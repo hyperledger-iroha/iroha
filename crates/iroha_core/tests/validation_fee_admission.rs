@@ -31,9 +31,8 @@ use iroha_data_model::{
         GovernanceCertificateId, GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1,
         GovernanceStageV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
         ParliamentBody, ProposalContentId, ProposalKind, RiskTierV1, SortitionRequestV1,
-        TleKeySessionId, TleSessionId,
-        ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
-        parliament_candidate_root_v1,
+        TleKeySessionId, TleSessionId, ValidationFeePayoutLifecycleProposal,
+        ValidationFeePolicyProposal, parliament_candidate_root_v1,
     },
     isi::{
         SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
@@ -673,11 +672,7 @@ fn test_parliament_authorization(
         });
     }
     attempt
-        .register_sortition_request_batch(
-            governance_attempt_id,
-            registrations,
-            candidates.clone(),
-        )
+        .register_sortition_request_batch(governance_attempt_id, registrations, candidates.clone())
         .expect("register deterministic sortition request batch");
     request_ids.sort_unstable();
     let sortition_pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));

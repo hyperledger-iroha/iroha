@@ -367,6 +367,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(kaigi::RecordKaigiUsage => "iroha.instruction.v1::kaigi::RecordKaigiUsage"),
     built_in_wire_id!(kaigi::SetKaigiRelayManifest => "iroha.instruction.v1::kaigi::SetKaigiRelayManifest"),
     built_in_wire_id!(kaigi::RegisterKaigiRelay => "iroha.instruction.v1::kaigi::RegisterKaigiRelay"),
+    built_in_wire_id!(kaigi::UnregisterKaigiRelay => "iroha.instruction.v1::kaigi::UnregisterKaigiRelay"),
     built_in_wire_id!(kaigi::ReportKaigiRelayHealth => "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth"),
     built_in_wire_id!(zk::RegisterZkAsset => "iroha.instruction.v1::zk::RegisterZkAsset"),
     built_in_wire_id!(zk::ScheduleConfidentialPolicyTransition => "zk::ScheduleConfidentialPolicyTransition"),

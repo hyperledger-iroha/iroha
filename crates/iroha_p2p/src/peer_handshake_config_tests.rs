@@ -47,7 +47,6 @@ fn minimal_puzzle_config(
             pow_params,
             Some(puzzle_params),
             ticket_ttl,
-            None,
             test_ticket_revocation_store(),
         )
         .expect("test SoraNet handshake config must be valid"),
@@ -72,7 +71,6 @@ fn in_memory_pow_replay_config() -> Arc<SoranetHandshakeConfig> {
             pow_params,
             None,
             Duration::from_secs(120),
-            None,
             Arc::new(Mutex::new(store)),
         )
         .expect("test SoraNet handshake config must be valid"),
@@ -192,7 +190,6 @@ fn rejects_invalid_kem_and_signature_ids() {
         params,
         None,
         Duration::from_secs(60),
-        None,
         test_ticket_revocation_store(),
     )
     .expect_err("unsupported KEM identifiers must fail closed");
@@ -213,7 +210,6 @@ fn rejects_invalid_kem_and_signature_ids() {
         params,
         None,
         Duration::from_secs(60),
-        None,
         test_ticket_revocation_store(),
     )
     .expect_err("unsupported signature identifiers must fail closed");
@@ -242,7 +238,6 @@ fn rejects_invalid_kem_and_signature_ids() {
             params,
             None,
             Duration::from_secs(60),
-            None,
             test_ticket_revocation_store(),
         )
         .expect("every advertised ML-KEM suite in the first-release registry must be accepted");
@@ -263,7 +258,6 @@ fn rejects_selected_kem_missing_from_capability_vectors() {
         PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30)),
         None,
         Duration::from_secs(60),
-        None,
         test_ticket_revocation_store(),
     )
     .expect_err("an unadvertised selected KEM must fail at construction");
@@ -288,7 +282,6 @@ fn rejects_descriptor_commitment_mismatching_relay_capability() {
         PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30)),
         None,
         Duration::from_secs(60),
-        None,
         test_ticket_revocation_store(),
     )
     .expect_err("the advertised and configured descriptor commitments must agree");
@@ -313,7 +306,6 @@ fn admission_config_retains_the_mandatory_replay_store() {
         PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(30)),
         None,
         Duration::from_secs(60),
-        None,
         Arc::clone(&replay_store),
     )
     .expect("admission config should retain its required replay store");
@@ -337,7 +329,6 @@ fn rejects_noncanonical_transcript_fields_and_capability_vectors_at_construction
                 params,
                 None,
                 Duration::from_secs(60),
-                None,
                 test_ticket_revocation_store(),
             )
         };
@@ -456,7 +447,6 @@ fn puzzle_ticket_mints_and_verifies() {
         pow_params,
         Some(puzzle_params),
         Duration::from_secs(240),
-        None,
         test_ticket_revocation_store(),
     )
     .expect("test SoraNet handshake config must be valid");
@@ -504,35 +494,6 @@ fn puzzle_ticket_mints_and_verifies() {
     );
 }
 #[test]
-fn delegated_bearer_modes_are_rejected_at_p2p_config_construction() {
-    let key = vec![0xA5; 32];
-    let error = SoranetHandshakeConfig::new(
-        iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-        iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-        iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
-        true,
-        1,
-        1,
-        None,
-        true,
-        PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(30)),
-        Some(test_puzzle_parameters(
-            1,
-            Duration::from_secs(300),
-            Duration::from_secs(30),
-        )),
-        Duration::from_secs(60),
-        Some(key),
-        test_ticket_revocation_store(),
-    )
-    .expect_err("direct P2P must reject delegated reusable bearer policy");
-    assert!(matches!(
-        error,
-        Error::HandshakeSoranet(message)
-            if message.contains("signed-ticket credentials are not supported")
-    ));
-}
-#[test]
 fn minted_challenge_explicitly_clears_sensitive_bytes() {
     let mut minted = MintedChallenge {
         frames: vec![vec![0xA5; 32]],
@@ -567,7 +528,6 @@ fn mint_challenge_ticket_reports_rng_failure() {
         pow_params,
         None,
         Duration::from_secs(240),
-        None,
         test_ticket_revocation_store(),
     )
     .expect("test SoraNet handshake config must be valid");
@@ -606,7 +566,6 @@ fn pow_ticket_replay_rejected_and_persisted() {
         pow_params,
         None,
         Duration::from_secs(240),
-        None,
         Arc::new(Mutex::new(store)),
     )
     .expect("test SoraNet handshake config must be valid");
@@ -639,7 +598,6 @@ fn pow_ticket_replay_rejected_and_persisted() {
         pow_params,
         None,
         Duration::from_secs(240),
-        None,
         Arc::new(Mutex::new(reloaded)),
     )
     .expect("test SoraNet handshake config must be valid");
@@ -730,7 +688,6 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         pow_params,
         None,
         Duration::from_secs(120),
-        None,
         Arc::new(Mutex::new(store)),
     )
     .expect("test SoraNet handshake config must be valid");
@@ -790,7 +747,6 @@ fn revocation_store_ttl_overflow_surfaces_store_error() {
         pow_params,
         None,
         Duration::from_secs(120),
-        None,
         Arc::new(Mutex::new(store)),
     )
     .expect("test SoraNet handshake config must be valid");
@@ -978,7 +934,6 @@ async fn ordinary_pow_verification_does_not_depend_on_the_puzzle_gate() {
             PowParameters::new(1, Duration::from_secs(30), Duration::from_secs(1)),
             None,
             Duration::from_secs(5),
-            None,
             test_ticket_revocation_store(),
         )
         .expect("test SoraNet handshake config must be valid"),

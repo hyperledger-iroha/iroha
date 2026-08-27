@@ -101,6 +101,20 @@ pub enum AuthenticationPolicy {
     /// Listener-wide controls can still restrict this route.
     Unauthenticated,
 }
+impl AuthenticationPolicy {
+    /// Return whether every response from this authentication boundary must be private and
+    /// non-cacheable.
+    #[must_use]
+    pub const fn requires_private_no_store(self) -> bool {
+        matches!(
+            self,
+            Self::OnboardingToken
+                | Self::CanonicalAccountSignature
+                | Self::OperatorSignature
+                | Self::OperatorCredentialExchange
+        )
+    }
+}
 /// Deterministic effect class for one Torii route. The classification describes the strongest
 /// server-side effect reachable through the route. A handler which can both read and mutate is
 /// therefore a [`Mutation`](Self::Mutation), while a transport which remains open is a
@@ -307,6 +321,7 @@ pub struct RouteDescriptor {
     route_match: RouteMatch,
     path_policy: PathPolicy,
     path_normalization: PathNormalization,
+    private_no_store: bool,
     implicit_head: bool,
     cors_options: bool,
 }
@@ -337,6 +352,7 @@ impl RouteDescriptor {
             route_match: RouteMatch::Exact,
             path_policy: PathPolicy::CanonicalV1,
             path_normalization: PathNormalization::Strict,
+            private_no_store: false,
             implicit_head: false,
             cors_options: false,
         }
@@ -381,6 +397,12 @@ impl RouteDescriptor {
     #[must_use]
     pub const fn with_path_policy(mut self, path_policy: PathPolicy) -> Self {
         self.path_policy = path_policy;
+        self
+    }
+    /// Require every response from this route to be private and non-cacheable.
+    #[must_use]
+    pub const fn with_private_no_store(mut self) -> Self {
+        self.private_no_store = true;
         self
     }
     /// Declare whether GET may also generate framework-level HEAD behavior.
@@ -459,6 +481,11 @@ impl RouteDescriptor {
     #[must_use]
     pub const fn path_normalization(self) -> PathNormalization {
         self.path_normalization
+    }
+    /// Return whether authentication or route-specific policy requires private non-caching.
+    #[must_use]
+    pub const fn requires_private_no_store(self) -> bool {
+        self.private_no_store || self.authentication.requires_private_no_store()
     }
     /// Return whether framework-level HEAD behavior is declared.
     #[must_use]
@@ -2795,6 +2822,8 @@ pub mod runtime_governance {
     /// Finality-bound current validation-fee policy proof path.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: &str =
         "/v1/validation-fee/policy/current/proof";
+    /// Same-snapshot evaluated Hijiri validation-fee quote path.
+    pub const VALIDATION_FEE_HIJIRI_QUOTE_PATH: &str = "/v1/validation-fee/hijiri/quote";
     /// Typed validation-fee proposal list path.
     pub const VALIDATION_FEE_PROPOSALS_PATH: &str = "/v1/validation-fee/proposals";
     /// Typed validation-fee proposal detail path.
@@ -2806,6 +2835,11 @@ pub mod runtime_governance {
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: RouteDescriptor = app_compute_post(
         "validation_fee.policy.current_proof",
         VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
+    );
+    /// Evaluate one bounded current-state Hijiri validation-fee quote.
+    pub const VALIDATION_FEE_HIJIRI_QUOTE: RouteDescriptor = app_signed_post(
+        "validation_fee.hijiri.quote",
+        VALIDATION_FEE_HIJIRI_QUOTE_PATH,
     );
     /// List typed validation-fee Parliament proposals.
     pub const VALIDATION_FEE_PROPOSALS: RouteDescriptor = app_signed_get(
@@ -2944,6 +2978,7 @@ pub mod runtime_governance {
         GOV_PARLIAMENT_TLE_PARTIAL_RELEASE,
         GOV_PARLIAMENT_TRANSITION_DRAFT,
         VALIDATION_FEE_CURRENT_POLICY_PROOF,
+        VALIDATION_FEE_HIJIRI_QUOTE,
         VALIDATION_FEE_PROPOSALS,
         VALIDATION_FEE_PROPOSAL_DETAIL,
         VALIDATION_FEE_PROPOSAL_DRAFT,

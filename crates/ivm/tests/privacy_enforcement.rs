@@ -3,7 +3,7 @@ mod common;
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use ivm::{
-    IVM, Instruction, Memory, ProgramMetadata, VMError, encoding,
+    IVM, Memory, ProgramMetadata, VMError, encoding,
     host::{DefaultHost, IVMHost},
     instruction,
     pointer_abi::PointerType,
@@ -30,6 +30,14 @@ fn raw_zk_program(words: &[u32]) -> Vec<u8> {
     }
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     program
+}
+const CONTINUATION_PC: u64 = 8;
+fn private_store_then(target: u32) -> Vec<u8> {
+    raw_zk_program(&[
+        encoding::wide::encode_store(instruction::wide::memory::STORE64, 1, 2, 0),
+        encoding::wide::encode_halt(),
+        target,
+    ])
 }
 fn scall(number: u32) -> u32 {
     encoding::wide::encode_sys(
@@ -73,12 +81,7 @@ fn mark_one_private_stack_byte(vm: &mut IVM, address: u64) {
     vm.set_register(1, word_address);
     vm.set_register(2, u64::from_le_bytes(bytes));
     vm.registers.set_tag(2, true);
-    vm.execute_instruction(Instruction::Store {
-        rs: 2,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .expect("store private stack word");
+    vm.run().expect("store private stack word");
     if byte_offset != 0 {
         vm.store_bytes(word_address, &bytes[..byte_offset])
             .expect("restore public bytes before the selected byte");
@@ -87,20 +90,40 @@ fn mark_one_private_stack_byte(vm: &mut IVM, address: u64) {
         vm.store_bytes(address + 1, &bytes[byte_offset + 1..])
             .expect("restore public bytes after the selected byte");
     }
+    vm.set_program_counter(CONTINUATION_PC)
+        .expect("select target after private-store fixture");
+}
+fn vm_with_private_stack_word() -> IVM {
+    let program = private_store_then(encoding::wide::encode_load(
+        instruction::wide::memory::LOAD64,
+        3,
+        1,
+        0,
+    ));
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&program)
+        .expect("load canonical private stack fixture");
+    vm.set_register(1, Memory::STACK_START);
+    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
+    vm.registers.set_tag(2, true);
+    vm.run().expect("store canonical private stack word");
+    vm
 }
 #[test]
 fn branch_on_private_fails() {
     let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
+    vm.load_program(&raw_zk_program(&[encoding::wide::encode_branch(
+        instruction::wide::control::BEQ,
+        1,
+        2,
+        1,
+    )]))
+    .expect("load private branch fixture");
     vm.set_register(1, 5);
     vm.registers.set_tag(1, true);
     vm.set_register(2, 5);
     vm.registers.set_tag(2, false);
-    let res = vm.execute_instruction(Instruction::Beq {
-        rs: 1,
-        rt: 2,
-        offset: 1,
-    });
+    let res = vm.run();
     assert!(matches!(res, Err(VMError::PrivacyViolation)));
 }
 #[test]
@@ -126,92 +149,33 @@ fn escrow_and_merkle_host_boundaries_reject_private_secondary_arguments() {
 #[test]
 fn load_private_address_fails() {
     let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
+    vm.load_program(&raw_zk_program(&[encoding::wide::encode_load(
+        instruction::wide::memory::LOAD64,
+        2,
+        1,
+        0,
+    )]))
+    .expect("load private-address fixture");
     vm.set_register(1, Memory::HEAP_START);
     vm.registers.set_tag(1, true);
-    let res = vm.execute_instruction(Instruction::Load {
-        rd: 2,
-        addr_reg: 1,
-        offset: 0,
-    });
+    let res = vm.run();
     assert!(matches!(res, Err(VMError::PrivacyViolation)));
 }
 #[test]
-fn add_private_succeeds() {
+fn wide_shift_mismatched_tags_fails() {
     let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
-    vm.set_register(1, 3);
-    vm.registers.set_tag(1, true);
-    vm.set_register(2, 4);
-    vm.registers.set_tag(2, true);
-    vm.execute_instruction(Instruction::Add {
-        rd: 3,
-        rs: 1,
-        rt: 2,
-    })
-    .unwrap();
-    assert_eq!(vm.register(3), 7);
-    assert!(vm.registers.tag(3));
-}
-#[test]
-fn simple_addi_propagates_tag() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
-    vm.set_register(1, 11);
-    vm.registers.set_tag(1, true);
-    vm.execute_instruction(Instruction::AddImm {
-        rd: 3,
-        rs: 1,
-        imm: 5,
-    })
-    .unwrap();
-    assert_eq!(vm.register(3), 16);
-    assert!(vm.registers.tag(3));
-}
-#[test]
-fn simple_shift_mismatched_tags_fails() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
+    vm.load_program(&raw_zk_program(&[encoding::wide::encode_rr(
+        instruction::wide::arithmetic::SLL,
+        3,
+        1,
+        2,
+    )]))
+    .expect("load private shift fixture");
     vm.set_register(1, 1);
     vm.set_register(2, 2);
     vm.registers.set_tag(1, true);
     vm.registers.set_tag(2, false);
-    let err = vm.execute_instruction(Instruction::Sll {
-        rd: 3,
-        rs: 1,
-        rt: 2,
-    });
-    assert!(matches!(err, Err(VMError::PrivacyViolation)));
-}
-#[test]
-fn parallel_addi_propagates_tag() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
-    vm.set_register(1, 7);
-    vm.registers.set_tag(1, true);
-    let block = [Instruction::AddImm {
-        rd: 3,
-        rs: 1,
-        imm: 4,
-    }];
-    vm.execute_block_parallel(&block).unwrap();
-    assert_eq!(vm.register(3), 11);
-    assert!(vm.registers.tag(3));
-}
-#[test]
-fn parallel_shift_mismatched_tags_fails() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
-    vm.set_register(1, 1);
-    vm.set_register(2, 3);
-    vm.registers.set_tag(1, true);
-    vm.registers.set_tag(2, false);
-    let block = [Instruction::Srl {
-        rd: 3,
-        rs: 1,
-        rt: 2,
-    }];
-    let err = vm.execute_block_parallel(&block);
+    let err = vm.run();
     assert!(matches!(err, Err(VMError::PrivacyViolation)));
 }
 #[test]
@@ -270,6 +234,7 @@ fn wide_add_propagates_secret_tag() {
     vm.registers.set_tag(1, true);
     vm.registers.set_tag(2, true);
     vm.run().unwrap();
+    assert_eq!(vm.register(3), 30);
     assert!(vm.registers.tag(3));
 }
 #[test]
@@ -372,6 +337,7 @@ fn wide_addi_propagates_tag() {
     vm.set_register(1, 10);
     vm.registers.set_tag(1, true);
     vm.run().unwrap();
+    assert_eq!(vm.register(3), 17);
     assert!(vm.registers.tag(3));
 }
 #[test]
@@ -1069,7 +1035,7 @@ fn signature_opcodes_reject_private_tlv_header_payload_and_checksum_bytes() {
         instruction::wide::crypto::DILITHIUMVERIFY,
     ] {
         for private_offset in [0_u64, 7, 7 + 32] {
-            let program = raw_zk_program(&[encoding::wide::encode_rr(opcode, 3, 1, 2)]);
+            let program = private_store_then(encoding::wide::encode_rr(opcode, 3, 1, 2));
             let mut vm = IVM::new(100_000);
             vm.load_program(&program)
                 .expect("load signature privacy fixture");
@@ -1113,7 +1079,7 @@ fn megabyte_public_tlv_privacy_preflight_checks_ranges_before_gas_debit() {
         }
     }
     let run = |private_byte_offset: Option<usize>| {
-        let program = raw_zk_program(&[scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)]);
+        let program = private_store_then(scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV));
         // Allocate the one-megabyte stack fixture independently of the low
         // execution budget, then apply the budget the assertion exercises.
         let mut vm = IVM::new(u64::MAX);
@@ -1127,6 +1093,9 @@ fn megabyte_public_tlv_privacy_preflight_checks_ranges_before_gas_debit() {
                 &mut vm,
                 pointer + u64::try_from(offset).expect("offset fits u64"),
             );
+        } else {
+            vm.set_program_counter(CONTINUATION_PC)
+                .expect("skip private-store test prefix");
         }
         vm.set_register(10, pointer);
         vm.set_gas_limit(64);
@@ -1193,129 +1162,143 @@ fn private_store_outside_the_stack_is_rejected() {
 }
 #[test]
 fn partial_public_overwrite_does_not_declassify_a_private_stack_word() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
-    vm.set_register(1, Memory::STACK_START);
-    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
-    vm.registers.set_tag(2, true);
-    vm.execute_instruction(Instruction::Store {
-        rs: 2,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .unwrap();
+    let mut vm = vm_with_private_stack_word();
     vm.store_u32(Memory::STACK_START, 0).unwrap();
-    let error = vm
-        .execute_instruction(Instruction::Load {
-            rd: 3,
-            addr_reg: 1,
-            offset: 0,
-        })
-        .expect_err("mixed-visibility words must trap");
+    let error = vm.run().expect_err("mixed-visibility words must trap");
     assert!(matches!(error, VMError::PrivacyViolation));
 }
 #[test]
 fn complete_public_overwrite_clears_private_stack_range() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
-    vm.set_register(1, Memory::STACK_START);
-    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
-    vm.registers.set_tag(2, true);
-    vm.execute_instruction(Instruction::Store {
-        rs: 2,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .unwrap();
+    let mut vm = vm_with_private_stack_word();
     vm.store_u64(Memory::STACK_START, 7).unwrap();
-    vm.execute_instruction(Instruction::Load {
-        rd: 3,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .expect("complete public overwrite declassifies the whole word");
+    vm.run()
+        .expect("complete public overwrite declassifies the whole word");
     assert_eq!(vm.register(3), 7);
     assert!(!vm.registers.tag(3));
 }
 #[test]
 fn execution_proof_commit_preserves_private_stack_ranges() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
-    vm.set_register(1, Memory::STACK_START);
-    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
-    vm.registers.set_tag(2, true);
-    vm.execute_instruction(Instruction::Store {
-        rs: 2,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .unwrap();
+    let mut vm = vm_with_private_stack_word();
     let _proof = vm.execution_proof();
-    vm.execute_instruction(Instruction::Load {
-        rd: 3,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .expect("proof commitment must not discard privacy metadata");
+    vm.run()
+        .expect("proof commitment must not discard privacy metadata");
     assert_eq!(vm.register(3), 0xCAFE_BABE_DEAD_BEEF);
     assert!(vm.registers.tag(3));
 }
 #[test]
 fn reset_scrubs_private_stack_spills() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
-    vm.set_register(1, Memory::STACK_START);
-    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
-    vm.registers.set_tag(2, true);
-    vm.execute_instruction(Instruction::Store {
-        rs: 2,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .unwrap();
+    let mut vm = vm_with_private_stack_word();
     vm.reset();
     assert_eq!(vm.load_u64(Memory::STACK_START).unwrap(), 0);
 }
 #[test]
 fn disabling_zk_mode_scrubs_private_stack_spills() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
-    vm.set_register(1, Memory::STACK_START);
-    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
-    vm.registers.set_tag(2, true);
-    vm.execute_instruction(Instruction::Store {
-        rs: 2,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .unwrap();
+    let mut vm = vm_with_private_stack_word();
+    vm.set_register(7, 0x1234_5678);
     vm.set_zk_mode(false);
     assert_eq!(vm.load_u64(Memory::STACK_START).unwrap(), 0);
+    assert_eq!(vm.register(2), 0);
+    assert!(!vm.registers.tag(2));
+    assert_eq!(vm.register(7), 0x1234_5678);
+    assert!(!vm.registers.tag(7));
+}
+#[test]
+fn disabling_zk_mode_discards_private_trace_and_write_history() {
+    const PRIVATE_VALUE: u64 = 0xCAFE_BABE_DEAD_BEEF;
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_zk_trace_enabled(true);
+    vm.set_trace_mode(ivm::TraceMode::DeltaRegisters);
+    vm.load_program(&private_store_then(encoding::wide::encode_halt()))
+        .expect("load private trace fixture");
+    vm.set_register(1, Memory::STACK_START);
+    vm.set_register(2, PRIVATE_VALUE);
+    vm.registers.set_tag(2, true);
+    vm.run().expect("record private trace fixture");
+
+    assert!(
+        vm.register_trace()
+            .iter()
+            .any(|state| state.gpr[2] == PRIVATE_VALUE)
+    );
+    assert!(vm.register_log().iter().any(|event| match event {
+        ivm::zk::RegEvent::Read { value, .. } | ivm::zk::RegEvent::Write { value, .. } => {
+            *value == PRIVATE_VALUE
+        }
+    }));
+    assert!(vm.memory.write_log().iter().any(|entry| {
+        entry
+            .bytes
+            .windows(8)
+            .any(|bytes| bytes == PRIVATE_VALUE.to_le_bytes().as_slice())
+    }));
+
+    vm.set_zk_mode(false);
+
+    assert!(vm.register_trace().is_empty());
+    assert!(vm.register_log().is_empty());
+    assert!(vm.memory_log().is_empty());
+    assert!(vm.delta_register_trace().is_empty());
+    assert!(vm.step_log().is_empty());
+    assert!(vm.memory.write_log().is_empty());
+}
+#[test]
+fn raw_code_load_scrubs_private_registers_and_preserves_public_arguments() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_zk_mode(true);
+    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
+    vm.registers.set_tag(2, true);
+    vm.set_register(7, 0x1234_5678);
+
+    vm.load_code(&encoding::wide::encode_halt().to_le_bytes())
+        .expect("replace the ZK program with raw public code");
+
+    assert_eq!(vm.register(2), 0);
+    assert!(!vm.registers.tag(2));
+    assert_eq!(vm.register(7), 0x1234_5678);
+    assert!(!vm.registers.tag(7));
+}
+#[test]
+fn artifact_load_scrubs_private_registers_and_preserves_public_arguments() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_zk_mode(true);
+    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
+    vm.registers.set_tag(2, true);
+    vm.set_register(7, 0x1234_5678);
+    let mut artifact = ProgramMetadata::default().encode();
+    artifact.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+
+    vm.load_program(&artifact)
+        .expect("replace the ZK program with a public artifact");
+
+    assert_eq!(vm.register(2), 0);
+    assert!(!vm.registers.tag(2));
+    assert_eq!(vm.register(7), 0x1234_5678);
+    assert!(!vm.registers.tag(7));
+}
+#[test]
+fn non_zk_run_rejects_injected_private_register_state() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_code(&encoding::wide::encode_halt().to_le_bytes())
+        .expect("load public code");
+    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
+    vm.registers.set_tag(2, true);
+
+    assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
 }
 #[test]
 fn runtime_template_restores_private_stack_tags_with_their_bytes() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
-    vm.set_register(1, Memory::STACK_START);
-    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
-    vm.registers.set_tag(2, true);
-    vm.execute_instruction(Instruction::Store {
-        rs: 2,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .unwrap();
+    let mut vm = vm_with_private_stack_word();
     let template = vm.runtime_template();
-    vm.store_u64(Memory::STACK_START, 0).unwrap();
+    vm.set_zk_mode(false);
+    assert!(!vm.zk_mode_enabled());
     vm.reset_from_runtime_template(&template)
         .expect("private-memory template geometry must match");
-    vm.set_register(1, Memory::STACK_START);
-    vm.execute_instruction(Instruction::Load {
-        rd: 3,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .unwrap();
+    assert!(
+        vm.zk_mode_enabled(),
+        "a private template must restore its ZK execution mode"
+    );
+    vm.run().unwrap();
     assert_eq!(vm.register(3), 0xCAFE_BABE_DEAD_BEEF);
     assert!(vm.registers.tag(3));
+    assert_eq!(vm.ensure_public_register(3), Err(VMError::PrivacyViolation));
 }

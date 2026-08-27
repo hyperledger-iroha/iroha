@@ -1,23 +1,22 @@
 # norito-java
 
-`norito-java` is a pure-Java (JDK 21-ready) reference implementation of the
+`norito-java` is a JDK 21 reference implementation of the
 Norito serialization codec. It mirrors the behaviour of the Rust and Python
 implementations so tooling can construct and inspect deterministic payloads
-without native dependencies.
+with one explicit Zstandard JNI runtime dependency.
 
 ## Features
 - Header parsing/serialization (`NRT0`, major 0 with fixed v1 minor `0x00`) with CRC64-XZ validation
 - Flag support: packed sequences, compact lengths, packed structs, field bitset
 - Adapters for signed/unsigned integers, booleans, UTF-8 strings, byte arrays,
-  options (`Optional`), results (`Result.Ok`/`Result.Err`), sequences, maps, and
-  packed structs with hybrid bitset layout
-- Schema hashing (type-name and structural descriptors using Norito's canonical JSON rules)
+  options (`Optional`), sequences, maps, and packed structs with hybrid bitset layout
+- Canonical type-name schema hashing
 - Columnar helpers and adaptive AoS layouts for `(u64, String, boolean)`,
   `(u64, Optional<String>, boolean)`, `(u64, Optional<u32>, boolean)`,
   `(u64, bytes)`, `(u64, bytes, boolean)` (including optional bytes), and
   `(u64, enum(Name|Code), boolean)` rows
-- Compression profiles (`CompressionConfig.zstdProfile`) that choose Zstandard levels
-  automatically for `"fast"`, `"balanced"`, or `"compact"` workloads.
+- Typed compression profiles (`FAST`, `BALANCED`, and `COMPACT`) that choose
+  Zstandard levels automatically for the encoded payload size.
 - CLI inspector `NoritoDump` for quick header introspection
 - Streaming resume helpers (`KeyUpdateState`/`ContentKeyState`) plus baseline RLE
   block decoding with explicit end-of-block validation.
@@ -31,13 +30,13 @@ contracts and the ergonomics exposed through `norito::codec::Encode`/`Decode`.
 the trait guidance refreshed in `norito.md`, keeping high-level callers in sync
 across Rust, Python, and Java.
 
-### Limitations (v0.1.0)
-- Optional Zstandard compression requires `com.github.luben:zstd-jni` on the classpath; when
-  absent, compression requests raise a clear `UnsupportedOperationException`.
+### Runtime dependency (v0.1.0)
+- Zstandard support is part of the release codec, so the published artifact depends directly on
+  `com.github.luben:zstd-jni:1.5.7-7` and fails at linkage time if that dependency is broken.
 
 ## Build & Test
-This module avoids external build tools. Compile with `javac` and run the
-assert-based test harness:
+Run the Gradle-backed assert harness, which supplies the same pinned runtime dependency as the
+published artifact:
 
 ```bash
 cd java/norito_java
@@ -94,13 +93,14 @@ dependencies {
 
 ### Bundling `zstd-jni`
 `CompressionConfig.zstdProfile` and `CompressionConfig.zstd(level)` call into
-`com.github.luben:zstd-jni` when Zstandard compression is requested. Add the
-dependency to your build so the native library is on the classpath:
+`com.github.luben:zstd-jni` directly. Gradle and Maven consumers receive version
+`1.5.7-7` transitively from `norito-java`; do not add a second optional backend or probe for one.
+If dependency constraints are managed centrally, keep the resolved version aligned:
 
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("com.github.luben:zstd-jni:1.5.6-9")
+    implementation("com.github.luben:zstd-jni:1.5.7-7")
 }
 ```
 
@@ -119,9 +119,8 @@ android {
 }
 ```
 
-Server-side or desktop JVM deployments only need the dependency on the classpath; no additional
-steps are required. `NoritoCompression.hasZstd()` returns `true` when the native library is
-available and can be used for smoke tests or feature gating.
+Server-side or desktop JVM deployments need no additional setup beyond the transitive runtime
+dependency. Compression is not feature-gated and there is no optional-backend probe.
 
 ## Maintenance & Sync
 Changes to the Rust Norito crate require corresponding updates in both

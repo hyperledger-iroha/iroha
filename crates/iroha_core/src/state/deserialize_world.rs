@@ -5586,7 +5586,7 @@ mod global_beacon_persistence_tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; 32])),
         );
         let (key_record, pulse) =
-            crate::beacon::tests::signed_persisted_pulse_fixture_for_world(network_id, 41);
+            crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
         let roster = (1_u8..=4)
             .map(|marker| {
                 KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
@@ -6234,7 +6234,6 @@ mod parliament_attempt_size_restore_tests {
 fn parse_world(
     mut map: SnapshotJsonMap<'_>,
     ivm_seed: &IvmSeed<'_, World>,
-    emergency_fast: bool,
 ) -> Result<World, json::Error> {
     if let Some(actual) = map.source_order.as_ref() {
         let expected = canonical_world_field_order();
@@ -6259,47 +6258,43 @@ fn parse_world(
     let domain_endorsements = take_required(&mut map, "domain_endorsements")?;
     let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
     let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
-    let account_aliases = take_optional_default(&mut map, "account_aliases")?;
-    let account_aliases_by_account = take_optional_default(&mut map, "account_aliases_by_account")?;
-    let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
+    let account_aliases = take_required(&mut map, "account_aliases")?;
+    let account_aliases_by_account = take_required(&mut map, "account_aliases_by_account")?;
+    let account_scope_directory = take_required(&mut map, "account_scope_directory")?;
     let ram_lfe_program_policies = take_ram_lfe_program_policies(&mut map)?;
-    if !emergency_fast {
-        validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
-    }
-    let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
-    let fee_sponsor_programs = take_optional_default(&mut map, "fee_sponsor_programs")?;
-    let fee_sponsor_program_revisions =
-        take_optional_default(&mut map, "fee_sponsor_program_revisions")?;
-    let fee_sponsor_enrollments = take_optional_default(&mut map, "fee_sponsor_enrollments")?;
-    let fee_sponsor_vaults = take_optional_default(&mut map, "fee_sponsor_vaults")?;
-    let fee_sponsor_budget_counters =
-        take_optional_default(&mut map, "fee_sponsor_budget_counters")?;
-    let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
-    let account_recovery_policies = take_optional_default(&mut map, "account_recovery_policies")?;
-    let account_recovery_requests = take_optional_default(&mut map, "account_recovery_requests")?;
+    validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
+    let identifier_policies = take_required(&mut map, "identifier_policies")?;
+    let fee_sponsor_programs = take_required(&mut map, "fee_sponsor_programs")?;
+    let fee_sponsor_program_revisions = take_required(&mut map, "fee_sponsor_program_revisions")?;
+    let fee_sponsor_enrollments = take_required(&mut map, "fee_sponsor_enrollments")?;
+    let fee_sponsor_vaults = take_required(&mut map, "fee_sponsor_vaults")?;
+    let fee_sponsor_budget_counters = take_required(&mut map, "fee_sponsor_budget_counters")?;
+    let identifier_claims = take_required(&mut map, "identifier_claims")?;
+    let account_recovery_policies = take_required(&mut map, "account_recovery_policies")?;
+    let account_recovery_requests = take_required(&mut map, "account_recovery_requests")?;
     let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
         take_required(&mut map, "asset_definitions")?;
     let asset_definition_alias_bindings =
-        take_optional_default(&mut map, "asset_definition_alias_bindings")?;
-    let contract_alias_bindings = take_optional_default(&mut map, "contract_alias_bindings")?;
+        take_required(&mut map, "asset_definition_alias_bindings")?;
+    let contract_alias_bindings = take_required(&mut map, "contract_alias_bindings")?;
     let assets: Storage<AssetId, AssetValue> = take_required(&mut map, "assets")?;
-    let account_rekey_records = take_optional_default(&mut map, "account_rekey_records")?;
-    let asset_metadata = take_optional_default(&mut map, "asset_metadata")?;
+    let account_rekey_records = take_required(&mut map, "account_rekey_records")?;
+    let asset_metadata = take_required(&mut map, "asset_metadata")?;
     let nfts: Storage<NftId, NftValue> = take_required(&mut map, "nfts")?;
-    let rwas: Storage<RwaId, RwaValue> = take_optional_default(&mut map, "rwas")?;
+    let rwas: Storage<RwaId, RwaValue> = take_required(&mut map, "rwas")?;
     let roles: Storage<RoleId, Role> = take_required(&mut map, "roles")?;
     let account_permissions: Storage<AccountId, Permissions> =
         take_required(&mut map, "account_permissions")?;
     let account_roles: Storage<RoleIdWithOwner, ()> = take_required(&mut map, "account_roles")?;
-    let oracle_feeds = take_optional_default(&mut map, "oracle_feeds")?;
-    let oracle_observations = take_optional_default(&mut map, "oracle_observations")?;
-    let oracle_history = take_optional_default(&mut map, "oracle_history")?;
-    let oracle_provider_stats = take_optional_default(&mut map, "oracle_provider_stats")?;
-    let oracle_disputes = take_optional_default(&mut map, "oracle_disputes")?;
-    let oracle_changes = take_optional_default(&mut map, "oracle_changes")?;
-    let defi_oracle_attestations = take_optional_default(&mut map, "defi_oracle_attestations")?;
-    let twitter_bindings = take_optional_default(&mut map, "twitter_bindings")?;
-    let twitter_bindings_by_uaid = take_optional_default(&mut map, "twitter_bindings_by_uaid")?;
+    let oracle_feeds = take_required(&mut map, "oracle_feeds")?;
+    let oracle_observations = take_required(&mut map, "oracle_observations")?;
+    let oracle_history = take_required(&mut map, "oracle_history")?;
+    let oracle_provider_stats = take_required(&mut map, "oracle_provider_stats")?;
+    let oracle_disputes = take_required(&mut map, "oracle_disputes")?;
+    let oracle_changes = take_required(&mut map, "oracle_changes")?;
+    let defi_oracle_attestations = take_required(&mut map, "defi_oracle_attestations")?;
+    let twitter_bindings = take_required(&mut map, "twitter_bindings")?;
+    let twitter_bindings_by_uaid = take_required(&mut map, "twitter_bindings_by_uaid")?;
     let viral_reward_budget = take_required(&mut map, "viral_reward_budget")?;
     let viral_campaign_budget = take_required(&mut map, "viral_campaign_budget")?;
     let viral_daily_counters = take_required(&mut map, "viral_daily_counters")?;
@@ -6310,54 +6305,50 @@ fn parse_world(
         take_required(&mut map, "axt_policies")?;
     let axt_handle_counters: Storage<DataSpaceId, AxtHandleCounterRecord> =
         take_required(&mut map, "axt_handle_counters")?;
-    if !emergency_fast {
-        let counters = axt_handle_counters.view();
-        for (_, record) in counters.iter() {
-            record
-                .validate()
-                .map_err(|error| json::Error::InvalidField {
-                    field: "world.axt_handle_counters".to_owned(),
-                    message: error.to_string(),
-                })?;
-        }
+    let counters = axt_handle_counters.view();
+    for (_, record) in counters.iter() {
+        record
+            .validate()
+            .map_err(|error| json::Error::InvalidField {
+                field: "world.axt_handle_counters".to_owned(),
+                message: error.to_string(),
+            })?;
     }
     let axt_asset_incarnations: Storage<AssetDefinitionId, AxtAssetIncarnationV1> =
         take_required(&mut map, "axt_asset_incarnations")?;
-    if !emergency_fast {
-        let definitions = asset_definitions.view();
-        let incarnations = axt_asset_incarnations.view();
-        for (asset_definition_id, incarnation) in incarnations.iter() {
-            incarnation
-                .validate()
-                .map_err(|error| json::Error::InvalidField {
-                    field: "world.axt_asset_incarnations".to_owned(),
-                    message: error.to_string(),
-                })?;
-            if definitions.get(asset_definition_id).is_none() {
-                return Err(json::Error::InvalidField {
-                    field: "world.axt_asset_incarnations".to_owned(),
-                    message: format!(
-                        "AXT incarnation references unregistered asset definition {asset_definition_id}"
-                    ),
-                });
-            }
+    let definitions = asset_definitions.view();
+    let incarnations = axt_asset_incarnations.view();
+    for (asset_definition_id, incarnation) in incarnations.iter() {
+        incarnation
+            .validate()
+            .map_err(|error| json::Error::InvalidField {
+                field: "world.axt_asset_incarnations".to_owned(),
+                message: error.to_string(),
+            })?;
+        if definitions.get(asset_definition_id).is_none() {
+            return Err(json::Error::InvalidField {
+                field: "world.axt_asset_incarnations".to_owned(),
+                message: format!(
+                    "AXT incarnation references unregistered asset definition {asset_definition_id}"
+                ),
+            });
         }
-        for (asset_definition_id, _) in definitions.iter() {
-            if incarnations.get(asset_definition_id).is_none() {
-                return Err(json::Error::InvalidField {
-                    field: "world.axt_asset_incarnations".to_owned(),
-                    message: format!(
-                        "registered asset definition {asset_definition_id} has no AXT incarnation"
-                    ),
-                });
-            }
+    }
+    for (asset_definition_id, _) in definitions.iter() {
+        if incarnations.get(asset_definition_id).is_none() {
+            return Err(json::Error::InvalidField {
+                field: "world.axt_asset_incarnations".to_owned(),
+                message: format!(
+                    "registered asset definition {asset_definition_id} has no AXT incarnation"
+                ),
+            });
         }
     }
     let axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord> =
         take_required(&mut map, "axt_replay_ledger")?;
     let axt_handle_budget_ledger: Storage<AxtHandleBudgetKey, AxtHandleBudgetRecord> =
         take_required(&mut map, "axt_handle_budget_ledger")?;
-    if !emergency_fast {
+    {
         {
             let ledger = axt_handle_budget_ledger.view();
             for (key, record) in ledger.iter() {
@@ -6502,11 +6493,9 @@ fn parse_world(
             }
         }
     }
-    if !emergency_fast {
-        map.get("sccp_registry")
-            .ok_or_else(|| json::Error::missing_field("sccp_registry"))?
-            .validate_sccp_registry()?;
-    }
+    map.get("sccp_registry")
+        .ok_or_else(|| json::Error::missing_field("sccp_registry"))?
+        .validate_sccp_registry()?;
     let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
         take_required(&mut map, "sccp_registry")?;
     let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
@@ -6517,32 +6506,30 @@ fn parse_world(
     let sccp_inbound_messages = take_required(&mut map, "sccp_inbound_messages")?;
     let sccp_inbound_anchor_high_water: Storage<SccpInboundAnchorHighWaterKeyV1, u64> =
         take_required(&mut map, "sccp_inbound_anchor_high_water")?;
-    if !emergency_fast {
-        validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
-        validate_sccp_outbound_pending_usage(
-            &sccp_outbound_pending_messages,
-            &sccp_outbound_pending_usage,
-        )?;
-        validate_sccp_outbound_indexes(
-            &sccp_outbound_pending_messages,
-            &sccp_outbound_proofs,
-            &sccp_outbound_message_locator,
-            &sccp_outbound_message_index,
-        )?;
-        validate_sccp_outbound_proofs(&sccp_outbound_proofs, &sccp_outbound_message_locator)?;
-        validate_sccp_inbound_messages(&sccp_inbound_messages)?;
-        let sccp_inbound_messages_view = sccp_inbound_messages.view();
-        let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
-        validate_sccp_inbound_anchor_high_water_index(
-            &sccp_inbound_messages_view,
-            &sccp_inbound_anchor_high_water_view,
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.sccp_inbound_anchor_high_water".to_owned(),
-            message,
-        })?;
-    }
-    let tx_sequences: Storage<AccountId, u64> = take_optional_default(&mut map, "tx_sequences")?;
+    validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
+    validate_sccp_outbound_pending_usage(
+        &sccp_outbound_pending_messages,
+        &sccp_outbound_pending_usage,
+    )?;
+    validate_sccp_outbound_indexes(
+        &sccp_outbound_pending_messages,
+        &sccp_outbound_proofs,
+        &sccp_outbound_message_locator,
+        &sccp_outbound_message_index,
+    )?;
+    validate_sccp_outbound_proofs(&sccp_outbound_proofs, &sccp_outbound_message_locator)?;
+    validate_sccp_inbound_messages(&sccp_inbound_messages)?;
+    let sccp_inbound_messages_view = sccp_inbound_messages.view();
+    let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
+    validate_sccp_inbound_anchor_high_water_index(
+        &sccp_inbound_messages_view,
+        &sccp_inbound_anchor_high_water_view,
+    )
+    .map_err(|message| json::Error::InvalidField {
+        field: "world.sccp_inbound_anchor_high_water".to_owned(),
+        message,
+    })?;
+    let tx_sequences: Storage<AccountId, u64> = take_required(&mut map, "tx_sequences")?;
     let triggers_value = map
         .remove("triggers")
         .ok_or_else(|| json::Error::missing_field("triggers"))?;
@@ -6553,13 +6540,13 @@ fn parse_world(
     let executor_data_model: Cell<ExecutorDataModel> =
         take_required(&mut map, "executor_data_model")?;
     let external_event_buf: Cell<Vec<EventBox>> = take_required(&mut map, "external_event_buf")?;
-    let verifying_keys = take_optional_default(&mut map, "verifying_keys")?;
-    let verifying_keys_by_circuit = take_optional_default(&mut map, "verifying_keys_by_circuit")?;
-    let consensus_keys = take_optional_default(&mut map, "consensus_keys")?;
-    let consensus_keys_by_pk = take_optional_default(&mut map, "consensus_keys_by_pk")?;
-    let pedersen_params = take_optional_default(&mut map, "pedersen_params")?;
-    let poseidon_params = take_optional_default(&mut map, "poseidon_params")?;
-    let runtime_upgrades = take_optional_default(&mut map, "runtime_upgrades")?;
+    let verifying_keys = take_required(&mut map, "verifying_keys")?;
+    let verifying_keys_by_circuit = take_required(&mut map, "verifying_keys_by_circuit")?;
+    let consensus_keys = take_required(&mut map, "consensus_keys")?;
+    let consensus_keys_by_pk = take_required(&mut map, "consensus_keys_by_pk")?;
+    let pedersen_params = take_required(&mut map, "pedersen_params")?;
+    let poseidon_params = take_required(&mut map, "poseidon_params")?;
+    let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
     let privacy_activations: Storage<
@@ -6590,44 +6577,40 @@ fn parse_world(
         crate::privacy_state::PrivacyRootHeadKeyV1,
         crate::privacy_state::PrivacyRootHeadRecordV1,
     > = take_required(&mut map, "privacy_root_heads")?;
-    if !emergency_fast {
-        crate::privacy_state::validate_privacy_persisted_state_v1(
-            privacy_consensus_policy.view().get(),
-            &privacy_activations.view(),
-            &privacy_pgc_accounts.view(),
-            &privacy_pgc_pool_invariants.view(),
-            &privacy_nullifiers.view(),
-            &privacy_commitments.view(),
-            &privacy_roots.view(),
-            &privacy_root_heads.view(),
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.privacy_state".to_owned(),
-            message,
-        })?;
-        crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
-            &privacy_commitments.view(),
-            &accounts.view(),
-            &asset_definitions.view(),
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.privacy_state".to_owned(),
-            message,
-        })?;
-    }
-    let proofs = take_optional_default(&mut map, "proofs")?;
-    let proof_tags = take_optional_default(&mut map, "proof_tags")?;
-    let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
-    let contract_manifests = take_optional_default(&mut map, "contract_manifests")?;
-    let contract_code = take_optional_default(&mut map, "contract_code")?;
+    crate::privacy_state::validate_privacy_persisted_state_v1(
+        privacy_consensus_policy.view().get(),
+        &privacy_activations.view(),
+        &privacy_pgc_accounts.view(),
+        &privacy_pgc_pool_invariants.view(),
+        &privacy_nullifiers.view(),
+        &privacy_commitments.view(),
+        &privacy_roots.view(),
+        &privacy_root_heads.view(),
+    )
+    .map_err(|message| json::Error::InvalidField {
+        field: "world.privacy_state".to_owned(),
+        message,
+    })?;
+    crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
+        &privacy_commitments.view(),
+        &accounts.view(),
+        &asset_definitions.view(),
+    )
+    .map_err(|message| json::Error::InvalidField {
+        field: "world.privacy_state".to_owned(),
+        message,
+    })?;
+    let proofs = take_required(&mut map, "proofs")?;
+    let proof_tags = take_required(&mut map, "proof_tags")?;
+    let proofs_by_tag = take_required(&mut map, "proofs_by_tag")?;
+    let contract_manifests = take_required(&mut map, "contract_manifests")?;
+    let contract_code = take_required(&mut map, "contract_code")?;
     let contract_code_uploads = take_required(&mut map, "contract_code_uploads")?;
     let contract_code_upload_chunks = take_required(&mut map, "contract_code_upload_chunks")?;
-    let contract_instances = take_optional_default(&mut map, "contract_instances")?;
-    let contract_subject_bindings = take_optional_default(&mut map, "contract_subject_bindings")?;
-    let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
-    if !emergency_fast {
-        reject_legacy_musubi_state(&smart_contract_state)?;
-    }
+    let contract_instances = take_required(&mut map, "contract_instances")?;
+    let contract_subject_bindings = take_required(&mut map, "contract_subject_bindings")?;
+    let smart_contract_state = take_required(&mut map, "smart_contract_state")?;
+    reject_legacy_musubi_state(&smart_contract_state)?;
     let musubi_namespace_bindings = take_musubi_namespace_bindings(&mut map)?;
     let musubi_domain_ownership_generations = take_musubi_domain_ownership_generations(&mut map)?;
     let musubi_packages = take_required(&mut map, "musubi_packages")?;
@@ -6704,50 +6687,46 @@ fn parse_world(
     let capacity_declarations = take_required(&mut map, "capacity_declarations")?;
     let pin_manifests = take_required(&mut map, "pin_manifests")?;
     let replication_orders = take_required(&mut map, "replication_orders")?;
-    if !emergency_fast {
-        SoracloudInrouPersistedStateV1 {
-            sequence_watermark: *soracloud_sequence_watermark.view().get(),
-            service_revisions: &soracloud_service_revisions,
-            service_deployments: &soracloud_service_deployments,
-            app_infra_states: &soracloud_app_infra_states,
-            service_runtime: &soracloud_service_runtime,
-            inrou_replica_runtime: &soracloud_inrou_replica_runtime,
-            service_audit_events: &soracloud_service_audit_events,
-            app_infra_audit_events: &soracloud_app_infra_audit_events,
-            training_job_audit_events: &soracloud_training_job_audit_events,
-            model_weight_audit_events: &soracloud_model_weight_audit_events,
-            model_artifact_audit_events: &soracloud_model_artifact_audit_events,
-            hf_shared_lease_audit_events: &soracloud_hf_shared_lease_audit_events,
-            agent_apartment_audit_events: &soracloud_agent_apartment_audit_events,
-            service_state_entries: &soracloud_service_state_entries,
-            decryption_request_records: &soracloud_decryption_request_records,
-            agent_apartments: &soracloud_agent_apartments,
-            training_jobs: &soracloud_training_jobs,
-            model_registries: &soracloud_model_registries,
-            model_weight_versions: &soracloud_model_weight_versions,
-            model_artifacts: &soracloud_model_artifacts,
-            hf_sources: &soracloud_hf_sources,
-            hf_shared_lease_pools: &soracloud_hf_shared_lease_pools,
-            hf_shared_lease_members: &soracloud_hf_shared_lease_members,
-            inrou_host_capabilities: &soracloud_inrou_host_capabilities,
-            inrou_service_placements: &soracloud_inrou_service_placements,
-            uploaded_model_bundles: &soracloud_uploaded_model_bundles,
-            mailbox_messages: &soracloud_mailbox_messages,
-            runtime_receipts: &soracloud_runtime_receipts,
-        }
-        .validate()?;
+    SoracloudInrouPersistedStateV1 {
+        sequence_watermark: *soracloud_sequence_watermark.view().get(),
+        service_revisions: &soracloud_service_revisions,
+        service_deployments: &soracloud_service_deployments,
+        app_infra_states: &soracloud_app_infra_states,
+        service_runtime: &soracloud_service_runtime,
+        inrou_replica_runtime: &soracloud_inrou_replica_runtime,
+        service_audit_events: &soracloud_service_audit_events,
+        app_infra_audit_events: &soracloud_app_infra_audit_events,
+        training_job_audit_events: &soracloud_training_job_audit_events,
+        model_weight_audit_events: &soracloud_model_weight_audit_events,
+        model_artifact_audit_events: &soracloud_model_artifact_audit_events,
+        hf_shared_lease_audit_events: &soracloud_hf_shared_lease_audit_events,
+        agent_apartment_audit_events: &soracloud_agent_apartment_audit_events,
+        service_state_entries: &soracloud_service_state_entries,
+        decryption_request_records: &soracloud_decryption_request_records,
+        agent_apartments: &soracloud_agent_apartments,
+        training_jobs: &soracloud_training_jobs,
+        model_registries: &soracloud_model_registries,
+        model_weight_versions: &soracloud_model_weight_versions,
+        model_artifacts: &soracloud_model_artifacts,
+        hf_sources: &soracloud_hf_sources,
+        hf_shared_lease_pools: &soracloud_hf_shared_lease_pools,
+        hf_shared_lease_members: &soracloud_hf_shared_lease_members,
+        inrou_host_capabilities: &soracloud_inrou_host_capabilities,
+        inrou_service_placements: &soracloud_inrou_service_placements,
+        uploaded_model_bundles: &soracloud_uploaded_model_bundles,
+        mailbox_messages: &soracloud_mailbox_messages,
+        runtime_receipts: &soracloud_runtime_receipts,
     }
+    .validate()?;
     let provider_owners = take_required(&mut map, "provider_owners")?;
     let provider_ingest_completion_authorities =
         take_required(&mut map, "provider_ingest_completion_authorities")?;
-    if !emergency_fast {
-        validate_provider_ingest_completion_authorities(
-            &provider_owners,
-            &provider_ingest_completion_authorities,
-        )?;
-        validate_capacity_declarations(&capacity_declarations, &provider_owners)?;
-    }
-    let zk_assets = take_optional_default(&mut map, "zk_assets")?;
+    validate_provider_ingest_completion_authorities(
+        &provider_owners,
+        &provider_ingest_completion_authorities,
+    )?;
+    validate_capacity_declarations(&capacity_declarations, &provider_owners)?;
+    let zk_assets = take_required(&mut map, "zk_assets")?;
     let elections = take_required(&mut map, "elections")?;
     let citizens = take_required(&mut map, "citizens")?;
     let ministry_agenda_proposals = take_required(&mut map, "ministry_agenda_proposals")?;
@@ -6763,53 +6742,51 @@ fn parse_world(
     let parliament_bodies = take_required(&mut map, "parliament_bodies")?;
     let parliament_attempts = take_required(&mut map, "parliament_attempts")?;
     let tle_key_sessions = take_required(&mut map, "tle_key_sessions")?;
-    let tle_active_key_session = take_optional_default(&mut map, "tle_active_key_session")?;
+    let tle_active_key_session = take_required(&mut map, "tle_active_key_session")?;
     let timed_ovn_evidence = take_required(&mut map, "timed_ovn_evidence")?;
     let global_beacon_dkg = take_required(&mut map, "global_beacon_dkg")?;
     let global_beacon_key_sessions = take_required(&mut map, "global_beacon_key_sessions")?;
     let global_beacon_active_session = take_required(&mut map, "global_beacon_active_session")?;
     let global_beacon_latest_pulse = take_required(&mut map, "global_beacon_latest_pulse")?;
     let global_beacon_pulses = take_required(&mut map, "global_beacon_pulses")?;
-    let vrf_epochs = take_required(&mut map, "vrf_epochs")?;
-    let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
-    let settlement_receipts = take_optional_default(&mut map, "settlement_receipts")?;
+    let repo_agreements = take_required(&mut map, "repo_agreements")?;
+    let settlement_receipts = take_required(&mut map, "settlement_receipts")?;
     let kagemusha_replay_keys = take_required(&mut map, "kagemusha_replay_keys")?;
     let direct_lane_block_application_markers =
-        take_optional_default(&mut map, "direct_lane_block_application_markers")?;
+        take_required(&mut map, "direct_lane_block_application_markers")?;
     let lane_relay_emergency_validators =
-        take_optional_default(&mut map, "lane_relay_emergency_validators")?;
-    let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
-    if !emergency_fast {
-        validate_musubi_location_reverse_indices(
-            &musubi_archives,
-            &musubi_archive_locations,
-            &pin_manifests,
-            &replication_orders,
-            &musubi_locations_by_pin,
-            &musubi_locations_by_replication_order,
-            &musubi_locations_by_provider,
-        )?;
-        validate_automatic_replication_capacity_state(
-            &capacity_declarations,
-            &provider_owners,
-            &provider_ingest_completion_authorities,
-            &pin_manifests,
-            &replication_orders,
-        )?;
-    }
-    let content_bundles = take_optional_default(&mut map, "content_bundles")?;
-    let content_chunks = take_optional_default(&mut map, "content_chunks")?;
-    let asset_escrows = take_optional_default(&mut map, "asset_escrows")?;
-    let vpn_leases = take_optional_default(&mut map, "vpn_leases")?;
-    let merge_hint_roots: Cell<Vec<Hash>> = take_optional_default(&mut map, "merge_hint_roots")?;
+        take_required(&mut map, "lane_relay_emergency_validators")?;
+    let manifest_aliases = take_required(&mut map, "manifest_aliases")?;
+    validate_musubi_location_reverse_indices(
+        &musubi_archives,
+        &musubi_archive_locations,
+        &pin_manifests,
+        &replication_orders,
+        &musubi_locations_by_pin,
+        &musubi_locations_by_replication_order,
+        &musubi_locations_by_provider,
+    )?;
+    validate_automatic_replication_capacity_state(
+        &capacity_declarations,
+        &provider_owners,
+        &provider_ingest_completion_authorities,
+        &pin_manifests,
+        &replication_orders,
+    )?;
+    let content_bundles = take_required(&mut map, "content_bundles")?;
+    let content_chunks = take_required(&mut map, "content_chunks")?;
+    let asset_escrows = take_required(&mut map, "asset_escrows")?;
+    let vpn_leases = take_required(&mut map, "vpn_leases")?;
+    let merge_hint_roots: Cell<Vec<Hash>> = take_required(&mut map, "merge_hint_roots")?;
     let merge_global_state_root: Cell<Option<Hash>> =
-        take_optional_default(&mut map, "merge_global_state_root")?;
+        take_required(&mut map, "merge_global_state_root")?;
     reject_unknown(&map, "world")?;
     let mut world = World {
         parameters,
         peers,
         domains,
         domains_by_owner: Storage::default(),
+        kaigi_relay_registry: Storage::default(),
         accounts,
         uaid_accounts: Storage::default(),
         account_aliases,
@@ -7044,7 +7021,6 @@ fn parse_world(
         global_beacon_latest_pulse,
         global_beacon_pulses,
         global_beacon_pulse_slots: Storage::default(),
-        vrf_epochs,
         merge_hint_roots,
         merge_global_state_root,
         consensus_evidence: Storage::default(),
@@ -7054,7 +7030,7 @@ fn parse_world(
         .rebuild_global_beacon_pulse_slots()
         .map_err(invalid_global_beacon_persistence)?;
     validate_parliament_attempt_encoded_size_bounds_v1(&world)?;
-    if !emergency_fast {
+    {
         let parliament_attempts_view = world.parliament_attempts.view();
         let governance_proposals_view = world.governance_proposals.view();
         for (attempt_id, attempt) in parliament_attempts_view.iter() {
@@ -7281,12 +7257,6 @@ fn parse_world(
                 message,
             })?;
     }
-    if emergency_fast {
-        iroha_logger::warn!(
-            "emergency Fast snapshot restore deferred every derived World index until a Strict restart"
-        );
-        return Ok(world);
-    }
     world.rebuild_domain_owner_index();
     world
         .rebuild_uaid_account_index()
@@ -7312,6 +7282,12 @@ fn parse_world(
             field: "account_rekey_records".into(),
             message,
         })?;
+    crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut world).map_err(
+        |message| json::Error::InvalidField {
+            field: "kaigi_relay_registry".into(),
+            message,
+        },
+    )?;
     world
         .rebuild_asset_definition_alias_indexes()
         .map_err(|message| json::Error::InvalidField {
@@ -8750,6 +8726,27 @@ mod decode_tests {
         assert!(
             SnapshotJsonMap::parse(r#"{"first":0,"first":1}"#, "fixture").is_err(),
             "duplicate signed snapshot fields must fail closed"
+        );
+    }
+    #[test]
+    fn first_release_world_decoder_requires_every_canonical_field() {
+        let encoded = json::to_json(&World::default()).expect("serialize default World");
+        let mut map = SnapshotJsonMap::parse(&encoded, "world").expect("parse default World");
+        map.remove("account_aliases")
+            .expect("canonical World contains account_aliases");
+        let ivm = IVM::new(0);
+        let seed = IvmSeed {
+            ivm: &ivm,
+            _marker: PhantomData,
+        };
+
+        let error = match parse_world(map, &seed) {
+            Ok(_) => panic!("a first-release snapshot cannot default a missing World field"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("account_aliases"),
+            "unexpected missing-field diagnostic: {error}"
         );
     }
     #[test]

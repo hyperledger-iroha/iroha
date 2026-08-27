@@ -7,7 +7,6 @@ import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
-import java.util.Locale;
 import java.util.Objects;
 
 /** High-level helpers for Norito encoding/decoding. */
@@ -52,9 +51,6 @@ public final class NoritoCodec {
     byte[] payloadBytes = payload;
     int compressionTag = NoritoHeader.COMPRESSION_NONE;
     if (compression.mode == NoritoHeader.COMPRESSION_ZSTD) {
-      if (!NoritoCompression.hasZstd()) {
-        throw new UnsupportedOperationException("Zstd compression requested but backend unavailable");
-      }
       payloadBytes = NoritoCompression.compressZstd(payload, compression.level);
       compressionTag = NoritoHeader.COMPRESSION_ZSTD;
     } else if (compression.mode != NoritoHeader.COMPRESSION_NONE) {
@@ -359,15 +355,6 @@ public final class NoritoCodec {
         }
         return clampLevel(buckets[buckets.length - 1].level());
       }
-
-      static CompressionProfile fromString(String value) {
-        Objects.requireNonNull(value, "profile");
-        try {
-          return CompressionProfile.valueOf(value.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException ex) {
-          throw new IllegalArgumentException("Unknown compression profile: " + value, ex);
-        }
-      }
     }
 
     private record LevelBucket(int lowerInclusive, int upperExclusive, int level) {
@@ -390,10 +377,6 @@ public final class NoritoCodec {
 
     public static CompressionConfig zstd(int level) {
       return new CompressionConfig(NoritoHeader.COMPRESSION_ZSTD, clampLevel(level));
-    }
-
-    public static CompressionConfig zstdProfile(String profile, int payloadBytes) {
-      return zstdProfile(CompressionProfile.fromString(profile), payloadBytes);
     }
 
     public static CompressionConfig zstdProfile(CompressionProfile profile, int payloadBytes) {

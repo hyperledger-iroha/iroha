@@ -390,7 +390,7 @@ fn direct_call_edges(op: &DecodedOp) -> Option<(u64, u64)> {
     let call_target = i128::from(op.pc)
         .checked_add(i128::from(byte_offset))
         .and_then(|target| u64::try_from(target).ok())?;
-    let return_pc = op.pc.checked_add(u64::from(op.len))?;
+    let return_pc = op.pc.checked_add(4)?;
     Some((call_target, return_pc))
 }
 fn is_protected_contract_return(op: &DecodedOp) -> bool {
@@ -1160,11 +1160,7 @@ seiyaku IndirectStateAnalysis {
     }
     #[test]
     fn protected_contract_return_requires_exact_jalr_encoding() {
-        let op = |inst| DecodedOp {
-            pc: 0,
-            inst,
-            len: 4,
-        };
+        let op = |inst| DecodedOp { pc: 0, inst };
         assert!(is_protected_contract_return(&op(wide_enc::encode_rr(
             wide::control::JALR,
             0,
@@ -1209,11 +1205,7 @@ seiyaku IndirectStateAnalysis {
             );
             assert!(facts.content_may_be_mutable[10]);
             transfer_static_state_facts(
-                &DecodedOp {
-                    pc: 0,
-                    inst: store,
-                    len: 4,
-                },
+                &DecodedOp { pc: 0, inst: store },
                 &literal_names,
                 &literal_state_paths,
                 &literal_pointer_envelopes,

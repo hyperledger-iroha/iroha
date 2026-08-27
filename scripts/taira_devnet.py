@@ -33,6 +33,7 @@ import argparse
 import fcntl
 import grp
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -45,12 +46,15 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeVar
 
 try:
     from taira_constants import (
@@ -69,6 +73,7 @@ except ModuleNotFoundError:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+_I105_ACCOUNT_DECODER: Callable[[str], bytes] | None = None
 DEFAULT_DIR = Path("/var/lib/iroha-taira-devnet")
 DEFAULT_API_PORT = 29_080
 DEFAULT_P2P_PORT = 33_337
@@ -148,6 +153,9 @@ LOCALNET_ONBOARDING_TOKEN_FILE = Path("runtime") / "onboarding.token"
 MAX_PREPARED_ENVELOPE_BYTES = 4 * 1024 * 1024
 PREPARED_MUTATION_PHASE = "pre_edge"
 PREPARED_EXECUTION_LEASE_MIN_SECONDS = 15 * 60
+PREPARED_RECOVERY_INITIAL_BACKOFF_SECONDS = 0.25
+PREPARED_RECOVERY_MAX_BACKOFF_SECONDS = 2.0
+PREPARED_RECOVERY_MAX_ATTEMPTS = 256
 PREPARED_WRITE_CHILDREN = (
     ("onboarding", "onboarding", "onboarding"),
     ("faucet", "faucet", "faucet"),
@@ -306,15 +314,13 @@ INROU_STAGE_RECEIPT_KEYS_V1 = frozenset(
 )
 SORAFS_CONTENT_CID_V1_RE = re.compile(r"b[a-z2-7]{58}")
 LOWER_32_BYTE_HEX_RE = re.compile(r"[0-9a-f]{64}")
-INROU_CANARY_SERVICE_VERSION_V1_RE = re.compile(
-    rf"{re.escape(INROU_CANARY_SERVICE_VERSION_PREFIX_V1)}[0-9a-f]{{64}}"
-)
 IROHA_HASH_LITERAL_RE = re.compile(r"hash:[0-9A-F]{64}#[0-9A-F]{4}")
 LOWER_GIT_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 LINUX_AARCH64_TARGET_RE = re.compile(
     r"aarch64-[a-z0-9_]+-linux(?:-[a-z0-9_.+]+)?"
 )
 TAIRA_QUALIFICATION_BRANCH = "optimizations"
+MCP_PROTOCOL_VERSION_V1 = "2025-06-18"
 
 
 @dataclass(frozen=True)
@@ -415,10 +421,12 @@ INROU_CANARY_CLI_SURFACES: tuple[
         "iroha",
         ("taira", "write-canary"),
         (
-            "--use-config-signer",
             "--operation",
             "--public-root",
             "--onboarding-token-file",
+            "--faucet-authority",
+            "--faucet-asset-id",
+            "--faucet-amount",
             "--authorization-sha256",
             "--authorization-nonce",
             "--mutation-phase",
@@ -449,10 +457,142 @@ class DevnetError(RuntimeError):
     """A disposable Taira operation failed."""
 
 
+class AmbiguousRetainedEnvelopeAction(DevnetError):
+    """A retained-envelope child failed after it may have contacted Torii."""
+
+
 def fail(message: str) -> NoReturn:
     """Raise a concise operator-facing error."""
 
     raise DevnetError(message)
+
+
+ParallelInput = TypeVar("ParallelInput")
+ParallelOutput = TypeVar("ParallelOutput")
+
+
+def parallel_map(
+    values: Sequence[ParallelInput],
+    operation: Callable[[ParallelInput], ParallelOutput],
+) -> list[ParallelOutput]:
+    """Run independent bounded peer work concurrently and retain input order."""
+
+    if len(values) < 2:
+        return [operation(value) for value in values]
+    with ThreadPoolExecutor(
+        max_workers=min(PEER_COUNT, len(values)),
+        thread_name_prefix="taira-devnet",
+    ) as executor:
+        futures = [executor.submit(operation, value) for value in values]
+        return [future.result() for future in futures]
+
+
+def _decode_canonical_i105_account_id(value: str) -> bytes:
+    """Decode through the repository's dependency-free canonical AccountId codec."""
+
+    global _I105_ACCOUNT_DECODER
+    if _I105_ACCOUNT_DECODER is None:
+        codec_path = REPO_ROOT / "python" / "iroha_torii_client" / "_account_id.py"
+        spec = importlib.util.spec_from_file_location(
+            "taira_devnet_account_id_codec", codec_path
+        )
+        if spec is None or spec.loader is None:
+            fail("cannot load the canonical I105 AccountId codec")
+        codec = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(codec)
+        decoder = getattr(codec, "decode_canonical_i105_account_id", None)
+        if not callable(decoder):
+            fail("canonical I105 AccountId codec omits its decoder")
+        _I105_ACCOUNT_DECODER = decoder
+    return _I105_ACCOUNT_DECODER(value)
+
+
+def _fee_quote_account_ids_have_same_identity(left: Any, right: Any) -> bool:
+    """Compare exact displays by the universal account-controller bytes."""
+
+    if not isinstance(left, str) or not isinstance(right, str):
+        return False
+    try:
+        return _decode_canonical_i105_account_id(
+            left
+        ) == _decode_canonical_i105_account_id(right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _fee_quote_program_ids_have_same_identity(left: Any, right: Any) -> bool:
+    """Compare sponsor programs by controller identity plus exact name."""
+
+    return (
+        isinstance(left, dict)
+        and isinstance(right, dict)
+        and set(left) == {"sponsor", "name"}
+        and set(right) == {"sponsor", "name"}
+        and left["name"] == right["name"]
+        and _fee_quote_account_ids_have_same_identity(
+            left["sponsor"], right["sponsor"]
+        )
+    )
+
+
+def _fee_quote_intents_have_same_identity(left: Any, right: Any) -> bool:
+    """Compare exact fee intents while treating sponsor I105 displays as identity."""
+
+    if left == right:
+        return True
+    if (
+        not isinstance(left, dict)
+        or not isinstance(right, dict)
+        or set(left) != {"payer", "value"}
+        or set(right) != {"payer", "value"}
+        or left["payer"] != "sponsor"
+        or right["payer"] != "sponsor"
+        or not isinstance(left["value"], dict)
+        or not isinstance(right["value"], dict)
+    ):
+        return False
+    fields = {
+        "program_id",
+        "program_revision",
+        "charge_limits",
+        "gas_limit",
+    }
+    left_value = left["value"]
+    right_value = right["value"]
+    return (
+        set(left_value) == fields
+        and set(right_value) == fields
+        and _fee_quote_program_ids_have_same_identity(
+            left_value["program_id"], right_value["program_id"]
+        )
+        and left_value["program_revision"] == right_value["program_revision"]
+        and left_value["charge_limits"] == right_value["charge_limits"]
+        and left_value["gas_limit"] == right_value["gas_limit"]
+    )
+
+
+def is_canonical_iroha_hash_hex(value: object) -> bool:
+    """Return whether ``value`` is exact lowercase marked Iroha Hash bytes."""
+
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        decoded = bytes.fromhex(value)
+    except ValueError:
+        return False
+    return len(decoded) == 32 and decoded.hex() == value and decoded[-1] & 1 == 1
+
+
+def is_canonical_inrou_service_version(value: object) -> bool:
+    """Return whether ``value`` is the artifact prefix plus one Iroha Hash."""
+
+    return (
+        isinstance(value, str)
+        and value.startswith(INROU_CANARY_SERVICE_VERSION_PREFIX_V1)
+        and is_canonical_iroha_hash_hex(
+            value[len(INROU_CANARY_SERVICE_VERSION_PREFIX_V1) :]
+        )
+    )
 
 
 def json_loads_no_duplicates(payload: str | bytes | bytearray) -> object:
@@ -628,13 +768,14 @@ def submitted_transaction_hash(completed: subprocess.CompletedProcess[str]) -> s
         payload["fee_quote"], dict
     ):
         fail("signed ping transaction receipt violates the exact V1 schema")
+    _validate_fee_quote_v1(payload["fee_quote"], "signed ping receipt.fee_quote")
     value = payload["hash"]
     match = (
         re.fullmatch(r"hash:([0-9a-f]{63}[13579bdf])#[0-9A-F]{4}", value)
         if isinstance(value, str)
         else None
     )
-    if match is None:
+    if match is None or not is_canonical_iroha_hash_hex(match.group(1)):
         fail("signed ping returned an invalid transaction hash")
     return match.group(1)
 
@@ -689,8 +830,7 @@ def require_applied_transaction(
         and final["status"].get("block_height") == block_height
     )
     if (
-        not isinstance(actual_hash, str)
-        or re.fullmatch(r"[0-9a-f]{63}[13579bdf]", actual_hash) is None
+        not is_canonical_iroha_hash_hex(actual_hash)
         or actual_hash != expected_hash
         or terminal_kind != "Applied"
         or payload["scope"] != "global"
@@ -864,46 +1004,6 @@ def require_runtime_signer_files(target: Path) -> None:
         identities.add(identity)
 
 
-def delete_runtime_signer_files(target: Path) -> None:
-    """Idempotently delete the stopped cohort's validated signer material."""
-
-    directory = target / RUNTIME_SIGNER_DIRECTORY
-    if directory.is_symlink():
-        fail(f"refusing symlinked Taira runtime signer directory: {directory}")
-    if not directory.exists():
-        return
-    if not directory.is_dir():
-        fail(f"Taira runtime signer path is not a directory: {directory}")
-    require_runtime_signer_files(target)
-    source_paths = runtime_signer_paths(target)
-    launch_paths = runtime_signer_launch_paths(target)
-    expected = {path.name for path in (*source_paths, *launch_paths)}
-    actual = {path.name for path in directory.iterdir()}
-    if not actual.issubset(expected):
-        fail(f"refusing unexpected Taira runtime signer directory contents: {directory}")
-    for path in launch_paths:
-        if path.is_symlink():
-            fail(f"refusing symlinked Taira FD198 launch file: {path}")
-        if not path.exists():
-            continue
-        try:
-            metadata = path.stat()
-        except OSError as error:
-            fail(f"cannot inspect Taira FD198 launch file {path}: {error}")
-        if (
-            not path.is_file()
-            or metadata.st_uid != os.geteuid()
-            or metadata.st_mode & 0o7777 != 0o600
-            or metadata.st_nlink != 1
-            or metadata.st_size not in (0, RUNTIME_SIGNER_FILE_BYTES)
-        ):
-            fail(f"untrusted Taira FD198 launch file: {path}")
-        path.unlink()
-    for path in source_paths:
-        path.unlink()
-    directory.rmdir()
-
-
 def require_stoppable_network(root: Path) -> Path:
     """Require the generated stop surface without depending on intact configs."""
 
@@ -918,20 +1018,89 @@ def require_stoppable_network(root: Path) -> Path:
     return target
 
 
-def read_bounded_text(path: Path, *, limit: int, label: str) -> str:
-    """Read one regular bundle file without accepting an oversized substitute."""
+def _stable_file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Return the pathname and descriptor fields that must stay fixed while reading."""
 
-    if path.is_symlink() or not path.is_file():
-        fail(f"{label} is missing or not a regular file: {path}")
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def read_stable_bytes(
+    path: Path,
+    *,
+    limit: int,
+    label: str,
+    owner: int | None = None,
+    exact_mode: int | None = None,
+    require_nonempty: bool = False,
+) -> bytes:
+    """Read one bounded regular file through a stable no-follow descriptor."""
+
     try:
-        size = path.stat().st_size
+        before = path.lstat()
     except OSError as error:
-        fail(f"cannot inspect {label} {path}: {error}")
-    if size > limit:
+        fail(f"{label} is missing or not a regular file: {path}: {error}")
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        fail(f"{label} is missing or not a direct single-link regular file: {path}")
+    if owner is not None and before.st_uid != owner:
+        fail(f"{label} is not owned by uid {owner}: {path}")
+    if exact_mode is not None and stat.S_IMODE(before.st_mode) != exact_mode:
+        fail(f"{label} does not have mode {exact_mode:04o}: {path}")
+    if before.st_size > limit:
         fail(f"{label} exceeds the {limit}-byte safety bound: {path}")
+    if require_nonempty and before.st_size == 0:
+        fail(f"{label} is empty: {path}")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        return path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        fail(f"cannot open {label} {path}: {error}")
+    try:
+        opened = os.fstat(descriptor)
+        payload = bytearray()
+        while len(payload) <= limit:
+            try:
+                chunk = os.read(descriptor, min(64 * 1024, limit + 1 - len(payload)))
+            except OSError as error:
+                fail(f"cannot read {label} {path}: {error}")
+            if not chunk:
+                break
+            payload.extend(chunk)
+        after_open = os.fstat(descriptor)
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            fail(f"cannot close {label} {path}: {error}")
+    try:
+        after_path = path.lstat()
+    except OSError as error:
+        fail(f"cannot re-inspect {label} {path}: {error}")
+    identity = _stable_file_identity(before)
+    if (
+        _stable_file_identity(opened) != identity
+        or _stable_file_identity(after_open) != identity
+        or _stable_file_identity(after_path) != identity
+        or len(payload) != before.st_size
+    ):
+        fail(f"{label} changed while it was read: {path}")
+    if len(payload) > limit:
+        fail(f"{label} exceeds the {limit}-byte safety bound: {path}")
+    return bytes(payload)
+
+
+def read_bounded_text(path: Path, *, limit: int, label: str) -> str:
+    """Read one stable regular UTF-8 bundle file within an exact byte bound."""
+
+    try:
+        return read_stable_bytes(path, limit=limit, label=label).decode("utf-8")
+    except UnicodeDecodeError as error:
         fail(f"cannot read {label} {path}: {error}")
 
 
@@ -1097,7 +1266,7 @@ def require_stopped_cohort(target: Path, run: Runner) -> None:
         fail(f"Taira teardown left managed peer processes running: {residual}")
 
 
-def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> None:
+def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> bool:
     """Stop only peers owned by the generated Kagami bundle."""
 
     try:
@@ -1105,7 +1274,7 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
         if target.is_symlink():
             fail(f"refusing symlinked network directory: {target}")
         if not target.exists():
-            return
+            return True
         if not target.is_dir():
             fail(f"network path is not a directory: {target}")
         pid_paths = [target / f"peer{index}.pid" for index in range(PEER_COUNT)]
@@ -1114,7 +1283,7 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
         ]
         if not present_pid_paths:
             require_stopped_cohort(target, run)
-            return
+            return True
         if len(present_pid_paths) != PEER_COUNT:
             fail(
                 "Taira teardown left peer PID files: "
@@ -1129,10 +1298,12 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
             fail(f"generated Taira network is incomplete: missing safe {stop.name}")
         run(["/bin/bash", str(stop)], cwd=stop.parent, timeout=30)
         require_stopped_cohort(target, run)
+        return True
     except (DevnetError, subprocess.TimeoutExpired) as error:
         if not tolerate_failure:
             raise
         print(f"warning: could not prove Taira cohort stopped: {error}", file=sys.stderr)
+        return False
 
 
 def _direct_root_owned_directory_identity(
@@ -1192,10 +1363,12 @@ def require_safe_cleanup_target(
     root: Path,
     target: Path,
     *,
-    expected_owner: int = 0,
+    expected_owner: int | None = None,
 ) -> tuple[int, int, int] | None:
     """Validate the exact privileged tree before recursive replacement."""
 
+    if expected_owner is None:
+        expected_owner = os.geteuid()
     root_identity = _direct_root_owned_directory_identity(
         root,
         label="managed devnet root",
@@ -1228,6 +1401,24 @@ def require_safe_cleanup_target(
     return target_metadata.st_dev, target_metadata.st_ino, target_metadata.st_uid
 
 
+def destroy_network(
+    root: Path,
+    target: Path,
+    expected_identity: tuple[int, int, int] | None,
+) -> bool:
+    """Destroy one previously pinned, stopped disposable network tree."""
+
+    current_identity = require_safe_cleanup_target(root, target)
+    if current_identity != expected_identity:
+        fail(f"network cleanup target changed before destruction: {target}")
+    if current_identity is None:
+        return False
+    shutil.rmtree(target)
+    if target.exists() or target.is_symlink():
+        fail(f"network cleanup target survived destruction: {target}")
+    return True
+
+
 def reset_network(
     root: Path,
     run: Runner,
@@ -1247,14 +1438,7 @@ def reset_network(
     target = network_dir(root)
     target_identity = require_safe_cleanup_target(root, target)
     stop_network(root, run, tolerate_failure=False)
-    if target.is_symlink():
-        fail(f"refusing symlinked network directory: {target}")
-    if target.exists():
-        if not target.is_dir():
-            fail(f"network path is not a directory: {target}")
-        if require_safe_cleanup_target(root, target) != target_identity:
-            fail(f"network cleanup target changed while peers were stopping: {target}")
-        shutil.rmtree(target)
+    destroy_network(root, target, target_identity)
     return target
 
 
@@ -1739,10 +1923,13 @@ def compiled_toolchain_evidence(
         "iroha": iroha,
         "sorafs-node": sorafs_node,
     }
-    return {
-        name: {"path": str(require_executable(path)), **executable_evidence(path)}
-        for name, path in binaries.items()
-    }
+    items = tuple(binaries.items())
+
+    def inspect(item: tuple[str, Path]) -> tuple[str, dict[str, int | str]]:
+        name, path = item
+        return name, {"path": str(require_executable(path)), **executable_evidence(path)}
+
+    return dict(parallel_map(items, inspect))
 
 
 def help_has_option(help_text: str, option: str) -> bool:
@@ -1773,7 +1960,10 @@ def preflight_cli_surfaces(
         surfaces.append(
             ("iroha", ("taira", "doctor"), ("--public-root", "--json"))
         )
-    for binary_name, subcommands, required_options in surfaces:
+    def validate_surface(
+        surface_spec: tuple[str, tuple[str, ...], tuple[str, ...]],
+    ) -> None:
+        binary_name, subcommands, required_options = surface_spec
         command = [str(binaries[binary_name]), *subcommands, "--help"]
         completed = run(command, cwd=REPO_ROOT, timeout=20)
         help_text = "\n".join((completed.stdout or "", completed.stderr or ""))
@@ -1786,6 +1976,8 @@ def preflight_cli_surfaces(
                 f"compiled CLI surface `{surface}` is missing current options: "
                 + ", ".join(missing)
             )
+
+    parallel_map(surfaces, validate_surface)
 
 
 def generate_network(
@@ -1839,7 +2031,7 @@ def validate_configs(
     """Run the current daemon's offline validator for every generated peer."""
 
     require_canonical_taira_profiles(target, trusted_guest)
-    for index in range(PEER_COUNT):
+    def validate(index: int) -> None:
         config = target / f"peer{index}.toml"
         run(
             [
@@ -1854,6 +2046,8 @@ def validate_configs(
             cwd=target,
             timeout=120,
         )
+
+    parallel_map(tuple(range(PEER_COUNT)), validate)
 
 
 def http_request(url: str, payload: object | None = None) -> tuple[int, object | None]:
@@ -1920,7 +2114,7 @@ def require_cluster_build_identity(
 ) -> None:
     """Require every running validator to expose the current Linux/AArch64 build."""
 
-    for root in roots:
+    def check(root: str) -> None:
         status, payload = request(root + "status", None)
         build = payload.get("build") if isinstance(payload, dict) else None
         git_commit_sha = build.get("git_commit_sha") if isinstance(build, dict) else None
@@ -1932,6 +2126,8 @@ def require_cluster_build_identity(
             )
         if target_triple != expected_target_triple:
             fail(f"validator build target does not match the native compiler at {root}")
+
+    parallel_map(roots, check)
 
 
 def require_cli_build_identity(
@@ -1997,15 +2193,17 @@ def wait_for_cluster(
         # published fail-stop or watchdog blocker terminal immediately.  Keep
         # them outside the retryable readiness block so a serious consensus
         # diagnosis is not hidden behind a generic convergence timeout.
-        for root in roots:
-            check_sumeragi_status(root, request)
+        parallel_map(roots, lambda root: check_sumeragi_status(root, request))
+
+        def ready_height(root: str) -> int:
+            for endpoint in ("health", "readyz"):
+                status, _ = request(root + endpoint, None)
+                if not 200 <= status < 300:
+                    fail(f"{root}{endpoint} returned HTTP {status}")
+            return read_height(root, request)
+
         try:
-            for root in roots:
-                for endpoint in ("health", "readyz"):
-                    status, _ = request(root + endpoint, None)
-                    if not 200 <= status < 300:
-                        fail(f"{root}{endpoint} returned HTTP {status}")
-            heights = [read_height(root, request) for root in roots]
+            heights = parallel_map(roots, ready_height)
             if len(set(heights)) == 1 and (above is None or heights[0] > above):
                 return heights
             last = f"heights={heights}, required_above={above}"
@@ -2027,8 +2225,7 @@ def check_mcp(root: str, request: Request) -> None:
         status != 200
         or not isinstance(capabilities, dict)
         or capabilities.get("enabled") is not True
-        or not isinstance(protocol_version, str)
-        or not protocol_version.strip()
+        or protocol_version != MCP_PROTOCOL_VERSION_V1
     ):
         fail(f"MCP capabilities are not enabled/current at {url} (HTTP {status})")
     initialize = {
@@ -2036,7 +2233,7 @@ def check_mcp(root: str, request: Request) -> None:
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": protocol_version,
+            "protocolVersion": MCP_PROTOCOL_VERSION_V1,
             "capabilities": {},
             "clientInfo": {"name": "taira-devnet-smoke", "version": "1"},
         },
@@ -2052,7 +2249,7 @@ def check_mcp(root: str, request: Request) -> None:
         or initialized.get("id") != 1
         or "error" in initialized
         or not isinstance(initialized_result, dict)
-        or initialized_result.get("protocolVersion") != protocol_version
+        or initialized_result.get("protocolVersion") != MCP_PROTOCOL_VERSION_V1
     ):
         fail(f"MCP initialize failed at {url} (HTTP {status})")
     initialized_notification = {
@@ -2092,8 +2289,7 @@ def check_mcp(root: str, request: Request) -> None:
 def check_all_mcp(roots: Sequence[str], request: Request) -> None:
     """Verify the live MCP handshake and curated tools on every validator."""
 
-    for root in roots:
-        check_mcp(root, request)
+    parallel_map(roots, lambda root: check_mcp(root, request))
 
 
 def run_full_doctor(target: Path, iroha: Path, root: str, run: Runner) -> None:
@@ -2477,6 +2673,49 @@ def section_assignment(path: Path, section: str, key: str) -> str:
     if len(values) != 1:
         fail(f"generated config must contain one {section}.{key} assignment: {path}")
     return values[0]
+
+
+@dataclass(frozen=True)
+class TrustedLocalnetFaucetPolicy:
+    """Exact faucet policy independently configured on every validator."""
+
+    authority: str
+    asset_definition_id: str
+    amount: str
+
+
+def require_trusted_localnet_faucet_policy(
+    target: Path,
+) -> TrustedLocalnetFaucetPolicy:
+    """Require one enabled, identical faucet policy across all four peers."""
+
+    policies: list[TrustedLocalnetFaucetPolicy] = []
+    for peer_index in range(PEER_COUNT):
+        config = target / f"peer{peer_index}.toml"
+        if section_assignment(config, "torii.faucet", "enabled") != "true":
+            fail(f"peer{peer_index} does not enable its generated faucet policy: {config}")
+        policy = TrustedLocalnetFaucetPolicy(
+            authority=section_assignment(config, "torii.faucet", "authority"),
+            asset_definition_id=section_assignment(
+                config, "torii.faucet", "asset_definition_id"
+            ),
+            amount=section_assignment(config, "torii.faucet", "amount"),
+        )
+        if any(
+            not value
+            or value != value.strip()
+            or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+            for value in (
+                policy.authority,
+                policy.asset_definition_id,
+                policy.amount,
+            )
+        ):
+            fail(f"peer{peer_index} has a malformed generated faucet policy: {config}")
+        policies.append(policy)
+    if len(set(policies)) != 1:
+        fail("generated Taira validators do not share one exact faucet policy")
+    return policies[0]
 
 
 _CANONICAL_TOML_HEADER = re.compile(
@@ -3226,86 +3465,16 @@ def _read_inrou_stage_receipt(stage_dir: Path) -> dict[str, Any]:
     """Read the staged receipt through one stable owner-only descriptor."""
 
     path = stage_dir / INROU_STAGE_RECEIPT_FILE
-    before = _require_owner_only_entry(
+    payload = read_stable_bytes(
         path,
-        directory=False,
+        limit=MAX_INROU_STAGE_RECEIPT_BYTES,
         label="native Taira Inrou stage receipt",
+        owner=os.geteuid(),
+        exact_mode=0o600,
+        require_nonempty=True,
     )
-    if before.st_size == 0 or before.st_size > MAX_INROU_STAGE_RECEIPT_BYTES:
-        fail("native Taira Inrou stage receipt exceeds its exact safety bound")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        fail(f"cannot open native Taira Inrou stage receipt: {error}")
-    try:
-        opened = os.fstat(descriptor)
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-            fail("native Taira Inrou stage receipt changed while opening it")
-        payload = bytearray()
-        while len(payload) <= MAX_INROU_STAGE_RECEIPT_BYTES:
-            try:
-                chunk = os.read(
-                    descriptor,
-                    min(
-                        64 * 1024,
-                        MAX_INROU_STAGE_RECEIPT_BYTES + 1 - len(payload),
-                    ),
-                )
-            except OSError as error:
-                fail(f"cannot read native Taira Inrou stage receipt: {error}")
-            if not chunk:
-                break
-            payload.extend(chunk)
-        after_open = os.fstat(descriptor)
-    finally:
-        try:
-            os.close(descriptor)
-        except OSError as error:
-            fail(f"cannot close native Taira Inrou stage receipt: {error}")
-    after_path = _require_owner_only_entry(
-        path,
-        directory=False,
-        label="native Taira Inrou stage receipt",
-    )
-    before_identity = (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
-    )
-    opened_identity = (
-        after_open.st_dev,
-        after_open.st_ino,
-        after_open.st_size,
-        after_open.st_mtime_ns,
-        after_open.st_ctime_ns,
-    )
-    after_identity = (
-        after_path.st_dev,
-        after_path.st_ino,
-        after_path.st_size,
-        after_path.st_mtime_ns,
-        after_path.st_ctime_ns,
-    )
-    if before_identity != opened_identity or before_identity != after_identity:
-        fail("native Taira Inrou stage receipt changed while it was read")
-    if len(payload) > MAX_INROU_STAGE_RECEIPT_BYTES:
-        fail("native Taira Inrou stage receipt exceeds its exact safety bound")
-    def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"duplicate JSON field {key}")
-            result[key] = value
-        return result
-
-    try:
-        receipt = json.loads(
-            payload.decode("utf-8"),
-            object_pairs_hook=unique_json_object,
-        )
+        receipt = json_loads_no_duplicates(payload.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         fail("native Taira Inrou stage receipt is not JSON")
     if not isinstance(receipt, dict) or set(receipt) != INROU_STAGE_RECEIPT_KEYS_V1:
@@ -3325,18 +3494,17 @@ def _read_inrou_stage_receipt(stage_dir: Path) -> dict[str, Any]:
     if any(receipt.get(field) != value for field, value in expected.items()):
         fail("native Taira Inrou stage receipt is not the exact V1 deploy layout")
     service_version = receipt.get("service_version")
-    if (
-        not isinstance(service_version, str)
-        or INROU_CANARY_SERVICE_VERSION_V1_RE.fullmatch(service_version) is None
-    ):
+    if not is_canonical_inrou_service_version(service_version):
         fail("native Taira Inrou stage receipt has a malformed artifact-derived service_version")
     for field in (
         "bundle_hash",
-        "bundle_manifest_digest_hex",
-        "guest_manifest_digest_hex",
         "container_manifest_hash",
         "service_manifest_hash",
     ):
+        value = receipt.get(field)
+        if not is_canonical_iroha_hash_hex(value):
+            fail(f"native Taira Inrou stage receipt has malformed {field}")
+    for field in ("bundle_manifest_digest_hex", "guest_manifest_digest_hex"):
         value = receipt.get(field)
         if not isinstance(value, str) or LOWER_32_BYTE_HEX_RE.fullmatch(value) is None:
             fail(f"native Taira Inrou stage receipt has malformed {field}")
@@ -3555,7 +3723,8 @@ def preseed_inrou_stage(
     ]
     if len(set(data_dirs)) != PEER_COUNT:
         fail("Taira Inrou preseed requires four disjoint SoraFS roots")
-    for data_dir in data_dirs:
+
+    def preseed_peer(data_dir: Path) -> None:
         for manifest, source_flag, source in (
             (
                 stage_dir / INROU_STAGE_BUNDLE_MANIFEST,
@@ -3581,18 +3750,7 @@ def preseed_inrou_stage(
                 timeout=timeout_seconds + 300,
             )
 
-
-def canonical_inrou_canary_outcome(
-    completed: subprocess.CompletedProcess[str],
-    expected_public_root: str,
-) -> dict[str, Any]:
-    """Decode and require the compiled canary's exact success receipt."""
-
-    try:
-        receipt = json_loads_no_duplicates(completed.stdout or "")
-    except (TypeError, ValueError):
-        fail("compiled Taira Inrou canary did not return its JSON receipt")
-    return require_canonical_inrou_canary_receipt(receipt, expected_public_root)
+    parallel_map(data_dirs, preseed_peer)
 
 
 def require_canonical_inrou_canary_receipt(
@@ -3618,10 +3776,7 @@ def require_canonical_inrou_canary_receipt(
     ):
         fail("compiled Taira Inrou canary did not report exact V1 deploy success")
     service_version = receipt.get("service_version")
-    if (
-        not isinstance(service_version, str)
-        or INROU_CANARY_SERVICE_VERSION_V1_RE.fullmatch(service_version) is None
-    ):
+    if not is_canonical_inrou_service_version(service_version):
         fail("compiled Taira Inrou canary has a malformed artifact-derived service_version")
     for field in ("active_host_adverts", "hosted_replica_count"):
         value = receipt.get(field)
@@ -3633,6 +3788,11 @@ def require_canonical_inrou_canary_receipt(
         "container_manifest_hash",
         "service_manifest_hash",
         "transaction_hash_hex",
+    ):
+        value = receipt.get(field)
+        if not is_canonical_iroha_hash_hex(value):
+            fail(f"compiled Taira Inrou canary receipt has malformed {field}")
+    for field in (
         "prepared_envelope_sha256",
         "authorization_sha256",
         "idempotency_key",
@@ -3670,12 +3830,16 @@ def require_canonical_inrou_canary_receipt(
         or prepared_size > MAX_PREPARED_ENVELOPE_BYTES
         or type(applied_height) is not int
         or applied_height <= 0
-        or not isinstance(receipt.get("evidence"), str)
-        or not receipt["evidence"]
-        or not isinstance(receipt.get("fee_payment"), dict)
-        or not isinstance(receipt.get("fee_quote"), dict)
+        or not is_canonical_iroha_hash_hex(receipt.get("evidence"))
+        or receipt.get("evidence") != receipt.get("transaction_hash_hex")
     ):
         fail("compiled Taira Inrou canary receipt has malformed prepared evidence")
+    _validate_fee_payment_v1(
+        receipt.get("fee_payment"), "compiled Taira Inrou canary receipt.fee_payment"
+    )
+    _validate_fee_quote_v1(
+        receipt.get("fee_quote"), "compiled Taira Inrou canary receipt.fee_quote"
+    )
 
     checks = receipt.get("checks")
     if not isinstance(checks, list) or len(checks) != 2:
@@ -3752,10 +3916,7 @@ def require_canonical_inrou_check_receipt(
     ):
         fail("compiled Taira Inrou check did not report exact V1 live success")
     service_version = receipt.get("service_version")
-    if (
-        not isinstance(service_version, str)
-        or INROU_CANARY_SERVICE_VERSION_V1_RE.fullmatch(service_version) is None
-    ):
+    if not is_canonical_inrou_service_version(service_version):
         fail("compiled Taira Inrou check has a malformed artifact-derived service_version")
     for retired in ("mutation_mode", "submitted_tx_hash", "mutation_response_digest"):
         if retired in receipt:
@@ -3766,11 +3927,13 @@ def require_canonical_inrou_check_receipt(
             fail(f"compiled Taira Inrou check receipt requires {field}=4")
     for field in (
         "bundle_hash",
-        "bundle_manifest_digest_hex",
-        "guest_manifest_digest_hex",
         "container_manifest_hash",
         "service_manifest_hash",
     ):
+        value = receipt.get(field)
+        if not is_canonical_iroha_hash_hex(value):
+            fail(f"compiled Taira Inrou check receipt has malformed {field}")
+    for field in ("bundle_manifest_digest_hex", "guest_manifest_digest_hex"):
         value = receipt.get(field)
         if not isinstance(value, str) or LOWER_32_BYTE_HEX_RE.fullmatch(value) is None:
             fail(f"compiled Taira Inrou check receipt has malformed {field}")
@@ -3850,78 +4013,14 @@ def require_canonical_inrou_check_receipt(
 def _read_inrou_guest_qualification_payload(path: Path) -> object:
     """Read one stable owner-only qualification record without following links."""
 
-    try:
-        before = path.lstat()
-    except OSError as error:
-        fail(f"Inrou guest qualification record is missing: {error}")
-    if (
-        not stat.S_ISREG(before.st_mode)
-        or before.st_uid != os.geteuid()
-        or stat.S_IMODE(before.st_mode) != 0o600
-        or before.st_nlink != 1
-        or before.st_size == 0
-        or before.st_size > MAX_INROU_GUEST_QUALIFICATION_BYTES
-    ):
-        fail("Inrou guest qualification record lacks direct owner-only custody")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        fail(f"cannot open Inrou guest qualification record: {error}")
-    try:
-        opened = os.fstat(descriptor)
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-            fail("Inrou guest qualification record changed while it was opened")
-        payload = bytearray()
-        while len(payload) <= MAX_INROU_GUEST_QUALIFICATION_BYTES:
-            try:
-                chunk = os.read(
-                    descriptor,
-                    min(
-                        64 * 1024,
-                        MAX_INROU_GUEST_QUALIFICATION_BYTES + 1 - len(payload),
-                    ),
-                )
-            except OSError as error:
-                fail(f"cannot read Inrou guest qualification record: {error}")
-            if not chunk:
-                break
-            payload.extend(chunk)
-        after_open = os.fstat(descriptor)
-    finally:
-        try:
-            os.close(descriptor)
-        except OSError as error:
-            fail(f"cannot close Inrou guest qualification record: {error}")
-    try:
-        after_path = path.lstat()
-    except OSError as error:
-        fail(f"cannot re-inspect Inrou guest qualification record: {error}")
-    identity_before = (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
+    payload = read_stable_bytes(
+        path,
+        limit=MAX_INROU_GUEST_QUALIFICATION_BYTES,
+        label="Inrou guest qualification record",
+        owner=os.geteuid(),
+        exact_mode=0o600,
+        require_nonempty=True,
     )
-    identity_opened = (
-        after_open.st_dev,
-        after_open.st_ino,
-        after_open.st_size,
-        after_open.st_mtime_ns,
-        after_open.st_ctime_ns,
-    )
-    identity_after = (
-        after_path.st_dev,
-        after_path.st_ino,
-        after_path.st_size,
-        after_path.st_mtime_ns,
-        after_path.st_ctime_ns,
-    )
-    if identity_before != identity_opened or identity_before != identity_after:
-        fail("Inrou guest qualification record changed while it was read")
-    if len(payload) > MAX_INROU_GUEST_QUALIFICATION_BYTES:
-        fail("Inrou guest qualification record exceeds its exact safety bound")
     try:
         decoded = json_loads_no_duplicates(payload.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
@@ -3929,7 +4028,7 @@ def _read_inrou_guest_qualification_payload(path: Path) -> object:
     canonical = (json.dumps(decoded, sort_keys=True, separators=(",", ":")) + "\n").encode(
         "utf-8"
     )
-    if bytes(payload) != canonical:
+    if payload != canonical:
         fail("Inrou guest qualification record is not canonical JSON")
     return decoded
 
@@ -4163,12 +4262,26 @@ def _prepared_canary_authorization(
     """Create one runtime-only authorization identity for the disposable cohort."""
 
     nonce = os.urandom(16).hex()
+    genesis_hash = read_stable_bytes(
+        target / "genesis.expected_hash",
+        limit=256,
+        label="generated genesis hash",
+        require_nonempty=True,
+    )
+    stage_receipt = read_stable_bytes(
+        stage_dir / INROU_STAGE_RECEIPT_FILE,
+        limit=MAX_INROU_STAGE_RECEIPT_BYTES,
+        label="native Taira Inrou stage receipt",
+        owner=os.geteuid(),
+        exact_mode=0o600,
+        require_nonempty=True,
+    )
     digest = hashlib.sha256()
     for frame in (
         b"iroha:taira:disposable-prepared-canary:v1\0",
         nonce.encode("ascii"),
-        (target / "genesis.expected_hash").read_bytes(),
-        (stage_dir / INROU_STAGE_RECEIPT_FILE).read_bytes(),
+        genesis_hash,
+        stage_receipt,
     ):
         digest.update(len(frame).to_bytes(8, "big"))
         digest.update(frame)
@@ -4201,57 +4314,1002 @@ def _prepare_prepared_canary_directory(target: Path) -> Path:
     return directory
 
 
+def _exact_v1_object(
+    value: Any,
+    fields: frozenset[str],
+    context: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != fields:
+        fail(f"{context} must contain exactly the V1 fields")
+    return value
+
+
+def _exact_v1_string(value: Any, context: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.strip() != value
+        or any(character.isspace() for character in value)
+    ):
+        fail(f"{context} must be one exact nonempty token")
+    return value
+
+
+def _exact_v1_u64(value: Any, context: str, *, positive: bool = False) -> int:
+    minimum = 1 if positive else 0
+    if type(value) is not int or not minimum <= value < 1 << 64:
+        fail(f"{context} must be an exact {'positive ' if positive else ''}u64")
+    return value
+
+
+def _exact_v1_lower_hex(
+    value: Any,
+    context: str,
+    *,
+    exact_bytes: int | None = None,
+    max_bytes: int | None = None,
+) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"(?:[0-9a-f]{2})+", value) is None:
+        fail(f"{context} must be nonempty lowercase whole-byte hexadecimal")
+    byte_length = len(value) // 2
+    if exact_bytes is not None and byte_length != exact_bytes:
+        fail(f"{context} must contain exactly {exact_bytes} bytes")
+    if max_bytes is not None and byte_length > max_bytes:
+        fail(f"{context} exceeds its {max_bytes}-byte V1 bound")
+    return value
+
+
+def _validate_quantity_v1(value: Any, context: str) -> Fraction:
+    if (
+        not isinstance(value, str)
+        or len(value) > 155
+        or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]{0,27}[1-9])?", value)
+        is None
+    ):
+        fail(f"{context} must be one canonical V1 Quantity string")
+    return Fraction(value)
+
+
+def _validate_asset_definition_id_v1(value: Any, context: str) -> None:
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{20,40}", value) is None
+    ):
+        fail(f"{context} must be one canonical Base58 asset-definition address")
+
+
+def _validate_tagged_null_v1(
+    value: Any,
+    context: str,
+    allowed_kinds: frozenset[str],
+) -> None:
+    tagged = _exact_v1_object(value, frozenset({"kind", "value"}), context)
+    if tagged["kind"] not in allowed_kinds or tagged["value"] is not None:
+        fail(f"{context} has an invalid closed V1 variant")
+
+
+def _validate_fee_charge_limit_v1(
+    value: Any,
+    context: str,
+) -> tuple[str, str, Fraction]:
+    charge = _exact_v1_object(
+        value,
+        frozenset({"kind", "asset_definition_id", "max_amount"}),
+        context,
+    )
+    _validate_tagged_null_v1(
+        charge["kind"],
+        f"{context}.kind",
+        frozenset({"nexus", "pipeline_gas"}),
+    )
+    _validate_asset_definition_id_v1(
+        charge["asset_definition_id"], f"{context}.asset_definition_id"
+    )
+    amount = _validate_quantity_v1(charge["max_amount"], f"{context}.max_amount")
+    if amount <= 0:
+        fail(f"{context}.max_amount must be positive")
+    return charge["kind"]["kind"], charge["asset_definition_id"], amount
+
+
+def _validate_fee_sponsor_program_id_v1(value: Any, context: str) -> None:
+    program = _exact_v1_object(
+        value,
+        frozenset({"sponsor", "name"}),
+        context,
+    )
+    _validate_fee_account_id_v1(program["sponsor"], f"{context}.sponsor")
+    name = _exact_v1_string(program["name"], f"{context}.name")
+    try:
+        encoded_name = name.encode("utf-8")
+    except UnicodeEncodeError:
+        fail(f"{context}.name must be one exact canonical sponsor-program name")
+    if (
+        len(encoded_name) > 255
+        or unicodedata.normalize("NFC", name) != name
+        or any(
+            unicodedata.category(character) == "Cc"
+            or character in "\u061c\u200e\u200f"
+            or "\u202a" <= character <= "\u202e"
+            or "\u2066" <= character <= "\u2069"
+            or character in "@#$/"
+            for character in name
+        )
+    ):
+        fail(f"{context}.name must be one exact canonical sponsor-program name")
+
+
+def _validate_fee_account_id_v1(value: Any, context: str) -> str:
+    account_id = _exact_v1_string(value, context)
+    try:
+        _decode_canonical_i105_account_id(account_id)
+    except (TypeError, ValueError):
+        fail(f"{context} must be one exact canonical I105 account id")
+    return account_id
+
+
+def _validate_fee_payment_v1(value: Any, context: str) -> None:
+    payment = _exact_v1_object(value, frozenset({"payer", "value"}), context)
+    payer = payment["payer"]
+    if payer == "authority":
+        fields = frozenset({"charge_limits", "gas_limit"})
+    elif payer == "sponsor":
+        fields = frozenset(
+            {"program_id", "program_revision", "charge_limits", "gas_limit"}
+        )
+    else:
+        fail(f"{context}.payer has an unknown V1 variant")
+    body = _exact_v1_object(payment["value"], fields, f"{context}.value")
+    limits = body["charge_limits"]
+    if not isinstance(limits, list):
+        fail(f"{context}.value.charge_limits must be an array")
+    previous_kind_rank = -1
+    kind_ranks = {"nexus": 0, "pipeline_gas": 1}
+    for index, charge in enumerate(limits):
+        kind, _, _ = _validate_fee_charge_limit_v1(
+            charge, f"{context}.value.charge_limits[{index}]"
+        )
+        kind_rank = kind_ranks[kind]
+        if kind_rank <= previous_kind_rank:
+            fail(f"{context}.value.charge_limits are not canonical and unique")
+        previous_kind_rank = kind_rank
+    gas_limit = body["gas_limit"]
+    if gas_limit is not None:
+        _exact_v1_u64(gas_limit, f"{context}.value.gas_limit", positive=True)
+    if payer == "sponsor":
+        _validate_fee_sponsor_program_id_v1(
+            body["program_id"], f"{context}.value.program_id"
+        )
+        _exact_v1_u64(
+            body["program_revision"],
+            f"{context}.value.program_revision",
+            positive=True,
+        )
+
+
+def _validate_fee_quote_v1(
+    value: Any,
+    context: str,
+    *,
+    expected_fee_payment: Any | None = None,
+    expected_authority: Any | None = None,
+) -> None:
+    quote = _exact_v1_object(
+        value,
+        frozenset({"intent", "observation", "components", "capacities", "decision"}),
+        context,
+    )
+    _validate_fee_payment_v1(quote["intent"], f"{context}.intent")
+    if expected_fee_payment is not None and not _fee_quote_intents_have_same_identity(
+        quote["intent"], expected_fee_payment
+    ):
+        fail(f"{context}.intent differs from the exact prepared fee payment")
+    observation = _exact_v1_object(
+        quote["observation"],
+        frozenset({"ledger_time_ms", "next_block_height", "route_dataspace_id"}),
+        f"{context}.observation",
+    )
+    _exact_v1_u64(
+        observation["ledger_time_ms"], f"{context}.observation.ledger_time_ms"
+    )
+    _exact_v1_u64(
+        observation["next_block_height"],
+        f"{context}.observation.next_block_height",
+        positive=True,
+    )
+    _exact_v1_u64(
+        observation["route_dataspace_id"],
+        f"{context}.observation.route_dataspace_id",
+    )
+    components = quote["components"]
+    if not isinstance(components, list):
+        fail(f"{context}.components must be an array")
+    for index, component in enumerate(components):
+        _validate_fee_charge_limit_v1(component, f"{context}.components[{index}]")
+    intent = quote["intent"]
+    intent_body = intent["value"]
+    if components != intent_body["charge_limits"]:
+        fail(f"{context}.components must exactly match the quoted fee intent")
+    capacities = quote["capacities"]
+    if not isinstance(capacities, list):
+        fail(f"{context}.capacities must be an array")
+    capacity_amount_fields = (
+        "vault_balance",
+        "reserve_floor",
+        "block_remaining",
+        "program_epoch_remaining",
+        "beneficiary_epoch_remaining",
+    )
+    capacity_fields = frozenset(("asset_definition_id", *capacity_amount_fields))
+    parsed_capacities: list[tuple[str, dict[str, Fraction]]] = []
+    for index, raw_capacity in enumerate(capacities):
+        capacity_context = f"{context}.capacities[{index}]"
+        capacity = _exact_v1_object(raw_capacity, capacity_fields, capacity_context)
+        _validate_asset_definition_id_v1(
+            capacity["asset_definition_id"],
+            f"{capacity_context}.asset_definition_id",
+        )
+        amounts = {}
+        for field in capacity_amount_fields:
+            amounts[field] = _validate_quantity_v1(
+                capacity[field], f"{capacity_context}.{field}"
+            )
+        parsed_capacities.append((capacity["asset_definition_id"], amounts))
+    decision = _exact_v1_object(
+        quote["decision"], frozenset({"status", "value"}), f"{context}.decision"
+    )
+    if decision["status"] != "accepted":
+        fail(f"{context}.decision.status must be accepted")
+    decision_value = _exact_v1_object(
+        decision["value"],
+        frozenset({"debit_source", "program_revision"}),
+        f"{context}.decision.value",
+    )
+    debit = _exact_v1_object(
+        decision_value["debit_source"],
+        frozenset({"kind", "value"}),
+        f"{context}.decision.value.debit_source",
+    )
+    revision = decision_value["program_revision"]
+    if intent["payer"] == "authority":
+        if debit["kind"] != "account" or revision is not None or capacities:
+            fail(f"{context}.decision does not match its authority-paid intent")
+        debit_account = _validate_fee_account_id_v1(
+            debit["value"], f"{context}.decision.value.debit_source.value"
+        )
+        if expected_authority is not None and not _fee_quote_account_ids_have_same_identity(
+            debit_account, expected_authority
+        ):
+            fail(f"{context}.decision debits a substituted authority")
+    else:
+        if debit["kind"] != "sponsor_program":
+            fail(f"{context}.decision does not match its sponsored intent")
+        _validate_fee_sponsor_program_id_v1(
+            debit["value"], f"{context}.decision.value.debit_source.value"
+        )
+        _exact_v1_u64(
+            revision,
+            f"{context}.decision.value.program_revision",
+            positive=True,
+        )
+        if (
+            not _fee_quote_program_ids_have_same_identity(
+                debit["value"], intent_body["program_id"]
+            )
+            or revision != intent_body["program_revision"]
+        ):
+            fail(f"{context}.decision differs from its exact sponsored intent")
+        required_by_asset: dict[str, Fraction] = {}
+        for index, component in enumerate(components):
+            _, asset_definition_id, amount = _validate_fee_charge_limit_v1(
+                component, f"{context}.components[{index}]"
+            )
+            required_by_asset[asset_definition_id] = (
+                required_by_asset.get(asset_definition_id, Fraction()) + amount
+            )
+        expected_assets = sorted(required_by_asset)
+        if [asset for asset, _ in parsed_capacities] != expected_assets:
+            fail(
+                f"{context}.capacities must contain exactly one canonical entry "
+                "for every sponsored fee asset"
+            )
+        for asset_definition_id, amounts in parsed_capacities:
+            required = required_by_asset[asset_definition_id]
+            if amounts["vault_balance"] < amounts["reserve_floor"] + required:
+                fail(f"{context}.capacities cannot cover the quoted vault charge")
+            for field in (
+                "block_remaining",
+                "program_epoch_remaining",
+                "beneficiary_epoch_remaining",
+            ):
+                if amounts[field] < required:
+                    fail(f"{context}.capacities cannot cover the quoted {field}")
+
+
+def _validate_public_reset_binding_v1(
+    value: Any,
+    context: str,
+    expected_kind: str,
+) -> dict[str, Any]:
+    binding = _exact_v1_object(
+        value,
+        frozenset(
+            {
+                "schema",
+                "authorization_sha256",
+                "authorization_nonce",
+                "kind",
+                "phase",
+                "idempotency_key",
+                "execution_expires_at_unix_ms",
+            }
+        ),
+        context,
+    )
+    if (
+        binding["schema"] != "iroha.taira.public-reset.mutation-binding.v1"
+        or binding["kind"] != expected_kind
+    ):
+        fail(f"{context} has a substituted V1 identity")
+    _exact_v1_lower_hex(
+        binding["authorization_sha256"],
+        f"{context}.authorization_sha256",
+        exact_bytes=32,
+    )
+    nonce = binding["authorization_nonce"]
+    if not isinstance(nonce, str) or re.fullmatch(r"[a-z0-9_-]{32}", nonce) is None:
+        fail(f"{context}.authorization_nonce is not exact V1")
+    _exact_v1_string(binding["phase"], f"{context}.phase")
+    _exact_v1_lower_hex(
+        binding["idempotency_key"], f"{context}.idempotency_key", exact_bytes=32
+    )
+    _exact_v1_u64(
+        binding["execution_expires_at_unix_ms"],
+        f"{context}.execution_expires_at_unix_ms",
+        positive=True,
+    )
+    return binding
+
+
+def _validate_inrou_binding_v1(
+    value: Any,
+    context: str,
+    expected_kind: str,
+) -> dict[str, Any]:
+    binding = _exact_v1_object(
+        value,
+        frozenset(
+            {
+                "authorization_sha256",
+                "authorization_nonce",
+                "kind",
+                "phase",
+                "idempotency_key",
+                "execution_expires_at_unix_ms",
+            }
+        ),
+        context,
+    )
+    if binding["kind"] != expected_kind:
+        fail("prepared canary envelope closure has a substituted child binding kind")
+    _exact_v1_lower_hex(
+        binding["authorization_sha256"],
+        f"{context}.authorization_sha256",
+        exact_bytes=32,
+    )
+    nonce = binding["authorization_nonce"]
+    if not isinstance(nonce, str) or re.fullmatch(r"[a-z0-9_-]{32}", nonce) is None:
+        fail(f"{context}.authorization_nonce is not exact V1")
+    _exact_v1_string(binding["phase"], f"{context}.phase")
+    _exact_v1_lower_hex(
+        binding["idempotency_key"], f"{context}.idempotency_key", exact_bytes=32
+    )
+    _exact_v1_u64(
+        binding["execution_expires_at_unix_ms"],
+        f"{context}.execution_expires_at_unix_ms",
+        positive=True,
+    )
+    return binding
+
+
+def _validate_hash_literal_v1(value: Any, context: str) -> None:
+    if not isinstance(value, str) or IROHA_HASH_LITERAL_RE.fullmatch(value) is None:
+        fail(f"{context} must be a canonical Iroha hash literal")
+
+
+def _validate_signature_v1(value: Any, context: str) -> None:
+    if not isinstance(value, str) or re.fullmatch(r"(?:[0-9A-F]{2})+", value) is None:
+        fail(f"{context} must be one canonical uppercase signature literal")
+
+
+def _validate_account_alias_name_v1(value: Any, context: str) -> None:
+    alias = _exact_v1_object(
+        value, frozenset({"label", "domain", "dataspace"}), context
+    )
+    _exact_v1_string(alias["label"], f"{context}.label")
+    _exact_v1_string(alias["dataspace"], f"{context}.dataspace")
+    if alias["domain"] is not None:
+        _exact_v1_string(alias["domain"], f"{context}.domain")
+
+
+def _validate_resolved_account_alias_v1(value: Any, context: str) -> None:
+    alias = _exact_v1_object(
+        value, frozenset({"canonical_name", "dataspace_id"}), context
+    )
+    _validate_account_alias_name_v1(alias["canonical_name"], f"{context}.canonical_name")
+    _exact_v1_u64(alias["dataspace_id"], f"{context}.dataspace_id")
+
+
+def _validate_alias_intent_v1(value: Any, context: str) -> None:
+    tagged = _exact_v1_object(value, frozenset({"kind", "intent"}), context)
+    if tagged["kind"] != "account_alias":
+        fail(f"{context}.kind must be account_alias")
+    intent = _exact_v1_object(
+        tagged["intent"],
+        frozenset({"alias", "target_account", "provision", "role"}),
+        f"{context}.intent",
+    )
+    _validate_resolved_account_alias_v1(intent["alias"], f"{context}.intent.alias")
+    _exact_v1_string(intent["target_account"], f"{context}.intent.target_account")
+    _validate_tagged_null_v1(
+        intent["provision"],
+        f"{context}.intent.provision",
+        frozenset({"existing", "create"}),
+    )
+    _validate_tagged_null_v1(
+        intent["role"],
+        f"{context}.intent.role",
+        frozenset({"primary", "additional"}),
+    )
+
+
+def _validate_alias_target_v1(value: Any, context: str) -> None:
+    tagged = _exact_v1_object(value, frozenset({"kind", "resource"}), context)
+    if tagged["kind"] != "account_alias":
+        fail(f"{context}.kind must be account_alias")
+    _validate_resolved_account_alias_v1(tagged["resource"], f"{context}.resource")
+
+
+def _validate_alias_disposition_v1(value: Any, context: str) -> None:
+    _validate_tagged_null_v1(
+        value,
+        context,
+        frozenset({"no_op", "repair", "create", "conflict"}),
+    )
+
+
+def _validate_alias_quote_guard_v1(value: Any, context: str) -> None:
+    guard = _exact_v1_object(
+        value,
+        frozenset(
+            {
+                "expected_policy_version",
+                "expected_payment_asset",
+                "max_amount",
+                "valid_until_ms",
+            }
+        ),
+        context,
+    )
+    policy_version = guard["expected_policy_version"]
+    if type(policy_version) is not int or not 0 <= policy_version <= 0xFFFF:
+        fail(f"{context}.expected_policy_version must be a u16")
+    _validate_asset_definition_id_v1(
+        guard["expected_payment_asset"], f"{context}.expected_payment_asset"
+    )
+    _validate_quantity_v1(guard["max_amount"], f"{context}.max_amount")
+    _exact_v1_u64(guard["valid_until_ms"], f"{context}.valid_until_ms", positive=True)
+
+
+def _validate_alias_lease_quote_v1(value: Any, context: str) -> None:
+    quote = _exact_v1_object(
+        value,
+        frozenset(
+            {
+                "target",
+                "pricing_class",
+                "exact_amount",
+                "guard",
+                "expires_at_ms",
+                "grace_expires_at_ms",
+                "redemption_expires_at_ms",
+            }
+        ),
+        context,
+    )
+    _validate_alias_target_v1(quote["target"], f"{context}.target")
+    pricing_class = quote["pricing_class"]
+    if type(pricing_class) is not int or not 0 <= pricing_class <= 0xFF:
+        fail(f"{context}.pricing_class must be a u8")
+    _validate_quantity_v1(quote["exact_amount"], f"{context}.exact_amount")
+    _validate_alias_quote_guard_v1(quote["guard"], f"{context}.guard")
+    for field in ("expires_at_ms", "grace_expires_at_ms", "redemption_expires_at_ms"):
+        _exact_v1_u64(quote[field], f"{context}.{field}", positive=True)
+
+
+def _validate_alias_frame_v1(value: Any, context: str) -> None:
+    frame = _exact_v1_object(
+        value, frozenset({"wire_id", "framed_payload"}), context
+    )
+    _exact_v1_string(frame["wire_id"], f"{context}.wire_id")
+    payload = frame["framed_payload"]
+    if not isinstance(payload, list):
+        fail(f"{context}.framed_payload must be an array")
+    for index, byte in enumerate(payload):
+        if type(byte) is not int or not 0 <= byte <= 0xFF:
+            fail(f"{context}.framed_payload[{index}] must be a byte")
+
+
+def _validate_onboarding_receipt_v1(value: Any, context: str) -> None:
+    receipt = _exact_v1_object(
+        value, frozenset({"body", "plan_hash", "signature"}), context
+    )
+    body = _exact_v1_object(
+        receipt["body"],
+        frozenset(
+            {
+                "version",
+                "request",
+                "authority",
+                "network_id",
+                "anchor",
+                "resource",
+                "acquisition",
+                "quote_guard",
+                "instructions",
+                "owner_auto_renew_instruction",
+                "valid_until_ms",
+            }
+        ),
+        f"{context}.body",
+    )
+    if body["version"] != 1 or type(body["version"]) is not int:
+        fail(f"{context}.body.version must be 1")
+    request = _exact_v1_object(
+        body["request"],
+        frozenset({"version", "alias", "account_id", "permissions"}),
+        f"{context}.body.request",
+    )
+    if request["version"] != 1 or type(request["version"]) is not int:
+        fail(f"{context}.body.request.version must be 1")
+    _exact_v1_string(request["alias"], f"{context}.body.request.alias")
+    _exact_v1_string(request["account_id"], f"{context}.body.request.account_id")
+    permissions = request["permissions"]
+    if not isinstance(permissions, list):
+        fail(f"{context}.body.request.permissions must be an array")
+    for index, permission in enumerate(permissions):
+        _exact_v1_string(permission, f"{context}.body.request.permissions[{index}]")
+    _exact_v1_string(body["authority"], f"{context}.body.authority")
+    _validate_hash_literal_v1(body["network_id"], f"{context}.body.network_id")
+    anchor = _exact_v1_object(
+        body["anchor"],
+        frozenset({"block_height", "block_hash"}),
+        f"{context}.body.anchor",
+    )
+    _exact_v1_u64(
+        anchor["block_height"], f"{context}.body.anchor.block_height", positive=True
+    )
+    _validate_hash_literal_v1(anchor["block_hash"], f"{context}.body.anchor.block_hash")
+    resource = _exact_v1_object(
+        body["resource"],
+        frozenset({"intent", "disposition", "quote", "instruction_index"}),
+        f"{context}.body.resource",
+    )
+    _validate_alias_intent_v1(resource["intent"], f"{context}.body.resource.intent")
+    _validate_alias_disposition_v1(
+        resource["disposition"], f"{context}.body.resource.disposition"
+    )
+    if resource["quote"] is not None:
+        _validate_alias_lease_quote_v1(
+            resource["quote"], f"{context}.body.resource.quote"
+        )
+    instruction_index = resource["instruction_index"]
+    if instruction_index is not None and (
+        type(instruction_index) is not int or not 0 <= instruction_index <= 0xFFFFFFFF
+    ):
+        fail(f"{context}.body.resource.instruction_index must be null or u32")
+    acquisition = _exact_v1_object(
+        body["acquisition"],
+        frozenset({"term_years", "pricing_class_hint"}),
+        f"{context}.body.acquisition",
+    )
+    if type(acquisition["term_years"]) is not int or not 1 <= acquisition["term_years"] <= 0xFF:
+        fail(f"{context}.body.acquisition.term_years must be a positive u8")
+    pricing_hint = acquisition["pricing_class_hint"]
+    if pricing_hint is not None and (
+        type(pricing_hint) is not int or not 0 <= pricing_hint <= 0xFF
+    ):
+        fail(f"{context}.body.acquisition.pricing_class_hint must be null or u8")
+    _validate_alias_quote_guard_v1(
+        body["quote_guard"], f"{context}.body.quote_guard"
+    )
+    instructions = body["instructions"]
+    if not isinstance(instructions, list):
+        fail(f"{context}.body.instructions must be an array")
+    for index, instruction in enumerate(instructions):
+        _validate_alias_frame_v1(instruction, f"{context}.body.instructions[{index}]")
+    if body["owner_auto_renew_instruction"] is not None:
+        _validate_alias_frame_v1(
+            body["owner_auto_renew_instruction"],
+            f"{context}.body.owner_auto_renew_instruction",
+        )
+    _exact_v1_u64(
+        body["valid_until_ms"], f"{context}.body.valid_until_ms", positive=True
+    )
+    _validate_hash_literal_v1(receipt["plan_hash"], f"{context}.plan_hash")
+    _validate_signature_v1(receipt["signature"], f"{context}.signature")
+
+
+def _validate_faucet_claim_v1(value: Any, context: str) -> None:
+    claim = _exact_v1_object(
+        value,
+        frozenset({"account_id", "pow_anchor_height", "pow_nonce_hex"}),
+        context,
+    )
+    _exact_v1_string(claim["account_id"], f"{context}.account_id")
+    _exact_v1_u64(
+        claim["pow_anchor_height"], f"{context}.pow_anchor_height", positive=True
+    )
+    _exact_v1_lower_hex(
+        claim["pow_nonce_hex"], f"{context}.pow_nonce_hex", max_bytes=32
+    )
+
+
+def _validate_prepared_onboarding_v1(
+    value: Any,
+    context: str,
+    root_binding: dict[str, Any],
+) -> None:
+    prepared = _exact_v1_object(
+        value,
+        frozenset(
+            {
+                "schema",
+                "binding",
+                "operation",
+                "receipt",
+                "semantic_hash_hex",
+                "account_id",
+                "alias",
+                "disposition",
+                "transaction_hash_hex",
+                "signed_transaction_wire_hex",
+                "signed_transaction_wire_sha256",
+                "fee_payment",
+                "server_signature",
+            }
+        ),
+        context,
+    )
+    if (
+        prepared["schema"] != "iroha.taira.prepared-transaction.v1"
+        or prepared["operation"] != "onboarding"
+        or prepared["binding"] != root_binding
+    ):
+        fail(f"{context} has a substituted prepared-onboarding identity")
+    _validate_onboarding_receipt_v1(prepared["receipt"], f"{context}.receipt")
+    for field in (
+        "semantic_hash_hex",
+        "transaction_hash_hex",
+        "signed_transaction_wire_sha256",
+    ):
+        _exact_v1_lower_hex(prepared[field], f"{context}.{field}", exact_bytes=32)
+    _exact_v1_string(prepared["account_id"], f"{context}.account_id")
+    _exact_v1_string(prepared["alias"], f"{context}.alias")
+    _validate_alias_disposition_v1(prepared["disposition"], f"{context}.disposition")
+    _exact_v1_lower_hex(
+        prepared["signed_transaction_wire_hex"],
+        f"{context}.signed_transaction_wire_hex",
+    )
+    _validate_fee_payment_v1(prepared["fee_payment"], f"{context}.fee_payment")
+    _validate_signature_v1(prepared["server_signature"], f"{context}.server_signature")
+
+
+def _validate_prepared_onboarding_proof_required_v1(
+    value: Any,
+    context: str,
+    root_binding: dict[str, Any],
+) -> None:
+    wrapper = _exact_v1_object(
+        value, frozenset({"schema", "receipt", "result"}), context
+    )
+    if wrapper["schema"] != "iroha.taira.prepared-onboarding-proof-required.v1":
+        fail(f"{context}.schema is not the proof-required V1 schema")
+    _validate_onboarding_receipt_v1(wrapper["receipt"], f"{context}.receipt")
+    result = _exact_v1_object(
+        wrapper["result"],
+        frozenset(
+            {
+                "schema",
+                "binding",
+                "operation",
+                "outcome",
+                "proof_kind",
+                "semantic_hash_hex",
+                "account_id",
+                "alias",
+                "disposition",
+                "server_signature",
+            }
+        ),
+        f"{context}.result",
+    )
+    if (
+        result["schema"] != "iroha.accounts.onboard.prepare-proof-required.v1"
+        or result["binding"] != root_binding
+        or result["operation"] != "onboarding"
+        or result["outcome"] != "ProofRequired"
+        or result["proof_kind"] != "account_alias_current_state"
+    ):
+        fail(f"{context}.result has a substituted proof-required identity")
+    _exact_v1_lower_hex(
+        result["semantic_hash_hex"], f"{context}.result.semantic_hash_hex", exact_bytes=32
+    )
+    _exact_v1_string(result["account_id"], f"{context}.result.account_id")
+    _exact_v1_string(result["alias"], f"{context}.result.alias")
+    _validate_alias_disposition_v1(
+        result["disposition"], f"{context}.result.disposition"
+    )
+    _validate_signature_v1(
+        result["server_signature"], f"{context}.result.server_signature"
+    )
+
+
+def _validate_prepared_faucet_v1(
+    value: Any,
+    context: str,
+    root_binding: dict[str, Any],
+) -> None:
+    prepared = _exact_v1_object(
+        value,
+        frozenset(
+            {
+                "schema",
+                "binding",
+                "operation",
+                "claim",
+                "semantic_hash_hex",
+                "account_id",
+                "asset_definition_id",
+                "asset_id",
+                "amount",
+                "transaction_hash_hex",
+                "signed_transaction_wire_hex",
+                "signed_transaction_wire_sha256",
+                "fee_payment",
+                "server_signature",
+            }
+        ),
+        context,
+    )
+    if (
+        prepared["schema"] != "iroha.taira.prepared-transaction.v1"
+        or prepared["operation"] != "faucet"
+        or prepared["binding"] != root_binding
+    ):
+        fail(f"{context} has a substituted prepared-faucet identity")
+    _validate_faucet_claim_v1(prepared["claim"], f"{context}.claim")
+    for field in (
+        "semantic_hash_hex",
+        "transaction_hash_hex",
+        "signed_transaction_wire_sha256",
+    ):
+        _exact_v1_lower_hex(prepared[field], f"{context}.{field}", exact_bytes=32)
+    _exact_v1_string(prepared["account_id"], f"{context}.account_id")
+    _validate_asset_definition_id_v1(
+        prepared["asset_definition_id"], f"{context}.asset_definition_id"
+    )
+    _exact_v1_string(prepared["asset_id"], f"{context}.asset_id")
+    _validate_quantity_v1(prepared["amount"], f"{context}.amount")
+    _exact_v1_lower_hex(
+        prepared["signed_transaction_wire_hex"],
+        f"{context}.signed_transaction_wire_hex",
+    )
+    _validate_fee_payment_v1(prepared["fee_payment"], f"{context}.fee_payment")
+    _validate_signature_v1(prepared["server_signature"], f"{context}.server_signature")
+
+
+def _validate_final_canary_v1(
+    value: Any,
+    context: str,
+    root_binding: dict[str, Any],
+    expected_authority: str,
+) -> None:
+    prepared = _exact_v1_object(
+        value,
+        frozenset(
+            {
+                "schema",
+                "binding",
+                "operation",
+                "transaction_hash_hex",
+                "signed_transaction_wire_hex",
+                "signed_transaction_wire_sha256",
+                "semantic_hash_hex",
+                "fee_payment",
+                "fee_quote",
+            }
+        ),
+        context,
+    )
+    if (
+        prepared["schema"] != "iroha.taira.prepared-transaction.v1"
+        or prepared["operation"] != "final_canary"
+        or prepared["binding"] != root_binding
+    ):
+        fail(f"{context} has a substituted final-canary identity")
+    for field in (
+        "transaction_hash_hex",
+        "signed_transaction_wire_sha256",
+        "semantic_hash_hex",
+    ):
+        _exact_v1_lower_hex(prepared[field], f"{context}.{field}", exact_bytes=32)
+    _exact_v1_lower_hex(
+        prepared["signed_transaction_wire_hex"],
+        f"{context}.signed_transaction_wire_hex",
+    )
+    _validate_fee_payment_v1(prepared["fee_payment"], f"{context}.fee_payment")
+    _validate_fee_quote_v1(
+        prepared["fee_quote"],
+        f"{context}.fee_quote",
+        expected_fee_payment=prepared["fee_payment"],
+        expected_authority=expected_authority,
+    )
+
+
+def _validate_inrou_stage_v1(value: Any, context: str) -> None:
+    stage = _exact_v1_object(
+        value,
+        frozenset(
+            {
+                "service_name",
+                "service_version",
+                "route_host",
+                "route_path_prefix",
+                "healthcheck_path",
+                "stage_mode",
+                "bundle_hash",
+                "bundle_content_cid",
+                "bundle_manifest_digest_hex",
+                "guest_content_cid",
+                "guest_manifest_digest_hex",
+                "container_manifest_hash",
+                "service_manifest_hash",
+            }
+        ),
+        context,
+    )
+    for field, field_value in stage.items():
+        _exact_v1_string(field_value, f"{context}.{field}")
+
+
+def _validate_prepared_inrou_v1(
+    value: Any,
+    context: str,
+    root_binding: dict[str, Any],
+    expected_operation: str,
+    expected_authority: str,
+) -> None:
+    prepared = _exact_v1_object(
+        value,
+        frozenset(
+            {
+                "schema",
+                "binding",
+                "operation",
+                "transaction_hash_hex",
+                "signed_transaction_wire_hex",
+                "signed_transaction_wire_sha256",
+                "fee_payment",
+                "fee_quote",
+            }
+        ),
+        context,
+    )
+    if (
+        prepared["schema"] != "iroha.taira.prepared-soracloud-transaction.v1"
+        or prepared["binding"] != root_binding
+        or prepared["operation"] != expected_operation
+    ):
+        fail(f"{context} has a substituted prepared-Inrou identity")
+    for field in ("transaction_hash_hex", "signed_transaction_wire_sha256"):
+        _exact_v1_lower_hex(prepared[field], f"{context}.{field}", exact_bytes=32)
+    _exact_v1_lower_hex(
+        prepared["signed_transaction_wire_hex"],
+        f"{context}.signed_transaction_wire_hex",
+    )
+    _validate_fee_payment_v1(prepared["fee_payment"], f"{context}.fee_payment")
+    _validate_fee_quote_v1(
+        prepared["fee_quote"],
+        f"{context}.fee_quote",
+        expected_fee_payment=prepared["fee_payment"],
+        expected_authority=expected_authority,
+    )
+
+
+def _validate_prepared_envelope_v1(
+    envelope: Any,
+    expected_public_root: str,
+    expected_kind: str,
+    expected_tags: set[str],
+) -> dict[str, Any]:
+    is_inrou = expected_kind.startswith("inrou_")
+    root_fields = {
+        "schema",
+        "binding",
+        "public_root",
+        "chain_id",
+        "network_id",
+        "authority",
+        "operation",
+    }
+    if is_inrou:
+        root_fields.add("stage")
+    root = _exact_v1_object(envelope, frozenset(root_fields), "prepared envelope")
+    if (
+        root["schema"] != "iroha.taira.prepared-mutation-envelope.v1"
+        or root["public_root"] != expected_public_root
+        or root["chain_id"] != DEFAULT_CHAIN_ID
+    ):
+        fail("prepared canary envelope closure has a substituted root identity")
+    _exact_v1_string(root["network_id"], "prepared envelope.network_id")
+    _exact_v1_string(root["authority"], "prepared envelope.authority")
+    if is_inrou:
+        binding = _validate_inrou_binding_v1(
+            root["binding"], "prepared envelope.binding", expected_kind
+        )
+        _validate_inrou_stage_v1(root["stage"], "prepared envelope.stage")
+    else:
+        binding = _validate_public_reset_binding_v1(
+            root["binding"], "prepared envelope.binding", expected_kind
+        )
+    tagged = _exact_v1_object(
+        root["operation"],
+        frozenset({"kind", "envelope"}),
+        "prepared envelope.operation",
+    )
+    tag = tagged["kind"]
+    if tag not in expected_tags:
+        fail("prepared canary envelope closure has a substituted operation tag")
+    payload = tagged["envelope"]
+    context = "prepared envelope.operation.envelope"
+    if tag == "onboarding_prepared":
+        _validate_prepared_onboarding_v1(payload, context, binding)
+    elif tag == "onboarding_proof_required":
+        _validate_prepared_onboarding_proof_required_v1(payload, context, binding)
+    elif tag == "faucet_prepared":
+        _validate_prepared_faucet_v1(payload, context, binding)
+    elif tag == "final_canary":
+        _validate_final_canary_v1(payload, context, binding, root["authority"])
+    elif tag in {"inrou_bundle_pin", "inrou_guest_pin", "inrou_canary"}:
+        expected_operation = {
+            "inrou_bundle_pin": "bundle_pin",
+            "inrou_guest_pin": "guest_pin",
+            "inrou_canary": "service_mutation",
+        }[tag]
+        _validate_prepared_inrou_v1(
+            payload,
+            context,
+            binding,
+            expected_operation,
+            root["authority"],
+        )
+    else:
+        fail("prepared canary envelope has an unsupported V1 operation tag")
+    return binding
+
+
 def _read_prepared_envelope(path: Path) -> tuple[bytes, dict[str, Any]]:
     """Read one immutable owner-only prepared envelope without following links."""
 
-    try:
-        before = path.lstat()
-    except OSError as error:
-        fail(f"prepared canary envelope is missing: {error}")
-    if (
-        not stat.S_ISREG(before.st_mode)
-        or before.st_uid != os.geteuid()
-        or stat.S_IMODE(before.st_mode) != 0o600
-        or before.st_nlink != 1
-        or before.st_size <= 0
-        or before.st_size > MAX_PREPARED_ENVELOPE_BYTES
-    ):
-        fail("prepared canary envelope lacks exact owner-only custody")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        fail(f"cannot open prepared canary envelope: {error}")
-    try:
-        opened = os.fstat(descriptor)
-        payload = bytearray()
-        while len(payload) <= MAX_PREPARED_ENVELOPE_BYTES:
-            chunk = os.read(
-                descriptor,
-                min(64 * 1024, MAX_PREPARED_ENVELOPE_BYTES + 1 - len(payload)),
-            )
-            if not chunk:
-                break
-            payload.extend(chunk)
-        after_open = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    try:
-        after_path = path.lstat()
-    except OSError as error:
-        fail(f"cannot re-inspect prepared canary envelope: {error}")
-    identity = lambda value: (
-        value.st_dev,
-        value.st_ino,
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
+    payload = read_stable_bytes(
+        path,
+        limit=MAX_PREPARED_ENVELOPE_BYTES,
+        label="prepared canary envelope",
+        owner=os.geteuid(),
+        exact_mode=0o600,
+        require_nonempty=True,
     )
-    if identity(before) != identity(opened) or identity(before) != identity(after_open):
-        fail("prepared canary envelope changed while it was read")
-    if identity(before) != identity(after_path):
-        fail("prepared canary envelope path changed while it was read")
-    if len(payload) > MAX_PREPARED_ENVELOPE_BYTES or not payload.endswith(b"\n"):
+    if not payload.endswith(b"\n"):
         fail("prepared canary envelope is oversized or lacks its canonical newline")
     try:
         value = json_loads_no_duplicates(payload.decode("utf-8"))
@@ -4259,7 +5317,13 @@ def _read_prepared_envelope(path: Path) -> tuple[bytes, dict[str, Any]]:
         fail("prepared canary envelope is not UTF-8 JSON")
     if not isinstance(value, dict):
         fail("prepared canary envelope root is not an object")
-    return bytes(payload), value
+    canonical = (
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        + "\n"
+    ).encode("utf-8")
+    if canonical != payload:
+        fail("prepared canary envelope is not exact canonical newline JSON")
+    return payload, value
 
 
 def _run_prepare_envelope(
@@ -4346,12 +5410,15 @@ def _run_retained_envelope_action(
         fail(f"cannot open retained prepared envelope: {error}")
     try:
         command.extend([action_flag, str(descriptor)])
-        return run(
-            command,
-            cwd=target,
-            timeout=timeout_seconds + 30,
-            pass_fds=(descriptor,),
-        )
+        try:
+            return run(
+                command,
+                cwd=target,
+                timeout=timeout_seconds + 30,
+                pass_fds=(descriptor,),
+            )
+        except (DevnetError, subprocess.TimeoutExpired) as error:
+            raise AmbiguousRetainedEnvelopeAction(str(error)) from error
     finally:
         os.close(descriptor)
 
@@ -4390,6 +5457,23 @@ def _prepared_report(
     if set(receipt) != expected_keys:
         fail("compiled prepared canary child receipt violates the exact V1 schema")
     payload, envelope = _read_prepared_envelope(envelope_path)
+    expected_tags = {
+        "onboarding": {"onboarding_prepared", "onboarding_proof_required"},
+        "faucet": {"faucet_prepared"},
+        "write_canary": {"final_canary"},
+        "inrou_bundle_pin": {"inrou_bundle_pin"},
+        "inrou_guest_pin": {"inrou_guest_pin"},
+        "inrou_canary": {"inrou_canary"},
+    }.get(kind)
+    if expected_tags is None:
+        fail("compiled prepared canary child has an unsupported V1 kind")
+    binding = _validate_prepared_envelope_v1(
+        envelope,
+        public_root,
+        kind,
+        expected_tags,
+    )
+    tagged = envelope["operation"]
     checks_are_valid = (
         service_applied and outcome == "Applied"
     ) or receipt.get("checks") == []
@@ -4418,27 +5502,18 @@ def _prepared_report(
         not in {"Prepared", "ProofRequired", "Applied", "Pending", "Rejected"}
     ):
         fail("compiled prepared canary child receipt changed its exact binding")
-    binding = envelope.get("binding")
-    tagged = envelope.get("operation")
     if (
-        envelope.get("schema") != "iroha.taira.prepared-mutation-envelope.v1"
-        or envelope.get("public_root") != public_root
-        or not isinstance(binding, dict)
-        or binding.get("authorization_sha256") != authorization_sha256
+        binding.get("authorization_sha256") != authorization_sha256
         or binding.get("authorization_nonce") != authorization_nonce
         or binding.get("kind") != kind
         or binding.get("phase") != PREPARED_MUTATION_PHASE
         or binding.get("idempotency_key") != idempotency_key
         or binding.get("execution_expires_at_unix_ms") != expires_at_unix_ms
-        or not isinstance(tagged, dict)
-        or not isinstance(tagged.get("kind"), str)
-        or not isinstance(tagged.get("envelope"), dict)
     ):
         fail("retained prepared canary envelope changed its exact binding")
     transaction_hash = receipt.get("transaction_hash_hex")
-    if transaction_hash is not None and (
-        not isinstance(transaction_hash, str)
-        or LOWER_32_BYTE_HEX_RE.fullmatch(transaction_hash) is None
+    if transaction_hash is not None and not is_canonical_iroha_hash_hex(
+        transaction_hash
     ):
         fail("prepared canary receipt has a malformed transaction hash")
     if outcome == "Prepared" and (
@@ -4472,11 +5547,29 @@ def _prepared_report(
         evidence = receipt.get("evidence")
         if not isinstance(evidence, str) or not evidence:
             fail("Applied prepared child omits its exact evidence")
-    if fee_fields and (
-        not isinstance(receipt.get("fee_payment"), dict)
-        or not isinstance(receipt.get("fee_quote"), dict)
-    ):
-        fail("prepared child omits its exact fee closure")
+        if transaction_hash is None:
+            if LOWER_32_BYTE_HEX_RE.fullmatch(evidence) is None:
+                fail("freshly proven onboarding has malformed semantic evidence")
+        elif not is_canonical_iroha_hash_hex(evidence) or evidence != transaction_hash:
+            fail("Applied prepared child evidence differs from its transaction hash")
+    if fee_fields:
+        operation_payload = tagged.get("envelope")
+        if not isinstance(operation_payload, dict):
+            fail("prepared fee-bearing child omits its exact operation envelope")
+        if (
+            receipt.get("fee_payment") != operation_payload.get("fee_payment")
+            or receipt.get("fee_quote") != operation_payload.get("fee_quote")
+        ):
+            fail("compiled prepared child fee evidence differs from its retained envelope")
+        _validate_fee_payment_v1(
+            receipt.get("fee_payment"), "compiled prepared child receipt.fee_payment"
+        )
+        _validate_fee_quote_v1(
+            receipt.get("fee_quote"),
+            "compiled prepared child receipt.fee_quote",
+            expected_fee_payment=receipt.get("fee_payment"),
+            expected_authority=envelope.get("authority"),
+        )
     return receipt
 
 
@@ -4505,7 +5598,6 @@ def _base_write_canary_command(
         "write-canary",
         "--public-root",
         public_root,
-        "--use-config-signer",
         "--operation",
         operation_cli,
         "--authorization-sha256",
@@ -4524,6 +5616,18 @@ def _base_write_canary_command(
             [
                 "--onboarding-token-file",
                 str(target / LOCALNET_ONBOARDING_TOKEN_FILE),
+            ]
+        )
+    if kind == "faucet":
+        faucet_policy = require_trusted_localnet_faucet_policy(target)
+        command.extend(
+            [
+                "--faucet-authority",
+                faucet_policy.authority,
+                "--faucet-asset-id",
+                faucet_policy.asset_definition_id,
+                "--faucet-amount",
+                faucet_policy.amount,
             ]
         )
     command.append("--json")
@@ -4609,6 +5713,7 @@ def _converge_prepared_child(
         fail("prepared child did not produce a forward-safe preparation outcome")
     proof_required = preparation_outcome == "ProofRequired"
     submit_was_ambiguous = False
+    last_ambiguous_error: AmbiguousRetainedEnvelopeAction | None = None
     if proof_required:
         # The envelope is durable before this point. A no-op prepare result is
         # never terminal and never submittable; recovery performs one fresh
@@ -4624,10 +5729,11 @@ def _converge_prepared_child(
                 max(1.0, deadline - time.monotonic()),
                 run,
             )
-        except (DevnetError, subprocess.TimeoutExpired):
+        except AmbiguousRetainedEnvelopeAction as error:
             # The process may have lost its response after Torii accepted the exact
             # retained bytes. Never resubmit: recovery is the only safe next step.
             submit_was_ambiguous = True
+            last_ambiguous_error = error
             receipt = None
         else:
             receipt = _prepared_report(
@@ -4636,15 +5742,19 @@ def _converge_prepared_child(
                 **report_args,
             )
     recovery_attempted = False
+    recovery_attempts = 0
+    recovery_backoff = PREPARED_RECOVERY_INITIAL_BACKOFF_SECONDS
     while (
         receipt is None or receipt["recovery_outcome"] == "Pending"
     ) and (
         time.monotonic() < deadline
         or ((submit_was_ambiguous or proof_required) and not recovery_attempted)
-    ):
-        if receipt is not None:
-            time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+    ) and recovery_attempts < PREPARED_RECOVERY_MAX_ATTEMPTS:
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(recovery_backoff, remaining))
         recovery_attempted = True
+        recovery_attempts += 1
         try:
             recovered = _run_retained_envelope_action(
                 recover_command.copy(),
@@ -4654,16 +5764,33 @@ def _converge_prepared_child(
                 max(1.0, deadline - time.monotonic()),
                 run,
             )
-        except (DevnetError, subprocess.TimeoutExpired):
+        except AmbiguousRetainedEnvelopeAction as error:
+            last_ambiguous_error = error
             receipt = None
+            recovery_backoff = min(
+                PREPARED_RECOVERY_MAX_BACKOFF_SECONDS,
+                recovery_backoff * 2,
+            )
             continue
         receipt = _prepared_report(
             recovered,
             envelope_path=envelope_path,
             **report_args,
         )
+        recovery_backoff = min(
+            PREPARED_RECOVERY_MAX_BACKOFF_SECONDS,
+            recovery_backoff * 2,
+        )
     if receipt is None:
-        fail("prepared canary child has no authoritative recovery outcome")
+        detail = (
+            f": {last_ambiguous_error}"
+            if last_ambiguous_error is not None
+            else ""
+        )
+        fail(
+            "prepared canary child has no authoritative recovery outcome after "
+            f"{recovery_attempts} recovery attempts{detail}"
+        )
     if receipt["recovery_outcome"] != "Applied":
         fail(
             "prepared canary child did not reach Applied: "
@@ -4712,19 +5839,18 @@ def require_prepared_canary_closure(
     for name, kind, tags in specifications:
         path = directory / name
         payload, envelope = _read_prepared_envelope(path)
-        binding = envelope.get("binding")
-        operation = envelope.get("operation")
+        binding = _validate_prepared_envelope_v1(
+            envelope,
+            expected_public_root,
+            kind,
+            tags,
+        )
         if (
-            envelope.get("public_root") != expected_public_root
-            or not isinstance(binding, dict)
-            or binding.get("kind") != kind
-            or binding.get("phase") != PREPARED_MUTATION_PHASE
+            binding.get("phase") != PREPARED_MUTATION_PHASE
             or binding.get("idempotency_key")
             != prepared_child_idempotency_key(
                 str(binding.get("authorization_nonce")), PREPARED_MUTATION_PHASE, kind
             )
-            or not isinstance(operation, dict)
-            or operation.get("kind") not in tags
         ):
             fail("prepared canary envelope closure has a substituted child")
         identity = (
@@ -5251,8 +6377,26 @@ def up(
             toolchain_evidence,
         )
     except (DevnetError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
-        stop_network(root, run, tolerate_failure=True)
+        cleanup_identity: tuple[int, int, int] | None = None
+        cleanup_target_was_validated = False
+        try:
+            cleanup_identity = require_safe_cleanup_target(root, target)
+            cleanup_target_was_validated = True
+        except DevnetError as cleanup_error:
+            print(
+                f"warning: cannot safely identify failed Taira network: {cleanup_error}",
+                file=sys.stderr,
+            )
+        stopped = stop_network(root, run, tolerate_failure=True)
         dump_logs(target)
+        if stopped and cleanup_target_was_validated:
+            try:
+                destroy_network(root, target, cleanup_identity)
+            except DevnetError as cleanup_error:
+                print(
+                    f"warning: could not destroy stopped Taira network: {cleanup_error}",
+                    file=sys.stderr,
+                )
         if isinstance(error, subprocess.TimeoutExpired):
             fail(f"command timed out: {error.cmd}")
         if isinstance(error, KeyboardInterrupt):
@@ -5280,7 +6424,6 @@ def up(
         },
         "toolchain": toolchain_evidence,
     }
-    print(json.dumps(report, indent=2, sort_keys=True))
     return report
 
 
@@ -5331,10 +6474,16 @@ def check(
     if source_observation != guest_qualification["source_observation"]:
         fail("current source observation differs from the retained Inrou qualification")
     toolchain = guest_qualification["toolchain"]
-    for name in COMPILED_TOOLCHAIN_NAMES_V1:
+
+    def current_tool(name: str) -> tuple[str, dict[str, int | str]]:
         retained = toolchain[name]
         path = Path(str(retained["path"]))
-        current = {"path": str(path), **executable_evidence(path)}
+        return name, {"path": str(path), **executable_evidence(path)}
+
+    current_toolchain = dict(parallel_map(COMPILED_TOOLCHAIN_NAMES_V1, current_tool))
+    for name in COMPILED_TOOLCHAIN_NAMES_V1:
+        current = current_toolchain[name]
+        retained = toolchain[name]
         if current != retained:
             fail(f"compiled {name} binary changed after Inrou qualification")
     iroha = Path(str(toolchain["iroha"]["path"]))
@@ -5387,20 +6536,24 @@ def check(
         "target_triple": guest_qualification["target_triple"],
         "toolchain": toolchain,
     }
-    print(json.dumps(report, indent=2, sort_keys=True))
     return report
 
 
 def down(args: argparse.Namespace, *, run: Runner = run_command) -> dict[str, Any]:
-    """Stop the peers and destroy their disposable runtime signer keys."""
+    """Stop the peers and destroy the complete disposable network tree."""
 
     root = managed_root(args.dir, create=False)
     target = require_stoppable_network(root)
+    target_identity = require_safe_cleanup_target(root, target)
+    if target_identity is None:
+        fail(f"network cleanup target disappeared before teardown: {target}")
     stop_network(root, run)
-    delete_runtime_signer_files(target)
-    report = {"directory": str(target), "runtime_signers_deleted": True, "stopped": True}
-    print(json.dumps(report, indent=2, sort_keys=True))
-    return report
+    destroy_network(root, target, target_identity)
+    return {
+        "directory": str(target),
+        "network_destroyed": True,
+        "stopped": True,
+    }
 
 
 def parser() -> argparse.ArgumentParser:
@@ -5465,7 +6618,9 @@ def parser() -> argparse.ArgumentParser:
     )
     check_parser.set_defaults(handler=check)
 
-    down_parser = commands.add_parser("down", help="stop the disposable peers and retain logs")
+    down_parser = commands.add_parser(
+        "down", help="stop the disposable peers and destroy the generated network"
+    )
     down_parser.set_defaults(handler=down)
     return result
 
@@ -5475,10 +6630,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = parser().parse_args(argv)
     try:
-        args.handler(args)
+        report = args.handler(args)
     except DevnetError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
+    print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 

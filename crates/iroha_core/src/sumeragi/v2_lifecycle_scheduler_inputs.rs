@@ -12,11 +12,12 @@ use super::{
         RecoveredDecisionFetchBodyPersistencePreparationFailureV1,
     },
     work_registry::{
-        ClaimedCertifiedServeDispatchErrorV1, ClaimedCertifiedServeDispatchV1,
-        ClaimedProducerTurnErrorV1, ClaimedProducerTurnV1, ConcreteLifecycleWorkRegistry,
-        ReadyCertifiedServeAttestationV1, ReadyLifecycleDecisionApplyDemandV1,
-        ReadyProducerTurnCensusAttestationErrorV1, RegistryError,
-        SchedulableLifecycleBroadcastCarrierV1, SchedulableRetainedDirectBroadcastAttestationV1,
+        AttestedLifecycleDecisionApplySuccessorOutputsV1, ClaimedCertifiedServeDispatchErrorV1,
+        ClaimedCertifiedServeDispatchV1, ClaimedProducerTurnErrorV1, ClaimedProducerTurnV1,
+        ConcreteLifecycleWorkRegistry, ReadyCertifiedServeAttestationV1,
+        ReadyLifecycleDecisionApplyDemandV1, ReadyProducerTurnCensusAttestationErrorV1,
+        RegistryError, SchedulableLifecycleBroadcastCarrierV1,
+        SchedulableRetainedDirectBroadcastAttestationV1,
     },
 };
 #[cfg(test)]
@@ -1364,6 +1365,45 @@ impl ProductionLifecycleOwnerV1 {
         self.classify_schedulable_completion_work(&schedulable, Some(fence))
     }
 
+    /// Project a bounded, payload-free terminal scheduler census for operators.
+    ///
+    /// LedgerV1 intentionally omits volatile Ready/Waiting generations and the
+    /// concrete carrier kind. This diagnostic preserves that privacy boundary
+    /// while making a retained direct output, refanned recovered Broadcast, or
+    /// obsolete paired Sign distinguishable in a live finalization stall.
+    pub(in crate::sumeragi) fn finalization_scheduler_diagnostic(
+        &self,
+        fence: crate::sumeragi::v2::LifecycleReducerFenceObservationV1,
+    ) -> String {
+        let classification = self.classify_completion_ready_work(fence);
+        let nonterminal = self
+            .coordinator
+            .records
+            .values()
+            .filter(|record| !matches!(record.state, LifecycleState::Terminal(_)))
+            .take(32)
+            .map(|record| {
+                format!(
+                    "{}:{:?}/{:?}/{:?}",
+                    record.ordinal, record.work_class, record.stage, record.state
+                )
+            })
+            .collect::<Vec<_>>();
+        let nonterminal_total = self
+            .coordinator
+            .records
+            .values()
+            .filter(|record| !matches!(record.state, LifecycleState::Terminal(_)))
+            .count();
+        let (registry_total, registry_entries) =
+            self.registry.registry().finalization_entry_kind_census();
+        format!(
+            "classification={classification:?} nonterminal_total={nonterminal_total} \
+             nonterminal={nonterminal:?} registry_total={registry_total} \
+             registry_entries={registry_entries:?}"
+        )
+    }
+
     /// Wake only a fence-expired direct Broadcast that globally precedes post-Apply cold output.
     ///
     /// The full schedulable census is reclassified before the reducer generation
@@ -2189,6 +2229,8 @@ impl ProductionLifecycleOwnerV1 {
             })
             .collect::<Vec<_>>();
         let mut protected_live_apply_ordinal = None;
+        let mut live_apply_successor_outputs =
+            BTreeMap::<u128, AttestedLifecycleDecisionApplySuccessorOutputsV1>::new();
         for ordinal in live_apply_ordinals {
             let authority = self
                 .registry
@@ -2203,6 +2245,20 @@ impl ProductionLifecycleOwnerV1 {
                     || !executor.exactly_owns_live_lifecycle_decision_apply(&authority)
                 {
                     return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                }
+                if executor.has_pending_lifecycle_output_admissions() {
+                    let attestation = self
+                        .attest_lifecycle_decision_apply_successor_outputs(
+                            authority,
+                            executor.pending_lifecycle_output_admission_census(),
+                        )
+                        .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                    if live_apply_successor_outputs
+                        .insert(protected_ordinal, attestation)
+                        .is_some()
+                    {
+                        return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                    }
                 }
             }
         }
@@ -2268,7 +2324,9 @@ impl ProductionLifecycleOwnerV1 {
                     }
                     let key = attestation.dispatch_key();
                     let executor_available = executor
-                        .lifecycle_decision_apply_dispatch_available()
+                        .lifecycle_decision_apply_dispatch_available(
+                            live_apply_successor_outputs.get(ordinal),
+                        )
                         .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                     (
                         AuthenticatedLifecycleCompletionReadyV1::Apply(attestation),
@@ -2598,8 +2656,12 @@ impl ProductionLifecycleOwnerV1 {
                 if !reservation.preflight(&prepared) {
                     return Err(ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch);
                 }
+                let successor_outputs = live_apply_successor_outputs.remove(&ordinal);
                 let executor_dispatch = executor
-                    .prepare_lifecycle_decision_apply_executor_dispatch(&prepared)
+                    .prepare_lifecycle_decision_apply_executor_dispatch(
+                        &prepared,
+                        successor_outputs,
+                    )
                     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 reservation.commit(prepared, executor_dispatch);
                 Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
@@ -2743,8 +2805,10 @@ impl ProductionLifecycleOwnerV1 {
     ///
     /// The retained publication token must still name the global Ready minimum
     /// and its complete registry coordinate. This path never observes or
-    /// acknowledges the worker completion FIFO. A live Apply successor also
-    /// installs its full executor retransmit owner before this method returns.
+    /// acknowledges the worker completion FIFO. The registry-authenticated
+    /// preliminary owner is installed before any outcome can terminalize the
+    /// Validate row; a live Apply successor then upgrades it to the full
+    /// executor retransmit owner before this method returns.
     pub(super) fn dispatch_ready_validate_successor(
         &mut self,
         services: &mut ProductionV2Services,

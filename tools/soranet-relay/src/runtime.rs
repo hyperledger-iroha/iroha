@@ -1,6 +1,8 @@
 //! Runtime orchestration for the relay daemon.
 #![allow(unexpected_cfgs)]
 use bytes::Bytes;
+#[cfg(test)]
+use iroha_crypto::soranet::pow::Parameters as PowParameters;
 use iroha_crypto::{
     Algorithm, KeyPair, PrivateKey, PublicKey,
     soranet::{
@@ -14,8 +16,8 @@ use iroha_crypto::{
             SessionSecrets, inspect_client_hello, process_client_hello, update_suite_list,
         },
         pow::{
-            self, Parameters as PowParameters, SignedTicket, Ticket as PowTicket,
-            TicketRevocationStore, TicketRevocationStoreLimits,
+            self, SignedTicket, Ticket as PowTicket, TicketRevocationStore,
+            TicketRevocationStoreLimits,
         },
         puzzle::{self, ChallengeBinding as PuzzleBinding},
         record::{RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind},
@@ -44,9 +46,9 @@ iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
 use crate::metrics::normalize_downgrade_reason;
 use crate::{
     capability::{
-        self, CapabilityError, CapabilityWarning, GreaseEntry, NegotiatedCapabilities,
-        ServerCapabilities, SignatureId, encode_relay_advertisement, negotiate_capabilities,
-        parse_client_advertisement,
+        self, CapabilityError, CapabilityWarning, ConstantRateMode, GreaseEntry,
+        NegotiatedCapabilities, ServerCapabilities, SignatureId, encode_relay_advertisement,
+        negotiate_capabilities, parse_client_advertisement,
     },
     circuit::{
         CircuitAdmissionError, CircuitRegistry, PaddingBudget, abort_padding_task,
@@ -2721,19 +2723,6 @@ fn verify_signed_puzzle_ticket_binding(
         })
     })
 }
-fn verify_pow_ticket_binding(
-    ticket: &PowTicket,
-    params: &PowParameters,
-    descriptor_commit: &[u8],
-    relay_id: &[u8],
-    transcript_hash: &[u8; 32],
-    replay_state: &StdMutex<TicketReplayState>,
-) -> Result<(), HandshakeError> {
-    let binding = pow::ChallengeBinding::new(descriptor_commit, relay_id, transcript_hash);
-    verify_and_consume_ticket(ticket, replay_state, || {
-        pow::verify(ticket, &binding, params).map_err(HandshakeError::Pow)
-    })
-}
 fn continue_after_admission<T>(
     admission: Result<(), HandshakeError>,
     expensive_handshake: impl FnOnce() -> Result<T, HandshakeError>,
@@ -3216,8 +3205,6 @@ impl RelayRuntime {
         let incentive_max_measurements_per_epoch =
             config.incentive_log_config().max_measurements_per_epoch;
         let pow_config = config.pow_config().clone();
-        let base_pow_params = pow_config.parameters()?;
-        let puzzle_params = pow_config.puzzle_parameters(&base_pow_params)?;
         let token_policy = pow_config.token_policy().map_err(RelayError::Config)?;
         let ticket_replays = Arc::new(StdMutex::new(TicketReplayState::load(
             &pow_config,
@@ -3339,9 +3326,7 @@ impl RelayRuntime {
             metrics.set_descriptor_commit_hex(None);
         }
         let dos = Arc::new(DoSControls::new(
-            base_pow_params,
             &pow_config,
-            puzzle_params,
             token_policy,
             Arc::clone(&metrics),
             config.mode,
@@ -3840,51 +3825,6 @@ impl RelayRuntime {
                             window: Some(limits.window()),
                             burst_limit: Some(limits.burst()),
                             max_entries: Some(limits.max_entries()),
-                            observed_gap: None,
-                        })
-                    }
-                    ThrottleReason::DescriptorQuota => {
-                        metrics.record_descriptor_quota_throttle();
-                        privacy.record_throttle(event_time, ThrottleScope::DescriptorQuota);
-                        privacy.record_gar_category(event_time, "throttle.descriptor_quota");
-                        privacy.record_throttle_cooldown(event_time, throttle.cooldown);
-                        privacy_events.record_throttle(
-                            privacy_mode,
-                            event_time,
-                            SoranetPrivacyThrottleScopeV1::from(ThrottleScope::DescriptorQuota),
-                        );
-                        privacy_events.record_gar_category(
-                            privacy_mode,
-                            event_time,
-                            "throttle.descriptor_quota",
-                        );
-                        context
-                            .dos
-                            .descriptor_quota_limits()
-                            .map(|limits| ThrottleAudit {
-                                scope: "per_descriptor",
-                                cooldown: Some(throttle.cooldown),
-                                window: Some(limits.window()),
-                                burst_limit: Some(limits.burst()),
-                                max_entries: Some(limits.max_entries()),
-                                observed_gap: None,
-                            })
-                    }
-                    ThrottleReason::DescriptorReplay => {
-                        metrics.record_descriptor_replay_throttle();
-                        privacy.record_throttle(event_time, ThrottleScope::DescriptorReplay);
-                        privacy.record_throttle_cooldown(event_time, throttle.cooldown);
-                        privacy_events.record_throttle(
-                            privacy_mode,
-                            event_time,
-                            SoranetPrivacyThrottleScopeV1::from(ThrottleScope::DescriptorReplay),
-                        );
-                        Some(ThrottleAudit {
-                            scope: "descriptor_replay",
-                            cooldown: Some(throttle.cooldown),
-                            window: None,
-                            burst_limit: None,
-                            max_entries: None,
                             observed_gap: None,
                         })
                     }
@@ -4910,12 +4850,12 @@ impl RelayRuntime {
                 b"vpn bridge policy failure".as_slice()
             }
         };
-        connection.close(0u32.into(), close_reason);
         match timeout(Duration::from_secs(1), protected_send.shutdown()).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => debug!(%error, "failed to finish protected vpn tunnel stream"),
             Err(error) => debug!(%error, "timed out finishing protected vpn tunnel stream"),
         }
+        connection.close(0u32.into(), close_reason);
     }
     #[expect(
         clippy::too_many_arguments,
@@ -5976,128 +5916,84 @@ impl RelayRuntime {
             .and_then(|overlay| overlay.helper_ticket_issuer_public_key());
         let mut byte_guard = HandshakeByteGuard::new(&context.metrics);
         let mut puzzle_verify_micros: Option<u64> = None;
-        let pow_params = context.dos.current_pow_parameters();
         let puzzle_params = context.dos.current_puzzle_parameters();
-        let pow_required = context.dos.is_pow_required();
-        let puzzle_enforced = pow_params.difficulty() > 0 || puzzle_params.is_some();
         let has_token_policy = context.dos.has_token_policy();
-        let mut cached_client_frame: Option<Vec<u8>> = None;
-        let mut puzzle_ticket_frame: Option<SensitiveBytes> = None;
         let mut pending_puzzle_ticket: Option<PowTicket> = None;
         let mut pending_signed_puzzle_ticket: Option<SignedTicket> = None;
-        let mut pending_pow_ticket: Option<PowTicket> = None;
         let mut admission_token: Option<AdmissionToken> = None;
         let mut vpn_helper_ticket: Option<VpnHelperTicketV1> = None;
         let mut vpn_helper_ticket_replay: Option<VpnHelperTicketReplayReservation> = None;
         let mut vpn_helper_ticket_frame: Option<SensitiveBytes> = None;
-        if helper_ticket_issuer_public_key.is_some()
-            || has_token_policy
-            || (pow_required && puzzle_enforced)
+        let first_frame = match timeout(
+            HANDSHAKE_PAYLOAD_TIMEOUT,
+            Self::read_handshake_frame(&mut recv),
+        )
+        .await
         {
-            let first_frame = match timeout(
-                HANDSHAKE_PAYLOAD_TIMEOUT,
-                Self::read_handshake_frame(&mut recv),
-            )
-            .await
-            {
-                Ok(Ok(frame)) => frame,
-                Ok(Err(error)) => return Err(error),
-                Err(_) => return Err(HandshakeError::Timeout("pow token/ticket")),
-            };
-            // The first frame may be a bearer ticket/token. Give it a
-            // zeroizing owner before any fallible classification or decode so
-            // malformed credentials are scrubbed on every early return.
-            let first_frame = SensitiveBytes::from_vec(first_frame);
-            byte_guard.add(first_frame.len() + 2);
-            if let Some(issuer_public_key) = helper_ticket_issuer_public_key {
-                if VpnHelperTicketV1::looks_like(&first_frame) {
-                    let now_ms = unix_time_ms(SystemTime::now());
-                    let helper_ticket =
-                        VpnHelperTicketV1::parse(&first_frame, issuer_public_key, now_ms)?;
-                    if helper_ticket.relay_id != context.relay_id {
-                        return Err(HandshakeError::HelperTicket(
-                            VpnHelperTicketError::InvalidRelay,
-                        ));
-                    }
-                    let trust = context.transport_trust.as_deref().ok_or_else(|| {
-                        HandshakeError::Noise(NoiseHandshakeError::Validation(
-                            "VPN helper ticket received without immutable relay transport trust"
-                                .to_owned(),
-                        ))
-                    })?;
-                    ensure_vpn_helper_ticket_within_trust(&helper_ticket, trust)
-                        .map_err(HandshakeError::Noise)?;
-                    let replay_state = context
-                        .vpn_helper_ticket_replays
-                        .as_ref()
-                        .map(Arc::clone)
-                        .ok_or_else(|| {
-                        HandshakeError::ReplayStore(
-                            "VPN helper-ticket replay ledger is unavailable".to_owned(),
-                        )
-                    })?;
-                    vpn_helper_ticket_replay = Some(VpnHelperTicketReplayReservation::reserve(
-                        replay_state,
-                        &helper_ticket,
-                        now_ms,
-                    )?);
-                    vpn_helper_ticket = Some(helper_ticket);
-                    vpn_helper_ticket_frame = Some(first_frame);
-                } else if has_token_policy && token::frame_looks_like_token(&first_frame) {
-                    let token = AdmissionToken::decode(&first_frame)
-                        .map_err(HandshakeError::TokenDecode)?;
-                    admission_token = Some(token);
-                } else if pow_required && puzzle_enforced {
-                    puzzle_ticket_frame = Some(first_frame);
-                } else {
-                    cached_client_frame = Some(first_frame.to_vec());
-                }
-            } else if has_token_policy && token::frame_looks_like_token(&first_frame) {
-                let token =
-                    AdmissionToken::decode(&first_frame).map_err(HandshakeError::TokenDecode)?;
-                admission_token = Some(token);
-            } else if pow_required && puzzle_enforced {
-                puzzle_ticket_frame = Some(first_frame);
-            } else {
-                cached_client_frame = Some(first_frame.to_vec());
-            }
-        }
-        if pow_required
-            && puzzle_enforced
-            && puzzle_ticket_frame.is_none()
-            && admission_token.is_none()
-            && vpn_helper_ticket.is_none()
+            Ok(Ok(frame)) => frame,
+            Ok(Err(error)) => return Err(error),
+            Err(_) => return Err(HandshakeError::Timeout("pow token/ticket")),
+        };
+        // The first frame is a bearer credential. Give it a zeroizing owner
+        // before classification so malformed credentials are scrubbed on every
+        // early return.
+        let first_frame = SensitiveBytes::from_vec(first_frame);
+        byte_guard.add(first_frame.len() + 2);
+        if let Some(issuer_public_key) = helper_ticket_issuer_public_key
+            && VpnHelperTicketV1::looks_like(&first_frame)
         {
-            return Err(HandshakeError::MissingChallenge);
-        }
-        if let Some(frame) = puzzle_ticket_frame {
-            if puzzle_params.is_some() {
-                if context.dos.signed_ticket_public_key().is_some() {
-                    pending_signed_puzzle_ticket =
-                        Some(SignedTicket::decode(&frame).map_err(HandshakeError::Pow)?);
-                } else {
-                    pending_puzzle_ticket =
-                        Some(PowTicket::parse(&frame).map_err(HandshakeError::Pow)?);
-                }
-            } else {
-                pending_pow_ticket = Some(PowTicket::parse(&frame).map_err(HandshakeError::Pow)?);
+            let now_ms = unix_time_ms(SystemTime::now());
+            let helper_ticket = VpnHelperTicketV1::parse(&first_frame, issuer_public_key, now_ms)?;
+            if helper_ticket.relay_id != context.relay_id {
+                return Err(HandshakeError::HelperTicket(
+                    VpnHelperTicketError::InvalidRelay,
+                ));
             }
+            let trust = context.transport_trust.as_deref().ok_or_else(|| {
+                HandshakeError::Noise(NoiseHandshakeError::Validation(
+                    "VPN helper ticket received without immutable relay transport trust".to_owned(),
+                ))
+            })?;
+            ensure_vpn_helper_ticket_within_trust(&helper_ticket, trust)
+                .map_err(HandshakeError::Noise)?;
+            let replay_state = context
+                .vpn_helper_ticket_replays
+                .as_ref()
+                .map(Arc::clone)
+                .ok_or_else(|| {
+                    HandshakeError::ReplayStore(
+                        "VPN helper-ticket replay ledger is unavailable".to_owned(),
+                    )
+                })?;
+            vpn_helper_ticket_replay = Some(VpnHelperTicketReplayReservation::reserve(
+                replay_state,
+                &helper_ticket,
+                now_ms,
+            )?);
+            vpn_helper_ticket = Some(helper_ticket);
+            vpn_helper_ticket_frame = Some(first_frame);
+        } else if has_token_policy && token::frame_looks_like_token(&first_frame) {
+            admission_token =
+                Some(AdmissionToken::decode(&first_frame).map_err(HandshakeError::TokenDecode)?);
+        } else if context.dos.signed_ticket_public_key().is_some() {
+            pending_signed_puzzle_ticket =
+                Some(SignedTicket::decode(&first_frame).map_err(HandshakeError::Pow)?);
+        } else {
+            pending_puzzle_ticket =
+                Some(PowTicket::parse(&first_frame).map_err(HandshakeError::Pow)?);
         }
-        let client_frame = match cached_client_frame {
-            Some(frame) => frame,
-            None => match timeout(
-                HANDSHAKE_PAYLOAD_TIMEOUT,
-                Self::read_handshake_frame(&mut recv),
-            )
-            .await
-            {
-                Ok(Ok(frame)) => {
-                    byte_guard.add(frame.len() + 2);
-                    frame
-                }
-                Ok(Err(error)) => return Err(error),
-                Err(_) => return Err(HandshakeError::Timeout("client hello")),
-            },
+        let client_frame = match timeout(
+            HANDSHAKE_PAYLOAD_TIMEOUT,
+            Self::read_handshake_frame(&mut recv),
+        )
+        .await
+        {
+            Ok(Ok(frame)) => {
+                byte_guard.add(frame.len() + 2);
+                frame
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(_) => return Err(HandshakeError::Timeout("client hello")),
         };
         let RelayClientHelloPreflight {
             metadata: client_hello,
@@ -6114,8 +6010,7 @@ impl RelayRuntime {
             update_suite_list(&relay_caps_bytes, context.handshake_suites.as_slice(), true)
                 .map_err(HandshakeError::Noise)?;
         let relay_caps_bytes = append_grease_tlvs(relay_caps_bytes, &grease_entries)?;
-        let admission = if let (Some(params), Some(signed_ticket), Some(public_key)) = (
-            puzzle_params,
+        let admission = if let (Some(signed_ticket), Some(public_key)) = (
             pending_signed_puzzle_ticket.take(),
             context.dos.signed_ticket_public_key(),
         ) {
@@ -6127,7 +6022,7 @@ impl RelayRuntime {
                 verify_signed_puzzle_ticket_binding(
                     &signed_ticket,
                     public_key.as_slice(),
-                    &params,
+                    &puzzle_params,
                     descriptor_commit.as_slice(),
                     relay_id.as_slice(),
                     &transcript_binding,
@@ -6140,7 +6035,7 @@ impl RelayRuntime {
             let micros = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
             puzzle_verify_micros = Some(micros);
             result
-        } else if let (Some(params), Some(ticket)) = (puzzle_params, pending_puzzle_ticket.take()) {
+        } else if let Some(ticket) = pending_puzzle_ticket.take() {
             let verify_start = Instant::now();
             let descriptor_commit = Arc::clone(&context.descriptor_commit);
             let relay_id = context.relay_id;
@@ -6148,7 +6043,7 @@ impl RelayRuntime {
             let result = run_blocking_admission_work(move || {
                 verify_puzzle_ticket_binding(
                     &ticket,
-                    &params,
+                    &puzzle_params,
                     descriptor_commit.as_slice(),
                     relay_id.as_slice(),
                     &transcript_binding,
@@ -6161,21 +6056,6 @@ impl RelayRuntime {
             let micros = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
             puzzle_verify_micros = Some(micros);
             result
-        } else if let Some(ticket) = pending_pow_ticket.take() {
-            let descriptor_commit = Arc::clone(&context.descriptor_commit);
-            let relay_id = context.relay_id;
-            let replay_state = Arc::clone(&context.ticket_replays);
-            run_blocking_admission_work(move || {
-                verify_pow_ticket_binding(
-                    &ticket,
-                    &pow_params,
-                    descriptor_commit.as_slice(),
-                    relay_id.as_slice(),
-                    &transcript_binding,
-                    replay_state.as_ref(),
-                )
-            })
-            .await
         } else if let Some(token) = admission_token.take() {
             let dos = Arc::clone(&context.dos);
             let relay_id = context.relay_id;
@@ -6970,11 +6850,26 @@ fn preflight_client_hello(
         .map_err(HandshakeError::Capability)?;
     let negotiated =
         negotiate_capabilities(&client_caps, server_caps).map_err(HandshakeError::Capability)?;
+    // Configuration rejects strict advertisements, but keep the live boundary fail-closed for
+    // programmatic capabilities and future callers. A strict claim must never reach the relay
+    // response while payload bypasses the DATAGRAM scheduler.
+    ensure_constant_rate_runtime_available(&negotiated)?;
     validate_client_selection(&negotiated, metadata.kem_id(), metadata.sig_id())?;
     Ok(RelayClientHelloPreflight {
         metadata,
         negotiated,
     })
+}
+fn ensure_constant_rate_runtime_available(
+    negotiated: &NegotiatedCapabilities,
+) -> Result<(), HandshakeError> {
+    if negotiated
+        .constant_rate
+        .is_some_and(|capability| matches!(capability.mode, ConstantRateMode::Strict))
+    {
+        return Err(HandshakeError::StrictConstantRateUnavailable);
+    }
+    Ok(())
 }
 fn validate_client_selection(
     negotiated: &NegotiatedCapabilities,

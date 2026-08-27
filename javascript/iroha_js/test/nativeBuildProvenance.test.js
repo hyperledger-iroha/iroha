@@ -124,7 +124,7 @@ function withSourceRepository(run) {
 
 test("repository ignores every native publication artifact", () => {
   const generatedPaths = [
-    "javascript/iroha_js/native/.build-dist.lock",
+    "javascript/iroha_js/.build-dist.lock",
     "javascript/iroha_js/native/iroha_js_host.node",
     "javascript/iroha_js/native/iroha_js_host.checksums.json",
     "javascript/iroha_js/native/.iroha-js-host-txn-00000000-0000-4000-8000-000000000000/iroha_js_host.node.next",

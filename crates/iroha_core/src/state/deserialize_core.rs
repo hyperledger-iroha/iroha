@@ -402,7 +402,7 @@ impl KuraSeed {
             ivm: &ivm_runtime,
             _marker: PhantomData,
         };
-        let mut world = parse_world(world_map, &ivm_seed, false)?;
+        let mut world = parse_world(world_map, &ivm_seed)?;
         let public_lane_validators: Vec<SnapshotNoritoBlob> =
             take_required(&mut map, "public_lane_validators")?;
         let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
@@ -1079,13 +1079,6 @@ where
     map.remove(key)
         .map(|value| value.decode_canonical(key))
         .transpose()
-}
-fn take_optional_default<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<T, json::Error>
-where
-    T: JsonDeserialize + JsonSerialize + Default,
-{
-    map.remove(key)
-        .map_or_else(|| Ok(T::default()), |value| value.decode_canonical(key))
 }
 fn take_musubi_namespace_bindings(
     map: &mut SnapshotJsonMap<'_>,

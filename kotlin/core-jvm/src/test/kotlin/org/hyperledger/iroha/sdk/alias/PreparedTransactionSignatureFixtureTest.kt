@@ -1,22 +1,20 @@
 package org.hyperledger.iroha.sdk.alias
 
-import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
-import java.security.MessageDigest
 import kotlin.test.Test
-import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
-import org.hyperledger.iroha.sdk.crypto.IrohaHash
-import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
+import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 import org.hyperledger.iroha.sdk.tx.norito.TransactionPayloadAdapter
 
@@ -67,14 +65,27 @@ class PreparedTransactionSignatureFixtureTest {
         )
         val independentlyParsedPrepared =
             assertIs<AccountOnboardingPreparedTransactionV1>(parseResponse(preparedVector))
+        val expectedFeePayment = FeePaymentIntent.authority(emptyList())
         AccountOnboardingPreparedVerifier.requireValidPrepared(
             prepared,
             prepared.receipt.body.request,
             independentlyParsedPrepared.receipt,
             independentlyParsedPrepared.binding,
+            expectedFeePayment,
             networkId,
             string(preparedVector, "signer_account_id"),
         )
+        assertFailsWith<IllegalArgumentException> {
+            AccountOnboardingPreparedVerifier.requireValidPrepared(
+                prepared,
+                prepared.receipt.body.request,
+                independentlyParsedPrepared.receipt,
+                independentlyParsedPrepared.binding,
+                FeePaymentIntent.authority(emptyList(), 1L),
+                networkId,
+                string(preparedVector, "signer_account_id"),
+            )
+        }
         val submitResponse = AccountOnboardingJsonParser.parseSubmitResponse(
             JsonEncoder.encode(
                 linkedMapOf(
@@ -86,8 +97,26 @@ class PreparedTransactionSignatureFixtureTest {
                 ),
             ).toByteArray(StandardCharsets.UTF_8),
         )
-        AccountOnboardingPreparedVerifier.requireValidSubmitResponse(submitResponse, prepared, 200)
-        AccountOnboardingPreparedVerifier.requireValidSubmitResponse(submitResponse, prepared, 202)
+        AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
+            submitResponse,
+            prepared,
+            expectedFeePayment,
+            200,
+        )
+        AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
+            submitResponse,
+            prepared,
+            expectedFeePayment,
+            202,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
+                submitResponse,
+                prepared,
+                FeePaymentIntent.authority(emptyList(), 1L),
+                200,
+            )
+        }
         val incorrectlyAppliedAtAcceptance = PreparedTransactionSubmitResponseV1(
             prepared.binding,
             prepared.operation,
@@ -98,6 +127,7 @@ class PreparedTransactionSignatureFixtureTest {
             AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
                 incorrectlyAppliedAtAcceptance,
                 prepared,
+                expectedFeePayment,
                 202,
             )
         }
@@ -135,6 +165,7 @@ class PreparedTransactionSignatureFixtureTest {
                 substitutedRequest,
                 prepared.receipt,
                 prepared.binding,
+                expectedFeePayment,
                 networkId,
                 string(preparedVector, "signer_account_id"),
             )
@@ -167,6 +198,7 @@ class PreparedTransactionSignatureFixtureTest {
                     prepared.receipt.body.request,
                     prepared.receipt,
                     candidate.binding,
+                    FeePaymentIntent.authority(emptyList()),
                     networkId,
                     authority,
                 )
@@ -189,31 +221,91 @@ class PreparedTransactionSignatureFixtureTest {
 
     private fun assertFaucetVector(vector: Map<String, Any?>, networkId: NetworkId) {
         val response = obj(vector["response"], "faucet response")
-        val transcript = faucetTranscript(response)
-        assertVectorTranscript(vector, transcript, string(response, "server_signature"))
-        val wire = decodeHex(string(response, "signed_transaction_wire_hex"))
-        assertEquals(
-            string(response, "signed_transaction_wire_sha256"),
-            hex(MessageDigest.getInstance("SHA-256").digest(wire)),
+        val prepared = AccountOnboardingJsonParser.parseFaucetPrepareResponse(
+            JsonEncoder.encode(response).toByteArray(StandardCharsets.UTF_8),
         )
-        val transaction = SignedTransactionEncoder.decodeVersioned(wire)
-        assertContentEquals(wire, SignedTransactionEncoder.encodeVersioned(transaction))
-        assertEquals(string(response, "transaction_hash_hex"), SignedTransactionHasher.hashHex(transaction))
-        val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(transaction.encodedPayload())
-        assertEquals(networkId, payload.networkId)
-        assertTrue(
-            AccountOnboardingReceiptVerifier.sameAccountIdentity(
-                string(vector, "signer_account_id"),
-                payload.authority,
+        assertVectorTranscript(
+            vector,
+            PreparedTransactionSignatureV1.faucetPrepared(prepared),
+            prepared.serverSignature,
+        )
+        assertEquals(prepared.claim.semanticHashHex(), prepared.semanticHashHex)
+        val expectedFeePayment = FeePaymentIntent.authority(emptyList())
+        val policy = AccountFaucetPolicyV1(
+            string(vector, "signer_account_id"),
+            FAUCET_ASSET_DEFINITION_ID,
+            KotodamaQuantity.parseCanonical(FAUCET_AMOUNT),
+        )
+        AccountFaucetPreparedVerifier.requireValidPrepared(
+            prepared,
+            prepared.claim,
+            prepared.binding,
+            expectedFeePayment,
+            policy,
+            networkId,
+        )
+        val submitResponse = PreparedTransactionSubmitResponseV1(
+            prepared.binding,
+            prepared.operation,
+            prepared.transactionHashHex,
+            PreparedTransactionOutcomeV1.PENDING,
+        )
+        AccountFaucetPreparedVerifier.requireValidSubmitResponse(
+            submitResponse,
+            prepared,
+            expectedFeePayment,
+            policy,
+            networkId,
+            202,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            AccountFaucetPreparedVerifier.requireValidPrepared(
+                prepared,
+                prepared.claim,
+                prepared.binding,
+                FeePaymentIntent.authority(emptyList(), 1L),
+                policy,
+                networkId,
+            )
+        }
+        listOf(
+            AccountFaucetPolicyV1(
+                prepared.accountId,
+                FAUCET_ASSET_DEFINITION_ID,
+                KotodamaQuantity.parseCanonical(FAUCET_AMOUNT),
             ),
-        )
-        assertTrue(
-            AccountOnboardingReceiptVerifier.verifyAuthoritySignature(
-                payload.authority,
-                IrohaHash.prehash(transaction.encodedPayload()),
-                transaction.signature(),
+            AccountFaucetPolicyV1(
+                policy.faucetAuthority,
+                otherAssetDefinition(),
+                KotodamaQuantity.parseCanonical(FAUCET_AMOUNT),
             ),
-        )
+            AccountFaucetPolicyV1(
+                policy.faucetAuthority,
+                FAUCET_ASSET_DEFINITION_ID,
+                KotodamaQuantity.parseCanonical("6"),
+            ),
+        ).forEach { substitutedPolicy ->
+            assertFailsWith<IllegalArgumentException> {
+                AccountFaucetPreparedVerifier.requireValidPrepared(
+                    prepared,
+                    prepared.claim,
+                    prepared.binding,
+                    expectedFeePayment,
+                    substitutedPolicy,
+                    networkId,
+                )
+            }
+            assertFailsWith<IllegalArgumentException> {
+                AccountFaucetPreparedVerifier.requireValidSubmitResponse(
+                    submitResponse,
+                    prepared,
+                    expectedFeePayment,
+                    substitutedPolicy,
+                    networkId,
+                    202,
+                )
+            }
+        }
     }
 
     private fun assertVectorTranscript(
@@ -231,35 +323,6 @@ class PreparedTransactionSignatureFixtureTest {
                 responseSignature,
             ),
         )
-    }
-
-    private fun faucetTranscript(response: Map<String, Any?>): ByteArray {
-        val binding = obj(response["binding"], "faucet binding")
-        val claim = obj(response["claim"], "faucet claim")
-        val output = ByteArrayOutputStream()
-        frame(output, decodeHex("69726f68613a74616972613a70726570617265642d7472616e73616374696f6e3a763100"))
-        field(output, "transcript_schema", PreparedTransactionSignatureV1.TRANSCRIPT_SCHEMA)
-        field(output, "envelope_schema", string(response, "schema"))
-        field(output, "operation", string(response, "operation"))
-        field(output, "binding.schema", string(binding, "schema"))
-        field(output, "binding.authorization_sha256", string(binding, "authorization_sha256"))
-        field(output, "binding.authorization_nonce", string(binding, "authorization_nonce"))
-        field(output, "binding.kind", string(binding, "kind"))
-        field(output, "binding.phase", string(binding, "phase"))
-        field(output, "binding.idempotency_key", string(binding, "idempotency_key"))
-        field(output, "binding.execution_expires_at_unix_ms", number(binding, "execution_expires_at_unix_ms").toString())
-        field(output, "claim.account_id", string(claim, "account_id"))
-        field(output, "claim.pow_anchor_height", optionalNumber(claim, "pow_anchor_height"))
-        field(output, "claim.pow_nonce_hex", optionalString(claim, "pow_nonce_hex"))
-        field(output, "semantic_hash_hex", string(response, "semantic_hash_hex"))
-        field(output, "account_id", string(response, "account_id"))
-        field(output, "asset_definition_id", string(response, "asset_definition_id"))
-        field(output, "asset_id", string(response, "asset_id"))
-        field(output, "amount", string(response, "amount"))
-        field(output, "transaction_hash_hex", string(response, "transaction_hash_hex"))
-        field(output, "signed_transaction_wire_sha256", string(response, "signed_transaction_wire_sha256"))
-        field(output, "signed_transaction_wire", decodeHex(string(response, "signed_transaction_wire_hex")))
-        return output.toByteArray()
     }
 
     private fun copyPrepared(
@@ -287,25 +350,12 @@ class PreparedTransactionSignatureFixtureTest {
             JsonEncoder.encode(obj(vector["response"], "response")).toByteArray(StandardCharsets.UTF_8),
         )
 
-    private fun field(output: ByteArrayOutputStream, label: String, value: String) =
-        field(output, label, value.toByteArray(StandardCharsets.UTF_8))
-
-    private fun field(output: ByteArrayOutputStream, label: String, value: ByteArray) {
-        frame(output, label.toByteArray(StandardCharsets.UTF_8))
-        frame(output, value)
+    private fun otherAssetDefinition(): String {
+        val bytes = ByteArray(16) { (it + 1).toByte() }
+        bytes[6] = 0x47
+        bytes[8] = 0x89.toByte()
+        return AssetDefinitionIdEncoder.encodeFromBytes(bytes)
     }
-
-    private fun frame(output: ByteArrayOutputStream, value: ByteArray) {
-        val length = value.size.toLong()
-        for (shift in 56 downTo 0 step 8) output.write(((length ushr shift) and 0xffL).toInt())
-        output.write(value)
-    }
-
-    private fun optionalNumber(map: Map<String, Any?>, key: String): String =
-        map[key]?.let { "some:${(it as Number).toLong()}" } ?: "none"
-
-    private fun optionalString(map: Map<String, Any?>, key: String): String =
-        map[key]?.let { "some:${it as String}" } ?: "none"
 
     private fun flipHex(value: String): String =
         (if (value[0].lowercaseChar() == '0') '1' else '0') + value.substring(1)
@@ -327,9 +377,6 @@ class PreparedTransactionSignatureFixtureTest {
     private fun string(map: Map<String, Any?>, key: String): String =
         map[key] as? String ?: error("$key must be a string")
 
-    private fun number(map: Map<String, Any?>, key: String): Long =
-        (map[key] as? Number)?.toLong() ?: error("$key must be a number")
-
     private fun resolveFixture(): Path {
         var directory = Paths.get("").toAbsolutePath()
         repeat(8) {
@@ -342,5 +389,7 @@ class PreparedTransactionSignatureFixtureTest {
 
     private companion object {
         const val FIXTURE_PATH = "fixtures/prepared_transactions/prepared_transaction_signature_v1.json"
+        const val FAUCET_ASSET_DEFINITION_ID = "4rPeAP6jAjiLVZThZYwwPRBuQagt"
+        const val FAUCET_AMOUNT = "5"
     }
 }

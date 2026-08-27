@@ -1099,8 +1099,11 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             rawRepresentation: fixed32(0x02)
         ).publicKey.x963Representation
         let publicKey = try KagemushaDevicePublicKeyV2(sec1Bytes: publicKeyBytes)
+        let recipientPublicKey = try Keypair(
+            privateKeyBytes: fixed32(0xC3)
+        ).publicKey
         let recipient = try AccountAddress
-            .fromAccount(publicKey: fixed32(0xC3))
+            .fromAccount(publicKey: recipientPublicKey)
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let output = try note(seed: 0xE0, amount: "1")
         let payload = try KagemushaRecipientPaymentRequestSigningPayload(
@@ -1370,7 +1373,12 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         recentBlockHash: Data? = nil,
         expiresAtMilliseconds: UInt64 = 10_000
     ) throws -> KagemushaDeviceAttestationRegistration {
-        let authorityKey = authorityPublicKey ?? fixed32(0xA5)
+        let authorityKey: Data
+        if let authorityPublicKey {
+            authorityKey = authorityPublicKey
+        } else {
+            authorityKey = try Keypair(privateKeyBytes: fixed32(0xA5)).publicKey
+        }
         let accountID = try AccountAddress
             .fromAccount(publicKey: authorityKey)
             .toI105(networkPrefix: 0x02F1)

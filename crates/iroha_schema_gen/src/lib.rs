@@ -71,6 +71,7 @@ macro_rules! schema_types {
             iroha_executor_data_model::permission::nft::CanTransferNft,
             iroha_executor_data_model::permission::nft::CanModifyNftMetadata,
             iroha_executor_data_model::permission::parameter::CanSetParameters,
+            iroha_executor_data_model::permission::parameter::CanSetHijiriParameters,
             iroha_executor_data_model::permission::role::CanManageRoles,
             iroha_executor_data_model::permission::trigger::CanRegisterTrigger,
             iroha_executor_data_model::permission::trigger::CanExecuteTrigger,

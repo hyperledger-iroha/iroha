@@ -74,10 +74,10 @@ use iroha_data_model::{
         SoraInrouReplicaRuntimeStateV1, SoraLeaseVolumeKindV1, SoraNetworkPolicyV1,
         SoraPublishedInrouGuestImageArtifactV1, SoraResourceLimitsV1, SoraRolloutStageV1,
         SoraRouteVisibilityV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
-        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
-        SoraServiceLeaseStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
-        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
-        SoraStateMutationOperationV1, SoracloudAppendJournalResponseV1,
+        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1, SoraServiceLifecycleActionV1,
+        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
+        SoraStateBindingV1, SoraStateMutationOperationV1, SoracloudAppendJournalResponseV1,
         SoracloudEmitMailboxMessageRequestV1, SoracloudEmitMailboxMessageResponseV1,
         SoracloudEmitStateMutationRequestV1, SoracloudEmitStateMutationResponseV1,
         SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
@@ -3954,14 +3954,21 @@ impl SoracloudRuntimeManager {
         })
     }
     fn run_startup_reconcile(self: Arc<Self>) -> eyre::Result<()> {
-        std::thread::Builder::new()
+        let manager = Arc::clone(&self);
+        let result = std::thread::Builder::new()
             .name("soracloud-runtime-startup-reconcile".to_owned())
-            .spawn(move || self.reconcile_once())
+            .spawn(move || manager.reconcile_once())
             .wrap_err("spawn Soracloud startup reconcile thread")?
-            .join()
-            .map_err(|panic| {
-                eyre::eyre!("Soracloud startup reconcile thread panicked: {panic:?}")
-            })?
+            .join();
+        match result {
+            Ok(result) => result,
+            Err(panic) => {
+                self.quarantine_local_inrou_runtime();
+                Err(eyre::eyre!(
+                    "Soracloud startup reconcile thread panicked: {panic:?}"
+                ))
+            }
+        }
     }
     fn spawn_reconcile_task(self: Arc<Self>, shutdown_signal: ShutdownSignal) -> JoinHandle<()> {
         tokio::task::spawn(async move {
@@ -3981,6 +3988,7 @@ impl SoracloudRuntimeManager {
                                 );
                             }
                             Err(error) => {
+                                self.quarantine_local_inrou_runtime();
                                 iroha_logger::warn!(
                                     ?error,
                                     state_dir = %self.config.state_dir.display(),
@@ -4000,6 +4008,40 @@ impl SoracloudRuntimeManager {
     }
     /// Reconcile the node-local materialization plan against authoritative state once.
     pub(crate) fn reconcile_once(&self) -> eyre::Result<()> {
+        let result = self.reconcile_once_inner();
+        if result.is_err() {
+            self.quarantine_local_inrou_runtime();
+        }
+        result
+    }
+    fn quarantine_local_inrou_runtime(&self) {
+        let workers = {
+            let mut workers = self.hosted_http_workers.lock();
+            std::mem::take(&mut *workers)
+        };
+        for worker in workers.into_values() {
+            worker.lock().stop();
+        }
+        let scrubbed_snapshot = {
+            let mut snapshot = self.snapshot.write();
+            strip_inrou_runtime_plans(&mut snapshot).then(|| snapshot.clone())
+        };
+        if let Some(snapshot) = scrubbed_snapshot
+            && let Err(error) = write_json_atomic_bounded(
+                &self.runtime_snapshot_path(),
+                &snapshot,
+                SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+                "Soracloud runtime snapshot",
+            )
+        {
+            iroha_logger::warn!(
+                ?error,
+                state_dir = %self.config.state_dir.display(),
+                "failed to durably scrub quarantined Inrou plans from the runtime snapshot"
+            );
+        }
+    }
+    fn reconcile_once_inner(&self) -> eyre::Result<()> {
         validate_soracloud_runtime_manager_posture(&self.config)
             .wrap_err("validate Soracloud runtime-manager PortableVM V1 posture")?;
         fs::create_dir_all(self.services_root())
@@ -4079,7 +4121,7 @@ impl SoracloudRuntimeManager {
             let view = self.state.view();
             self.reconcile_inrou_egress_checkpoint_files(&view)
                 .wrap_err("reconcile durable Inrou egress checkpoint files")?;
-            self.reconcile_hosted_http_workers(&view, &initial_snapshot, &bundle_registry)?;
+            self.reconcile_hosted_http_workers(&view, &initial_snapshot)?;
         }
         {
             let view = self.state.view();
@@ -4100,7 +4142,7 @@ impl SoracloudRuntimeManager {
         };
         {
             let view = self.state.view();
-            self.submit_http_service_runtime_state_updates(&view, &snapshot, &bundle_registry);
+            self.submit_http_service_runtime_state_updates(&view, &snapshot)?;
         }
         write_json_atomic_bounded(
             &self.config.state_dir.join("runtime_snapshot.json"),
@@ -4115,31 +4157,26 @@ impl SoracloudRuntimeManager {
         &self,
         view: &StateView<'_>,
         snapshot: &SoracloudRuntimeSnapshot,
-        bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
-    ) {
+    ) -> eyre::Result<()> {
+        let inrou_plans = collect_authoritative_single_revision_inrou_runtime_plans(
+            view,
+            snapshot,
+            self.config.local_validator_account_id.as_ref(),
+            self.config.local_peer_id.as_deref(),
+        )?;
         let Some(mutation_sink) = self.mutation_sink.as_ref() else {
-            return;
+            return Ok(());
         };
-        let desired_keys = snapshot
-            .services
+        let desired_keys = inrou_plans
             .iter()
-            .flat_map(|(service_name, versions)| {
-                versions.iter().flat_map(move |(service_version, plan)| {
-                    (plan.runtime == SoraContainerRuntimeV1::Inrou)
-                        .then_some(
-                            plan.local_replicas
-                                .iter()
-                                .map(|replica| {
-                                    (
-                                        service_name.clone(),
-                                        service_version.clone(),
-                                        replica.replica_slot,
-                                        replica.placement_incarnation.clone(),
-                                    )
-                                })
-                                .collect::<Vec<_>>(),
-                        )
-                        .unwrap_or_default()
+            .flat_map(|(service_name, service_version, plan)| {
+                plan.local_replicas.iter().map(|replica| {
+                    (
+                        (*service_name).clone(),
+                        (*service_version).clone(),
+                        replica.replica_slot,
+                        replica.placement_incarnation.clone(),
+                    )
                 })
             })
             .collect::<BTreeSet<_>>();
@@ -4169,36 +4206,10 @@ impl SoracloudRuntimeManager {
                 .collect::<BTreeSet<_>>(),
             _ => BTreeSet::new(),
         };
-        let tracked_keys = desired_keys
-            .iter()
-            .cloned()
-            .chain(clearable_keys.iter().cloned())
-            .collect::<BTreeSet<_>>();
         self.last_runtime_state_submission_commitments
             .lock()
-            .retain(|key, _commitment| tracked_keys.contains(key));
+            .retain(|key, _commitment| desired_keys.contains(key));
         for (service_name, service_version, replica_slot, placement_incarnation) in clearable_keys {
-            let commitment = Hash::new(Encode::encode(&(
-                "soracloud:inrou-runtime-clear:v1",
-                service_name.as_str(),
-                service_version.as_str(),
-                replica_slot,
-                placement_incarnation.as_str(),
-            )));
-            let key = (
-                service_name.clone(),
-                service_version.clone(),
-                replica_slot,
-                placement_incarnation.clone(),
-            );
-            if self
-                .last_runtime_state_submission_commitments
-                .lock()
-                .get(&key)
-                .is_some_and(|previous| *previous == commitment)
-            {
-                continue;
-            }
             let service_name_id = match Name::from_str(&service_name) {
                 Ok(name) => name,
                 Err(error) => {
@@ -4245,179 +4256,174 @@ impl SoracloudRuntimeManager {
                 );
                 continue;
             }
-            self.last_runtime_state_submission_commitments
-                .lock()
-                .insert(key, commitment);
         }
-        for (service_name, versions) in &snapshot.services {
-            for (service_version, plan) in versions {
-                if plan.runtime != SoraContainerRuntimeV1::Inrou || plan.local_replicas.is_empty() {
+        for (service_name, service_version, plan) in inrou_plans {
+            if plan.local_replicas.is_empty() {
+                continue;
+            }
+            let Some(bundle) = view
+                .world()
+                .soracloud_service_revisions()
+                .get(&(service_name.clone(), service_version.clone()))
+            else {
+                continue;
+            };
+            let service_name_id = match Name::from_str(service_name) {
+                Ok(name) => name,
+                Err(error) => {
+                    iroha_logger::warn!(
+                        ?error,
+                        service_name = %service_name,
+                        service_version = %service_version,
+                        "failed to parse Soracloud service name while submitting authoritative Inrou replica runtime state"
+                    );
                     continue;
                 }
-                let Some(bundle) =
-                    bundle_registry.get(&(service_name.clone(), service_version.clone()))
+            };
+            let Some((lease_started_height, reporting_epoch)) =
+                self.authoritative_service_lease_identity(view, service_name)
+            else {
+                continue;
+            };
+            for replica in &plan.local_replicas {
+                let Some(assignment) = view
+                    .world()
+                    .soracloud_inrou_service_placements()
+                    .get(&(service_name.clone(), service_version.clone()))
+                    .and_then(|record| {
+                        record
+                            .placements
+                            .iter()
+                            .find(|placement| placement.replica_slot == replica.replica_slot)
+                    })
                 else {
                     continue;
                 };
-                let service_name_id = match Name::from_str(service_name) {
-                    Ok(name) => name,
-                    Err(error) => {
-                        iroha_logger::warn!(
-                            ?error,
-                            service_name = %service_name,
-                            service_version = %service_version,
-                            "failed to parse Soracloud service name while submitting authoritative Inrou replica runtime state"
-                        );
-                        continue;
-                    }
-                };
-                let Some((lease_started_height, reporting_epoch)) =
-                    self.authoritative_service_lease_identity(view, service_name)
+                if !assignment.host_availability.is_available()
+                    || assignment.lease_started_height != lease_started_height
+                    || replica.placement_incarnation != assignment.placement_incarnation.to_string()
+                    || replica.lease_started_height != assignment.lease_started_height
+                    || self.config.local_validator_account_id.as_ref()
+                        != Some(&assignment.validator_account_id)
+                    || self.config.local_peer_id.as_deref() != Some(assignment.peer_id.as_str())
+                {
+                    continue;
+                }
+                let Some(reporter_target_epoch) = self
+                    .authoritative_service_lease_reporter_target_epoch(
+                        view,
+                        service_name,
+                        lease_started_height,
+                        service_version,
+                        replica.replica_slot,
+                        assignment.placement_incarnation,
+                    )
                 else {
                     continue;
                 };
-                for replica in &plan.local_replicas {
-                    let Some(assignment) =
-                        view.world()
-                            .soracloud_inrou_service_placements()
-                            .get(&(service_name.clone(), service_version.clone()))
-                            .and_then(|record| {
-                                record.placements.iter().find(|placement| {
-                                    placement.replica_slot == replica.replica_slot
-                                })
-                            })
-                    else {
-                        continue;
-                    };
-                    if !assignment.host_availability.is_available()
-                        || assignment.lease_started_height != lease_started_height
-                        || replica.placement_incarnation
-                            != assignment.placement_incarnation.to_string()
-                        || replica.lease_started_height != assignment.lease_started_height
-                        || self.config.local_validator_account_id.as_ref()
-                            != Some(&assignment.validator_account_id)
-                        || self.config.local_peer_id.as_deref() != Some(assignment.peer_id.as_str())
-                    {
-                        continue;
-                    }
-                    let Some(reporter_target_epoch) = self
-                        .authoritative_service_lease_reporter_target_epoch(
-                            view,
-                            service_name,
-                            lease_started_height,
-                            service_version,
-                            replica.replica_slot,
-                            assignment.placement_incarnation,
-                        )
-                    else {
-                        continue;
-                    };
-                    let authoritative_state =
-                        view.world().soracloud_inrou_replica_runtime().get(&(
+                let authoritative_state = view.world().soracloud_inrou_replica_runtime().get(&(
+                    service_name.clone(),
+                    service_version.clone(),
+                    replica.replica_slot.to_string(),
+                ));
+                let reporter_accounted_egress_bytes = if reporter_target_epoch == reporting_epoch {
+                    self.inrou_replica_egress_accounting
+                        .lock()
+                        .get(&(
                             service_name.clone(),
                             service_version.clone(),
-                            replica.replica_slot.to_string(),
-                        ));
-                    let reporter_accounted_egress_bytes =
-                        if reporter_target_epoch == reporting_epoch {
-                            self.inrou_replica_egress_accounting
-                                .lock()
-                                .get(&(
-                                    service_name.clone(),
-                                    service_version.clone(),
+                            lease_started_height,
+                            reporter_target_epoch,
+                            replica.replica_slot,
+                            replica.placement_incarnation.clone(),
+                        ))
+                        .map_or_else(
+                            || {
+                                self.authoritative_service_lease_reporter_checkpoint(
+                                    view,
+                                    service_name,
                                     lease_started_height,
                                     reporter_target_epoch,
+                                    service_version,
                                     replica.replica_slot,
-                                    replica.placement_incarnation.clone(),
-                                ))
-                                .map_or_else(
-                                    || {
-                                        self.authoritative_service_lease_reporter_checkpoint(
-                                            view,
-                                            service_name,
-                                            lease_started_height,
-                                            reporter_target_epoch,
-                                            service_version,
-                                            replica.replica_slot,
-                                            assignment.placement_incarnation,
-                                        )
-                                        .map_or(0, |checkpoint| checkpoint.accounted_egress_bytes)
-                                    },
-                                    PortableVmEgressAccounting::accounted_egress_bytes,
+                                    assignment.placement_incarnation,
                                 )
-                        } else {
-                            0
-                        };
-                    let desired_state = SoraInrouReplicaRuntimeStateV1 {
-                        schema_version: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
-                        service_name: service_name_id.clone(),
-                        service_version: service_version.clone(),
-                        replica_slot: replica.replica_slot,
-                        placement_incarnation: assignment.placement_incarnation,
-                        validator_account_id: assignment.validator_account_id.clone(),
-                        peer_id: assignment.peer_id.clone(),
-                        selected_guest_isa: assignment.selected_guest_isa,
-                        health_status: replica.health_status,
-                        load_factor_bps: plan.load_factor_bps,
-                        materialized_bundle_hash: bundle.container.bundle_hash,
-                        reporting_epoch,
-                        accounted_egress_bytes: reporter_accounted_egress_bytes,
-                        updated_at_ms: soracloud_runtime_observed_at_ms(),
-                        last_error: replica.last_error.clone(),
-                    };
-                    if authoritative_state.is_some_and(|state| {
-                        inrou_runtime_state_matches_authoritative_snapshot(state, &desired_state)
-                    }) {
-                        self.last_runtime_state_submission_commitments
-                            .lock()
-                            .remove(&(
-                                service_name.clone(),
-                                service_version.clone(),
-                                replica.replica_slot,
-                                replica.placement_incarnation.clone(),
-                            ));
-                        continue;
-                    }
-                    let commitment = inrou_runtime_state_submission_commitment(&desired_state);
-                    let key = (
-                        service_name.clone(),
-                        service_version.clone(),
-                        replica.replica_slot,
-                        replica.placement_incarnation.clone(),
-                    );
-                    if authoritative_state.is_some()
-                        && self
-                            .last_runtime_state_submission_commitments
-                            .lock()
-                            .get(&key)
-                            .is_some_and(|previous| *previous == commitment)
-                    {
-                        continue;
-                    }
-                    let instruction = InstructionBox::from(
-                        isi::soracloud::SetSoracloudInrouReplicaRuntimeState {
-                            state: desired_state,
-                        },
-                    );
-                    if let Err(error) = mutation_sink.submit_instruction(
-                        instruction,
-                        "/internal/soracloud/runtime/inrou-replica-runtime-state",
-                    ) {
-                        iroha_logger::warn!(
-                            ?error,
-                            service_name = %service_name,
-                            service_version = %service_version,
-                            replica_slot = replica.replica_slot,
-                            "failed to submit authoritative Inrou replica runtime state update from embedded runtime manager"
-                        );
-                        continue;
-                    }
+                                .map_or(0, |checkpoint| checkpoint.accounted_egress_bytes)
+                            },
+                            PortableVmEgressAccounting::accounted_egress_bytes,
+                        )
+                } else {
+                    0
+                };
+                let desired_state = SoraInrouReplicaRuntimeStateV1 {
+                    schema_version: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+                    service_name: service_name_id.clone(),
+                    service_version: service_version.clone(),
+                    replica_slot: replica.replica_slot,
+                    placement_incarnation: assignment.placement_incarnation,
+                    validator_account_id: assignment.validator_account_id.clone(),
+                    peer_id: assignment.peer_id.clone(),
+                    selected_guest_isa: assignment.selected_guest_isa,
+                    health_status: replica.health_status,
+                    load_factor_bps: plan.load_factor_bps,
+                    materialized_bundle_hash: bundle.container.bundle_hash,
+                    reporting_epoch,
+                    accounted_egress_bytes: reporter_accounted_egress_bytes,
+                    updated_at_ms: soracloud_runtime_observed_at_ms(),
+                    last_error: replica.last_error.clone(),
+                };
+                if authoritative_state.is_some_and(|state| {
+                    inrou_runtime_state_matches_authoritative_snapshot(state, &desired_state)
+                }) {
                     self.last_runtime_state_submission_commitments
                         .lock()
-                        .insert(key, commitment);
+                        .remove(&(
+                            service_name.clone(),
+                            service_version.clone(),
+                            replica.replica_slot,
+                            replica.placement_incarnation.clone(),
+                        ));
+                    continue;
                 }
+                let commitment = inrou_runtime_state_submission_commitment(&desired_state);
+                let key = (
+                    service_name.clone(),
+                    service_version.clone(),
+                    replica.replica_slot,
+                    replica.placement_incarnation.clone(),
+                );
+                if authoritative_state.is_some()
+                    && self
+                        .last_runtime_state_submission_commitments
+                        .lock()
+                        .get(&key)
+                        .is_some_and(|previous| *previous == commitment)
+                {
+                    continue;
+                }
+                let instruction =
+                    InstructionBox::from(isi::soracloud::SetSoracloudInrouReplicaRuntimeState {
+                        state: desired_state,
+                    });
+                if let Err(error) = mutation_sink.submit_instruction(
+                    instruction,
+                    "/internal/soracloud/runtime/inrou-replica-runtime-state",
+                ) {
+                    iroha_logger::warn!(
+                        ?error,
+                        service_name = %service_name,
+                        service_version = %service_version,
+                        replica_slot = replica.replica_slot,
+                        "failed to submit authoritative Inrou replica runtime state update from embedded runtime manager"
+                    );
+                    continue;
+                }
+                self.last_runtime_state_submission_commitments
+                    .lock()
+                    .insert(key, commitment);
             }
         }
+        Ok(())
     }
     fn authoritative_service_reporting_epoch_egress_bytes(
         &self,
@@ -4430,18 +4436,24 @@ impl SoracloudRuntimeManager {
         let service_name_id = Name::from_str(service_name).wrap_err_with(|| {
             format!("parse authoritative Soracloud service name `{service_name}`")
         })?;
-        let lease = view
+        let deployment = view
             .world()
             .soracloud_service_deployments()
             .get(&service_name_id)
-            .filter(|deployment| {
-                deployment.current_service_version == service_version
-                    || deployment.active_rollout.as_ref().is_some_and(|rollout| {
-                        rollout.candidate_version == service_version
-                            || rollout.baseline_version == service_version
-                    })
-            })
-            .and_then(|deployment| deployment.service_lease.as_ref())
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "service `{service_name}` revision `{service_version}` has no authoritative deployment"
+                )
+            })?;
+        if deployment.active_rollout.is_some() {
+            eyre::bail!(
+                "service `{service_name}` carries an unsupported active Inrou canary; first-release host-local lease disks require one active revision"
+            );
+        }
+        let lease = deployment
+            .service_lease
+            .as_ref()
+            .filter(|_| deployment.current_service_version == service_version)
             .filter(|lease| {
                 lease.lease_started_height == lease_started_height
                     && lease.reporting_epoch == reporting_epoch
@@ -4564,6 +4576,23 @@ impl SoracloudRuntimeManager {
     fn reconcile_inrou_egress_checkpoint_files(&self, view: &StateView<'_>) -> io::Result<()> {
         let mut retained_digests = BTreeSet::new();
         for (service_name, deployment) in view.world().soracloud_service_deployments().iter() {
+            let current_revision_key = (
+                service_name.to_string(),
+                deployment.current_service_version.clone(),
+            );
+            let current_revision_is_inrou = view
+                .world()
+                .soracloud_service_revisions()
+                .get(&current_revision_key)
+                .is_some_and(|bundle| bundle.container.runtime == SoraContainerRuntimeV1::Inrou);
+            if current_revision_is_inrou && deployment.active_rollout.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "service `{service_name}` carries an unsupported active Inrou canary; first-release host-local lease disks require one active revision"
+                    ),
+                ));
+            }
             let Some(lease) = deployment.service_lease.as_ref() else {
                 continue;
             };
@@ -4578,6 +4607,9 @@ impl SoracloudRuntimeManager {
                             "service `{service_name}` contains an Inrou reporter checkpoint from another lease incarnation or reporting epoch"
                         ),
                     ));
+                }
+                if checkpoint.assignment.service_version != deployment.current_service_version {
+                    continue;
                 }
                 retained_digests.insert(inrou_egress_reporter_key_digest(
                     service_name.as_ref(),
@@ -4601,17 +4633,26 @@ impl SoracloudRuntimeManager {
             for ((service_name, service_version), record) in
                 view.world().soracloud_inrou_service_placements().iter()
             {
-                let Some(lease_started_height) = Name::from_str(service_name)
+                let Some(deployment) = Name::from_str(service_name)
                     .ok()
                     .and_then(|name| view.world().soracloud_service_deployments().get(&name))
-                    .filter(|deployment| {
-                        deployment.current_service_version == *service_version
-                            || deployment.active_rollout.as_ref().is_some_and(|rollout| {
-                                rollout.candidate_version == *service_version
-                                    || rollout.baseline_version == *service_version
-                            })
-                    })
-                    .and_then(|deployment| deployment.service_lease.as_ref())
+                else {
+                    continue;
+                };
+                if deployment.active_rollout.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "service `{service_name}` carries an unsupported active Inrou canary; first-release host-local lease disks require one active revision"
+                        ),
+                    ));
+                }
+                if deployment.current_service_version != *service_version {
+                    continue;
+                }
+                let Some(lease_started_height) = deployment
+                    .service_lease
+                    .as_ref()
                     .map(|lease| lease.lease_started_height)
                 else {
                     continue;
@@ -5032,31 +5073,36 @@ impl SoracloudRuntimeManager {
                     )
                 })?
                 .lease_started_height;
-            for (service_version, _, _) in collect_active_versions(deployment)? {
-                let Some(bundle) = bundle_registry
-                    .get(&(service_name.as_ref().to_owned(), service_version.clone()))
-                else {
-                    continue;
-                };
-                if bundle.container.runtime != SoraContainerRuntimeV1::Inrou
-                    || bundle.service.execution_plane
-                        != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
-                {
-                    continue;
-                }
-                let key = (service_name.as_ref().to_owned(), service_version.clone());
-                desired_records.insert(key.clone(), bundle.service.replicas.get());
-                let Some(record) = world.soracloud_inrou_service_placements().get(&key) else {
-                    return Ok(true);
-                };
-                if record.service_name != *service_name
-                    || record.service_version != service_version
-                    || record.desired_replica_count != bundle.service.replicas.get()
-                    || record.placements.len() > usize::from(record.desired_replica_count)
-                {
-                    return Ok(true);
-                }
-                let required_storage_bytes = bundle
+            let service_version = deployment.current_service_version.clone();
+            let Some(bundle) =
+                bundle_registry.get(&(service_name.as_ref().to_owned(), service_version.clone()))
+            else {
+                continue;
+            };
+            if bundle.container.runtime != SoraContainerRuntimeV1::Inrou
+                || bundle.service.execution_plane
+                    != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
+            {
+                continue;
+            }
+            if deployment.active_rollout.is_some() {
+                eyre::bail!(
+                    "service `{service_name}` carries an unsupported active Inrou canary; first-release host-local lease disks require one active revision"
+                );
+            }
+            let key = (service_name.as_ref().to_owned(), service_version.clone());
+            desired_records.insert(key.clone(), bundle.service.replicas.get());
+            let Some(record) = world.soracloud_inrou_service_placements().get(&key) else {
+                return Ok(true);
+            };
+            if record.service_name != *service_name
+                || record.service_version != service_version
+                || record.desired_replica_count != bundle.service.replicas.get()
+                || record.placements.len() > usize::from(record.desired_replica_count)
+            {
+                return Ok(true);
+            }
+            let required_storage_bytes = bundle
                     .service
                     .lease_volumes
                     .iter()
@@ -5070,63 +5116,59 @@ impl SoracloudRuntimeManager {
                             "Inrou service `{service_name}` revision `{service_version}` per-replica storage exceeds u64"
                         )
                     })?;
-                for placement in &record.placements {
-                    if placement.lease_started_height != lease_started_height {
-                        return Ok(true);
-                    }
-                    let current = retained_usage_by_validator
-                        .get(&placement.validator_account_id)
-                        .copied()
-                        .unwrap_or_default();
-                    let next = RetainedUsage {
-                        hosted_replicas: current.hosted_replicas.checked_add(1).ok_or_else(
-                            || eyre::eyre!("aggregate retained Inrou replica count exceeds u16"),
-                        )?,
-                        cpu_millis: current
-                            .cpu_millis
-                            .checked_add(
-                                bundle
-                                    .container
-                                    .resources
-                                    .checked_inrou_host_cpu_millis()
-                                    .ok_or_else(|| {
-                                        eyre::eyre!("Inrou physical CPU reservation exceeds u64")
-                                    })?,
-                            )
-                            .ok_or_else(|| {
-                                eyre::eyre!("aggregate retained Inrou CPU exceeds u64")
-                            })?,
-                        memory_bytes: current
-                            .memory_bytes
-                            .checked_add(
-                                bundle
-                                    .container
-                                    .resources
-                                    .checked_inrou_host_memory_bytes()
-                                    .ok_or_else(|| {
-                                        eyre::eyre!("Inrou physical memory reservation exceeds u64")
-                                    })?,
-                            )
-                            .ok_or_else(|| {
-                                eyre::eyre!("aggregate retained Inrou memory exceeds u64")
-                            })?,
-                        storage_bytes: current
-                            .storage_bytes
-                            .checked_add(required_storage_bytes)
-                            .ok_or_else(|| {
-                                eyre::eyre!("aggregate retained Inrou storage exceeds u64")
-                            })?,
-                    };
-                    retained_usage_by_validator
-                        .insert(placement.validator_account_id.clone(), next);
-                    let selected_image_artifact = bundle
-                        .container
-                        .inrou
-                        .as_ref()
-                        .and_then(|inrou| inrou.guest_images.get(&placement.selected_guest_isa))
-                        .map(|image| image.published_artifact.clone());
-                    retained_placements.push((placement.clone(), selected_image_artifact));
+            for placement in &record.placements {
+                if placement.lease_started_height != lease_started_height {
+                    return Ok(true);
                 }
+                let current = retained_usage_by_validator
+                    .get(&placement.validator_account_id)
+                    .copied()
+                    .unwrap_or_default();
+                let next = RetainedUsage {
+                    hosted_replicas: current.hosted_replicas.checked_add(1).ok_or_else(|| {
+                        eyre::eyre!("aggregate retained Inrou replica count exceeds u16")
+                    })?,
+                    cpu_millis: current
+                        .cpu_millis
+                        .checked_add(
+                            bundle
+                                .container
+                                .resources
+                                .checked_inrou_host_cpu_millis()
+                                .ok_or_else(|| {
+                                    eyre::eyre!("Inrou physical CPU reservation exceeds u64")
+                                })?,
+                        )
+                        .ok_or_else(|| eyre::eyre!("aggregate retained Inrou CPU exceeds u64"))?,
+                    memory_bytes: current
+                        .memory_bytes
+                        .checked_add(
+                            bundle
+                                .container
+                                .resources
+                                .checked_inrou_host_memory_bytes()
+                                .ok_or_else(|| {
+                                    eyre::eyre!("Inrou physical memory reservation exceeds u64")
+                                })?,
+                        )
+                        .ok_or_else(|| {
+                            eyre::eyre!("aggregate retained Inrou memory exceeds u64")
+                        })?,
+                    storage_bytes: current
+                        .storage_bytes
+                        .checked_add(required_storage_bytes)
+                        .ok_or_else(|| {
+                            eyre::eyre!("aggregate retained Inrou storage exceeds u64")
+                        })?,
+                };
+                retained_usage_by_validator.insert(placement.validator_account_id.clone(), next);
+                let selected_image_artifact = bundle
+                    .container
+                    .inrou
+                    .as_ref()
+                    .and_then(|inrou| inrou.guest_images.get(&placement.selected_guest_isa))
+                    .map(|image| image.published_artifact.clone());
+                retained_placements.push((placement.clone(), selected_image_artifact));
             }
         }
         for (placement, selected_image_artifact) in retained_placements {
@@ -5199,7 +5241,7 @@ impl SoracloudRuntimeManager {
     }
     fn restore_persisted_snapshot(&self) -> eyre::Result<bool> {
         let path = self.runtime_snapshot_path();
-        let Some(snapshot) = read_json_optional::<SoracloudRuntimeSnapshot>(
+        let Some(mut snapshot) = read_json_optional::<SoracloudRuntimeSnapshot>(
             &path,
             SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
             "Soracloud runtime snapshot",
@@ -5215,6 +5257,41 @@ impl SoracloudRuntimeManager {
                 SORACLOUD_RUNTIME_SNAPSHOT_VERSION_V1
             );
         }
+        let validation_error = {
+            let view = self.state.view();
+            collect_authoritative_single_revision_inrou_runtime_plans(
+                &view,
+                &snapshot,
+                self.config.local_validator_account_id.as_ref(),
+                self.config.local_peer_id.as_deref(),
+            )
+            .err()
+        };
+        if let Some(error) = validation_error {
+            // This V1 file is derived node-local state, never rollout authority. A parsed but
+            // non-current Inrou plan must disappear durably before startup reconciliation; only
+            // the exact schema remains accepted, and authoritative WSV rebuilds the sole revision.
+            if !strip_inrou_runtime_plans(&mut snapshot) {
+                return Err(error).wrap_err("validate first-release Inrou runtime snapshot");
+            }
+            write_json_atomic_bounded(
+                &path,
+                &snapshot,
+                SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+                "Soracloud runtime snapshot",
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "durably scrub non-authoritative Inrou plans from {}",
+                    path.display()
+                )
+            })?;
+            iroha_logger::warn!(
+                ?error,
+                snapshot_path = %path.display(),
+                "discarded non-authoritative persisted Inrou runtime plans before reconciliation"
+            );
+        }
         *self.snapshot.write() = snapshot;
         Ok(true)
     }
@@ -5222,53 +5299,52 @@ impl SoracloudRuntimeManager {
         &self,
         view: &StateView<'_>,
         snapshot: &SoracloudRuntimeSnapshot,
-        _bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
-    ) -> BTreeSet<HostedHttpReporterKey> {
+    ) -> eyre::Result<BTreeSet<HostedHttpReporterKey>> {
         let mut desired = BTreeSet::new();
-        for (service_name, versions) in &snapshot.services {
-            for (service_version, plan) in versions {
-                if plan.runtime != SoraContainerRuntimeV1::Inrou
-                    || plan.process_generation.is_none()
-                {
+        for (service_name, service_version, plan) in
+            collect_authoritative_single_revision_inrou_runtime_plans(
+                view,
+                snapshot,
+                self.config.local_validator_account_id.as_ref(),
+                self.config.local_peer_id.as_deref(),
+            )?
+        {
+            if plan.process_generation.is_none() {
+                continue;
+            }
+            for replica in &plan.local_replicas {
+                let Ok(placement_incarnation) = Hash::from_str(&replica.placement_incarnation)
+                else {
                     continue;
-                }
-                for replica in &plan.local_replicas {
-                    let Ok(placement_incarnation) = Hash::from_str(&replica.placement_incarnation)
-                    else {
-                        continue;
-                    };
-                    let Some(reporting_epoch) = self
-                        .authoritative_service_lease_reporter_target_epoch(
-                            view,
-                            service_name,
-                            replica.lease_started_height,
-                            service_version,
-                            replica.replica_slot,
-                            placement_incarnation,
-                        )
-                    else {
-                        continue;
-                    };
-                    desired.insert((
-                        service_name.clone(),
-                        service_version.clone(),
-                        replica.lease_started_height,
-                        reporting_epoch,
-                        replica.replica_slot,
-                        replica.placement_incarnation.clone(),
-                    ));
-                }
+                };
+                let Some(reporting_epoch) = self.authoritative_service_lease_reporter_target_epoch(
+                    view,
+                    service_name,
+                    replica.lease_started_height,
+                    service_version,
+                    replica.replica_slot,
+                    placement_incarnation,
+                ) else {
+                    continue;
+                };
+                desired.insert((
+                    service_name.clone(),
+                    service_version.clone(),
+                    replica.lease_started_height,
+                    reporting_epoch,
+                    replica.replica_slot,
+                    replica.placement_incarnation.clone(),
+                ));
             }
         }
-        desired
+        Ok(desired)
     }
     fn reconcile_hosted_http_workers(
         &self,
         view: &StateView<'_>,
         snapshot: &SoracloudRuntimeSnapshot,
-        bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
     ) -> eyre::Result<()> {
-        let desired_keys = self.desired_hosted_http_worker_keys(view, snapshot, bundle_registry);
+        let desired_keys = self.desired_hosted_http_worker_keys(view, snapshot)?;
         let desired_revision_keys = desired_keys
             .iter()
             .map(
@@ -5447,89 +5523,89 @@ impl SoracloudRuntimeManager {
             let workers = self.hosted_http_workers.lock();
             workers.len()
         };
-        for (service_name, versions) in &snapshot.services {
-            let mut hosted_http_versions = versions
-                .iter()
-                .filter(|(_service_version, plan)| {
-                    plan.runtime == SoraContainerRuntimeV1::Inrou
-                        && plan.process_generation.is_some()
-                })
-                .collect::<Vec<_>>();
-            hosted_http_versions.sort_by_key(|(_service_version, plan)| match plan.role {
-                SoracloudRuntimeRevisionRole::Active => 0u8,
-                SoracloudRuntimeRevisionRole::CanaryCandidate => 1u8,
-            });
-            for (service_version, plan) in hosted_http_versions {
-                let Some(bundle) =
-                    bundle_registry.get(&(service_name.clone(), service_version.clone()))
-                else {
-                    continue;
-                };
-                let runtime_label = "inrou";
-                let (lease_started_height, reporting_epoch) = self
+        for (service_name, service_version, plan) in
+            collect_authoritative_single_revision_inrou_runtime_plans(
+                view,
+                snapshot,
+                self.config.local_validator_account_id.as_ref(),
+                self.config.local_peer_id.as_deref(),
+            )?
+        {
+            if plan.process_generation.is_none() {
+                continue;
+            }
+            let Some(bundle) = view
+                .world()
+                .soracloud_service_revisions()
+                .get(&(service_name.clone(), service_version.clone()))
+            else {
+                continue;
+            };
+            let runtime_label = "inrou";
+            let (lease_started_height, reporting_epoch) = self
                     .authoritative_service_lease_identity(view, service_name)
                     .ok_or_else(|| {
                         eyre::eyre!(
                             "local Inrou service `{service_name}` revision `{service_version}` has no authoritative reporting epoch"
                         )
                     })?;
-                let process_generation = plan.process_generation.ok_or_else(|| {
+            let process_generation = plan.process_generation.ok_or_else(|| {
                     eyre::eyre!(
                         "local Inrou service `{service_name}` revision `{service_version}` has no canonical process generation"
                     )
                 })?;
-                let service_data_dir =
-                    build_native_service_data_dir(&self.config.state_dir, service_name);
-                let authoritative_reporting_epoch_egress_bytes = self
-                    .authoritative_service_reporting_epoch_egress_bytes(
-                        view,
-                        service_name,
-                        service_version,
+            let service_data_dir =
+                build_native_service_data_dir(&self.config.state_dir, service_name);
+            let authoritative_reporting_epoch_egress_bytes = self
+                .authoritative_service_reporting_epoch_egress_bytes(
+                    view,
+                    service_name,
+                    service_version,
+                    lease_started_height,
+                    reporting_epoch,
+                )?;
+            let revision_reporting_epoch_accounting_offset_bytes =
+                authoritative_reporting_epoch_egress_bytes;
+            let revision_egress_accounting = {
+                let mut accounting = self.inrou_revision_egress_accounting.lock();
+                accounting
+                    .entry((
+                        service_name.clone(),
+                        service_version.clone(),
                         lease_started_height,
                         reporting_epoch,
-                    )?;
-                let revision_reporting_epoch_accounting_offset_bytes =
-                    authoritative_reporting_epoch_egress_bytes;
-                let revision_egress_accounting = {
-                    let mut accounting = self.inrou_revision_egress_accounting.lock();
-                    accounting
-                        .entry((
-                            service_name.clone(),
-                            service_version.clone(),
-                            lease_started_height,
-                            reporting_epoch,
-                        ))
-                        .or_insert_with(|| {
-                            PortableVmEgressAccounting::new(
-                                revision_reporting_epoch_accounting_offset_bytes,
-                            )
-                        })
-                        .clone()
-                };
-                revision_egress_accounting
+                    ))
+                    .or_insert_with(|| {
+                        PortableVmEgressAccounting::new(
+                            revision_reporting_epoch_accounting_offset_bytes,
+                        )
+                    })
+                    .clone()
+            };
+            revision_egress_accounting
                     .advance_floor(revision_reporting_epoch_accounting_offset_bytes)
                     .wrap_err_with(|| {
                         format!(
                             "advance shared Inrou egress accounting floor for service `{service_name}` revision `{service_version}`"
                         )
                     })?;
-                let mut replica_runtime_states = Vec::with_capacity(plan.local_replica_slots.len());
-                for replica_slot in plan.local_replica_slots.iter().copied() {
-                    let replica_plan = project_hosted_http_replica_plan(plan, replica_slot)?;
-                    let placement = exact_inrou_replica_placement(&replica_plan)?;
-                    if placement.lease_started_height != lease_started_height {
-                        eyre::bail!(
-                            "local Inrou replica `{service_name}` revision `{service_version}` replica {replica_slot} belongs to lease height {} instead of authoritative height {lease_started_height}",
-                            placement.lease_started_height
-                        );
-                    }
-                    let placement_incarnation =
+            let mut replica_runtime_states = Vec::with_capacity(plan.local_replica_slots.len());
+            for replica_slot in plan.local_replica_slots.iter().copied() {
+                let replica_plan = project_hosted_http_replica_plan(plan, replica_slot)?;
+                let placement = exact_inrou_replica_placement(&replica_plan)?;
+                if placement.lease_started_height != lease_started_height {
+                    eyre::bail!(
+                        "local Inrou replica `{service_name}` revision `{service_version}` replica {replica_slot} belongs to lease height {} instead of authoritative height {lease_started_height}",
+                        placement.lease_started_height
+                    );
+                }
+                let placement_incarnation =
                         Hash::from_str(&placement.placement_incarnation).wrap_err_with(|| {
                             format!(
                                 "parse Inrou placement incarnation for service `{service_name}` revision `{service_version}` replica {replica_slot}"
                             )
                         })?;
-                    let target_reporting_epoch = self
+                let target_reporting_epoch = self
                         .authoritative_service_lease_reporter_target_epoch(
                             view,
                             service_name,
@@ -5543,51 +5619,51 @@ impl SoracloudRuntimeManager {
                                 "local Inrou replica `{service_name}` revision `{service_version}` replica {replica_slot} has no authoritative reporter epoch"
                             )
                         })?;
-                    let reporter_revision_egress_accounting =
-                        if target_reporting_epoch == reporting_epoch {
-                            revision_egress_accounting.clone()
-                        } else {
-                            let mut accounting = self.inrou_revision_egress_accounting.lock();
-                            accounting
-                                .entry((
-                                    service_name.clone(),
-                                    service_version.clone(),
-                                    lease_started_height,
-                                    target_reporting_epoch,
-                                ))
-                                .or_insert_with(|| PortableVmEgressAccounting::new(0))
-                                .clone()
-                        };
-                    let key = (
-                        service_name.clone(),
-                        service_version.clone(),
+                let reporter_revision_egress_accounting =
+                    if target_reporting_epoch == reporting_epoch {
+                        revision_egress_accounting.clone()
+                    } else {
+                        let mut accounting = self.inrou_revision_egress_accounting.lock();
+                        accounting
+                            .entry((
+                                service_name.clone(),
+                                service_version.clone(),
+                                lease_started_height,
+                                target_reporting_epoch,
+                            ))
+                            .or_insert_with(|| PortableVmEgressAccounting::new(0))
+                            .clone()
+                    };
+                let key = (
+                    service_name.clone(),
+                    service_version.clone(),
+                    lease_started_height,
+                    target_reporting_epoch,
+                    replica_slot,
+                    placement.placement_incarnation.clone(),
+                );
+                let authoritative_reporter_checkpoint = self
+                    .authoritative_service_lease_reporter_checkpoint(
+                        view,
+                        service_name,
                         lease_started_height,
                         target_reporting_epoch,
+                        service_version,
                         replica_slot,
-                        placement.placement_incarnation.clone(),
+                        placement_incarnation,
                     );
-                    let authoritative_reporter_checkpoint = self
-                        .authoritative_service_lease_reporter_checkpoint(
-                            view,
-                            service_name,
-                            lease_started_height,
-                            target_reporting_epoch,
-                            service_version,
-                            replica_slot,
-                            placement_incarnation,
-                        );
-                    let authoritative_reporter_accounted_egress_bytes =
-                        authoritative_reporter_checkpoint
-                            .map_or(0, |checkpoint| checkpoint.accounted_egress_bytes);
-                    let reporter_egress_accounting = if let Some(accounting) = self
-                        .inrou_replica_egress_accounting
-                        .lock()
-                        .get(&key)
-                        .cloned()
-                    {
-                        accounting
-                    } else {
-                        let validator_account_id = self
+                let authoritative_reporter_accounted_egress_bytes =
+                    authoritative_reporter_checkpoint
+                        .map_or(0, |checkpoint| checkpoint.accounted_egress_bytes);
+                let reporter_egress_accounting = if let Some(accounting) = self
+                    .inrou_replica_egress_accounting
+                    .lock()
+                    .get(&key)
+                    .cloned()
+                {
+                    accounting
+                } else {
+                    let validator_account_id = self
                             .config
                             .local_validator_account_id
                             .as_ref()
@@ -5596,7 +5672,7 @@ impl SoracloudRuntimeManager {
                                     "local Inrou replica `{service_name}` revision `{service_version}` replica {replica_slot} has no validator reporter identity"
                                 )
                             })?;
-                        let durable_checkpoint = InrouDurableEgressCheckpoint::load_or_create(
+                    let durable_checkpoint = InrouDurableEgressCheckpoint::load_or_create(
                             &self.config.state_dir,
                             service_name,
                             lease_started_height,
@@ -5612,79 +5688,172 @@ impl SoracloudRuntimeManager {
                                 "recover durable Inrou egress checkpoint for service `{service_name}` revision `{service_version}` replica {replica_slot}"
                             )
                         })?;
-                        let recovered_accounted_egress_bytes =
-                            durable_checkpoint.accounted_egress_bytes();
-                        let accounting = PortableVmEgressAccounting::new_durable_with_gate(
-                            recovered_accounted_egress_bytes,
-                            Arc::clone(&reporter_revision_egress_accounting.update_gate),
-                            durable_checkpoint,
-                        )?;
-                        self.inrou_replica_egress_accounting
-                            .lock()
-                            .insert(key.clone(), accounting.clone());
-                        accounting
-                    };
-                    reporter_egress_accounting
+                    let recovered_accounted_egress_bytes =
+                        durable_checkpoint.accounted_egress_bytes();
+                    let accounting = PortableVmEgressAccounting::new_durable_with_gate(
+                        recovered_accounted_egress_bytes,
+                        Arc::clone(&reporter_revision_egress_accounting.update_gate),
+                        durable_checkpoint,
+                    )?;
+                    self.inrou_replica_egress_accounting
+                        .lock()
+                        .insert(key.clone(), accounting.clone());
+                    accounting
+                };
+                reporter_egress_accounting
                         .advance_floor(authoritative_reporter_accounted_egress_bytes)
                         .wrap_err_with(|| {
                             format!(
                                 "advance Inrou reporter egress accounting floor for service `{service_name}` revision `{service_version}` replica {replica_slot}"
                             )
                         })?;
-                    let replica_egress_accounting = PortableVmReplicaEgressAccounting::from_shared(
-                        reporter_revision_egress_accounting,
-                        reporter_egress_accounting.clone(),
-                    )
-                    .wrap_err("bind Inrou revision and reporter egress accounting")?;
-                    let submit_replica_usage = || {
-                        self.submit_http_service_lease_usage_update(
-                            view,
-                            service_name,
-                            lease_started_height,
-                            target_reporting_epoch,
-                            service_version,
-                            replica_slot,
-                            placement_incarnation,
-                            reporter_egress_accounting.accounted_egress_bytes(),
-                            false,
-                        );
-                    };
-                    if self
-                        .last_service_lease_usage_submission_bytes
-                        .lock()
-                        .get(&key)
-                        .is_some_and(|attempt| {
-                            attempt.accounted_egress_bytes
-                                > reporter_egress_accounting.accounted_egress_bytes()
-                        })
-                    {
-                        return Err(eyre::eyre!(
-                            "last submitted Inrou checkpoint for `{service_name}` revision `{service_version}` replica {replica_slot} exceeds its durable local counter"
-                        ));
+                let replica_egress_accounting = PortableVmReplicaEgressAccounting::from_shared(
+                    reporter_revision_egress_accounting,
+                    reporter_egress_accounting.clone(),
+                )
+                .wrap_err("bind Inrou revision and reporter egress accounting")?;
+                let submit_replica_usage = || {
+                    self.submit_http_service_lease_usage_update(
+                        view,
+                        service_name,
+                        lease_started_height,
+                        target_reporting_epoch,
+                        service_version,
+                        replica_slot,
+                        placement_incarnation,
+                        reporter_egress_accounting.accounted_egress_bytes(),
+                        false,
+                    );
+                };
+                if self
+                    .last_service_lease_usage_submission_bytes
+                    .lock()
+                    .get(&key)
+                    .is_some_and(|attempt| {
+                        attempt.accounted_egress_bytes
+                            > reporter_egress_accounting.accounted_egress_bytes()
+                    })
+                {
+                    return Err(eyre::eyre!(
+                        "last submitted Inrou checkpoint for `{service_name}` revision `{service_version}` replica {replica_slot} exceeds its durable local counter"
+                    ));
+                }
+                submit_replica_usage();
+                let local_reporter_accounted_egress_bytes =
+                    reporter_egress_accounting.accounted_egress_bytes();
+                let reporter_checkpoint_is_open = authoritative_reporter_checkpoint
+                    .is_some_and(|checkpoint| !checkpoint.finalize_reporter);
+                let reporter_checkpoint_is_current =
+                    hosted_http_reporter_checkpoint_is_current_open(
+                        authoritative_reporter_checkpoint,
+                        lease_started_height,
+                        target_reporting_epoch,
+                        local_reporter_accounted_egress_bytes,
+                    );
+                let existing_worker_is_running = self.hosted_http_workers.lock().contains_key(&key);
+                if !reporter_checkpoint_is_open
+                    || (!reporter_checkpoint_is_current && !existing_worker_is_running)
+                {
+                    if let Some(worker) = self.hosted_http_workers.lock().remove(&key) {
+                        worker.lock().stop();
+                        running_processes = running_processes.saturating_sub(1);
                     }
-                    submit_replica_usage();
-                    let local_reporter_accounted_egress_bytes =
+                    let accounted_egress_bytes =
                         reporter_egress_accounting.accounted_egress_bytes();
-                    let reporter_checkpoint_is_open = authoritative_reporter_checkpoint
-                        .is_some_and(|checkpoint| !checkpoint.finalize_reporter);
-                    let reporter_checkpoint_is_current =
-                        hosted_http_reporter_checkpoint_is_current_open(
-                            authoritative_reporter_checkpoint,
-                            lease_started_height,
-                            target_reporting_epoch,
-                            local_reporter_accounted_egress_bytes,
-                        );
-                    let existing_worker_is_running =
-                        self.hosted_http_workers.lock().contains_key(&key);
-                    if !reporter_checkpoint_is_open
-                        || (!reporter_checkpoint_is_current && !existing_worker_is_running)
-                    {
-                        if let Some(worker) = self.hosted_http_workers.lock().remove(&key) {
-                            worker.lock().stop();
-                            running_processes = running_processes.saturating_sub(1);
+                    replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
+                        &PathBuf::from(&replica_plan.materialization_dir),
+                        service_name,
+                        service_version,
+                        process_generation,
+                        replica_slot,
+                        &placement.placement_incarnation,
+                        SoraServiceHealthStatusV1::Hydrating,
+                        None,
+                        None,
+                        accounted_egress_bytes,
+                        Some(
+                            "awaiting authoritative Inrou egress reporter checkpoint catch-up"
+                                .to_owned(),
+                        ),
+                    )?);
+                    continue;
+                }
+                let cache_key = HostedHttpWorkerCacheKey {
+                    runtime: bundle.container.runtime,
+                    guest_isa: plan.inrou.as_ref().map(|inrou| inrou.selected_guest_isa),
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    replica_slot,
+                    lease_started_height: placement.lease_started_height,
+                    placement_incarnation: placement.placement_incarnation.clone(),
+                    validator_account_id: placement.validator_account_id.clone(),
+                    peer_id: placement.peer_id.clone(),
+                    bundle_hash: plan.bundle_hash.clone(),
+                    bundle_path: plan.bundle_path.clone(),
+                    entrypoint: plan.entrypoint.clone(),
+                    process_generation,
+                    args: bundle.container.args.clone(),
+                    effective_env: replica_plan.effective_env.clone(),
+                    healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
+                    service_data_dir: service_data_dir.clone(),
+                };
+                let existing_worker = {
+                    let workers = self.hosted_http_workers.lock();
+                    workers.get(&key).cloned()
+                };
+                if let Some(worker) = existing_worker {
+                    let mut guard = worker.lock();
+                    let current_accounted_egress_bytes = guard.accounted_egress_bytes();
+                    let exited = match guard.try_wait() {
+                        Ok(Some(status)) => {
+                            Some(format!("{runtime_label} exited with status {status}"))
                         }
-                        let accounted_egress_bytes =
-                            reporter_egress_accounting.accounted_egress_bytes();
+                        Ok(None) => None,
+                        Err(error) => {
+                            Some(format!("failed to poll {runtime_label} status: {error}"))
+                        }
+                    };
+                    let same_cache_key = guard.cache_key == cache_key;
+                    if exited.is_none() && same_cache_key {
+                        let health = probe_hosted_http_health(
+                            &guard.listen_base_url,
+                            guard.cache_key.healthcheck_path.as_deref(),
+                        );
+                        let (health_status, last_error) = match health {
+                            Ok(()) => (SoraServiceHealthStatusV1::Healthy, None),
+                            Err(error) => (
+                                SoraServiceHealthStatusV1::Degraded,
+                                Some(runtime_error_summary(&error)),
+                            ),
+                        };
+                        let accounted_egress_bytes = current_accounted_egress_bytes
+                            .unwrap_or_else(|| reporter_egress_accounting.accounted_egress_bytes());
+                        replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
+                            &PathBuf::from(&replica_plan.materialization_dir),
+                            service_name,
+                            service_version,
+                            process_generation,
+                            replica_slot,
+                            &placement.placement_incarnation,
+                            health_status,
+                            Some(&guard.listen_base_url),
+                            guard.pid(),
+                            accounted_egress_bytes,
+                            last_error,
+                        )?);
+                        submit_replica_usage();
+                        continue;
+                    }
+                    guard.stop();
+                    let accounted_egress_bytes = guard
+                        .accounted_egress_bytes()
+                        .unwrap_or_else(|| reporter_egress_accounting.accounted_egress_bytes());
+                    drop(guard);
+                    let removed = self.hosted_http_workers.lock().remove(&key);
+                    if removed.is_some() && running_processes > 0 {
+                        running_processes = running_processes.saturating_sub(1);
+                    }
+                    if !replica_plan.bundle_available_locally {
                         replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
                             &PathBuf::from(&replica_plan.materialization_dir),
                             service_name,
@@ -5696,109 +5865,13 @@ impl SoracloudRuntimeManager {
                             None,
                             None,
                             accounted_egress_bytes,
-                            Some(
-                                "awaiting authoritative Inrou egress reporter checkpoint catch-up"
-                                    .to_owned(),
-                            ),
+                            Some(format!("{runtime_label} bundle is still hydrating")),
                         )?);
+                        submit_replica_usage();
                         continue;
                     }
-                    let cache_key = HostedHttpWorkerCacheKey {
-                        runtime: bundle.container.runtime,
-                        guest_isa: plan.inrou.as_ref().map(|inrou| inrou.selected_guest_isa),
-                        service_name: service_name.clone(),
-                        service_version: service_version.clone(),
-                        replica_slot,
-                        lease_started_height: placement.lease_started_height,
-                        placement_incarnation: placement.placement_incarnation.clone(),
-                        validator_account_id: placement.validator_account_id.clone(),
-                        peer_id: placement.peer_id.clone(),
-                        bundle_hash: plan.bundle_hash.clone(),
-                        bundle_path: plan.bundle_path.clone(),
-                        entrypoint: plan.entrypoint.clone(),
-                        process_generation,
-                        args: bundle.container.args.clone(),
-                        effective_env: replica_plan.effective_env.clone(),
-                        healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
-                        service_data_dir: service_data_dir.clone(),
-                    };
-                    let existing_worker = {
-                        let workers = self.hosted_http_workers.lock();
-                        workers.get(&key).cloned()
-                    };
-                    if let Some(worker) = existing_worker {
-                        let mut guard = worker.lock();
-                        let current_accounted_egress_bytes = guard.accounted_egress_bytes();
-                        let exited = match guard.try_wait() {
-                            Ok(Some(status)) => {
-                                Some(format!("{runtime_label} exited with status {status}"))
-                            }
-                            Ok(None) => None,
-                            Err(error) => {
-                                Some(format!("failed to poll {runtime_label} status: {error}"))
-                            }
-                        };
-                        let same_cache_key = guard.cache_key == cache_key;
-                        if exited.is_none() && same_cache_key {
-                            let health = probe_hosted_http_health(
-                                &guard.listen_base_url,
-                                guard.cache_key.healthcheck_path.as_deref(),
-                            );
-                            let (health_status, last_error) = match health {
-                                Ok(()) => (SoraServiceHealthStatusV1::Healthy, None),
-                                Err(error) => (
-                                    SoraServiceHealthStatusV1::Degraded,
-                                    Some(runtime_error_summary(&error)),
-                                ),
-                            };
-                            let accounted_egress_bytes = current_accounted_egress_bytes
-                                .unwrap_or_else(|| {
-                                    reporter_egress_accounting.accounted_egress_bytes()
-                                });
-                            replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
-                                &PathBuf::from(&replica_plan.materialization_dir),
-                                service_name,
-                                service_version,
-                                process_generation,
-                                replica_slot,
-                                &placement.placement_incarnation,
-                                health_status,
-                                Some(&guard.listen_base_url),
-                                guard.pid(),
-                                accounted_egress_bytes,
-                                last_error,
-                            )?);
-                            submit_replica_usage();
-                            continue;
-                        }
-                        guard.stop();
-                        let accounted_egress_bytes = guard
-                            .accounted_egress_bytes()
-                            .unwrap_or_else(|| reporter_egress_accounting.accounted_egress_bytes());
-                        drop(guard);
-                        let removed = self.hosted_http_workers.lock().remove(&key);
-                        if removed.is_some() && running_processes > 0 {
-                            running_processes = running_processes.saturating_sub(1);
-                        }
-                        if !replica_plan.bundle_available_locally {
-                            replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
-                                &PathBuf::from(&replica_plan.materialization_dir),
-                                service_name,
-                                service_version,
-                                process_generation,
-                                replica_slot,
-                                &placement.placement_incarnation,
-                                SoraServiceHealthStatusV1::Hydrating,
-                                None,
-                                None,
-                                accounted_egress_bytes,
-                                Some(format!("{runtime_label} bundle is still hydrating")),
-                            )?);
-                            submit_replica_usage();
-                            continue;
-                        }
-                        if running_processes >= max_inrou_instances {
-                            replica_runtime_states.push(
+                    if running_processes >= max_inrou_instances {
+                        replica_runtime_states.push(
                                 persist_hosted_http_replica_runtime_state(
                                     &PathBuf::from(&replica_plan.materialization_dir),
                                     service_name,
@@ -5815,27 +5888,27 @@ impl SoracloudRuntimeManager {
                                     )),
                                 )?,
                             );
-                            submit_replica_usage();
-                            continue;
-                        }
-                    } else if !replica_plan.bundle_available_locally {
-                        replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
-                            &PathBuf::from(&replica_plan.materialization_dir),
-                            service_name,
-                            service_version,
-                            process_generation,
-                            replica_slot,
-                            &placement.placement_incarnation,
-                            SoraServiceHealthStatusV1::Hydrating,
-                            None,
-                            None,
-                            reporter_egress_accounting.accounted_egress_bytes(),
-                            Some(format!("{runtime_label} bundle is still hydrating")),
-                        )?);
                         submit_replica_usage();
                         continue;
-                    } else if running_processes >= max_inrou_instances {
-                        replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
+                    }
+                } else if !replica_plan.bundle_available_locally {
+                    replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
+                        &PathBuf::from(&replica_plan.materialization_dir),
+                        service_name,
+                        service_version,
+                        process_generation,
+                        replica_slot,
+                        &placement.placement_incarnation,
+                        SoraServiceHealthStatusV1::Hydrating,
+                        None,
+                        None,
+                        reporter_egress_accounting.accounted_egress_bytes(),
+                        Some(format!("{runtime_label} bundle is still hydrating")),
+                    )?);
+                    submit_replica_usage();
+                    continue;
+                } else if running_processes >= max_inrou_instances {
+                    replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
                             &PathBuf::from(&replica_plan.materialization_dir),
                             service_name,
                             service_version,
@@ -5850,10 +5923,10 @@ impl SoracloudRuntimeManager {
                                 "{runtime_label} concurrency limit {max_inrou_instances} is already exhausted"
                             )),
                         )?);
-                        submit_replica_usage();
-                        continue;
-                    }
-                    let worker = match self
+                    submit_replica_usage();
+                    continue;
+                }
+                let worker = match self
                         .start_hosted_http_worker(
                             &replica_plan,
                             bundle,
@@ -5894,48 +5967,47 @@ impl SoracloudRuntimeManager {
                             continue;
                         }
                     };
-                    let accounted_egress_bytes = worker
-                        .accounted_egress_bytes()
-                        .unwrap_or_else(|| reporter_egress_accounting.accounted_egress_bytes());
-                    replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
-                        &PathBuf::from(&replica_plan.materialization_dir),
-                        service_name,
-                        service_version,
-                        process_generation,
-                        replica_slot,
-                        &placement.placement_incarnation,
-                        SoraServiceHealthStatusV1::Healthy,
-                        Some(&worker.listen_base_url),
-                        worker.pid(),
-                        accounted_egress_bytes,
-                        None,
-                    )?);
-                    self.hosted_http_workers
-                        .lock()
-                        .insert(key, Arc::new(Mutex::new(worker)));
-                    running_processes = running_processes.saturating_add(1);
-                    submit_replica_usage();
-                }
-                let accounted_egress_bytes = revision_egress_accounting.accounted_egress_bytes();
-                let revision_listen_base_url =
-                    aggregate_hosted_http_revision_listener(&replica_runtime_states)
-                        .map(ToOwned::to_owned);
-                let revision_pid = aggregate_hosted_http_revision_pid(&replica_runtime_states);
-                let revision_last_error =
-                    aggregate_hosted_http_revision_last_error(&replica_runtime_states);
-                write_hosted_http_runtime_state(
-                    &PathBuf::from(&plan.materialization_dir),
+                let accounted_egress_bytes = worker
+                    .accounted_egress_bytes()
+                    .unwrap_or_else(|| reporter_egress_accounting.accounted_egress_bytes());
+                replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
+                    &PathBuf::from(&replica_plan.materialization_dir),
                     service_name,
                     service_version,
                     process_generation,
-                    aggregate_hosted_http_revision_health_status(&replica_runtime_states),
-                    revision_listen_base_url.as_deref(),
-                    revision_pid,
+                    replica_slot,
+                    &placement.placement_incarnation,
+                    SoraServiceHealthStatusV1::Healthy,
+                    Some(&worker.listen_base_url),
+                    worker.pid(),
                     accounted_egress_bytes,
-                    revision_last_error,
-                    replica_runtime_states,
-                )?;
+                    None,
+                )?);
+                self.hosted_http_workers
+                    .lock()
+                    .insert(key, Arc::new(Mutex::new(worker)));
+                running_processes = running_processes.saturating_add(1);
+                submit_replica_usage();
             }
+            let accounted_egress_bytes = revision_egress_accounting.accounted_egress_bytes();
+            let revision_listen_base_url =
+                aggregate_hosted_http_revision_listener(&replica_runtime_states)
+                    .map(ToOwned::to_owned);
+            let revision_pid = aggregate_hosted_http_revision_pid(&replica_runtime_states);
+            let revision_last_error =
+                aggregate_hosted_http_revision_last_error(&replica_runtime_states);
+            write_hosted_http_runtime_state(
+                &PathBuf::from(&plan.materialization_dir),
+                service_name,
+                service_version,
+                process_generation,
+                aggregate_hosted_http_revision_health_status(&replica_runtime_states),
+                revision_listen_base_url.as_deref(),
+                revision_pid,
+                accounted_egress_bytes,
+                revision_last_error,
+                replica_runtime_states,
+            )?;
         }
         Ok(())
     }
@@ -9899,6 +9971,223 @@ fn collect_service_revision_registry(
         })
         .collect()
 }
+fn strip_inrou_runtime_plans(snapshot: &mut SoracloudRuntimeSnapshot) -> bool {
+    let mut removed = false;
+    for versions in snapshot.services.values_mut() {
+        let previous_len = versions.len();
+        versions.retain(|_, plan| !has_inrou_runtime_shape(plan));
+        removed |= versions.len() != previous_len;
+    }
+    snapshot.services.retain(|_, versions| !versions.is_empty());
+    removed
+}
+fn has_inrou_runtime_shape(plan: &SoracloudRuntimeServicePlan) -> bool {
+    plan.runtime == SoraContainerRuntimeV1::Inrou
+        || plan.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+        || plan.inrou.is_some()
+        || !plan.local_replica_slots.is_empty()
+        || !plan.local_replicas.is_empty()
+}
+fn collect_single_revision_inrou_runtime_plans(
+    snapshot: &SoracloudRuntimeSnapshot,
+) -> eyre::Result<Vec<(&String, &String, &SoracloudRuntimeServicePlan)>> {
+    let mut plans = Vec::new();
+    for (service_name, versions) in &snapshot.services {
+        let mut inrou_versions = versions
+            .iter()
+            .filter(|(_, plan)| has_inrou_runtime_shape(plan));
+        let Some((service_version, plan)) = inrou_versions.next() else {
+            continue;
+        };
+        if versions.len() != 1 || inrou_versions.next().is_some() {
+            eyre::bail!(
+                "runtime snapshot for Inrou service `{service_name}` must contain exactly one revision"
+            );
+        }
+        if plan.role != SoracloudRuntimeRevisionRole::Active || plan.traffic_percent != 100 {
+            eyre::bail!(
+                "runtime snapshot for Inrou service `{service_name}` revision `{service_version}` must be the sole active revision with 100 percent traffic"
+            );
+        }
+        if plan.service_name != *service_name || plan.service_version != *service_version {
+            eyre::bail!(
+                "runtime snapshot key `{service_name}`/`{service_version}` does not match embedded Inrou plan `{}`/`{}`",
+                plan.service_name,
+                plan.service_version
+            );
+        }
+        plans.push((service_name, service_version, plan));
+    }
+    Ok(plans)
+}
+fn collect_authoritative_single_revision_inrou_runtime_plans<'snapshot>(
+    view: &StateView<'_>,
+    snapshot: &'snapshot SoracloudRuntimeSnapshot,
+    local_validator_account_id: Option<&AccountId>,
+    local_peer_id: Option<&str>,
+) -> eyre::Result<
+    Vec<(
+        &'snapshot String,
+        &'snapshot String,
+        &'snapshot SoracloudRuntimeServicePlan,
+    )>,
+> {
+    let plans = collect_single_revision_inrou_runtime_plans(snapshot)?;
+    if plans.is_empty() {
+        return Ok(plans);
+    }
+    let world = view.world();
+    let current_height = committed_height(view);
+    let current_block_hash = view.latest_block_hash().map(|hash| hash.to_string());
+    if snapshot.observed_height != current_height
+        || snapshot.observed_block_hash != current_block_hash
+    {
+        eyre::bail!(
+            "Inrou runtime snapshot belongs to height {} block {:?}, not authoritative height {current_height} block {current_block_hash:?}",
+            snapshot.observed_height,
+            snapshot.observed_block_hash
+        );
+    }
+    if snapshot.local_peer_id.as_deref() != local_peer_id {
+        eyre::bail!(
+            "Inrou runtime snapshot peer identity {:?} does not match this runtime host {:?}",
+            snapshot.local_peer_id,
+            local_peer_id
+        );
+    }
+    for (service_name, service_version, plan) in &plans {
+        let service_name_id = Name::from_str(service_name.as_str()).wrap_err_with(|| {
+            format!("parse Inrou runtime snapshot service name `{service_name}`")
+        })?;
+        let deployment = world
+            .soracloud_service_deployments()
+            .get(&service_name_id)
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "runtime snapshot for Inrou service `{service_name}` has no authoritative deployment"
+                )
+            })?;
+        if deployment.current_service_version.as_str() != service_version.as_str() {
+            eyre::bail!(
+                "runtime snapshot for Inrou service `{service_name}` revision `{service_version}` is not the authoritative current revision `{}`",
+                deployment.current_service_version
+            );
+        }
+        let bundle = world
+            .soracloud_service_revisions()
+            .get(&((*service_name).clone(), (*service_version).clone()))
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "runtime snapshot for Inrou service `{service_name}` revision `{service_version}` has no admitted bundle"
+                )
+            })?;
+        deployment
+            .validate_against_active_bundle(bundle)
+            .map_err(|error| eyre::eyre!(error.to_string()))
+            .wrap_err_with(|| {
+                format!(
+                    "validate authoritative Inrou deployment `{service_name}` revision `{service_version}`"
+                )
+            })?;
+        if plan.runtime != SoraContainerRuntimeV1::Inrou
+            || bundle.container.runtime != SoraContainerRuntimeV1::Inrou
+            || bundle.service.execution_plane
+                != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
+            || plan.execution_plane != bundle.service.execution_plane
+            || plan.bundle_hash != bundle.container.bundle_hash.to_string()
+            || plan.bundle_path != bundle.container.bundle_path
+            || plan.entrypoint != bundle.container.entrypoint
+            || plan.desired_replica_count != bundle.service.replicas.get()
+        {
+            eyre::bail!(
+                "runtime snapshot for Inrou service `{service_name}` revision `{service_version}` does not match its admitted bundle"
+            );
+        }
+        let active_placement =
+            iroha_core::soracloud_runtime::resolve_active_inrou_placement_record(
+                world,
+                service_name,
+                service_version,
+                current_height,
+            )
+            .map_err(eyre::Report::msg)?;
+        let local_assignments = if active_placement.is_some() {
+            local_inrou_replica_placements(
+                world,
+                service_name,
+                service_version,
+                local_validator_account_id,
+                local_peer_id,
+            )
+        } else {
+            Vec::new()
+        };
+        let expected_process_generation =
+            (!local_assignments.is_empty()).then_some(deployment.process_generation);
+        if plan.process_generation != expected_process_generation
+            || plan.config_generation != deployment.config_generation
+            || plan.secret_generation != deployment.secret_generation
+            || plan.rollout_handle.is_some()
+        {
+            eyre::bail!(
+                "runtime snapshot for Inrou service `{service_name}` revision `{service_version}` does not match the authoritative process and material generations"
+            );
+        }
+        let mut projected_slots = plan
+            .local_replicas
+            .iter()
+            .map(|replica| replica.replica_slot)
+            .collect::<Vec<_>>();
+        projected_slots.sort_unstable();
+        if projected_slots != plan.local_replica_slots {
+            eyre::bail!(
+                "runtime snapshot for Inrou service `{service_name}` revision `{service_version}` carries inconsistent local replica slots"
+            );
+        }
+        let expected_slots = local_assignments
+            .iter()
+            .map(|assignment| assignment.replica_slot)
+            .collect::<Vec<_>>();
+        if plan.local_replica_slots != expected_slots
+            || plan.local_replicas.len() != local_assignments.len()
+        {
+            eyre::bail!(
+                "runtime snapshot for Inrou service `{service_name}` revision `{service_version}` does not contain the exact local authoritative replica set"
+            );
+        }
+        let expected_inrou_plan = build_inrou_runtime_plan(bundle, local_assignments.first());
+        if plan.inrou.as_ref() != expected_inrou_plan.as_ref() {
+            eyre::bail!(
+                "runtime snapshot for Inrou service `{service_name}` revision `{service_version}` does not match the signed local guest plan"
+            );
+        }
+        for replica in &plan.local_replicas {
+            let assignment = local_assignments
+                .iter()
+                .find(|assignment| assignment.replica_slot == replica.replica_slot)
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "runtime snapshot for Inrou service `{service_name}` revision `{service_version}` replica {} has no active authoritative assignment",
+                        replica.replica_slot
+                    )
+                })?;
+            if replica.lease_started_height != assignment.lease_started_height
+                || replica.placement_incarnation != assignment.placement_incarnation.to_string()
+                || replica.host_availability != assignment.host_availability
+                || replica.validator_account_id != assignment.validator_account_id.to_string()
+                || replica.peer_id != assignment.peer_id
+                || plan.inrou.as_ref().map(|inrou| inrou.selected_guest_isa)
+                    != Some(assignment.selected_guest_isa)
+            {
+                eyre::bail!(
+                    "runtime snapshot for Inrou service `{service_name}` revision `{service_version}` replica {} does not match its active authoritative assignment",
+                    replica.replica_slot
+                );
+            }
+        }
+    }
+    Ok(plans)
+}
 fn collect_active_versions(
     deployment: &SoraServiceDeploymentStateV1,
 ) -> eyre::Result<Vec<(String, SoracloudRuntimeRevisionRole, u8)>> {
@@ -10224,8 +10513,6 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::MemoryAccessViolation { .. } => "memory_access_violation",
         VMError::MisalignedAccess { .. } => "misaligned_access",
         VMError::MemoryOutOfBounds => "memory_out_of_bounds",
-        VMError::UnalignedAccess => "unaligned_access",
-        VMError::MemoryPermissionDenied => "memory_permission_denied",
         VMError::DecodeError => "decode_error",
         VMError::InvalidOpcode(_) => "invalid_opcode",
         VMError::UnknownSyscall(_) => "unknown_syscall",
@@ -10255,7 +10542,6 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::PermissionDenied => "permission_denied",
         VMError::PrivacyViolation => "privacy_violation",
         VMError::RegisterOutOfBounds => "register_out_of_bounds",
-        VMError::HTMAbort => "htm_abort",
         VMError::NoritoInvalid => "norito_invalid",
         VMError::AbiTypeNotAllowed { .. } => "abi_type_not_allowed",
         VMError::HostOutputBudgetExceeded { .. } => "host_output_budget_exceeded",
@@ -11669,7 +11955,15 @@ fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
         )
     })?;
     let effective_uid = rustix::process::geteuid().as_raw();
-    for (index, ancestor) in parent.ancestors().enumerate() {
+    // Relative paths end with an empty `Path` sentinel when walked through
+    // `ancestors()`. It does not name a filesystem entry (`.` is validated
+    // through the canonical pass below), so asking for its metadata would
+    // reject every fresh relative runtime directory with `ENOENT`.
+    for (index, ancestor) in parent
+        .ancestors()
+        .take_while(|ancestor| !ancestor.as_os_str().is_empty())
+        .enumerate()
+    {
         let metadata = fs::symlink_metadata(ancestor)?;
         let replaceable = metadata.mode() & 0o022 != 0;
         let sticky = metadata.mode() & 0o1000 != 0;
@@ -22662,6 +22956,55 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_lease_egress_rejects_active_inrou_rollout() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let mut deployment = sample_deployment_state(&bundle);
+        let lease = deployment.service_lease.as_ref().expect("service lease");
+        let reporting_epoch = lease.reporting_epoch;
+        let lease_started_height = lease.lease_started_height;
+        deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
+            schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+            rollout_handle: "retired-inrou-canary".to_owned(),
+            baseline_version: "2026.01.0".to_owned(),
+            candidate_version: bundle.service.service_version.clone(),
+            canary_percent: 25,
+            traffic_percent: 25,
+            stage: SoraRolloutStageV1::Canary,
+            health_failures: 0,
+            max_health_failures: 3,
+            health_window_secs: 30,
+            created_sequence: 7,
+            updated_sequence: 7,
+        });
+        let mut state = test_state()?;
+        insert_service_deployment_fixture(
+            &mut Arc::get_mut(&mut state).expect("unique test state").world,
+            &bundle,
+            deployment,
+        );
+        let fixture = RuntimeFixture::new(&state)?;
+        let view = state.view();
+
+        let error = fixture
+            .manager
+            .authoritative_service_reporting_epoch_egress_bytes(
+                &view,
+                bundle.service.service_name.as_ref(),
+                &bundle.service.service_version,
+                lease_started_height,
+                reporting_epoch,
+            )
+            .expect_err("first-release Inrou egress must reject an active rollout");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported active Inrou canary"),
+            "unexpected error: {error:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn authoritative_lease_egress_rejects_cross_placement_u64_overflow() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let mut deployment = sample_deployment_state(&bundle);
@@ -22897,7 +23240,7 @@ mod tests {
     }
 
     #[test]
-    fn inrou_placement_reconcile_keeps_explicit_rollout_baseline() -> Result<()> {
+    fn inrou_placement_reconcile_rejects_active_rollout() -> Result<()> {
         let mut candidate = sample_inrou_test_bundle()?;
         candidate.service.service_version = "2026.2.0".to_owned();
         let mut baseline = candidate.clone();
@@ -22936,9 +23279,14 @@ mod tests {
         let view = state.view();
         let bundle_registry = collect_service_revision_registry(&view);
 
+        let error = manager
+            .inrou_placement_reconcile_needed(&view, &bundle_registry)
+            .expect_err("first-release Inrou placement reconciliation must reject active rollout");
         assert!(
-            !manager.inrou_placement_reconcile_needed(&view, &bundle_registry)?,
-            "the explicit baseline placement must remain desired while its candidate rollout is active"
+            error
+                .to_string()
+                .contains("unsupported active Inrou canary"),
+            "unexpected error: {error:?}"
         );
         Ok(())
     }
@@ -25929,6 +26277,22 @@ mod tests {
                 })
                 .collect()
         }
+        fn submitted_inrou_replica_runtime_state_clears(
+            &self,
+        ) -> Vec<iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState> {
+            self.instructions
+                .lock()
+                .iter()
+                .filter_map(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<
+                            iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState,
+                        >()
+                        .cloned()
+                })
+                .collect()
+        }
         fn submitted_service_lease_usage(
             &self,
         ) -> Vec<iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage> {
@@ -27611,6 +27975,135 @@ mod tests {
         assert_eq!(snapshot.local_peer_id.as_deref(), Some(local_peer_id));
         Ok(())
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn reconcile_error_quarantines_existing_inrou_worker_and_snapshot_plan() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = sample_inrou_test_bundle()?;
+        let deployment = sample_deployment_state(&bundle);
+        let reporting_epoch = deployment
+            .service_lease
+            .as_ref()
+            .expect("hosted service lease")
+            .reporting_epoch;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, deployment);
+        }
+        let local_peer_id = canonical_inrou_test_peer_id();
+        insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1]);
+        let temp_dir = tempfile::tempdir()?;
+        let state_dir = temp_dir.path().join("blocked-runtime-state");
+        let config = test_runtime_manager_config(state_dir.clone())
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let snapshot = {
+            let view = state.view();
+            let bundle_registry = collect_service_revision_registry(&view);
+            build_runtime_snapshot(
+                &view,
+                &bundle_registry,
+                &config.state_dir,
+                config.state_dir.join("artifacts"),
+                &config.cache_budgets,
+                config.local_validator_account_id.as_ref(),
+                config.local_peer_id.as_deref(),
+                true,
+            )?
+        };
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("local Inrou plan");
+        let replica = plan.local_replicas.first().expect("local replica plan");
+        let reporter_key = (
+            bundle.service.service_name.to_string(),
+            bundle.service.service_version.clone(),
+            replica.lease_started_height,
+            reporting_epoch,
+            replica.replica_slot,
+            replica.placement_incarnation.clone(),
+        );
+        let cache_key = HostedHttpWorkerCacheKey {
+            runtime: SoraContainerRuntimeV1::Inrou,
+            guest_isa: plan.inrou.as_ref().map(|inrou| inrou.selected_guest_isa),
+            service_name: bundle.service.service_name.to_string(),
+            service_version: bundle.service.service_version.clone(),
+            replica_slot: replica.replica_slot,
+            lease_started_height: replica.lease_started_height,
+            placement_incarnation: replica.placement_incarnation.clone(),
+            validator_account_id: replica.validator_account_id.clone(),
+            peer_id: replica.peer_id.clone(),
+            bundle_hash: plan.bundle_hash.clone(),
+            bundle_path: plan.bundle_path.clone(),
+            entrypoint: plan.entrypoint.clone(),
+            process_generation: plan.process_generation.expect("process generation"),
+            args: bundle.container.args.clone(),
+            effective_env: plan.effective_env.clone(),
+            healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
+            service_data_dir: build_native_service_data_dir(
+                &config.state_dir,
+                bundle.service.service_name.as_ref(),
+            ),
+        };
+        let child = Command::new("/bin/sleep")
+            .arg("60")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let child_pid = child.id();
+        let worker = HostedHttpWorker {
+            cache_key,
+            child,
+            log_drains: Vec::new(),
+            listen_base_url: "http://127.0.0.1:1/".to_owned(),
+            egress_accounting: PortableVmReplicaEgressAccounting::new(
+                PortableVmEgressAccounting::new(0),
+                0,
+            ),
+            stderr_log_path: config.state_dir.join("worker.stderr.log"),
+            stop_grace: Duration::ZERO,
+            port_forward: None,
+            qmp_control: None,
+            #[cfg(target_os = "linux")]
+            loopback_firewall: None,
+            #[cfg(target_os = "linux")]
+            cgroup: None,
+        };
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        *manager.snapshot.write() = snapshot;
+        manager
+            .hosted_http_workers
+            .lock()
+            .insert(reporter_key, Arc::new(parking_lot::Mutex::new(worker)));
+        fs::write(&state_dir, b"not a directory")?;
+
+        manager
+            .reconcile_once()
+            .expect_err("an unusable runtime state directory must fail reconciliation");
+        assert!(manager.hosted_http_workers.lock().is_empty());
+        assert!(
+            manager.snapshot.read().services.values().all(|versions| {
+                versions
+                    .values()
+                    .all(|plan| plan.runtime != SoraContainerRuntimeV1::Inrou)
+            }),
+            "a failed reconcile must withdraw every locally served Inrou plan"
+        );
+        let still_running = Command::new("sh")
+            .arg("-c")
+            .arg(format!("kill -0 {child_pid} 2>/dev/null"))
+            .status()?;
+        assert!(
+            !still_running.success(),
+            "a worker present before the reconcile error must be stopped and reaped"
+        );
+        Ok(())
+    }
+
     #[test]
     fn build_runtime_snapshot_rejects_active_inrou_canary() -> Result<()> {
         let mut state = test_state()?;
@@ -27677,6 +28170,359 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn persisted_and_synthetic_inrou_snapshots_require_current_exact_revision() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = sample_inrou_test_bundle()?;
+        let mut ivm_bundle = load_deployment_bundle_fixture()?;
+        ivm_bundle.service.service_name = "deterministic_sidecar".parse()?;
+        ivm_bundle.validate_for_admission()?;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
+            insert_service_revision_fixture(world, &ivm_bundle);
+            insert_service_deployment_fixture(
+                world,
+                &ivm_bundle,
+                sample_deployment_state(&ivm_bundle),
+            );
+        }
+        let local_peer_id = canonical_inrou_test_peer_id();
+        insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1]);
+        let temp_dir = tempfile::tempdir()?;
+        let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
+        let config = test_runtime_manager_config(state_dir)
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let view = state.view();
+        let bundle_registry = collect_service_revision_registry(&view);
+        let mut snapshot = build_runtime_snapshot(
+            &view,
+            &bundle_registry,
+            &config.state_dir,
+            config.state_dir.join("artifacts"),
+            &config.cache_budgets,
+            config.local_validator_account_id.as_ref(),
+            config.local_peer_id.as_deref(),
+            true,
+        )?;
+        let plan = snapshot
+            .services
+            .get_mut(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get_mut(&bundle.service.service_version))
+            .expect("current Inrou runtime plan");
+        plan.role = SoracloudRuntimeRevisionRole::CanaryCandidate;
+        plan.traffic_percent = 25;
+        let manager = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state));
+
+        let error = manager
+            .submit_http_service_runtime_state_updates(&view, &snapshot)
+            .expect_err("runtime-state publication must reject a candidate Inrou snapshot");
+        assert!(error.to_string().contains("sole active revision"));
+        let error = manager
+            .desired_hosted_http_worker_keys(&view, &snapshot)
+            .expect_err("worker selection must reject a candidate Inrou snapshot");
+        assert!(error.to_string().contains("sole active revision"));
+        let error = manager
+            .reconcile_hosted_http_workers(&view, &snapshot)
+            .expect_err("worker reconciliation must reject a candidate Inrou snapshot");
+        assert!(error.to_string().contains("sole active revision"));
+
+        write_json_atomic(&manager.runtime_snapshot_path(), &snapshot)?;
+        assert!(
+            manager.restore_persisted_snapshot()?,
+            "an existing snapshot must be handled"
+        );
+        let restored = manager.snapshot.read().clone();
+        assert!(
+            restored.services.values().all(|versions| {
+                versions
+                    .values()
+                    .all(|plan| plan.runtime != SoraContainerRuntimeV1::Inrou)
+            }),
+            "non-authoritative persisted Inrou plans must be discarded before startup reconciliation"
+        );
+        let persisted = read_json_optional::<SoracloudRuntimeSnapshot>(
+            &manager.runtime_snapshot_path(),
+            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+            "test Soracloud runtime snapshot",
+        )?
+        .expect("scrubbed runtime snapshot remains persisted");
+        assert_eq!(persisted, restored, "the scrub must be durable");
+        assert_eq!(
+            restored
+                .services
+                .get(ivm_bundle.service.service_name.as_ref()),
+            snapshot
+                .services
+                .get(ivm_bundle.service.service_name.as_ref()),
+            "scrubbing stale Inrou state must preserve generic deterministic-IVM plans"
+        );
+
+        let versions = snapshot
+            .services
+            .get_mut(bundle.service.service_name.as_ref())
+            .expect("Inrou versions");
+        let current_plan = versions
+            .get_mut(&bundle.service.service_version)
+            .expect("current plan");
+        current_plan.role = SoracloudRuntimeRevisionRole::Active;
+        current_plan.traffic_percent = 100;
+
+        let signed_inrou_plan = current_plan.inrou.take();
+        current_plan.runtime = SoraContainerRuntimeV1::Ivm;
+        current_plan.execution_plane = SoraServiceExecutionPlaneV1::DeterministicService;
+        let error = manager
+            .desired_hosted_http_worker_keys(&view, &snapshot)
+            .expect_err("relabeling a local Inrou replica plan as IVM must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match its admitted bundle")
+        );
+        let current_plan = snapshot
+            .services
+            .get_mut(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get_mut(&bundle.service.service_version))
+            .expect("current Inrou runtime plan");
+        current_plan.runtime = SoraContainerRuntimeV1::Inrou;
+        current_plan.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        current_plan.inrou = signed_inrou_plan;
+
+        let expected_process_generation = current_plan.process_generation;
+        current_plan.process_generation = Some(
+            expected_process_generation
+                .expect("local Inrou plan generation")
+                .saturating_add(1),
+        );
+        let error = manager
+            .desired_hosted_http_worker_keys(&view, &snapshot)
+            .expect_err("a stale Inrou process generation must be rejected");
+        assert!(error.to_string().contains("authoritative process"));
+        snapshot
+            .services
+            .get_mut(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get_mut(&bundle.service.service_version))
+            .expect("current Inrou runtime plan")
+            .process_generation = expected_process_generation;
+
+        let versions = snapshot
+            .services
+            .get_mut(bundle.service.service_name.as_ref())
+            .expect("Inrou versions");
+        let mut stale_plan = versions
+            .remove(&bundle.service.service_version)
+            .expect("current plan");
+        stale_plan.service_version = "2026.03.0".to_owned();
+        versions.insert(stale_plan.service_version.clone(), stale_plan);
+        let error = manager
+            .desired_hosted_http_worker_keys(&view, &snapshot)
+            .expect_err("a non-current sole Inrou revision must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("not the authoritative current revision")
+        );
+        let versions = snapshot
+            .services
+            .get_mut(bundle.service.service_name.as_ref())
+            .expect("Inrou versions");
+        let mut current_plan = versions.remove("2026.03.0").expect("stale plan");
+        current_plan.service_version = bundle.service.service_version.clone();
+        versions.insert(bundle.service.service_version.clone(), current_plan);
+
+        snapshot.observed_height = snapshot.observed_height.saturating_add(1);
+        let error = manager
+            .desired_hosted_http_worker_keys(&view, &snapshot)
+            .expect_err("an Inrou plan from another block height must be rejected");
+        assert!(error.to_string().contains("not authoritative height"));
+        snapshot.observed_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+
+        let versions = snapshot
+            .services
+            .get_mut(bundle.service.service_name.as_ref())
+            .expect("Inrou versions");
+        let current_plan = versions
+            .get(&bundle.service.service_version)
+            .expect("current plan");
+        let mut second_plan = current_plan.clone();
+        second_plan.service_version = "2026.03.0".to_owned();
+        versions.insert(second_plan.service_version.clone(), second_plan);
+        let error = collect_single_revision_inrou_runtime_plans(&snapshot)
+            .expect_err("an Inrou snapshot must never carry a second revision");
+        assert!(error.to_string().contains("exactly one revision"));
+        Ok(())
+    }
+
+    #[test]
+    fn startup_rebuilds_snapshot_after_atomic_inrou_revision_switch() -> Result<()> {
+        let mut state = test_state()?;
+        let retired_bundle = sample_inrou_test_bundle()?;
+        retired_bundle.validate_for_admission()?;
+        let retired_deployment = sample_deployment_state(&retired_bundle);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &retired_bundle);
+            insert_service_deployment_fixture(world, &retired_bundle, retired_deployment.clone());
+            insert_inrou_service_placement_record_fixture(world, &retired_bundle, Vec::new());
+        }
+        let temp_dir = tempfile::tempdir()?;
+        let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
+        let local_peer_id = canonical_inrou_test_peer_id();
+        let config = test_runtime_manager_config(state_dir)
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let retired_snapshot = {
+            let view = state.view();
+            let bundle_registry = collect_service_revision_registry(&view);
+            build_runtime_snapshot(
+                &view,
+                &bundle_registry,
+                &config.state_dir,
+                config.state_dir.join("artifacts"),
+                &config.cache_budgets,
+                config.local_validator_account_id.as_ref(),
+                config.local_peer_id.as_deref(),
+                false,
+            )?
+        };
+        assert!(
+            retired_snapshot
+                .services
+                .get(retired_bundle.service.service_name.as_ref())
+                .is_some_and(|versions| {
+                    versions.contains_key(&retired_bundle.service.service_version)
+                })
+        );
+        write_json_atomic_bounded(
+            &config.state_dir.join("runtime_snapshot.json"),
+            &retired_snapshot,
+            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+            "test Soracloud runtime snapshot",
+        )?;
+
+        let mut current_bundle = retired_bundle.clone();
+        current_bundle.service.service_version = "2026.03.0".to_owned();
+        current_bundle.container.bundle_path = "/bundles/web_portal_2026_03.to".to_owned();
+        current_bundle.container.bundle_hash = Hash::new(b"atomic-inrou-revision-2026.03.0");
+        current_bundle.service.container.manifest_hash = current_bundle.container_manifest_hash();
+        current_bundle.validate_for_admission()?;
+        let mut current_deployment = retired_deployment;
+        current_deployment.current_service_version = current_bundle.service.service_version.clone();
+        current_deployment.current_service_manifest_hash = current_bundle.service_manifest_hash();
+        current_deployment.current_container_manifest_hash =
+            current_bundle.container_manifest_hash();
+        current_deployment.revision_count = current_deployment.revision_count.saturating_add(1);
+        current_deployment.process_generation =
+            current_deployment.process_generation.saturating_add(1);
+        current_deployment.process_started_sequence = current_deployment
+            .process_started_sequence
+            .saturating_add(1);
+        current_deployment.last_rollout = Some(SoraServiceRolloutStateV1 {
+            schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+            rollout_handle: "atomic-inrou-upgrade-2026-03".to_owned(),
+            baseline_version: retired_bundle.service.service_version.clone(),
+            candidate_version: current_bundle.service.service_version.clone(),
+            canary_percent: current_bundle.service.rollout.canary_percent,
+            traffic_percent: 100,
+            stage: SoraRolloutStageV1::Promoted,
+            health_failures: 0,
+            max_health_failures: current_bundle
+                .service
+                .rollout
+                .automatic_rollback_failures
+                .get(),
+            health_window_secs: current_bundle.service.rollout.health_window_secs.get(),
+            created_sequence: current_deployment.process_started_sequence,
+            updated_sequence: current_deployment.process_started_sequence,
+        });
+        current_deployment.active_rollout = None;
+        current_deployment.validate_against_active_bundle(&current_bundle)?;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &current_bundle);
+            insert_service_deployment_fixture(world, &current_bundle, current_deployment);
+        }
+
+        let scrub_probe = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state));
+        assert!(scrub_probe.restore_persisted_snapshot()?);
+        let scrubbed = scrub_probe.snapshot.read().clone();
+        assert!(
+            !scrubbed
+                .services
+                .contains_key(retired_bundle.service.service_name.as_ref()),
+            "restore must discard the retired Inrou revision before reconciliation"
+        );
+        let persisted_scrubbed = read_json_optional::<SoracloudRuntimeSnapshot>(
+            &scrub_probe.runtime_snapshot_path(),
+            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+            "test Soracloud runtime snapshot",
+        )?
+        .expect("scrubbed runtime snapshot");
+        assert_eq!(
+            persisted_scrubbed, scrubbed,
+            "restore scrub must be durable"
+        );
+
+        // Reinstall the stale derived file so the real startup sequence independently proves
+        // restore -> scrub -> reconcile -> exact-current publication.
+        write_json_atomic_bounded(
+            &config.state_dir.join("runtime_snapshot.json"),
+            &retired_snapshot,
+            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+            "test Soracloud runtime snapshot",
+        )?;
+        let restarted_manager = Arc::new(SoracloudRuntimeManager::new(
+            config.clone(),
+            Arc::clone(&state),
+        ));
+        restarted_manager.initialize_for_startup()?;
+        let rebuilt = restarted_manager.snapshot.read().clone();
+        let versions = rebuilt
+            .services
+            .get(current_bundle.service.service_name.as_ref())
+            .expect("current Inrou service must be rebuilt");
+        assert_eq!(versions.len(), 1);
+        let current_plan = versions
+            .get(&current_bundle.service.service_version)
+            .expect("atomic current Inrou revision");
+        assert_eq!(current_plan.runtime, SoraContainerRuntimeV1::Inrou);
+        assert_eq!(current_plan.role, SoracloudRuntimeRevisionRole::Active);
+        assert_eq!(current_plan.traffic_percent, 100);
+        assert!(current_plan.rollout_handle.is_none());
+        assert!(!versions.contains_key(&retired_bundle.service.service_version));
+        let view = state.view();
+        assert!(
+            view.world()
+                .soracloud_service_revisions()
+                .get(&(
+                    retired_bundle.service.service_name.to_string(),
+                    retired_bundle.service.service_version.clone(),
+                ))
+                .is_some(),
+            "retired admitted metadata may remain without becoming a serving fallback"
+        );
+        assert!(
+            view.world()
+                .soracloud_inrou_service_placements()
+                .get(&(
+                    retired_bundle.service.service_name.to_string(),
+                    retired_bundle.service.service_version.clone(),
+                ))
+                .is_some(),
+            "retired placement metadata may remain without becoming a serving fallback"
+        );
+        drop(view);
+        let persisted_rebuilt = read_json_optional::<SoracloudRuntimeSnapshot>(
+            &restarted_manager.runtime_snapshot_path(),
+            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+            "test Soracloud runtime snapshot",
+        )?
+        .expect("rebuilt runtime snapshot");
+        assert_eq!(persisted_rebuilt, rebuilt);
+        Ok(())
+    }
+
     #[test]
     fn submit_http_service_runtime_state_retries_until_authoritative_state_catches_up() -> Result<()>
     {
@@ -27684,6 +28530,11 @@ mod tests {
         let bundle = sample_inrou_test_bundle()?;
         bundle.validate_for_admission()?;
         let deployment_state = sample_deployment_state(&bundle);
+        let reporting_epoch = deployment_state
+            .service_lease
+            .as_ref()
+            .expect("hosted service lease")
+            .reporting_epoch;
         let local_peer_id = canonical_inrou_test_peer_id();
         let selected_guest_isa =
             current_host_inrou_guest_isa().expect("tests require a supported Inrou host ISA");
@@ -27691,6 +28542,33 @@ mod tests {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_revision_fixture(world, &bundle);
             insert_service_deployment_fixture(world, &bundle, deployment_state);
+            let retired_version = "2026.01.0".to_owned();
+            world
+                .soracloud_inrou_replica_runtime_mut_for_testing()
+                .insert(
+                    (
+                        bundle.service.service_name.to_string(),
+                        retired_version.clone(),
+                        "1".to_owned(),
+                    ),
+                    SoraInrouReplicaRuntimeStateV1 {
+                        schema_version: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+                        service_name: bundle.service.service_name.clone(),
+                        service_version: retired_version,
+                        replica_slot: 1,
+                        placement_incarnation: Hash::new(b"placement-1"),
+                        validator_account_id: ALICE_ID.clone(),
+                        peer_id: local_peer_id.to_owned(),
+                        selected_guest_isa,
+                        health_status: SoraServiceHealthStatusV1::Degraded,
+                        load_factor_bps: 0,
+                        materialized_bundle_hash: bundle.container.bundle_hash,
+                        reporting_epoch,
+                        accounted_egress_bytes: 0,
+                        updated_at_ms: 1,
+                        last_error: Some("retired revision".to_owned()),
+                    },
+                );
         }
         insert_local_inrou_service_placement_fixture(
             &mut state,
@@ -27719,20 +28597,28 @@ mod tests {
                 true,
             )?
         };
-        let bundle_registry = {
-            let view = state.view();
-            collect_service_revision_registry(&view)
-        };
         {
             let view = state.view();
-            manager.submit_http_service_runtime_state_updates(&view, &snapshot, &bundle_registry);
-            manager.submit_http_service_runtime_state_updates(&view, &snapshot, &bundle_registry);
+            manager.submit_http_service_runtime_state_updates(&view, &snapshot)?;
+            manager.submit_http_service_runtime_state_updates(&view, &snapshot)?;
         }
         let submitted_states = mutation_sink.submitted_inrou_replica_runtime_states();
         assert_eq!(
             submitted_states.len(),
             2,
             "hosted replica runtime state must be retried while the authoritative chain state is still missing"
+        );
+        let submitted_clears = mutation_sink.submitted_inrou_replica_runtime_state_clears();
+        assert_eq!(
+            submitted_clears.len(),
+            2,
+            "a retired runtime-state row must be cleared on every reconcile until WSV catches up"
+        );
+        assert_eq!(submitted_clears[0].service_version, "2026.01.0");
+        assert_eq!(submitted_clears[0].replica_slot, 1);
+        assert_eq!(
+            submitted_clears[0].expected_placement_incarnation,
+            Hash::new(b"placement-1")
         );
         let submitted_state = &submitted_states[0].state;
         assert_eq!(submitted_state.service_name, bundle.service.service_name);
@@ -27770,12 +28656,30 @@ mod tests {
 
         {
             let view = state.view();
-            manager.submit_http_service_runtime_state_updates(&view, &snapshot, &bundle_registry);
+            let bundle_registry = collect_service_revision_registry(&view);
+            let snapshot_after_catch_up = build_runtime_snapshot(
+                &view,
+                &bundle_registry,
+                &config.state_dir,
+                config.state_dir.join("artifacts"),
+                &config.cache_budgets,
+                config.local_validator_account_id.as_ref(),
+                config.local_peer_id.as_deref(),
+                true,
+            )?;
+            manager.submit_http_service_runtime_state_updates(&view, &snapshot_after_catch_up)?;
         }
         assert_eq!(
             mutation_sink.submitted_inrou_replica_runtime_states().len(),
             2,
             "no runtime-state mutation should be submitted after authoritative catch-up"
+        );
+        assert_eq!(
+            mutation_sink
+                .submitted_inrou_replica_runtime_state_clears()
+                .len(),
+            3,
+            "a stale clear must remain retryable independently of current-state catch-up"
         );
         assert!(
             !manager
@@ -30489,6 +31393,158 @@ mod tests {
             "unexpected symlink rejection: {error}"
         );
         assert!(fs::read_dir(&redirected)?.next().is_none());
+        Ok(())
+    }
+    #[test]
+    fn durable_inrou_egress_gc_rejects_active_rollout() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = sample_inrou_test_bundle()?;
+        let mut deployment = sample_deployment_state(&bundle);
+        deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
+            schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+            rollout_handle: "retired-inrou-canary".to_owned(),
+            baseline_version: "2026.01.0".to_owned(),
+            candidate_version: bundle.service.service_version.clone(),
+            canary_percent: 25,
+            traffic_percent: 25,
+            stage: SoraRolloutStageV1::Canary,
+            health_failures: 0,
+            max_health_failures: 3,
+            health_window_secs: 30,
+            created_sequence: 7,
+            updated_sequence: 7,
+        });
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, deployment);
+        }
+        let temp_dir = tempfile::tempdir()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(canonical_test_runtime_state_dir(&temp_dir)?),
+            Arc::clone(&state),
+        );
+        let view = state.view();
+
+        let error = manager
+            .reconcile_inrou_egress_checkpoint_files(&view)
+            .expect_err("first-release Inrou checkpoint GC must reject an active rollout");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported active Inrou canary"),
+            "unexpected error: {error}"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_inrou_egress_gc_removes_retired_revision_reporter_file() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = sample_inrou_test_bundle()?;
+        let mut deployment = sample_deployment_state(&bundle);
+        let lease = deployment
+            .service_lease
+            .as_mut()
+            .expect("hosted service lease");
+        let retired_version = "2026.01.0";
+        let placement_incarnation = Hash::new(b"retired-placement");
+        lease.egress_reporter_checkpoints.push(
+            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+                reporting_epoch: lease.reporting_epoch,
+                assignment:
+                    iroha_data_model::soracloud::SoraServiceLeaseReporterAssignmentV1 {
+                        schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+                        service_version: retired_version.to_owned(),
+                        placement: SoraInrouReplicaPlacementV1 {
+                            replica_slot: 1,
+                            economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                            lease_started_height: lease.lease_started_height,
+                            placement_incarnation,
+                            host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
+                            validator_account_id: ALICE_ID.clone(),
+                            peer_id: canonical_inrou_test_peer_id().to_owned(),
+                            selected_guest_isa: current_host_inrou_guest_isa()
+                                .expect("supported Inrou host ISA"),
+                        },
+                        placement_reconciled_at_ms: 1,
+                    },
+                accounted_egress_bytes: 7,
+                last_updated_height: 1,
+                finalize_reporter: true,
+            },
+        );
+        lease.accounted_egress_bytes = 7;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, deployment);
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
+        let retired = InrouDurableEgressCheckpoint::load_or_create(
+            &state_dir,
+            bundle.service.service_name.as_ref(),
+            1,
+            1,
+            retired_version,
+            1,
+            &placement_incarnation,
+            &ALICE_ID,
+            None,
+        )?;
+        retired.advance_to(7)?;
+        let retired_path = retired.path.clone();
+        drop(retired);
+        assert!(retired_path.is_file());
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(state_dir),
+            Arc::clone(&state),
+        );
+        let view = state.view();
+        manager.reconcile_inrou_egress_checkpoint_files(&view)?;
+        assert!(
+            !retired_path.exists(),
+            "a reporter file for a non-current Inrou revision must not survive GC"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_inrou_egress_checkpoint_accepts_fresh_relative_state_dir() -> Result<()> {
+        use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
+
+        let current_dir = fs::canonicalize(".")?;
+        let temp_dir = tempfile::Builder::new()
+            .prefix("soracloud-relative-state-")
+            .tempdir_in(&current_dir)?;
+        let state_dir = temp_dir.path().join("storage/soracloud_runtime");
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700).create(&state_dir)?;
+        let checkpoint_dir = state_dir.join(SORACLOUD_INROU_EGRESS_CHECKPOINT_DIR);
+        assert!(!checkpoint_dir.exists());
+        let relative_state_dir = state_dir
+            .strip_prefix(&current_dir)
+            .wrap_err("derive relative Soracloud runtime state directory")?;
+        assert!(relative_state_dir.is_relative());
+
+        assert_eq!(
+            reconcile_inrou_egress_checkpoint_directory(
+                relative_state_dir,
+                &BTreeSet::new(),
+                8,
+            )?,
+            0
+        );
+        let checkpoint_metadata = fs::symlink_metadata(&checkpoint_dir)?;
+        assert!(checkpoint_metadata.is_dir());
+        assert_eq!(checkpoint_metadata.mode() & 0o077, 0);
+        assert!(fs::read_dir(&checkpoint_dir)?.next().is_none());
         Ok(())
     }
     #[cfg(unix)]

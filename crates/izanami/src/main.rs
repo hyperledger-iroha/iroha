@@ -149,12 +149,6 @@ fn merge_with_overrides(
     if is_cli_source(matches, "network_partition") {
         base.faults.network_partition = overrides.faults.network_partition;
     }
-    if is_cli_source(matches, "network_packet_loss") {
-        base.faults.network_packet_loss = overrides.faults.network_packet_loss;
-    }
-    if is_cli_source(matches, "packet_loss_percent") {
-        base.packet_loss_percent = overrides.packet_loss_percent;
-    }
     if is_cli_source(matches, "cpu_stress") {
         base.faults.cpu_stress = overrides.faults.cpu_stress;
     }
@@ -389,7 +383,6 @@ mod tests {
             spam_invalid_transactions: false,
             network_latency: false,
             network_partition: false,
-            network_packet_loss: false,
             cpu_stress: false,
             disk_saturation: false,
         };
@@ -409,7 +402,6 @@ mod tests {
         assert!(merged.faults.network_latency);
         assert!(merged.faults.cpu_stress);
         assert!(!merged.faults.network_partition);
-        assert!(!merged.faults.network_packet_loss);
         assert!(!merged.faults.disk_saturation);
     }
     #[test]
@@ -421,7 +413,6 @@ mod tests {
             "--fault-enable-spam-invalid-transactions=false".to_string(),
             "--fault-enable-network-latency=false".to_string(),
             "--fault-enable-network-partition=false".to_string(),
-            "--fault-enable-network-packet-loss=false".to_string(),
             "--fault-enable-cpu-stress=false".to_string(),
             "--fault-enable-disk-saturation=false".to_string(),
         ]);
@@ -430,22 +421,8 @@ mod tests {
         assert!(!cli_args.faults.spam_invalid_transactions);
         assert!(!cli_args.faults.network_latency);
         assert!(!cli_args.faults.network_partition);
-        assert!(!cli_args.faults.network_packet_loss);
         assert!(!cli_args.faults.cpu_stress);
         assert!(!cli_args.faults.disk_saturation);
-    }
-    #[test]
-    fn cli_overrides_packet_loss_percent() {
-        let defaults = config::IzanamiArgs::defaults();
-        let mut persisted = defaults.clone();
-        persisted.packet_loss_percent = 75;
-        let (cli_args, matches) = parse_cli_arguments(vec![
-            "izanami".to_string(),
-            "--fault-network-packet-loss-percent".to_string(),
-            "25".to_string(),
-        ]);
-        let merged = merge_with_overrides(persisted, &cli_args, &matches);
-        assert_eq!(merged.packet_loss_percent, 25);
     }
     #[test]
     fn cli_overrides_submitter_count() {

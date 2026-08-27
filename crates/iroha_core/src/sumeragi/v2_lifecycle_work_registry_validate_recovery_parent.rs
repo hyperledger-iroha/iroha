@@ -798,7 +798,18 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         proposal: wire::Proposal,
         manifest: wire::PayloadManifest,
         validated_receipt: ValidatedBodyReceipt,
-    ) -> (TurnLease, PhysicalSlotId, CandidateAdmission) {
+        expected_decision: Option<(
+            wire::ConsensusRound,
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            wire::ExecutionCommitment,
+        )>,
+    ) -> (
+        TurnLease,
+        PhysicalSlotId,
+        CandidateAdmission,
+        RecoveredDurableValidateRetryCensusV1,
+    ) {
         assert_eq!(proposal.manifest, manifest);
         let fetch_effect = AdapterEffect::FetchBody {
             tag,
@@ -895,6 +906,16 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             replay_evidence,
         };
         assert!(validate_validated_receipt_authority(&incumbent, &validated_receipt).is_ok());
+        let retry_owner = RecoveredDurableValidateRetryOwnerV1::for_test(
+            incumbent.effect.clone(),
+            incumbent.durable_receipt.clone(),
+            &incumbent.pending,
+            ordinal,
+            expected_decision,
+        )
+        .expect("carry the exact remote-Proposal Validate retry owner");
+        let retry_census =
+            RecoveredDurableValidateRetryCensusV1::from_admission_owner_for_test(retry_owner);
         let outcome = DurableBodyValidationOutcome::validated_for_test(validated_receipt);
         let replacement_digest =
             durable_validate_completion_digest(incumbent_digest, expected_manifest_hash, &outcome)
@@ -930,7 +951,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             physical_slots: ready_slots,
             output_reservation: None,
         };
-        (lease, slot, coordinator_candidate)
+        (lease, slot, coordinator_candidate, retry_census)
     }
     /// Assemble and install a genuine validated completion fixture, then reach
     /// the recovered-WAL cut through the production Ready preparation and
@@ -948,13 +969,15 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         let vote = recovered.vote();
         assert_eq!(proposal.round, vote.proposal_round);
         assert_eq!(proposal.subject, vote.subject);
-        let (lease, slot, _candidate) = self.install_remote_proposal_validate_completion_for_test(
-            verified,
-            tag,
-            proposal,
-            manifest,
-            validated_receipt,
-        );
+        let (lease, slot, _candidate, _retry_census) = self
+            .install_remote_proposal_validate_completion_for_test(
+                verified,
+                tag,
+                proposal,
+                manifest,
+                validated_receipt,
+                None,
+            );
         let prepared = self
             .registry_for_test_mut()
             .prepare_ready_durable_validate_execution(&lease, slot, verified)

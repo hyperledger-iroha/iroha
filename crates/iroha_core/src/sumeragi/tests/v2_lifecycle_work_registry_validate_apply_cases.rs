@@ -4,12 +4,17 @@ fn assert_ready_validate_vote_sign_live_transaction(
     attach_ledger: bool,
     sign_phase: wire::GlobalPhase,
     supersede_prepare: bool,
+    exercise_later_terminal_validate_retry: bool,
 ) {
     assert!(matches!(
         sign_phase,
         wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit
     ));
     assert!(!supersede_prepare || (attach_ledger && sign_phase == wire::GlobalPhase::Prepare));
+    assert!(
+        !exercise_later_terminal_validate_retry
+            || (attach_ledger && sign_phase == wire::GlobalPhase::Prepare && !supersede_prepare)
+    );
     let marker = match sign_phase {
         wire::GlobalPhase::Prepare => 0xDF,
         wire::GlobalPhase::Commit => 0xE0,
@@ -123,13 +128,14 @@ fn assert_ready_validate_vote_sign_live_transaction(
         assert!(observed.effects().is_empty());
     }
     let mut holder = LifecycleWorkRegistryHolder::empty();
-    let (lease, slot, coordinator_candidate) = holder
+    let (lease, slot, coordinator_candidate, _retry_census) = holder
         .install_remote_proposal_validate_completion_for_test(
             &fixture.verified,
             tag,
             proposal,
             fixture.manifest.clone(),
             validated_receipt,
+            None,
         );
     let registry_before = format!("{:?}", holder.registry_for_test());
     let prepared = holder
@@ -494,13 +500,10 @@ fn assert_ready_validate_vote_sign_live_transaction(
         )
         .expect("sign exact receiver Prepare Vote task");
         let signature = signature.payload().to_vec();
-        let authority = crate::sumeragi::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1::for_test(
-            child_ordinal,
-            sign_tag,
-            request.clone(),
+        let authority = crate::sumeragi::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1::from_registry_task_for_test(
+            task,
             signature.clone(),
             None,
-            RecoveredLifecycleSignClassV1::PhaseVote,
         );
         let preview = adapter
             .prepare_recovered_lifecycle_sign_completion(authority)
@@ -509,6 +512,164 @@ fn assert_ready_validate_vote_sign_live_transaction(
             preview.settlement_family(),
             Some(crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::Broadcast)
         );
+        if exercise_later_terminal_validate_retry {
+            let successor = holder
+                .registry_for_test_mut()
+                .prepare_recovered_lifecycle_sign_broadcast_successor(
+                    &coordinator,
+                    &sign_lease,
+                    &fixture.verified,
+                    dispatch_key,
+                    preview,
+                )
+                .expect("bind the exact live Prepare Sign to its signed Broadcast child");
+            let transition = coordinator
+                .prepare_recovered_lifecycle_sign_broadcast_transition(
+                    &sign_lease,
+                    &fixture.verified,
+                    successor,
+                )
+                .expect("stage the exact live Prepare Sign-to-Broadcast successor");
+            transition
+                .persist_exact_successor()
+                .expect("persist the live Prepare Sign-to-Broadcast successor");
+            transition.commit_after_publication();
+
+            let broadcast_ordinal = coordinator.high_water();
+            let broadcast = coordinator
+                .records
+                .get(&broadcast_ordinal)
+                .expect("published signed Broadcast remains in the coordinator");
+            assert_eq!(broadcast.owner, lease.owner());
+            assert_eq!(broadcast.work_class, LifecycleWorkClass::Broadcast);
+            assert_eq!(broadcast.state, LifecycleState::Ready);
+            let (&broadcast_slot, &broadcast_digest) = broadcast
+                .physical_slots
+                .first_key_value()
+                .expect("published signed Broadcast retains one physical slot");
+            let broadcast_address =
+                ConcreteWorkAddress::new(broadcast.owner, broadcast_ordinal, broadcast_slot)
+                    .expect("published signed Broadcast has one exact address");
+            assert!(matches!(
+                &holder.registry_for_test().entries[&broadcast_address].kind,
+                ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_)
+            ));
+
+            // Model the assertion-only tail of the production refanout: the
+            // durable Broadcast remains nonterminal but parks on its exact
+            // Recovery(digest) generation after output handoff.
+            let wait_source = WaitSource::Recovery(broadcast_digest);
+            let observed_generation = coordinator
+                .observed_generation
+                .get(&wait_source)
+                .copied()
+                .unwrap_or(0);
+            coordinator
+                .observed_generation
+                .insert(wait_source, observed_generation);
+            assert!(coordinator.ready_index.remove(&broadcast_ordinal));
+            coordinator
+                .records
+                .get_mut(&broadcast_ordinal)
+                .expect("refanned signed Broadcast remains installed")
+                .state = LifecycleState::Waiting(WaitToken::new(wait_source, observed_generation));
+            assert!(
+                holder
+                    .registry_for_test()
+                    .exactly_covers_finalization_work(&coordinator),
+                "the original live Validate-to-Sign-to-Broadcast lineage is finalization-exact"
+            );
+
+            // Reproduce the durable-retry history observed in the network:
+            // the same causal owner later acquires a fresh Validate ordinal,
+            // which terminalizes without a successor. It is not part of the
+            // older closed Sign-to-Broadcast interval.
+            let retry_case = super::super::replay_authority::exact_record_fixture(
+                coordinator.active_context,
+                LifecycleStageKind::ValidateBody,
+                0xA7,
+            );
+            assert_eq!(retry_case.work_class, LifecycleWorkClass::Validate);
+            assert_ne!(
+                retry_case.key,
+                coordinator.records[&lease.ordinal()].key,
+                "the later Validate occurrence must retain a distinct lifecycle key"
+            );
+            let retry_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+            let retry_candidate = CandidateAdmission::new(
+                retry_case.key,
+                lease.owner().causal_root(),
+                retry_case.work_class,
+                retry_case.stage,
+                InitialLifecycleState::Ready,
+                lease.owner().causal_root().digest(),
+                retry_case.payload,
+                retry_case.authority,
+                super::super::PhysicalGeometry::new(
+                    [PhysicalSlot::new(
+                        retry_slot,
+                        LifecycleDigest::new([0xA7; 32]),
+                    )],
+                    [retry_slot],
+                ),
+                None,
+            );
+            let mut staged = coordinator.stage_durable_transaction();
+            let retry_ordinal = match staged
+                .reduce_admit(AdmissionRequest::Candidate(retry_candidate))
+            {
+                AdmissionDecision::Admitted {
+                    owner,
+                    ordinal,
+                    producer_turn_ordinal: None,
+                } if owner == lease.owner() => ordinal,
+                decision => panic!("admit later same-owner Validate retry: {decision:?}"),
+            };
+            assert_eq!(
+                retry_ordinal,
+                broadcast_ordinal
+                    .checked_add(1)
+                    .expect("later Validate retry ordinal remains representable")
+            );
+            staged
+                .finish_terminal(retry_ordinal, TerminalOutcome::Advanced)
+                .expect("terminalize the later same-owner Validate retry");
+            staged
+                .durable_records
+                .get_mut(&retry_ordinal)
+                .expect("later terminal Validate retry retains durable metadata")
+                .continuation = super::super::schema::DurableContinuation::AdvancedNoSuccessor;
+            assert!(
+                super::super::ledger::LifecycleLedgerV1::from_coordinator(&staged).is_ok(),
+                "the later same-owner terminal Validate retry must be a valid LedgerV1 row"
+            );
+            coordinator
+                .persist_exact_staged_successor(&staged)
+                .expect("persist the later same-owner terminal Validate retry");
+            coordinator = staged;
+
+            assert_eq!(
+                coordinator
+                    .records
+                    .values()
+                    .filter(|record| record.owner == lease.owner())
+                    .map(|record| record.ordinal)
+                    .collect::<Vec<_>>(),
+                vec![
+                    lease.ordinal(),
+                    child_ordinal,
+                    broadcast_ordinal,
+                    retry_ordinal,
+                ]
+            );
+            assert!(
+                holder
+                    .registry_for_test()
+                    .exactly_covers_finalization_work(&coordinator),
+                "a later terminal same-owner Validate retry cannot invalidate the older refanned Broadcast"
+            );
+            return;
+        }
         drop(preview);
 
         assert_eq!(queue_projection(&mut adapter), queue_projection_before);
@@ -716,6 +877,19 @@ fn lifecycle_decision_apply_live_recovered_substitution_matrix_is_inert() {
 }
 
 #[cfg(feature = "bls")]
+#[test]
+fn recovered_decision_apply_finality_retires_authenticated_validate_retry_seal() {
+    let handle = std::thread::Builder::new()
+        .name("recovered-apply-validate-retry-retirement".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(recovered_decision_apply_validate_retry_retirement_fixture)
+        .expect("spawn recovered Apply Validate retry retirement fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
 fn ready_validate_apply_actor_global_child_fixture(
     tamper_apply_frame: bool,
@@ -849,13 +1023,19 @@ fn ready_validate_apply_actor_global_child_fixture(
     assert!(observed.effects().is_empty());
 
     let mut holder = LifecycleWorkRegistryHolder::empty();
-    let (lease, slot, coordinator_candidate) = holder
+    let (lease, slot, coordinator_candidate, recovered_validate_retry_census) = holder
         .install_remote_proposal_validate_completion_for_test(
             &fixture.verified,
             tag,
             proposal,
             fixture.manifest.clone(),
             validated_receipt,
+            Some((
+                decision.round,
+                decision.proposal_round,
+                decision.subject,
+                decision.execution_commitment,
+            )),
         );
     let active_context = LifecycleContext::new(
         coordinator_candidate.key.context(),
@@ -883,10 +1063,12 @@ fn ready_validate_apply_actor_global_child_fixture(
         .attest_ready_validate_demand(&holder, lease.ordinal())
         .expect("attest exact Ready Validate predecessor before publication");
     assert!(!live_validate_attestation.requires_io_dispatch());
-    assert!(
-        live_validate_attestation
-            .dispatch_key()
-            .matches_consensus_round(&round)
+    let live_validate_dispatch_key = live_validate_attestation.dispatch_key();
+    assert!(live_validate_dispatch_key.matches_consensus_round(&round));
+    assert_eq!(
+        recovered_validate_retry_census.owner_class_counts_for_test(),
+        (1, 0),
+        "the remote-Proposal Validate parent owns one admission retry seal"
     );
     coordinator.ready_index.remove(&lease.ordinal());
     coordinator
@@ -993,6 +1175,7 @@ fn ready_validate_apply_actor_global_child_fixture(
         cleanup.dispatch_key().lineage(),
         LifecycleDecisionApplyLineageV1::Live
     );
+    assert_eq!(cleanup.validate_predecessor_ordinal(), lease.ordinal());
     assert_eq!(cleanup.subject(), subject);
     assert_eq!(cleanup.certificate(), &decision);
     assert_eq!(holder.registry_for_test().entries.len(), 1);
@@ -1028,6 +1211,8 @@ fn ready_validate_apply_actor_global_child_fixture(
             adapter,
             startup,
             cleanup,
+            live_validate_dispatch_key,
+            recovered_validate_retry_census,
             _directory.path(),
         );
         return;
@@ -1119,13 +1304,15 @@ fn ready_validate_apply_actor_global_child_fixture(
     .0;
     let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
-    let (mut executor, mut planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
-        &mut services,
-        runtime,
-        std::sync::Arc::clone(&output_guard),
-        0,
-        2,
-    );
+    let (mut executor, mut planner_io) = owner
+        .bind_body_store_to_lifecycle_completion_io_with_validate_retry_census_for_test(
+            &mut services,
+            runtime,
+            std::sync::Arc::clone(&output_guard),
+            0,
+            2,
+            recovered_validate_retry_census,
+        );
     let live_started_at = std::time::Instant::now();
     executor
         .arm_live_clocks(
@@ -1134,13 +1321,8 @@ fn ready_validate_apply_actor_global_child_fixture(
         )
         .expect("arm exact live Apply clocks after service construction");
     assert_eq!(
-        executor.validate_retry_lifecycle_ordinal_for_test((round, subject)),
-        None,
-        "cold Apply child must not reconstruct a terminal Validate parent"
-    );
-    assert_eq!(
         executor
-            .reconcile_ownerless_reopened_decision_for_lifecycle_apply_lineage_test(&mut services)
+            .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut services, false)
             .expect("reconcile exact live Apply Decision into the executor"),
         (
             decision.round,
@@ -1149,9 +1331,34 @@ fn ready_validate_apply_actor_global_child_fixture(
             decision.execution_commitment,
         )
     );
+    assert!(
+        executor
+            .ready_to_finish_blockers()
+            .contains(&"durable-validate-retry-seal"),
+        "the synchronous Apply cleanup fixture must begin with its live Validate retry ordinal"
+    );
     executor
         .reconcile_live_lifecycle_decision_apply(cleanup, &mut services)
         .expect("install exact live Apply owner before the normal Ready scheduler gate");
+    assert!(
+        !executor
+            .ready_to_finish_blockers()
+            .contains(&"durable-validate-retry-seal"),
+        "synchronous Apply reconciliation must release its authenticated Validate predecessor"
+    );
+    let repeated_cleanup = owner
+        .registry
+        .prepare_ready_live_decision_apply_reconciliation(&owner.coordinator, child_ordinal)
+        .expect("reattest the unchanged Ready live Apply carrier")
+        .expect("unchanged live Apply projects repeatable cleanup authority");
+    executor
+        .reconcile_live_lifecycle_decision_apply(repeated_cleanup, &mut services)
+        .expect("repeat exact live Apply reconciliation after retry release");
+    assert!(
+        !executor
+            .ready_to_finish_blockers()
+            .contains(&"durable-validate-retry-seal")
+    );
 
     planner_io.saturate_consensus_prefix(&services);
     assert_eq!(
@@ -1263,6 +1470,11 @@ fn ready_validate_apply_actor_global_child_fixture(
             .is_none()
     );
     assert!(executor.durable_finality().is_some());
+    assert!(
+        executor.ready_to_finish(),
+        "terminal live Apply left rollover blockers: {:?}",
+        executor.ready_to_finish_blockers()
+    );
     let (_, terminal_ledger) =
         super::super::ledger::LifecycleLedgerStoreV1::open(ledger_directory.path(), active_context)
             .expect("reopen exact terminal live Apply LedgerV1");
@@ -1422,6 +1634,212 @@ fn project_recovered_apply_task_for_lineage_test(
 }
 
 #[cfg(feature = "bls")]
+fn recovered_apply_validate_retry_census_for_test(
+    holder: &LifecycleWorkRegistryHolder,
+    address: ConcreteWorkAddress,
+    key: LifecycleDecisionApplyDispatchKeyV1,
+    validate_predecessor_ordinal: u128,
+) -> RecoveredDurableValidateRetryCensusV1 {
+    let task = project_recovered_apply_task_for_lineage_test(holder, address, key);
+    let tag = task.exact_tag();
+    let subject = task.subject();
+    let certificate = task.certificate().clone();
+    let fetch = AdapterEffect::FetchBody {
+        tag,
+        round: certificate.proposal_round,
+        subject,
+        manifest: None,
+        certified_sources: Vec::new(),
+        certificate: Some(certificate.clone()),
+    };
+    let validate = AdapterEffect::ValidateBody {
+        tag,
+        round: certificate.proposal_round,
+        subject,
+    };
+    let ownership = crate::sumeragi::v2_runtime::bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&fetch),
+        vec![
+            crate::sumeragi::v2_runtime::RuntimeEffectOwnership::fresh_for_test(
+                tag,
+                validate_predecessor_ordinal,
+            ),
+        ],
+    )
+    .expect("bind the recovered Apply fixture's certified Fetch authority")
+    .pop()
+    .expect("one certified Fetch has one exact owner")
+    .rebind_as_inherited_adapter_effect(&validate)
+    .expect("carry certified Fetch authority into the recovered Validate predecessor");
+    let pending = ownership
+        .exact_pending_adapter_effect_binding(&validate)
+        .expect("seal the recovered Validate predecessor's exact pending binding");
+    let retry_owner = RecoveredDurableValidateRetryOwnerV1::for_test(
+        validate,
+        task.validated_receipt().durable().clone(),
+        &pending,
+        validate_predecessor_ordinal,
+        Some((
+            certificate.round,
+            certificate.proposal_round,
+            subject,
+            certificate.execution_commitment,
+        )),
+    )
+    .expect("seal the recovered Apply fixture's exact Validate retry owner");
+    RecoveredDurableValidateRetryCensusV1::from_admission_owner_for_test(retry_owner)
+}
+
+#[cfg(feature = "bls")]
+fn recovered_decision_apply_validate_retry_retirement_fixture() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    crate::sumeragi::status::clear_v2_status();
+    let (mut owner, _safety, storage) =
+        crate::sumeragi::v2::recovered_decision_apply_owner_for_lineage_test(0xEA);
+    let active_context = owner.coordinator.active_context;
+    let (_, apply_ordinal) = owner
+        .recovered_decision_apply_summary_for_test()
+        .expect("genuine recovered owner retains one Ready Decision Apply");
+    let apply_record = &owner.coordinator.records[&apply_ordinal];
+    let (&apply_slot, _) = apply_record
+        .physical_slots
+        .first_key_value()
+        .expect("recovered Apply retains its physical slot");
+    let apply_address = ConcreteWorkAddress::new(apply_record.owner, apply_ordinal, apply_slot)
+        .expect("recovered Apply address is exact");
+    let predecessor_ordinals = owner
+        .coordinator
+        .records
+        .iter()
+        .filter_map(|(&ordinal, record)| {
+            let continuation = owner
+                .coordinator
+                .durable_records
+                .get(&ordinal)?
+                .continuation;
+            (record.owner == apply_address.owner
+                && record.work_class == LifecycleWorkClass::Validate
+                && continuation
+                    == super::super::schema::DurableContinuation::successor(
+                        super::super::schema::DurableContinuationEdge::ValidateToApply,
+                        apply_ordinal,
+                    ))
+            .then_some(ordinal)
+        })
+        .collect::<Vec<_>>();
+    let [validate_predecessor_ordinal] = predecessor_ordinals.as_slice() else {
+        panic!("recovered Apply fixture lost its sole ValidateToApply predecessor")
+    };
+    let validate_predecessor_ordinal = *validate_predecessor_ordinal;
+    let apply_key = owner
+        .registry
+        .attest_ready_lifecycle_decision_apply(&owner.coordinator, apply_ordinal)
+        .expect("attest the genuine recovered Apply")
+        .dispatch_key();
+    let task =
+        project_recovered_apply_task_for_lineage_test(&owner.registry, apply_address, apply_key);
+    let decision = (
+        task.certificate().round,
+        task.certificate().proposal_round,
+        task.subject(),
+        task.certificate().execution_commitment,
+    );
+    let retry_key = (task.certificate().proposal_round, task.subject());
+    let retry_census = recovered_apply_validate_retry_census_for_test(
+        &owner.registry,
+        apply_address,
+        apply_key,
+        validate_predecessor_ordinal,
+    );
+
+    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+    let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    let (mut executor, mut planner_io) = owner.bind_recovered_apply_executor_for_lineage_test(
+        &mut services,
+        std::sync::Arc::clone(&output_guard),
+        retry_census,
+        2,
+    );
+    executor
+        .reconcile_recovered_validate_retry_decision_for_test(decision, false, &mut services)
+        .expect("reconcile the decided-body frontier without bypassing lifecycle-owned Apply");
+    assert_eq!(
+        executor.recovered_durable_validate_retry_keys_for_test(),
+        vec![retry_key]
+    );
+    assert!(
+        executor
+            .ready_to_finish_blockers()
+            .contains(&"durable-validate-retry-seal")
+    );
+
+    assert_eq!(
+        owner
+            .dispatch_completion_for_test(&mut services, &mut executor, 0)
+            .expect("queue the genuine recovered Decision Apply"),
+        super::super::ProductionCompletionDispatchV1::ApplyQueued {
+            ordinal: apply_ordinal,
+        }
+    );
+    planner_io.execute_one_lifecycle_decision_apply_fixture(std::sync::Arc::clone(&output_guard));
+    let completion = match services
+        .take_next_lifecycle_completion()
+        .expect("take the guarded recovered Apply completion")
+    {
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::Apply(completion) => completion,
+        other => {
+            drop(other);
+            panic!("recovered Apply completion lost its dedicated queue class")
+        }
+    };
+    assert!(matches!(
+        super::super::settle_applied_live_lifecycle_decision_apply_completion_for_test(
+            &mut owner,
+            &mut executor,
+            completion,
+        ),
+        Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
+    ));
+    assert!(matches!(
+        owner.coordinator.records[&apply_ordinal].state,
+        LifecycleState::Terminal(TerminalOutcome::Advanced)
+    ));
+    let (_, terminal_ledger) = super::super::ledger::LifecycleLedgerStoreV1::open(
+        &storage.path().join("ledger"),
+        active_context,
+    )
+    .expect("reopen the durably published recovered Apply terminal");
+    assert_eq!(terminal_ledger.high_water(), apply_ordinal);
+    assert_eq!(
+        terminal_ledger
+            .records()
+            .iter()
+            .find(|record| record.ordinal() == apply_ordinal)
+            .and_then(super::super::ledger::LifecycleLedgerRecordV1::terminal),
+        Some(Some(TerminalOutcome::Advanced))
+    );
+    assert!(executor.durable_finality().is_some());
+    assert_eq!(
+        executor.recovered_durable_validate_retry_keys_for_test(),
+        vec![retry_key],
+        "the recovered retry owner remains only as the decided-body inert tombstone"
+    );
+    assert!(
+        !executor
+            .ready_to_finish_blockers()
+            .contains(&"durable-validate-retry-seal"),
+        "recovered Apply finality must retire its exact durable Validate predecessor"
+    );
+    assert!(
+        executor.ready_to_finish(),
+        "recovered Apply finality left rollover blockers: {:?}",
+        executor.ready_to_finish_blockers()
+    );
+    assert!(!output_guard.restart_required());
+    planner_io.detach(&mut services);
+}
+
+#[cfg(feature = "bls")]
 fn lifecycle_ledger_frame_for_lineage_test(root: &std::path::Path) -> Vec<u8> {
     std::fs::read(root.join("lifecycle-ledger-v1.norito"))
         .expect("read lifecycle Decision Apply lineage fixture ledger")
@@ -1437,6 +1855,7 @@ fn assert_executor_completion_lineage_substitution_is_inert(
     lease: &TurnLease,
     exact: &crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1,
     opposite_lineage: LifecycleDecisionApplyLineageV1,
+    validate_predecessor_ordinal: u128,
 ) {
     let crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Applied(completion) =
         exact
@@ -1448,6 +1867,11 @@ fn assert_executor_completion_lineage_substitution_is_inert(
     let (transition, authority) = holder
         .prepare_lifecycle_decision_apply_terminal_transition(coordinator, lease, completion)
         .expect("project exact completion authority before lineage substitution");
+    assert_eq!(
+        authority.validate_predecessor_ordinal(),
+        validate_predecessor_ordinal,
+        "completion authority must retain its registry-authenticated Validate predecessor"
+    );
     drop(transition);
     executor.assert_lifecycle_apply_completion_lineage_substitution_is_inert_for_test(
         authority,
@@ -1564,8 +1988,11 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     live_adapter: crate::sumeragi::v2::SumeragiV2Adapter,
     live_startup: Vec<AdapterEffect>,
     live_cleanup: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+    live_validate_dispatch_key: LifecycleValidateDispatchKeyV1,
+    recovered_validate_retry_census: RecoveredDurableValidateRetryCensusV1,
     live_body_root: &std::path::Path,
 ) {
+    let live_validate_predecessor_ordinal = live_cleanup.validate_predecessor_ordinal();
     let live_runtime = crate::sumeragi::v2_runtime::SerializedV2Runtime::new(
         live_adapter,
         live_startup,
@@ -1583,17 +2010,6 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
         })
         .expect("semantically revalidate exact live Apply lineage body marker");
     let live_body_store_identity = live_body_store.instance_identity();
-    let replayed_decision = live_runtime
-        .replayed_decision_key()
-        .expect("read exact live Apply lineage Decision");
-    let recovered_validate_retry_census = live_holder
-        .project_recovered_durable_validate_retry_census(live_coordinator, replayed_decision)
-        .expect("project empty recovered Validate census beside live Apply");
-    assert_eq!(
-        recovered_validate_retry_census.len_for_test(),
-        0,
-        "terminal Validate parent cannot enter the cold Apply retry census"
-    );
     let live_output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut live_executor, live_body_store) =
         crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
@@ -1635,9 +2051,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     );
     assert_eq!(
         live_executor
-            .reconcile_ownerless_reopened_decision_for_lifecycle_apply_lineage_test(
-                &mut live_services,
-            )
+            .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut live_services, true,)
             .expect("reconcile exact live Apply Decision into the lineage executor"),
         (
             live_certificate.round,
@@ -1664,12 +2078,49 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     let recovered_address =
         ConcreteWorkAddress::new(recovered_record.owner, recovered_ordinal, recovered_slot)
             .expect("recovered Apply address is exact");
+    let recovered_validate_predecessors = recovered
+        .coordinator
+        .records
+        .iter()
+        .filter_map(|(&ordinal, record)| {
+            let continuation = recovered
+                .coordinator
+                .durable_records
+                .get(&ordinal)?
+                .continuation;
+            (record.owner == recovered_address.owner
+                && record.work_class == LifecycleWorkClass::Validate
+                && continuation
+                    == super::super::schema::DurableContinuation::successor(
+                        super::super::schema::DurableContinuationEdge::ValidateToApply,
+                        recovered_ordinal,
+                    ))
+            .then_some(ordinal)
+        })
+        .collect::<Vec<_>>();
+    let [recovered_validate_predecessor_ordinal] = recovered_validate_predecessors.as_slice()
+    else {
+        panic!("recovered lineage fixture lost its sole ValidateToApply predecessor")
+    };
+    let recovered_validate_predecessor_ordinal = *recovered_validate_predecessor_ordinal;
+    let recovered_retry_key = recovered
+        .registry
+        .attest_ready_lifecycle_decision_apply(&recovered.coordinator, recovered_ordinal)
+        .expect("attest the recovered Apply before binding its retry census")
+        .dispatch_key();
+    let recovered_validate_retry_census = recovered_apply_validate_retry_census_for_test(
+        &recovered.registry,
+        recovered_address,
+        recovered_retry_key,
+        recovered_validate_predecessor_ordinal,
+    );
     let recovered_output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut recovered_services, _) = crate::sumeragi::v2_worker::tests::fixture();
     let (mut recovered_executor, recovered_planner_io) = recovered
         .bind_recovered_apply_executor_for_lineage_test(
             &mut recovered_services,
             std::sync::Arc::clone(&recovered_output_guard),
+            recovered_validate_retry_census,
             2,
         );
     assert!(
@@ -1887,6 +2338,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
         &live_lease,
         &live_exact,
         LifecycleDecisionApplyLineageV1::Recovered,
+        live_validate_predecessor_ordinal,
     );
     assert_eq!(
         live_executor.live_lifecycle_decision_apply_key_for_test(),
@@ -1900,6 +2352,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
         &recovered_lease,
         &recovered_exact,
         LifecycleDecisionApplyLineageV1::Live,
+        recovered_validate_predecessor_ordinal,
     );
     assert!(
         recovered_executor

@@ -331,12 +331,8 @@ enum ToriiPreparedAccountProtocolV1 {
   static func faucetSemanticHash(_ claim: ToriiAccountFaucetClaimV1) throws -> String {
     var encoded = CompactNoritoWriter()
     encoded.writeField(CompactNorito.encodeString(claim.accountId))
-    encoded.writeField(
-      try CompactNorito.encodeOption(claim.powAnchorHeight, encode: CompactNorito.encodeUInt64)
-    )
-    encoded.writeField(
-      try CompactNorito.encodeOption(claim.powNonceHex, encode: CompactNorito.encodeString)
-    )
+    encoded.writeField(CompactNorito.encodeUInt64(claim.powAnchorHeight))
+    encoded.writeField(CompactNorito.encodeString(claim.powNonceHex))
     return IrohaHash.hash(faucetClaimHashDomain + encoded.data).hexEncodedString()
   }
 
@@ -492,19 +488,24 @@ public struct ToriiAccountOnboardingPrepareRequestV1: Codable, Equatable, Sendab
   public let schema: String
   public let binding: ToriiTairaPublicResetMutationBindingV1
   public let receipt: ToriiAccountOnboardingPlanReceipt
+  public let feePayment: FeePaymentIntent
 
   private enum CodingKeys: String, CodingKey, CaseIterable {
     case schema, binding, receipt
+    case feePayment = "fee_payment"
   }
 
   public init(
     binding: ToriiTairaPublicResetMutationBindingV1,
-    receipt: ToriiAccountOnboardingPlanReceipt
+    receipt: ToriiAccountOnboardingPlanReceipt,
+    feePayment: FeePaymentIntent
   ) throws {
     try binding.validate(expectedOperation: .onboarding, activeAtUnixMs: nil)
+    _ = try feePayment.canonicalJSONData()
     schema = Self.schemaV1
     self.binding = binding
     self.receipt = receipt
+    self.feePayment = feePayment
   }
 
   public init(from decoder: Decoder) throws {
@@ -523,7 +524,8 @@ public struct ToriiAccountOnboardingPrepareRequestV1: Codable, Equatable, Sendab
     }
     try self.init(
       binding: container.decode(ToriiTairaPublicResetMutationBindingV1.self, forKey: .binding),
-      receipt: container.decode(ToriiAccountOnboardingPlanReceipt.self, forKey: .receipt)
+      receipt: container.decode(ToriiAccountOnboardingPlanReceipt.self, forKey: .receipt),
+      feePayment: container.decode(FeePaymentIntent.self, forKey: .feePayment)
     )
   }
 }
@@ -652,12 +654,14 @@ public struct ToriiAccountOnboardingPreparedTransactionV1: Codable, Equatable, S
     receipt expectedReceipt: ToriiAccountOnboardingPlanReceipt,
     binding expectedBinding: ToriiTairaPublicResetMutationBindingV1,
     semanticHashHex expectedSemanticHashHex: String,
+    expectedFeePayment: FeePaymentIntent,
     expectedAuthority: String,
     expectedNetworkId: NetworkId
   ) throws {
     guard receipt == expectedReceipt,
       binding == expectedBinding,
-      semanticHashHex == expectedSemanticHashHex
+      semanticHashHex == expectedSemanticHashHex,
+      feePayment.hasSamePayerAndGasBound(as: expectedFeePayment)
     else {
       throw ToriiClientError.invalidResponse
     }
@@ -1117,8 +1121,8 @@ public enum ToriiAccountOnboardingCurrentStateVerificationV1: Equatable, Sendabl
 /// Solved account faucet claim consumed by non-mutating prepare.
 public struct ToriiAccountFaucetClaimV1: Codable, Equatable, Sendable {
   public let accountId: String
-  public let powAnchorHeight: UInt64?
-  public let powNonceHex: String?
+  public let powAnchorHeight: UInt64
+  public let powNonceHex: String
 
   private enum CodingKeys: String, CodingKey, CaseIterable {
     case accountId = "account_id"
@@ -1128,18 +1132,24 @@ public struct ToriiAccountFaucetClaimV1: Codable, Equatable, Sendable {
 
   public init(
     accountId: String,
-    powAnchorHeight: UInt64? = nil,
-    powNonceHex: String? = nil
+    powAnchorHeight: UInt64,
+    powNonceHex: String
   ) throws {
     self.accountId = try ToriiPreparedAccountProtocolV1.canonicalAccountId(
       accountId,
       field: "claim.account_id"
     )
+    guard powAnchorHeight > 0 else {
+      throw ToriiClientError.invalidPayload("claim.pow_anchor_height must be positive.")
+    }
     self.powAnchorHeight = powAnchorHeight
-    if let powNonceHex {
-      _ = try ToriiPreparedAccountProtocolV1.exactLowerHexBytes(
-        powNonceHex,
-        field: "claim.pow_nonce_hex"
+    let nonce = try ToriiPreparedAccountProtocolV1.exactLowerHexBytes(
+      powNonceHex,
+      field: "claim.pow_nonce_hex"
+    )
+    guard nonce.count <= 32 else {
+      throw ToriiClientError.invalidPayload(
+        "claim.pow_nonce_hex must not exceed 32 bytes."
       )
     }
     self.powNonceHex = powNonceHex
@@ -1154,24 +1164,52 @@ public struct ToriiAccountFaucetClaimV1: Codable, Equatable, Sendable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     try self.init(
       accountId: container.decode(String.self, forKey: .accountId),
-      powAnchorHeight: container.decodeIfPresent(UInt64.self, forKey: .powAnchorHeight),
-      powNonceHex: container.decodeIfPresent(String.self, forKey: .powNonceHex)
+      powAnchorHeight: container.decode(UInt64.self, forKey: .powAnchorHeight),
+      powNonceHex: container.decode(String.self, forKey: .powNonceHex)
     )
   }
+}
 
-  public func encode(to encoder: Encoder) throws {
-    var container = encoder.container(keyedBy: CodingKeys.self)
-    try container.encode(accountId, forKey: .accountId)
-    if let powAnchorHeight {
-      try container.encode(powAnchorHeight, forKey: .powAnchorHeight)
-    } else {
-      try container.encodeNil(forKey: .powAnchorHeight)
+/// Independently trusted first-release faucet authority and issuance policy.
+///
+/// Construct this value only from trusted deployment configuration. Prepared responses cannot
+/// select or replace the faucet authority, asset definition, or exact issuance amount.
+public struct ToriiAccountFaucetPolicyV1: Equatable, Sendable {
+  public let faucetAuthority: String
+  public let assetDefinitionId: String
+  public let amount: KotodamaQuantity
+
+  public init(
+    faucetAuthority: String,
+    assetDefinitionId: String,
+    amount: KotodamaQuantity
+  ) throws {
+    let exactAuthority = try ToriiPreparedAccountProtocolV1.canonicalAccountId(
+      faucetAuthority,
+      field: "faucetPolicy.faucetAuthority"
+    )
+    let address = try AccountAddress.parseEncoded(exactAuthority)
+    guard let controller = address.singleControllerInfo(),
+      controller.algorithm == .ed25519,
+      Ed25519PublicKeyAdmission.isValidPublicKey(controller.publicKey)
+    else {
+      throw ToriiClientError.invalidPayload(
+        "faucetPolicy.faucetAuthority must be one canonical Ed25519 account."
+      )
     }
-    if let powNonceHex {
-      try container.encode(powNonceHex, forKey: .powNonceHex)
-    } else {
-      try container.encodeNil(forKey: .powNonceHex)
+    guard AssetDefinitionAddressCodec.canonicalDefinitionLiteral(assetDefinitionId)
+      == assetDefinitionId
+    else {
+      throw ToriiClientError.invalidPayload(
+        "faucetPolicy.assetDefinitionId must be one canonical asset definition id."
+      )
     }
+    guard amount.canonicalString != "0" else {
+      throw ToriiClientError.invalidPayload("faucetPolicy.amount must be positive.")
+    }
+    self.faucetAuthority = exactAuthority
+    self.assetDefinitionId = assetDefinitionId
+    self.amount = amount
   }
 }
 
@@ -1182,19 +1220,24 @@ public struct ToriiAccountFaucetPrepareRequestV1: Codable, Equatable, Sendable {
   public let schema: String
   public let binding: ToriiTairaPublicResetMutationBindingV1
   public let claim: ToriiAccountFaucetClaimV1
+  public let feePayment: FeePaymentIntent
 
   private enum CodingKeys: String, CodingKey, CaseIterable {
     case schema, binding, claim
+    case feePayment = "fee_payment"
   }
 
   public init(
     binding: ToriiTairaPublicResetMutationBindingV1,
-    claim: ToriiAccountFaucetClaimV1
+    claim: ToriiAccountFaucetClaimV1,
+    feePayment: FeePaymentIntent
   ) throws {
     try binding.validate(expectedOperation: .faucet, activeAtUnixMs: nil)
+    _ = try feePayment.canonicalJSONData()
     schema = Self.schemaV1
     self.binding = binding
     self.claim = claim
+    self.feePayment = feePayment
   }
 
   public init(from decoder: Decoder) throws {
@@ -1213,7 +1256,8 @@ public struct ToriiAccountFaucetPrepareRequestV1: Codable, Equatable, Sendable {
     }
     try self.init(
       binding: container.decode(ToriiTairaPublicResetMutationBindingV1.self, forKey: .binding),
-      claim: container.decode(ToriiAccountFaucetClaimV1.self, forKey: .claim)
+      claim: container.decode(ToriiAccountFaucetClaimV1.self, forKey: .claim),
+      feePayment: container.decode(FeePaymentIntent.self, forKey: .feePayment)
     )
   }
 }
@@ -1345,12 +1389,16 @@ public struct ToriiAccountFaucetPreparedTransactionV1: Codable, Equatable, Senda
   func validate(
     claim expectedClaim: ToriiAccountFaucetClaimV1,
     binding expectedBinding: ToriiTairaPublicResetMutationBindingV1,
-    expectedAuthority: String,
+    expectedFeePayment: FeePaymentIntent,
+    policy: ToriiAccountFaucetPolicyV1,
     expectedNetworkId: NetworkId
   ) throws {
     guard claim == expectedClaim,
       binding == expectedBinding,
-      semanticHashHex == (try ToriiPreparedAccountProtocolV1.faucetSemanticHash(expectedClaim))
+      semanticHashHex == (try ToriiPreparedAccountProtocolV1.faucetSemanticHash(expectedClaim)),
+      assetDefinitionId == policy.assetDefinitionId,
+      amount == policy.amount.canonicalString,
+      feePayment.hasSamePayerAndGasBound(as: expectedFeePayment)
     else {
       throw ToriiClientError.invalidResponse
     }
@@ -1365,13 +1413,13 @@ public struct ToriiAccountFaucetPreparedTransactionV1: Codable, Equatable, Senda
       binding: binding,
       operation: operation,
       semanticHashHex: semanticHashHex,
-      expectedAuthority: expectedAuthority,
+      expectedAuthority: policy.faucetAuthority,
       expectedNetworkId: expectedNetworkId
     )
     try ToriiPreparedAccountProtocolV1.verifyServerSignature(
       transcript: try signatureTranscript(),
       serverSignature: serverSignature,
-      expectedAuthority: expectedAuthority
+      expectedAuthority: policy.faucetAuthority
     )
   }
 
@@ -1388,12 +1436,12 @@ public struct ToriiAccountFaucetPreparedTransactionV1: Codable, Equatable, Senda
     )
     ToriiPreparedAccountProtocolV1.appendField(
       "claim.pow_anchor_height",
-      claim.powAnchorHeight.map { "some:\($0)" } ?? "none",
+      String(claim.powAnchorHeight),
       to: &transcript
     )
     ToriiPreparedAccountProtocolV1.appendField(
       "claim.pow_nonce_hex",
-      claim.powNonceHex.map { "some:\($0)" } ?? "none",
+      claim.powNonceHex,
       to: &transcript
     )
     ToriiPreparedAccountProtocolV1.appendField(

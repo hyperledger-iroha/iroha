@@ -42,6 +42,11 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingPreparedTransactionV
 import org.hyperledger.iroha.android.alias.AccountOnboardingProofRequiredPrepareResponseV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateRequestV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateV1;
+import org.hyperledger.iroha.android.alias.AccountFaucetClaimV1;
+import org.hyperledger.iroha.android.alias.AccountFaucetPolicyV1;
+import org.hyperledger.iroha.android.alias.AccountFaucetPrepareRequestV1;
+import org.hyperledger.iroha.android.alias.AccountFaucetPreparedTransactionV1;
+import org.hyperledger.iroha.android.alias.AccountFaucetPreparedVerifier;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPreparedVerifier;
 import org.hyperledger.iroha.android.alias.AccountOnboardingReceiptVerifier;
 import org.hyperledger.iroha.android.alias.PreparedTransactionSubmitResponseV1;
@@ -49,6 +54,7 @@ import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
 import org.hyperledger.iroha.android.consensus.SumeragiStatusModels;
@@ -895,9 +901,17 @@ public final class HttpClientTransport implements IrohaClient {
     Objects.requireNonNull(canonicalAuth, "canonicalAuth");
     requireNetworkTransactionDomain(unsignedPayload);
     final Object authority = unsignedPayload.get("authority");
-    if (!(authority instanceof String) || !authority.equals(canonicalAuth.accountId())) {
+    if (!(authority instanceof String)) {
+      throw new IllegalArgumentException("unsignedPayload.authority must be a string");
+    }
+    final String canonicalAuthority =
+        AccountIdLiteral.requireCanonicalI105Address(
+            (String) authority, "unsignedPayload.authority");
+    if (!CanonicalRequestSigner.isCanonicalAsciiAccountAlias(canonicalAuth.accountId())
+        && !FeeQuoteResponse.sameFeeQuoteAccountIdentity(
+            canonicalAuthority, canonicalAuth.accountId())) {
       throw new IllegalArgumentException(
-          "canonicalAuth.accountId must equal unsignedPayload.authority");
+          "canonicalAuth.accountId must identify unsignedPayload.authority or be a canonical account alias");
     }
     final FeePaymentIntent requestedIntent =
         FeePaymentJson.parse(unsignedPayload.get("fee_payment"), "unsignedPayload.fee_payment");
@@ -905,16 +919,24 @@ public final class HttpClientTransport implements IrohaClient {
     requestBody.put("payload", unsignedPayload);
     final byte[] body = encodeJsonBody(requestBody);
     return fetchJson(
-            buildVpnRequest("POST", "/v1/fees/quote", body, canonicalAuth),
-            FeePaymentJson::parseQuote,
+            buildExactCanonicalJsonPostRequest(
+                "/v1/fees/quote", body, canonicalAuth, FEE_QUOTE_RESPONSE_MAX_BYTES),
+            response -> {
+              if ((long) response.length > FEE_QUOTE_RESPONSE_MAX_BYTES) {
+                throw new IllegalArgumentException(
+                    "fee quote response exceeds the "
+                        + FEE_QUOTE_RESPONSE_MAX_BYTES
+                        + " byte limit");
+              }
+              return FeePaymentJson.parseQuote(response);
+            },
             "fee quote",
-            200)
+            200,
+            null,
+            true)
         .thenApply(
             quote -> {
-              if (!requestedIntent.hasSamePayerAndGasBound(quote.intent())) {
-                throw new IllegalArgumentException(
-                    "fee quote response changed the requested payer, sponsor revision, or gas bound");
-              }
+              quote.validateForDraft(requestedIntent, canonicalAuthority);
               return quote;
             });
   }
@@ -952,10 +974,16 @@ public final class HttpClientTransport implements IrohaClient {
     requestBody.put("program_id", programId.literal());
     final byte[] body = encodeJsonBody(requestBody);
     return fetchJson(
-            buildVpnRequest("POST", "/v1/fee-sponsor-programs/by-id", body, canonicalAuth),
+            buildExactCanonicalJsonPostRequest(
+                "/v1/fee-sponsor-programs/by-id",
+                body,
+                canonicalAuth,
+                FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES),
             FeePaymentJson::parseProgram,
             "fee sponsor program lookup",
-            200)
+            200,
+            null,
+            true)
         .thenApply(
             program -> {
               if (!programId.equals(program.id())) {
@@ -1490,6 +1518,7 @@ public final class HttpClientTransport implements IrohaClient {
       final AccountOnboardingPlanRequestV1 requestBody,
       final AccountOnboardingPlanReceiptV1 receipt,
       final TairaPublicResetMutationBindingV1 binding,
+      final FeePaymentIntent feePayment,
       final String onboardingToken,
       final String expectedAuthority,
       final NetworkId expectedNetworkId) {
@@ -1502,7 +1531,8 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalArgumentException("onboarding prepare binding is expired");
     }
     final byte[] body =
-        JsonEncoder.encode(new AccountOnboardingPrepareRequestV1(binding, receipt).toJsonMap())
+        JsonEncoder.encode(
+                new AccountOnboardingPrepareRequestV1(binding, receipt, feePayment).toJsonMap())
             .getBytes(StandardCharsets.UTF_8);
     return fetchJson(
         buildOnboardingRequest("POST", "/v1/accounts/onboard/prepare", body, onboardingToken),
@@ -1515,6 +1545,7 @@ public final class HttpClientTransport implements IrohaClient {
                 requestBody,
                 receipt,
                 binding,
+                feePayment,
                 expectedNetworkId,
                 expectedAuthority);
           } else if (result instanceof AccountOnboardingProofRequiredPrepareResponseV1) {
@@ -1576,6 +1607,7 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<PreparedTransactionSubmitResponseV1> submitPreparedAccountOnboarding(
       final AccountOnboardingPlanRequestV1 requestBody,
       final AccountOnboardingPreparedTransactionV1 prepared,
+      final FeePaymentIntent expectedFeePayment,
       final String onboardingToken,
       final String expectedAuthority,
       final NetworkId expectedNetworkId) {
@@ -1584,6 +1616,7 @@ public final class HttpClientTransport implements IrohaClient {
         requestBody,
         prepared.receipt(),
         prepared.binding(),
+        expectedFeePayment,
         expectedNetworkId,
         expectedAuthority);
     if (prepared.binding().executionExpiresAtUnixMs() <= System.currentTimeMillis()) {
@@ -1598,7 +1631,76 @@ public final class HttpClientTransport implements IrohaClient {
         null,
         (response, statusCode) ->
             AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
-                response, prepared, statusCode.intValue()));
+                response, prepared, expectedFeePayment, statusCode.intValue()));
+  }
+
+  @Override
+  public CompletableFuture<AccountFaucetPreparedTransactionV1>
+      prepareAccountFaucetTransaction(
+          final AccountFaucetClaimV1 claim,
+          final TairaPublicResetMutationBindingV1 binding,
+          final FeePaymentIntent feePayment,
+          final AccountFaucetPolicyV1 policy,
+          final NetworkId expectedNetworkId) {
+    Objects.requireNonNull(claim, "claim");
+    Objects.requireNonNull(feePayment, "feePayment");
+    Objects.requireNonNull(policy, "policy");
+    Objects.requireNonNull(expectedNetworkId, "expectedNetworkId");
+    if (!TairaPublicResetMutationBindingV1.FAUCET.equals(
+        Objects.requireNonNull(binding, "binding").kind())) {
+      throw new IllegalArgumentException("faucet prepare requires a faucet binding");
+    }
+    if (binding.executionExpiresAtUnixMs() <= System.currentTimeMillis()) {
+      throw new IllegalArgumentException("faucet prepare binding is expired");
+    }
+    final byte[] body =
+        JsonEncoder.encode(new AccountFaucetPrepareRequestV1(binding, claim, feePayment).toJsonMap())
+            .getBytes(StandardCharsets.UTF_8);
+    return fetchJson(
+        buildJsonPostRequest("/v1/accounts/faucet/prepare", body),
+        response -> {
+          final AccountFaucetPreparedTransactionV1 prepared =
+              AccountOnboardingJsonParser.parseFaucetPrepareResponse(response);
+          AccountFaucetPreparedVerifier.requireValidPrepared(
+              prepared, claim, binding, feePayment, policy, expectedNetworkId);
+          return prepared;
+        },
+        "account faucet prepare",
+        Integer.valueOf(200));
+  }
+
+  @Override
+  public CompletableFuture<PreparedTransactionSubmitResponseV1>
+      submitPreparedAccountFaucetTransaction(
+          final AccountFaucetPreparedTransactionV1 prepared,
+          final FeePaymentIntent expectedFeePayment,
+          final AccountFaucetPolicyV1 policy,
+          final NetworkId expectedNetworkId) {
+    AccountFaucetPreparedVerifier.requireValidPrepared(
+        prepared,
+        prepared.claim(),
+        prepared.binding(),
+        expectedFeePayment,
+        policy,
+        expectedNetworkId);
+    if (prepared.binding().executionExpiresAtUnixMs() <= System.currentTimeMillis()) {
+      throw new IllegalArgumentException("prepared faucet binding is expired");
+    }
+    final byte[] body =
+        JsonEncoder.encode(prepared.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    return fetchJson(
+        buildJsonPostRequest("/v1/accounts/faucet", body),
+        AccountOnboardingJsonParser::parseSubmitResponse,
+        "prepared account faucet submit",
+        null,
+        (response, statusCode) ->
+            AccountFaucetPreparedVerifier.requireValidSubmitResponse(
+                response,
+                prepared,
+                expectedFeePayment,
+                policy,
+                expectedNetworkId,
+                statusCode.intValue()));
   }
 
   @Override
@@ -2645,6 +2747,16 @@ public final class HttpClientTransport implements IrohaClient {
       final String errorContext,
       final Integer acceptedStatus,
       final BiFunction<T, Integer, T> responseValidator) {
+    return fetchJson(request, parser, errorContext, acceptedStatus, responseValidator, false);
+  }
+
+  private <T> CompletableFuture<T> fetchJson(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext,
+      final Integer acceptedStatus,
+      final BiFunction<T, Integer, T> responseValidator,
+      final boolean exactJsonMediaType) {
     notifyRequest(request);
     final CompletableFuture<T> future = new CompletableFuture<>();
     executor
@@ -2657,6 +2769,19 @@ public final class HttpClientTransport implements IrohaClient {
                 final RuntimeException error =
                     new RuntimeException(errorContext + " request failed", cause);
                 notifyFailure(request, cause);
+                future.completeExceptionally(error);
+                return;
+              }
+              final Long maximumResponseBytes = request.maximumResponseBytes();
+              if (maximumResponseBytes != null
+                  && (long) response.body().length > maximumResponseBytes.longValue()) {
+                final IllegalArgumentException error =
+                    new IllegalArgumentException(
+                        errorContext
+                            + " response exceeds the "
+                            + maximumResponseBytes
+                            + " byte limit");
+                notifyFailure(request, error);
                 future.completeExceptionally(error);
                 return;
               }
@@ -2680,6 +2805,9 @@ public final class HttpClientTransport implements IrohaClient {
                 return;
               }
               try {
+                if (exactJsonMediaType) {
+                  requireUnambiguousApplicationJsonHeader(response.headers(), errorContext);
+                }
                 final T parsed = parser.apply(response.body());
                 final T validated =
                     responseValidator == null
@@ -2960,18 +3088,117 @@ public final class HttpClientTransport implements IrohaClient {
       throw new RuntimeException(
           errorContext + " request failed with status " + response.statusCode());
     }
-    final List<String> contentTypes = new ArrayList<>();
-    for (final Map.Entry<String, List<String>> entry : response.headers().entrySet()) {
-      if (entry.getKey() != null
-          && entry.getKey().equalsIgnoreCase("Content-Type")
-          && entry.getValue() != null) {
-        contentTypes.addAll(entry.getValue());
-      }
-    }
-    if (contentTypes.size() != 1 || !"application/json".equals(contentTypes.get(0))) {
-      throw new RuntimeException(
+    requireUnambiguousApplicationJsonHeader(response.headers(), errorContext);
+  }
+
+  private static void requireUnambiguousApplicationJsonHeader(
+      final Map<String, List<String>> headers, final String errorContext) {
+    final List<String> contentTypes = headerValues(headers, "Content-Type");
+    if (contentTypes.size() != 1 || !isUnambiguousApplicationJson(contentTypes.get(0))) {
+      throw new IllegalStateException(
           errorContext + " response Content-Type must be exactly application/json");
     }
+  }
+
+  private static boolean isUnambiguousApplicationJson(final String value) {
+    if (value == null || value.indexOf(',') >= 0) {
+      return false;
+    }
+    int index = skipHttpOws(value, 0);
+    if (index + APPLICATION_JSON.length() > value.length()) {
+      return false;
+    }
+    for (int offset = 0; offset < APPLICATION_JSON.length(); offset++) {
+      final char actual = value.charAt(index + offset);
+      final char expected = APPLICATION_JSON.charAt(offset);
+      if (actual != expected
+          && !(expected >= 'a' && expected <= 'z' && actual == (char) (expected - 32))) {
+        return false;
+      }
+    }
+    index = skipHttpOws(value, index + APPLICATION_JSON.length());
+    while (index < value.length()) {
+      if (value.charAt(index) != ';') {
+        return false;
+      }
+      index = skipHttpOws(value, index + 1);
+      final int nameStart = index;
+      while (index < value.length() && isHttpTokenCharacter(value.charAt(index))) {
+        index++;
+      }
+      if (index == nameStart || index >= value.length() || value.charAt(index) != '=') {
+        return false;
+      }
+      index++;
+      if (index >= value.length()) {
+        return false;
+      }
+      if (value.charAt(index) == '"') {
+        index++;
+        boolean closed = false;
+        while (index < value.length()) {
+          final char current = value.charAt(index);
+          if (current == '"') {
+            index++;
+            closed = true;
+            break;
+          }
+          if (current == '\\') {
+            index++;
+            if (index >= value.length()
+                || !isHttpQuotedPairCharacter(value.charAt(index))) {
+              return false;
+            }
+          } else if (!isHttpQuotedTextCharacter(current)) {
+            return false;
+          }
+          index++;
+        }
+        if (!closed) {
+          return false;
+        }
+      } else {
+        final int parameterValueStart = index;
+        while (index < value.length() && isHttpTokenCharacter(value.charAt(index))) {
+          index++;
+        }
+        if (index == parameterValueStart) {
+          return false;
+        }
+      }
+      index = skipHttpOws(value, index);
+    }
+    return true;
+  }
+
+  private static int skipHttpOws(final String value, final int start) {
+    int index = start;
+    while (index < value.length()
+        && (value.charAt(index) == ' ' || value.charAt(index) == '\t')) {
+      index++;
+    }
+    return index;
+  }
+
+  private static boolean isHttpTokenCharacter(final char value) {
+    return (value >= '0' && value <= '9')
+        || (value >= 'A' && value <= 'Z')
+        || (value >= 'a' && value <= 'z')
+        || "!#$%&'*+-.^_`|~".indexOf(value) >= 0;
+  }
+
+  private static boolean isHttpQuotedTextCharacter(final char value) {
+    return value == 0x09
+        || (value >= 0x20 && value <= 0x21)
+        || (value >= 0x23 && value <= 0x5B)
+        || (value >= 0x5D && value <= 0x7E)
+        || (value >= 0x80 && value <= 0xFF);
+  }
+
+  private static boolean isHttpQuotedPairCharacter(final char value) {
+    return value == 0x09
+        || (value >= 0x20 && value <= 0x7E)
+        || (value >= 0x80 && value <= 0xFF);
   }
 
   private <T> CompletableFuture<Optional<T>> fetchJsonAllowingNotFound(
@@ -3337,6 +3564,7 @@ public final class HttpClientTransport implements IrohaClient {
         payload,
         request.validationFeePolicyVersion(),
         request.validationFeePolicyHash(),
+        request.validationFeeHijiriFeeQuoteHash(),
         request.validationFeeInstructionIndex(),
         request.validationFeeTransferEntryIndex());
     final List<String> instructions = new ArrayList<>();
@@ -3371,15 +3599,21 @@ public final class HttpClientTransport implements IrohaClient {
       final Map<String, Object> payload,
       final Long validationFeePolicyVersion,
       final String validationFeePolicyHash,
+      final String validationFeeHijiriFeeQuoteHash,
       final Long validationFeeInstructionIndex,
       final Long validationFeeTransferEntryIndex) {
     final boolean hasPolicyVersion = validationFeePolicyVersion != null;
     final boolean hasPolicyHash = validationFeePolicyHash != null;
+    final boolean hasHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash != null;
     final boolean hasInstructionIndex = validationFeeInstructionIndex != null;
     final boolean hasTransferEntryIndex = validationFeeTransferEntryIndex != null;
     if (hasPolicyVersion != hasPolicyHash) {
       throw new IllegalArgumentException(
           "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
+    }
+    if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
+      throw new IllegalArgumentException(
+          "validationFeeHijiriFeeQuoteHash requires validationFeePolicyVersion and validationFeePolicyHash");
     }
     if (!hasPolicyVersion && hasInstructionIndex) {
       throw new IllegalArgumentException(
@@ -3409,6 +3643,12 @@ public final class HttpClientTransport implements IrohaClient {
     payload.put(
         "validation_fee_policy_hash",
         normalizeHex32(validationFeePolicyHash, "validationFeePolicyHash"));
+    if (hasHijiriFeeQuoteHash) {
+      payload.put(
+          "validation_fee_hijiri_fee_quote_hash",
+          normalizeHex32(
+              validationFeeHijiriFeeQuoteHash, "validationFeeHijiriFeeQuoteHash"));
+    }
     if (hasInstructionIndex) {
       payload.put("validation_fee_instruction_index", validationFeeInstructionIndex.toString());
     }
@@ -4075,6 +4315,8 @@ public final class HttpClientTransport implements IrohaClient {
           "transaction_payload_b64",
           "native_proof_b64",
           "creation_time_ms");
+  private static final long FEE_QUOTE_RESPONSE_MAX_BYTES = 64L * 1024L;
+  private static final long FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L;

@@ -218,6 +218,23 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         }
     }
 
+    func testCertifiedBodyResponseCarriesThePeerIDResponderPayload() throws {
+        let row = try XCTUnwrap(
+            fixtureRows().first {
+                $0.kind == "message" && $0.name == "certified_body_response"
+            }
+        )
+        let message = try SumeragiV2ConsensusMessage.decodeCanonical(
+            Data(sumeragiV2Hex: row.hex)
+        )
+        guard case .certifiedBodyResponse(let response) = message.payload else {
+            return XCTFail("certified body response fixture decoded to the wrong payload")
+        }
+
+        XCTAssertEqual(response.responder.bytes.count, 75)
+        XCTAssertEqual(message.encode(), try Data(sumeragiV2Hex: row.hex))
+    }
+
     func testRustMergeCarrierFixturePinsCurrentV4Shape() throws {
         let rows = try fixtureRows()
         let carriedRow = try XCTUnwrap(rows.first {

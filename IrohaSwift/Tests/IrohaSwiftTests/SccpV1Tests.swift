@@ -27,6 +27,10 @@ private final class SccpStubURLProtocol: URLProtocol {
 final class SccpV1Tests: XCTestCase {
     private let hashHex = { (byte: UInt8) in "0x" + String(repeating: String(format: "%02x", byte), count: 32) }
 
+    private func validEd25519PublicKey(seed: UInt8) throws -> Data {
+        try Keypair(privateKeyBytes: Data(repeating: seed, count: 32)).publicKey
+    }
+
     override func tearDown() {
         SccpStubURLProtocol.handler = nil
         super.tearDown()
@@ -87,7 +91,7 @@ final class SccpV1Tests: XCTestCase {
     func testCodecsAndSourceRolesRejectAliasesAndCollisions() throws {
         XCTAssertEqual(try SccpCodecV1.canonicalText.validate(Data("merchant@taira".utf8)), Data("merchant@taira".utf8))
         let i105 = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x91, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x91))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         XCTAssertTrue(i105.unicodeScalars.contains { !$0.isASCII }, "fixture must exercise non-ASCII I105 digits")
         XCTAssertEqual(try SccpCodecV1.canonicalText.validate(Data(i105.utf8)), Data(i105.utf8))
@@ -234,10 +238,10 @@ final class SccpV1Tests: XCTestCase {
 
     func testSubmitPreservesTypedFeePaymentIntents() throws {
         let authority = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x51, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x51))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let sponsor = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x52, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x52))
             .toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         var assetDefinitionBytes = Data(repeating: 0x53, count: 16)
         assetDefinitionBytes[6] = (assetDefinitionBytes[6] & 0x0f) | 0x40
@@ -347,7 +351,7 @@ final class SccpV1Tests: XCTestCase {
 
     func testSubmitAcceptsExactTairaSponsorProgram() throws {
         let authority = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x54, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x54))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let programId = try FeeSponsorProgramId(
             "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
@@ -385,7 +389,7 @@ final class SccpV1Tests: XCTestCase {
 
     func testSubmitRequiresExactDefaultTransactionTimeToLive() throws {
         let authority = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x56, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x56))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
 
         let defaultTimeToLive = try canonicalSccpTransactionPayload(
@@ -426,7 +430,7 @@ final class SccpV1Tests: XCTestCase {
 
     func testSubmitRejectsGenesisUnknownLegacyAndUnmarkedTransactionDomains() throws {
         let authority = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x57, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x57))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         func domain(kind: UInt32, value: Data? = nil, trailing: Data = Data()) -> Data {
             var writer = CompactNoritoWriter()
@@ -470,7 +474,7 @@ final class SccpV1Tests: XCTestCase {
 
     func testSubmitRejectsNonNfcSponsorProgramNameInRawCompactTransaction() throws {
         let authority = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x55, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x55))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let sponsor = try AccountAddress.parseEncoded(
             "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
@@ -507,7 +511,7 @@ final class SccpV1Tests: XCTestCase {
     }
 
     func testSubmitAuthorityRequiresExactTairaDiscriminant() throws {
-        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x41, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: validEd25519PublicKey(seed: 0x41))
         let authority = try address.toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let artifact = noritoEncode(
             typeName: "iroha_sccp::SccpGroth16Bn254ProofArtifactV1",
@@ -557,7 +561,7 @@ final class SccpV1Tests: XCTestCase {
 
     func testSubmitArtifactsRequireExactSchemaAndZeroAlignmentPadding() throws {
         let authority = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x42, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x42))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let destination = noritoEncode(
             typeName: SccpSubmitValidation.destinationArtifactTypeName,

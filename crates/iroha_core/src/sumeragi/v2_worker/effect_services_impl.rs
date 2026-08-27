@@ -122,8 +122,6 @@ impl V2EffectServices for ProductionV2Services {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                 self.remote_voters()
             }
@@ -298,10 +296,8 @@ impl V2EffectServices for ProductionV2Services {
                 fetch.task = task;
                 let fetch_work_id = fetch.task.id();
                 if let Some(data) = certified_message {
-                    let peers = certified_sources
-                        .into_iter()
-                        .filter(|peer| peer != &self.local_peer)
-                        .collect();
+                    let peers =
+                        self.current_archive_targets_with_frozen_fallback(&certified_sources);
                     if self.enqueue_exact_fanout_while_guarded(
                         vec![data],
                         peers,
@@ -351,10 +347,7 @@ impl V2EffectServices for ProductionV2Services {
         let work_id = task.id();
         self.fetches.insert(work_id, FetchSession { task, chunks });
         if let Some(data) = certified_message {
-            let peers = certified_sources
-                .into_iter()
-                .filter(|peer| peer != &self.local_peer)
-                .collect();
+            let peers = self.current_archive_targets_with_frozen_fallback(&certified_sources);
             if self.enqueue_exact_fanout_while_guarded(
                 vec![data],
                 peers,
@@ -722,9 +715,10 @@ impl V2EffectServices for ProductionV2Services {
 
 /// Recover the exact global round carried by one view-scoped v2 output.
 ///
-/// Height-only recovery requests and retired VRF wire variants return `None`.
-/// A certified view does not supersede recovery owners, and production emits
-/// no VRF owner. Global threshold-beacon partials remain exact-view traffic.
+/// Payload chunks and request-bound body acquisition traffic return `None`
+/// because their exact task owner, rather than a later certified view, controls
+/// retirement. Height-only recovery requests also return `None`; global
+/// threshold-beacon partials retain their exact round.
 fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRound> {
     let NetworkMessage::SumeragiBlock(envelope) = message else {
         return None;
@@ -739,23 +733,44 @@ fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRou
         wire::ConsensusMessageV2Payload::TimeoutVote(vote) => Some(vote.round),
         wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => Some(certificate.round),
         wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => Some(manifest.round),
-        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => Some(request.round),
-        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => {
-            Some(response.manifest.round)
-        }
         wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
             Some(response.certificate.round)
         }
         wire::ConsensusMessageV2Payload::PayloadChunk(_)
-        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-        | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_) => None,
         wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => {
             Some(partial.round)
         }
     }
 }
 impl PendingExactFanout {
+    /// Whether this fanout is one current-height CommitQC discovery attempt.
+    ///
+    /// The discovery tracker, rather than exact output, remains the durable
+    /// source for this request until reducer admission or Decision cancels it.
+    fn is_commit_certificate_acquisition_topology_fanout(&self) -> bool {
+        matches!(&self.rollover_claim, ExactOutputRolloverClaim::GlobalV2(_))
+            && matches!(
+                self.messages.as_slice(),
+                [NetworkMessage::SumeragiBlock(envelope)]
+                    if matches!(
+                        envelope.as_message(),
+                        BlockMessage::V2(message)
+                            if matches!(
+                                &message.payload,
+                                wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+                            )
+                    )
+            )
+            && self.reply_routes.is_none()
+            && self.ingress_ownership.is_none()
+            && self
+                .targets
+                .iter()
+                .all(|target| matches!(&target.route, ExactTargetRoute::Topology))
+    }
     fn is_global_pacemaker_fanout(&self) -> bool {
         !self.messages.is_empty()
             && self.messages.iter().all(|message| {
@@ -791,6 +806,41 @@ impl PendingExactFanout {
                 .iter()
                 .chain(&candidate.targets)
                 .all(|target| matches!(&target.route, ExactTargetRoute::Topology))
+    }
+    /// Whether two topology fanouts belong to the same acquisition request.
+    ///
+    /// Archive sampling may rotate the target batch without changing the
+    /// immutable request. Callers use this identity to leave any different
+    /// batch with the durable source until the one incumbent fanout (and any
+    /// ranked actor ticket it owns) drains.
+    fn is_same_acquisition_topology_retry(&self, candidate: &Self) -> bool {
+        let is_acquisition = |fanout: &Self| {
+            matches!(
+                &fanout.rollover_claim,
+                ExactOutputRolloverClaim::GlobalV2(_)
+            ) && matches!(
+                fanout.messages.as_slice(),
+                [NetworkMessage::SumeragiBlock(envelope)]
+                    if matches!(
+                        envelope.as_message(),
+                        BlockMessage::V2(message)
+                            if matches!(
+                                &message.payload,
+                                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+                                    | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+                            )
+                    )
+            ) && fanout.reply_routes.is_none()
+                && fanout.ingress_ownership.is_none()
+                && fanout
+                    .targets
+                    .iter()
+                    .all(|target| matches!(&target.route, ExactTargetRoute::Topology))
+        };
+        is_acquisition(self)
+            && is_acquisition(candidate)
+            && self.rollover_claim == candidate.rollover_claim
+            && self.message_hashes == candidate.message_hashes
     }
 }
 impl PendingExactOutput {
@@ -842,8 +892,8 @@ impl PendingExactOutput {
     /// this cut, repeated view changes consume the finite shared ownership
     /// pool until a current Proposal or timeout fanout can no longer reach any
     /// responsive peer. Every removed message is bound to this exact height
-    /// context and a strictly lower view; height-only and epoch-wide traffic is
-    /// retained.
+    /// context and a strictly lower view; request-bound acquisition/recovery
+    /// traffic and epoch-wide traffic are retained.
     fn retain_certified_global_view_output(
         &mut self,
         retained_round: wire::ConsensusRound,

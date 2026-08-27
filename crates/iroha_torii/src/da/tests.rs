@@ -6,10 +6,10 @@ use crate::da::taikai::taikai_ingest::{
     AnchorSendError, AnchorSender, collect_pending_uploads, process_batch,
 };
 use crate::da::taikai::{
-    TAIKAI_ANCHOR_READY_PREFIX, TAIKAI_ANCHOR_READY_SUFFIX, TAIKAI_ANCHOR_REQUEST_PREFIX,
-    TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX, TAIKAI_ANCHOR_SENTINEL_SUFFIX,
-    TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX, TAIKAI_TRM_LINEAGE_SUFFIX,
-    TAIKAI_TRM_LOCK_PREFIX, TAIKAI_TRM_LOCK_SUFFIX,
+    TAIKAI_ANCHOR_INVALID_SUFFIX, TAIKAI_ANCHOR_READY_PREFIX, TAIKAI_ANCHOR_READY_SUFFIX,
+    TAIKAI_ANCHOR_REQUEST_PREFIX, TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX,
+    TAIKAI_ANCHOR_SENTINEL_SUFFIX, TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX,
+    TAIKAI_TRM_LINEAGE_SUFFIX, TAIKAI_TRM_LOCK_PREFIX, TAIKAI_TRM_LOCK_SUFFIX,
 };
 use crate::da::{
     DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
@@ -22,14 +22,15 @@ use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::{
     DaTaikaiAnchor, LaneConfig as ConfigLaneConfig, Nexus as ConfigNexus, TelemetryProfile,
 };
-use iroha_core::{da::LaneEpoch, telemetry::Telemetry};
+use iroha_core::{da::LaneEpoch, state::StateReadOnly, telemetry::Telemetry};
 use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature, SignatureOf};
 use iroha_data_model::{
     Encode,
     account::AccountId,
+    block::BlockHeader,
     da::{
         commitment::DaCommitmentBundle,
-        ingest::DaStripeLayout,
+        ingest::{DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1, DaStripeLayout},
         types::{BlobDigest, DaRentQuote, StorageTicketId},
     },
     name::Name,
@@ -37,19 +38,22 @@ use iroha_data_model::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
         LaneConfig as ModelLaneConfig, LaneId,
     },
+    parameter::{Parameter, custom::CustomParameter},
     sorafs::{
         capacity::ProviderId,
         pin_registry::{ManifestAliasBinding, ManifestDigest},
     },
     taikai::{
-        GuardDirectoryId, SegmentTimestamp, TaikaiAliasBinding, TaikaiAvailabilityClass,
-        TaikaiCarPointer, TaikaiCidIndexKey, TaikaiEnvelopeIndexes, TaikaiEventId,
-        TaikaiGuardPolicy, TaikaiRenditionId, TaikaiRenditionRouteV1, TaikaiRoutingManifestV1,
-        TaikaiSegmentEnvelopeV1, TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1,
-        TaikaiSegmentWindow, TaikaiStreamId, TaikaiTimeIndexKey,
+        GuardDirectoryId, SegmentTimestamp, TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1,
+        TAIKAI_ANCHOR_RECEIPT_VERSION_V1, TaikaiAliasBinding, TaikaiAnchorReceiptBodyV1,
+        TaikaiAnchorReceiptV1, TaikaiAvailabilityClass, TaikaiCarPointer, TaikaiCidIndexKey,
+        TaikaiEnvelopeIndexes, TaikaiEventId, TaikaiGuardPolicy, TaikaiRenditionId,
+        TaikaiRenditionRouteV1, TaikaiRoutingManifestV1, TaikaiSegmentEnvelopeV1,
+        TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1, TaikaiSegmentWindow,
+        TaikaiStreamId, TaikaiTimeIndexKey,
     },
 };
-use iroha_primitives::numeric::XorQuantity;
+use iroha_primitives::{json::Json, numeric::XorQuantity};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{
@@ -72,12 +76,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, ErrorKind, Read, Write},
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
         Arc, Barrier, LazyLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     time::Duration,
@@ -109,14 +113,13 @@ fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn da_ingest_compute_jobs_respect_configured_parallelism() {
     const LIMIT: usize = 2;
-    const JOBS: usize = 3;
     let limiter = Arc::new(tokio::sync::Semaphore::new(LIMIT));
     let active = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
     let (started_tx, started_rx) = mpsc::channel();
-    let mut release_senders = Vec::with_capacity(JOBS);
-    let mut tasks = Vec::with_capacity(JOBS);
-    for id in 0..JOBS {
+    let mut release_senders = Vec::with_capacity(LIMIT);
+    let mut tasks = Vec::with_capacity(LIMIT);
+    for id in 0..LIMIT {
         let (release_tx, release_rx) = mpsc::channel();
         release_senders.push(Some(release_tx));
         let limiter = Arc::clone(&limiter);
@@ -144,23 +147,24 @@ async fn da_ingest_compute_jobs_respect_configured_parallelism() {
         .expect("second compute job should start");
     assert_ne!(first, second);
     assert_eq!(peak.load(Ordering::SeqCst), LIMIT);
+    let rejected_job_ran = Arc::new(AtomicBool::new(false));
+    let rejected_job_ran_in_worker = Arc::clone(&rejected_job_ran);
+    let err = tokio::time::timeout(
+        Duration::from_secs(2),
+        run_da_ingest_compute_job(Arc::clone(&limiter), move || {
+            rejected_job_ran_in_worker.store(true, Ordering::SeqCst);
+            Ok::<_, (StatusCode, String)>(())
+        }),
+    )
+    .await
+    .expect("saturated compute admission must return promptly")
+    .expect_err("saturated compute admission must fail fast");
+    assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(err.1.contains("capacity is saturated"));
     assert!(
-        matches!(
-            started_rx.recv_timeout(Duration::from_millis(100)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ),
-        "a third physical compute job must wait for configured capacity"
+        !rejected_job_ran.load(Ordering::SeqCst),
+        "a rejected compute job must never reach a physical worker"
     );
-    release_senders[first]
-        .take()
-        .expect("first release sender")
-        .send(())
-        .expect("release first compute job");
-    let third = started_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("third compute job should start after capacity is released");
-    assert_ne!(third, first);
-    assert_ne!(third, second);
     for sender in release_senders.into_iter().flatten() {
         let _ = sender.send(());
     }
@@ -1501,6 +1505,154 @@ fn sample_request() -> DaIngestRequest {
     .try_sign(&keypair)
     .expect("sign canonical DA request fixture")
 }
+
+fn active_da_admission_incarnation(app: &crate::SharedAppState, lane_id: LaneId) -> Hash {
+    let view = app.state.view();
+    let proposal_height = u64::try_from(view.height())
+        .expect("test state height fits u64")
+        .checked_add(1)
+        .expect("test proposal height advances");
+    view.lane_incarnation_at_height(lane_id, proposal_height)
+        .expect("test lane has an active incarnation")
+}
+
+fn seed_da_admission_parameter(app: &crate::SharedAppState, parameter: CustomParameter) {
+    let next_height = u64::try_from(app.state.view().height())
+        .expect("test state height fits u64")
+        .checked_add(1)
+        .expect("test block height advances");
+    let header = BlockHeader::new(
+        NonZeroU64::new(next_height).expect("test block height is non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = app.state.block(header);
+    let mut transaction = block.transaction();
+    transaction
+        .world_mut_for_testing()
+        .parameters_mut_for_testing()
+        .get_mut()
+        .set_parameter(Parameter::Custom(parameter));
+    transaction.apply();
+    block
+        .commit()
+        .expect("commit governed DA admission test parameter");
+}
+
+fn da_admission_policy(
+    lane_id: LaneId,
+    lane_incarnation: Hash,
+    producers: Vec<AccountId>,
+    current_epoch: u64,
+    grace_epoch: Option<u64>,
+) -> DaIngestAdmissionPolicyV1 {
+    let policy = DaIngestAdmissionPolicyV1 {
+        version: DaIngestAdmissionPolicyV1::VERSION,
+        revision: 1,
+        expected_previous_policy_hash: None,
+        lanes: vec![DaIngestAdmissionLaneV1 {
+            lane_id,
+            lane_incarnation,
+            producers,
+            current_epoch,
+            grace_epoch,
+        }],
+    };
+    policy
+        .validate()
+        .expect("DA admission test policy must be canonical");
+    policy
+}
+
+#[tokio::test]
+async fn da_ingest_admission_fails_closed_without_governed_policy() {
+    let app = crate::mk_app_state_for_tests();
+    let error = admission_snapshot_for_request(&app, &ALICE_ID, LaneId::SINGLE, 5)
+        .expect_err("DA ingest without a committed policy must fail closed");
+
+    assert_eq!(error.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(error.1.contains("governance installs an admission policy"));
+}
+
+#[tokio::test]
+async fn da_ingest_admission_fails_closed_for_malformed_governed_policy() {
+    let app = crate::mk_app_state_for_tests();
+    seed_da_admission_parameter(
+        &app,
+        CustomParameter::new(
+            DaIngestAdmissionPolicyV1::parameter_id(),
+            Json::new("not-a-da-admission-policy"),
+        ),
+    );
+
+    let error = admission_snapshot_for_request(&app, &ALICE_ID, LaneId::SINGLE, 5)
+        .expect_err("malformed committed DA admission policy must fail closed");
+    assert_eq!(error.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        error
+            .1
+            .contains("committed DA ingest admission policy is invalid")
+    );
+}
+
+#[tokio::test]
+async fn da_ingest_admission_rejects_wrong_producer_and_epoch() {
+    let app = crate::mk_app_state_for_tests();
+    let lane_id = LaneId::SINGLE;
+    let incarnation = active_da_admission_incarnation(&app, lane_id);
+    let policy = da_admission_policy(lane_id, incarnation, vec![ALICE_ID.clone()], 5, Some(4));
+    seed_da_admission_parameter(&app, policy.into_custom_parameter());
+
+    for (owner, epoch, label) in [
+        (&*BOB_ID, 5, "unlisted producer"),
+        (&*ALICE_ID, 3, "retired epoch"),
+        (&*ALICE_ID, 6, "future epoch"),
+    ] {
+        let error = admission_snapshot_for_request(&app, owner, lane_id, epoch).expect_err(label);
+        assert_eq!(error.0, StatusCode::FORBIDDEN, "{label}");
+    }
+}
+
+#[tokio::test]
+async fn da_ingest_admission_rejects_wrong_lane_incarnation() {
+    let app = crate::mk_app_state_for_tests();
+    let lane_id = LaneId::SINGLE;
+    let active_incarnation = active_da_admission_incarnation(&app, lane_id);
+    let mut wrong_incarnation = Hash::prehashed([0xE1; Hash::LENGTH]);
+    if wrong_incarnation == active_incarnation {
+        wrong_incarnation = Hash::prehashed([0xE2; Hash::LENGTH]);
+    }
+    let policy = da_admission_policy(
+        lane_id,
+        wrong_incarnation,
+        vec![ALICE_ID.clone()],
+        5,
+        Some(4),
+    );
+    seed_da_admission_parameter(&app, policy.into_custom_parameter());
+
+    let error = admission_snapshot_for_request(&app, &ALICE_ID, lane_id, 5)
+        .expect_err("policy for a retired lane incarnation must be rejected");
+    assert_eq!(error.0, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn da_ingest_admission_accepts_current_and_grace_epochs_for_exact_scope() {
+    let app = crate::mk_app_state_for_tests();
+    let lane_id = LaneId::SINGLE;
+    let incarnation = active_da_admission_incarnation(&app, lane_id);
+    let policy = da_admission_policy(lane_id, incarnation, vec![ALICE_ID.clone()], 5, Some(4));
+    seed_da_admission_parameter(&app, policy.into_custom_parameter());
+
+    for epoch in [4, 5] {
+        admission_snapshot_for_request(&app, &ALICE_ID, lane_id, epoch)
+            .unwrap_or_else(|error| panic!("exact admitted epoch {epoch} rejected: {error:?}"));
+    }
+}
+
 include!("tests/principal_binding_tests.rs");
 #[test]
 fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
@@ -1714,6 +1866,15 @@ fn validate_request_rejects_excess_source_chunks_and_row_work() {
     assert!(err.1.contains("source-stripe computation limit"));
 }
 #[test]
+fn validate_request_rejects_terminal_sequence() {
+    let mut request = sample_request();
+    request.sequence = u64::MAX;
+    let err = validate_request_shape(&request)
+        .expect_err("a terminal sequence must not poison the replay window");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("monotonic successor"));
+}
+#[test]
 fn normalize_payload_rejects_claimed_decompression_bomb_before_decoding() {
     let mut request = sample_request();
     request.compression = Compression::Gzip;
@@ -1798,6 +1959,119 @@ fn fingerprint_ignores_manifest_storage_ticket_and_timestamp() {
     assert_eq!(baseline.fingerprint, manifest.fingerprint);
     assert_eq!(manifest.manifest.issued_at_unix, 7);
 }
+
+#[test]
+fn supplied_taikai_manifest_is_stable_across_server_queue_times() {
+    let (mut request, mut supplied) = taikai_manifest_fixture();
+    let canonical = normalize_payload(&request)
+        .expect("normalize payload")
+        .into_vec();
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let rent_policy = DaRentPolicyV1::default();
+    let manifest_metadata = supplied.manifest.metadata.clone();
+    supplied.manifest.issued_at_unix = 1_701_000_123;
+    let supplied_bytes = to_bytes(&supplied.manifest).expect("encode caller-supplied manifest");
+    let supplied_hash = BlobDigest::from_hash(blake3_hash(&supplied_bytes));
+    request.norito_manifest = Some(supplied_bytes.clone());
+
+    let first = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &manifest_metadata,
+        &request.retention_policy,
+        1_701_000_200,
+        &rent_policy,
+    )
+    .expect("resolve supplied manifest at first queue time");
+    let second = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &manifest_metadata,
+        &request.retention_policy,
+        1_701_000_900,
+        &rent_policy,
+    )
+    .expect("resolve supplied manifest at later queue time");
+
+    assert_eq!(first.manifest.issued_at_unix, 1_701_000_123);
+    assert_eq!(first.manifest, supplied.manifest);
+    assert_eq!(first.encoded, supplied_bytes);
+    assert_eq!(first.manifest_hash, supplied_hash);
+    assert_eq!(first.manifest, second.manifest);
+    assert_eq!(first.encoded, second.encoded);
+    assert_eq!(first.manifest_hash, second.manifest_hash);
+    assert_eq!(first.fingerprint, second.fingerprint);
+    assert_eq!(first.storage_ticket, second.storage_ticket);
+}
+
+#[test]
+fn supplied_taikai_manifest_rejects_zero_issued_at() {
+    let (mut request, mut supplied) = taikai_manifest_fixture();
+    let canonical = normalize_payload(&request)
+        .expect("normalize payload")
+        .into_vec();
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let rent_policy = DaRentPolicyV1::default();
+    let manifest_metadata = supplied.manifest.metadata.clone();
+    supplied.manifest.issued_at_unix = 0;
+    request.norito_manifest =
+        Some(to_bytes(&supplied.manifest).expect("encode zero-time manifest"));
+
+    let err = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &manifest_metadata,
+        &request.retention_policy,
+        1_701_000_200,
+        &rent_policy,
+    )
+    .expect_err("zero caller-supplied Taikai issued_at_unix must reject");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("issued_at_unix must be greater than zero"),
+        "unexpected zero issued_at_unix error: {}",
+        err.1
+    );
+}
+
+#[test]
+fn taikai_ssm_requires_caller_supplied_manifest_in_compute_path() {
+    let mut request = sample_request();
+    request.metadata = taikai_metadata();
+    request.metadata.items.push(MetadataEntry::new(
+        taikai::META_TAIKAI_SSM,
+        b"signed-manifest-placeholder".to_vec(),
+        MetadataVisibility::Public,
+    ));
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    let digest = request.signing_digest();
+    request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+
+    let err = compute_da_manifest_artifacts(
+        &request,
+        &nexus,
+        1,
+        None,
+        None,
+        &DaReplicationPolicy::default(),
+        &DaRentPolicyV1::default(),
+        None,
+    )
+    .err()
+    .expect("Taikai SSM without caller-supplied manifest must reject");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("require a caller-supplied `norito_manifest`"),
+        "unexpected missing manifest error: {}",
+        err.1
+    );
+}
+
 #[test]
 fn lane_proof_scheme_rejects_stale_geometry_only_lane() {
     let stale_lane = LaneId::new(3);
@@ -2254,14 +2528,16 @@ impl AnchorSender for MockAnchorSender {
     async fn send(
         &self,
         endpoint: &Url,
-        body: String,
+        base_id: &str,
+        body: &str,
         api_token: Option<&str>,
-    ) -> Result<(), AnchorSendError> {
-        self.calls
-            .lock()
-            .await
-            .push((endpoint.clone(), body, api_token.map(str::to_owned)));
-        Ok(())
+    ) -> Result<Vec<u8>, AnchorSendError> {
+        self.calls.lock().await.push((
+            endpoint.clone(),
+            body.to_owned(),
+            api_token.map(str::to_owned),
+        ));
+        Ok(signed_anchor_receipt(base_id, body))
     }
 }
 struct BlockingSentinelAnchorSender {
@@ -2273,19 +2549,21 @@ impl AnchorSender for BlockingSentinelAnchorSender {
     async fn send(
         &self,
         endpoint: &Url,
-        body: String,
+        base_id: &str,
+        body: &str,
         api_token: Option<&str>,
-    ) -> Result<(), AnchorSendError> {
+    ) -> Result<Vec<u8>, AnchorSendError> {
         {
-            self.calls
-                .lock()
-                .await
-                .push((endpoint.clone(), body, api_token.map(str::to_owned)));
+            self.calls.lock().await.push((
+                endpoint.clone(),
+                body.to_owned(),
+                api_token.map(str::to_owned),
+            ));
         }
         async_fs::create_dir(&self.sentinel_path)
             .await
             .expect("block sentinel path");
-        Ok(())
+        Ok(signed_anchor_receipt(base_id, body))
     }
 }
 #[derive(Default)]
@@ -2297,13 +2575,15 @@ impl AnchorSender for FailingAnchorSender {
     async fn send(
         &self,
         endpoint: &Url,
-        body: String,
+        _base_id: &str,
+        body: &str,
         api_token: Option<&str>,
-    ) -> Result<(), AnchorSendError> {
-        self.calls
-            .lock()
-            .await
-            .push((endpoint.clone(), body, api_token.map(str::to_owned)));
+    ) -> Result<Vec<u8>, AnchorSendError> {
+        self.calls.lock().await.push((
+            endpoint.clone(),
+            body.to_owned(),
+            api_token.map(str::to_owned),
+        ));
         Err(Box::new(std::io::Error::new(
             ErrorKind::ConnectionRefused,
             "anchor service unavailable",
@@ -2319,12 +2599,17 @@ impl AnchorSender for FirstFailingAnchorSender {
     async fn send(
         &self,
         endpoint: &Url,
-        body: String,
+        base_id: &str,
+        body: &str,
         api_token: Option<&str>,
-    ) -> Result<(), AnchorSendError> {
+    ) -> Result<Vec<u8>, AnchorSendError> {
         let call_count = {
             let mut calls = self.calls.lock().await;
-            calls.push((endpoint.clone(), body.clone(), api_token.map(str::to_owned)));
+            calls.push((
+                endpoint.clone(),
+                body.to_owned(),
+                api_token.map(str::to_owned),
+            ));
             calls.len()
         };
         if call_count == 1 {
@@ -2333,7 +2618,7 @@ impl AnchorSender for FirstFailingAnchorSender {
                 "anchor service unavailable for first upload",
             )));
         }
-        Ok(())
+        Ok(signed_anchor_receipt(base_id, body))
     }
 }
 struct FirstBlockingSentinelAnchorSender {
@@ -2345,26 +2630,49 @@ impl AnchorSender for FirstBlockingSentinelAnchorSender {
     async fn send(
         &self,
         endpoint: &Url,
-        body: String,
+        base_id: &str,
+        body: &str,
         api_token: Option<&str>,
-    ) -> Result<(), AnchorSendError> {
+    ) -> Result<Vec<u8>, AnchorSendError> {
         let call_count = {
             let mut calls = self.calls.lock().await;
-            calls.push((endpoint.clone(), body.clone(), api_token.map(str::to_owned)));
+            calls.push((
+                endpoint.clone(),
+                body.to_owned(),
+                api_token.map(str::to_owned),
+            ));
             calls.len()
         };
         if call_count == 1 {
             let sentinel_path = self
                 .sentinel_paths_by_body
-                .get(&body)
+                .get(body)
                 .expect("first upload body should have a sentinel path");
             async_fs::create_dir(sentinel_path)
                 .await
                 .expect("block first sentinel path");
         }
-        Ok(())
+        Ok(signed_anchor_receipt(base_id, body))
     }
 }
+
+struct StaticAnchorResponseSender {
+    response: Vec<u8>,
+}
+
+#[async_trait]
+impl AnchorSender for StaticAnchorResponseSender {
+    async fn send(
+        &self,
+        _endpoint: &Url,
+        _base_id: &str,
+        _body: &str,
+        _api_token: Option<&str>,
+    ) -> Result<Vec<u8>, AnchorSendError> {
+        Ok(self.response.clone())
+    }
+}
+
 async fn write_minimal_taikai_anchor_artifacts(spool_dir: &Path, base_id: &str) {
     async_fs::create_dir_all(spool_dir)
         .await
@@ -2416,8 +2724,33 @@ fn taikai_anchor_config(api_token: Option<&str>) -> DaTaikaiAnchor {
     DaTaikaiAnchor {
         endpoint: Url::parse("http://localhost/anchor").unwrap(),
         api_token: api_token.map(str::to_owned),
+        receipt_public_key: anchor_signer().public_key().clone(),
         poll_interval: Duration::from_secs(5),
+        request_timeout: Duration::from_secs(5),
     }
+}
+fn anchor_signer() -> KeyPair {
+    checked_fixture_ed25519_keypair(0xA7)
+}
+fn signed_anchor_receipt(base_id: &str, request_body: &str) -> Vec<u8> {
+    signed_anchor_receipt_with_signer(base_id, request_body, &anchor_signer())
+}
+
+fn signed_anchor_receipt_with_signer(
+    base_id: &str,
+    request_body: &str,
+    signer: &KeyPair,
+) -> Vec<u8> {
+    let body = TaikaiAnchorReceiptBodyV1 {
+        schema: TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1.to_owned(),
+        version: TAIKAI_ANCHOR_RECEIPT_VERSION_V1,
+        base_id: base_id.to_owned(),
+        request_digest: *blake3_hash(request_body.as_bytes()).as_bytes(),
+        acknowledged_unix_secs: 1_750_000_000,
+    };
+    let receipt =
+        TaikaiAnchorReceiptV1::try_sign(body, signer).expect("sign Taikai anchor receipt");
+    json::to_vec(&receipt).expect("encode Taikai anchor receipt")
 }
 #[cfg(unix)]
 async fn replace_path_with_symlink(path: &Path, target_contents: &[u8]) -> PathBuf {
@@ -2662,6 +2995,272 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
         .expect("collect after upload");
     assert!(pending_after.is_empty());
 }
+
+#[tokio::test]
+async fn taikai_anchor_processing_rejects_status_only_success() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    let sender = StaticAnchorResponseSender {
+        response: Vec::new(),
+    };
+
+    let err = process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect_err("an empty 2xx response must not acknowledge an upload");
+
+    assert!(
+        err.contains("invalid Taikai receipt"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        spool_dir
+            .join(format!("taikai-envelope-{base_id}.norito"))
+            .is_file(),
+        "status-only success must leave source artefacts retryable"
+    );
+    assert!(
+        !spool_dir
+            .join(format!(
+                "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+            ))
+            .exists(),
+        "status-only success must not create an acknowledgement"
+    );
+    assert_eq!(
+        collect_pending_uploads(&spool_dir)
+            .await
+            .expect("collect after status-only success")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_rejects_receipt_for_different_request() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    let sender = StaticAnchorResponseSender {
+        response: signed_anchor_receipt(base_id, "different exact request bytes"),
+    };
+
+    let err = process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect_err("a receipt for different bytes must not acknowledge an upload");
+
+    assert!(
+        err.contains("request digest does not match"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        spool_dir
+            .join(format!("taikai-envelope-{base_id}.norito"))
+            .is_file(),
+        "request-binding failure must leave source artefacts retryable"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_rejects_receipt_for_different_base_id() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    let pending = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("prepare request capture");
+    let different_base_id = "00000001-0000000000000002-0000000000000004-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    let sender = StaticAnchorResponseSender {
+        response: signed_anchor_receipt(different_base_id, pending[0].body()),
+    };
+
+    let err = process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect_err("a receipt for another artefact must not acknowledge an upload");
+
+    assert!(
+        err.contains("receipt base_id") && err.contains("does not match"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        spool_dir
+            .join(format!("taikai-envelope-{base_id}.norito"))
+            .is_file(),
+        "artefact-binding failure must leave source artefacts retryable"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_rejects_receipt_from_unpinned_signer() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    let pending = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("prepare request capture");
+    let wrong_signer = checked_fixture_ed25519_keypair(0xB8);
+    let sender = StaticAnchorResponseSender {
+        response: signed_anchor_receipt_with_signer(base_id, pending[0].body(), &wrong_signer),
+    };
+
+    let err = process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect_err("an untrusted signer must not acknowledge an upload");
+
+    assert!(
+        err.contains("signature validation failed"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        spool_dir
+            .join(format!("taikai-envelope-{base_id}.norito"))
+            .is_file(),
+        "signer validation failure must leave source artefacts retryable"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_restart_quarantines_legacy_timestamp_sentinel() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    collect_pending_uploads(&spool_dir)
+        .await
+        .expect("prepare request capture");
+    let sentinel = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+    ));
+    async_fs::write(&sentinel, b"1750000000\n")
+        .await
+        .expect("write legacy timestamp sentinel");
+
+    let pending = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("a legacy marker should be quarantined without blocking retry");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].base_id(), base_id);
+    assert!(
+        spool_dir
+            .join(format!("taikai-envelope-{base_id}.norito"))
+            .is_file(),
+        "unverified restart state must not retire source artefacts"
+    );
+    assert!(
+        !sentinel.exists(),
+        "legacy marker must leave the live namespace"
+    );
+    let quarantine_prefix = format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}{TAIKAI_ANCHOR_INVALID_SUFFIX}-"
+    );
+    let quarantined = fs::read_dir(&spool_dir)
+        .expect("scan quarantine evidence")
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with(&quarantine_prefix))
+        .count();
+    assert_eq!(quarantined, 1, "legacy marker must be retained as evidence");
+}
+
+#[tokio::test]
+async fn taikai_anchor_prune_quarantines_orphan_legacy_sentinel() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    async_fs::create_dir(&spool_dir)
+        .await
+        .expect("create Taikai spool");
+    let sentinel = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{ANCHOR_BASE_ID}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+    ));
+    async_fs::write(&sentinel, b"1750000000\n")
+        .await
+        .expect("write orphan legacy sentinel");
+    let sender = MockAnchorSender::default();
+
+    process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect("orphan legacy marker should be quarantined during pruning");
+
+    assert!(
+        sender.calls.lock().await.is_empty(),
+        "an orphan acknowledgement must not trigger an upload"
+    );
+    assert!(
+        !sentinel.exists(),
+        "orphan legacy marker must leave the live acknowledgement namespace"
+    );
+    let quarantine_prefix = format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{ANCHOR_BASE_ID}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}{TAIKAI_ANCHOR_INVALID_SUFFIX}-"
+    );
+    let quarantined = fs::read_dir(&spool_dir)
+        .expect("scan orphan quarantine evidence")
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with(&quarantine_prefix))
+        .count();
+    assert_eq!(
+        quarantined, 1,
+        "orphan legacy marker must be retained as evidence"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_restart_accepts_exact_signed_receipt() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    let pending = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("prepare request capture");
+    let sentinel = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+    ));
+    async_fs::write(&sentinel, signed_anchor_receipt(base_id, pending[0].body()))
+        .await
+        .expect("persist signed receipt before simulated restart");
+
+    assert!(
+        collect_pending_uploads(&spool_dir)
+            .await
+            .expect("recover exact signed receipt")
+            .is_empty()
+    );
+    for source in [
+        format!("taikai-envelope-{base_id}.norito"),
+        format!("taikai-indexes-{base_id}.json"),
+        format!("taikai-ssm-{base_id}.norito"),
+        format!("{TAIKAI_ANCHOR_READY_PREFIX}{base_id}{TAIKAI_ANCHOR_READY_SUFFIX}"),
+    ] {
+        assert!(
+            !spool_dir.join(source).exists(),
+            "verified restart recovery must retire source artefacts"
+        );
+    }
+    assert!(
+        sentinel.is_file(),
+        "verified receipt remains as audit evidence"
+    );
+    assert!(
+        spool_dir
+            .join(format!(
+                "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
+            ))
+            .is_file(),
+        "exact request capture remains available for future verification"
+    );
+}
+
 #[tokio::test]
 async fn taikai_anchor_processing_reports_anchor_delivery_failure() {
     let AnchorFixture {
@@ -3345,6 +3944,303 @@ fn taikai_trm_lineage_guard_rejects_overlapping_windows() {
         .validate(&overlap, &overlap_digest)
         .expect_err("must reject overlapping manifest windows");
 }
+#[test]
+fn taikai_trm_lineage_guard_allows_exact_staged_ingest_retry() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path();
+    let mut manifest = sample_trm_manifest();
+    manifest.segment_window = TaikaiSegmentWindow::new(0, 15);
+    let alias = manifest.alias_binding.clone();
+    let trm_bytes = to_bytes(&manifest).expect("encode routing manifest");
+    let digest = hex::encode(blake3_hash(&trm_bytes).as_bytes());
+    let lane_id = LaneId::new(7);
+    let epoch = 42;
+    let sequence = 9;
+    let storage_ticket = StorageTicketId::new([0xA5; 32]);
+    let fingerprint = ReplayFingerprint::from_hash(blake3_hash(b"exact-lineage-retry"));
+    {
+        let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+            .expect("guard")
+            .expect("enabled");
+        guard.validate(&manifest, &digest).expect("fresh lineage");
+        taikai_ingest::persist_envelope(
+            spool_dir,
+            lane_id,
+            epoch,
+            sequence,
+            &storage_ticket,
+            &fingerprint,
+            b"envelope",
+        )
+        .expect("persist envelope")
+        .expect("enabled envelope path");
+        taikai_ingest::persist_trm(
+            spool_dir,
+            lane_id,
+            epoch,
+            sequence,
+            &storage_ticket,
+            &fingerprint,
+            &trm_bytes,
+        )
+        .expect("persist routing manifest")
+        .expect("enabled routing manifest path");
+        guard
+            .commit_ingest(
+                manifest.segment_window.clone(),
+                &digest,
+                lane_id,
+                epoch,
+                sequence,
+                &storage_ticket,
+                &fingerprint,
+            )
+            .expect("commit lineage before simulated receipt failure");
+    }
+    let guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+        .expect("retry guard")
+        .expect("enabled");
+    let validation = guard
+        .validate_ingest_retry(
+            &manifest,
+            &digest,
+            lane_id,
+            epoch,
+            sequence,
+            &storage_ticket,
+            &fingerprint,
+            &trm_bytes,
+        )
+        .expect("exact staged retry must be admitted");
+    assert_eq!(
+        validation,
+        taikai_ingest::TrmLineageValidation::ExactArtifactRetry
+    );
+    assert!(
+        taikai_ingest::TrmLineageValidation::Fresh.records_alias_rotation(),
+        "fresh lineage must emit one alias-rotation event"
+    );
+    assert!(
+        !validation.records_alias_rotation(),
+        "an exact retry must not emit a duplicate alias-rotation event"
+    );
+}
+#[test]
+fn taikai_trm_lineage_guard_rejects_retry_from_legacy_lineage_without_provenance() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path();
+    let mut manifest = sample_trm_manifest();
+    manifest.segment_window = TaikaiSegmentWindow::new(0, 15);
+    let alias = manifest.alias_binding.clone();
+    let trm_bytes = to_bytes(&manifest).expect("encode routing manifest");
+    let digest = hex::encode(blake3_hash(&trm_bytes).as_bytes());
+    let lane_id = LaneId::new(7);
+    let epoch = 42;
+    let sequence = 9;
+    let storage_ticket = StorageTicketId::new([0xA5; 32]);
+    let fingerprint = ReplayFingerprint::from_hash(blake3_hash(b"legacy-lineage-retry"));
+    {
+        let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+            .expect("guard")
+            .expect("enabled");
+        taikai_ingest::persist_envelope(
+            spool_dir,
+            lane_id,
+            epoch,
+            sequence,
+            &storage_ticket,
+            &fingerprint,
+            b"envelope",
+        )
+        .expect("persist envelope")
+        .expect("enabled envelope path");
+        taikai_ingest::persist_trm(
+            spool_dir,
+            lane_id,
+            epoch,
+            sequence,
+            &storage_ticket,
+            &fingerprint,
+            &trm_bytes,
+        )
+        .expect("persist routing manifest")
+        .expect("enabled routing manifest path");
+        guard
+            .commit(manifest.segment_window.clone(), &digest)
+            .expect("seed legacy lineage without artifact provenance");
+    }
+    let guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+        .expect("retry guard")
+        .expect("enabled");
+    let err = guard
+        .validate_ingest_retry(
+            &manifest,
+            &digest,
+            lane_id,
+            epoch,
+            sequence,
+            &storage_ticket,
+            &fingerprint,
+            &trm_bytes,
+        )
+        .expect_err("legacy lineage without provenance must not authenticate a retry");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("already accepted"),
+        "unexpected legacy-lineage retry error: {:?}",
+        err
+    );
+}
+#[test]
+fn taikai_trm_lineage_guard_rejects_staged_retry_at_different_coordinates() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path();
+    let mut manifest = sample_trm_manifest();
+    manifest.segment_window = TaikaiSegmentWindow::new(0, 15);
+    let alias = manifest.alias_binding.clone();
+    let trm_bytes = to_bytes(&manifest).expect("encode routing manifest");
+    let digest = hex::encode(blake3_hash(&trm_bytes).as_bytes());
+    let lane_id = LaneId::new(7);
+    let epoch = 42;
+    let sequence = 9;
+    let storage_ticket = StorageTicketId::new([0xA5; 32]);
+    let fingerprint = ReplayFingerprint::from_hash(blake3_hash(b"bound-lineage-retry"));
+    {
+        let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+            .expect("guard")
+            .expect("enabled");
+        taikai_ingest::persist_envelope(
+            spool_dir,
+            lane_id,
+            epoch,
+            sequence,
+            &storage_ticket,
+            &fingerprint,
+            b"envelope",
+        )
+        .expect("persist envelope")
+        .expect("enabled envelope path");
+        taikai_ingest::persist_trm(
+            spool_dir,
+            lane_id,
+            epoch,
+            sequence,
+            &storage_ticket,
+            &fingerprint,
+            &trm_bytes,
+        )
+        .expect("persist routing manifest")
+        .expect("enabled routing manifest path");
+        taikai_ingest::persist_envelope(
+            spool_dir,
+            lane_id,
+            epoch,
+            sequence + 1,
+            &storage_ticket,
+            &fingerprint,
+            b"other-envelope",
+        )
+        .expect("persist other partial envelope")
+        .expect("enabled other envelope path");
+        taikai_ingest::persist_trm(
+            spool_dir,
+            lane_id,
+            epoch,
+            sequence + 1,
+            &storage_ticket,
+            &fingerprint,
+            &trm_bytes,
+        )
+        .expect("persist other partial routing manifest")
+        .expect("enabled other routing manifest path");
+        guard
+            .commit_ingest(
+                manifest.segment_window.clone(),
+                &digest,
+                lane_id,
+                epoch,
+                sequence,
+                &storage_ticket,
+                &fingerprint,
+            )
+            .expect("commit lineage");
+    }
+    let other_ticket = StorageTicketId::new([0x5A; 32]);
+    let other_fingerprint = ReplayFingerprint::from_hash(blake3_hash(b"other-lineage-retry"));
+    let candidates = [
+        (
+            "lane",
+            LaneId::new(8),
+            epoch,
+            sequence,
+            storage_ticket.clone(),
+            fingerprint,
+        ),
+        (
+            "epoch",
+            lane_id,
+            epoch + 1,
+            sequence,
+            storage_ticket.clone(),
+            fingerprint,
+        ),
+        (
+            "sequence",
+            lane_id,
+            epoch,
+            sequence + 1,
+            storage_ticket.clone(),
+            fingerprint,
+        ),
+        (
+            "storage ticket",
+            lane_id,
+            epoch,
+            sequence,
+            other_ticket,
+            fingerprint,
+        ),
+        (
+            "fingerprint",
+            lane_id,
+            epoch,
+            sequence,
+            storage_ticket,
+            other_fingerprint,
+        ),
+    ];
+    for (
+        label,
+        candidate_lane,
+        candidate_epoch,
+        candidate_sequence,
+        candidate_ticket,
+        candidate_fingerprint,
+    ) in candidates
+    {
+        let guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+            .expect("retry guard")
+            .expect("enabled");
+        let err = guard
+            .validate_ingest_retry(
+                &manifest,
+                &digest,
+                candidate_lane,
+                candidate_epoch,
+                candidate_sequence,
+                &candidate_ticket,
+                &candidate_fingerprint,
+                &trm_bytes,
+            )
+            .expect_err("different replay coordinates must reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST, "coordinate: {label}");
+        assert!(
+            err.1.contains("already accepted"),
+            "unexpected {label} retry error: {:?}",
+            err
+        );
+    }
+}
 fn trm_digest_hex(byte: u8) -> String {
     hex::encode([byte; 32])
 }
@@ -3396,13 +4292,23 @@ fn assert_mutated_lineage_state_rejected(mutate: impl FnOnce(&mut Value), expect
     manifest.segment_window = TaikaiSegmentWindow::new(0, 8);
     let alias = manifest.alias_binding.clone();
     let digest = trm_digest_hex(0xAB);
+    let storage_ticket = StorageTicketId::new([0xA5; 32]);
+    let fingerprint = ReplayFingerprint::from_hash(blake3_hash(b"mutated-lineage-state"));
     {
         let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
             .expect("guard")
             .expect("enabled");
         guard.validate(&manifest, &digest).expect("valid");
         guard
-            .commit(manifest.segment_window, &digest)
+            .commit_ingest(
+                manifest.segment_window,
+                &digest,
+                LaneId::new(7),
+                42,
+                9,
+                &storage_ticket,
+                &fingerprint,
+            )
             .expect("commit");
     }
     mutate_taikai_lineage_state(spool_dir, mutate);
@@ -3462,6 +4368,18 @@ fn taikai_trm_lineage_guard_rejects_noncanonical_uppercase_manifest_digest() {
                 .insert("manifest_digest_hex".into(), Value::from("AB".repeat(32)));
         },
         "manifest_digest_hex must be 32-byte lowercase hex",
+    );
+}
+#[test]
+fn taikai_trm_lineage_guard_rejects_malformed_artifact_base_id() {
+    assert_mutated_lineage_state_rejected(
+        |value| {
+            value
+                .as_object_mut()
+                .expect("lineage object")
+                .insert("artifact_base_id".into(), Value::from("not-canonical"));
+        },
+        "artifact_base_id must be canonical lowercase hex",
     );
 }
 #[test]
@@ -3861,6 +4779,30 @@ fn taikai_alias_cache_policy() -> crate::sorafs::AliasCachePolicy {
         Duration::from_secs(60),
     )
 }
+
+#[test]
+fn validate_taikai_ssm_rejects_malformed_norito() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let (_, telemetry) = telemetry_handle_for_tests();
+    let err = taikai::validate_taikai_ssm(
+        b"not-a-norito-signing-manifest",
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
+        &telemetry,
+    )
+    .expect_err("malformed Norito SSM must fail admission");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("failed to decode signing manifest"),
+        "unexpected malformed SSM error: {}",
+        err.1
+    );
+}
+
 #[test]
 fn validate_taikai_ssm_accepts_matching_payload() {
     let (manifest, taikai) = taikai_ssm_validation_fixture();
@@ -3887,6 +4829,49 @@ fn validate_taikai_ssm_accepts_matching_payload() {
     )
     .expect("ssm valid");
     assert_eq!(outcome.alias_label, "sora/docs");
+}
+
+#[test]
+fn validate_taikai_publisher_owner_binds_outer_principal() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let ssm_bytes = build_ssm_bytes(
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+    );
+    let signing_manifest: TaikaiSegmentSigningManifestV1 =
+        norito::decode_from_bytes(&ssm_bytes).expect("decode signing manifest");
+    let telemetry = crate::routing::MaybeTelemetry::disabled();
+    let outcome = taikai::validate_taikai_ssm(
+        &ssm_bytes,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
+        &telemetry,
+    )
+    .expect("ssm valid");
+    assert_eq!(
+        outcome.publisher_account,
+        signing_manifest.body.publisher_account
+    );
+    taikai::validate_taikai_publisher_owner(&outcome, &signing_manifest.body.publisher_account)
+        .expect("the authenticated publisher may submit its own segment");
+    let relayer = if signing_manifest.body.publisher_account != *ALICE_ID {
+        ALICE_ID.clone()
+    } else {
+        BOB_ID.clone()
+    };
+    let err = taikai::validate_taikai_publisher_owner(&outcome, &relayer)
+        .expect_err("an unrelated DA owner must not submit another publisher's SSM");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("does not match the SSM publisher"));
 }
 
 #[test]
@@ -3919,6 +4904,43 @@ fn validate_taikai_ssm_rejects_unsupported_body_version() {
     .expect_err("unknown SSM body version must fail admission");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert!(err.1.contains("unsupported signing manifest version"));
+}
+
+#[test]
+fn validate_taikai_ssm_rejects_zero_signed_timestamp() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let ssm_bytes = build_ssm_bytes_with_alias_council_and_body_mutation(
+        manifest.manifest_hash,
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+        Algorithm::Ed25519,
+        &[[0x33; 32]],
+        |body| body.signed_unix_ms = 0,
+    );
+    let (_, telemetry) = telemetry_handle_for_tests();
+    let err = taikai::validate_taikai_ssm(
+        &ssm_bytes,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
+        &telemetry,
+    )
+    .expect_err("zero SSM production timestamp must fail admission");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("signed_unix_ms must be a non-zero production timestamp"),
+        "unexpected zero timestamp error: {}",
+        err.1
+    );
 }
 
 #[test]
@@ -4323,6 +5345,42 @@ fn validate_taikai_trm_rejects_invalid_window() {
     assert!(
         err.1.contains("invalid routing manifest"),
         "unexpected error message: {}",
+        err.1
+    );
+}
+
+#[test]
+fn validate_taikai_trm_rejects_terminal_window_before_lineage_mutation() {
+    let taikai = taikai_envelope_fixture();
+    let mut trm = sample_trm_manifest_for_envelope(&taikai);
+    trm.segment_window = TaikaiSegmentWindow::new(40, u64::MAX);
+    let trm_bytes = to_bytes(&trm).expect("encode terminal-window trm");
+
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &trm.alias_binding)
+        .expect_err("terminal TRM window must fail before a lineage guard is created");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("segment window end must be less than u64::MAX"),
+        "unexpected terminal-window error: {}",
+        err.1
+    );
+}
+
+#[test]
+fn validate_taikai_trm_rejects_oversized_window_before_lineage_mutation() {
+    let taikai = taikai_envelope_fixture();
+    let mut trm = sample_trm_manifest_for_envelope(&taikai);
+    trm.segment_window = TaikaiSegmentWindow::new(40, 160);
+    let trm_bytes = to_bytes(&trm).expect("encode oversized-window trm");
+
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &trm.alias_binding)
+        .expect_err("121-segment TRM window must fail before a lineage guard is created");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("segment window covers 121 sequences; maximum is 120"),
+        "unexpected oversized-window error: {}",
         err.1
     );
 }
@@ -5143,6 +6201,51 @@ fn persist_da_pin_intent_writes_file() {
     assert_eq!(decoded, intent);
     assert_eq!(decoded.alias, Some("sora/docs".to_owned()));
     assert_eq!(decoded.authorization.owner, *ALICE_ID);
+    let loaded = persistence::load_da_pin_intent(
+        manifest_dir,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("load exact pin intent");
+    assert_eq!(loaded, intent);
+}
+
+#[test]
+fn load_da_pin_intent_rejects_filename_body_tuple_mismatch() {
+    let temp_dir = tempdir().expect("temp dir");
+    let context = sample_manifest_context_for(BlobClass::TaikaiSegment);
+    let request = context.request;
+    let manifest = context.artifacts;
+    let intent = build_da_pin_intent(&request, &manifest).expect("build pin intent");
+    let wrong_sequence = request.sequence.saturating_add(1);
+    let path = spool_artifact_path_for_key(
+        temp_dir.path(),
+        "da-pin-intent-",
+        request.lane_id,
+        request.epoch,
+        wrong_sequence,
+        &manifest.storage_ticket,
+        *manifest.fingerprint.as_bytes(),
+    );
+    fs::write(&path, to_bytes(&intent).expect("encode pin intent"))
+        .expect("write mismatched pin-intent fixture");
+    let err = persistence::load_da_pin_intent(
+        temp_dir.path(),
+        request.lane_id,
+        request.epoch,
+        wrong_sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect_err("pin-intent filename/body mismatch must reject");
+    assert_eq!(err.kind(), ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("does not match its filename"),
+        "unexpected pin-intent mismatch error: {err}"
+    );
 }
 fn assert_invalid_input<T>(result: std::io::Result<T>, label: &str) {
     let err = match result {
@@ -6278,6 +7381,18 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
     )
     .expect("persist manifest")
     .expect("manifest path");
+    let durable_pin_intent = build_da_pin_intent(&request, &manifest).expect("build pin intent");
+    persistence::persist_da_pin_intent(
+        spool_dir,
+        &durable_pin_intent,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist pin intent")
+    .expect("pin intent path");
     let pdp_commitment = compute_pdp_commitment(
         &manifest.manifest_hash,
         &manifest.manifest,
@@ -6325,6 +7440,8 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         .expect("append receipt"),
         ReceiptInsertOutcome::Stored { .. }
     ));
+    let retry_pin_intent =
+        build_da_pin_intent(&request, &retry_manifest).expect("retry pin intent");
     let duplicate = load_duplicate_da_artifacts(
         &log,
         spool_dir,
@@ -6332,6 +7449,7 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         request.sequence,
         &retry_manifest.storage_ticket,
         retry_manifest.fingerprint,
+        &retry_pin_intent,
     )
     .expect("load duplicate artifacts");
     assert_eq!(duplicate.receipt, receipt);
@@ -6355,12 +7473,253 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         request.sequence,
         &retry_manifest.storage_ticket,
         retry_manifest.fingerprint,
+        &retry_pin_intent,
     )
     .expect("check durable duplicate after restart")
     .expect("durable duplicate should be present after restart");
     assert_eq!(recovered_after_restart.receipt, receipt);
     assert_eq!(recovered_after_restart.pdp_commitment_bytes, pdp_bytes);
 }
+
+fn persist_completed_duplicate_fixture(
+    spool_dir: &Path,
+    request: &DaIngestRequest,
+    manifest: &ManifestArtifacts,
+) -> DaReceiptLog {
+    let canonical = normalize_payload(request).expect("normalize duplicate fixture payload");
+    let chunk_store = build_chunk_store(request, canonical.as_slice());
+    persistence::persist_manifest_for_sorafs(
+        spool_dir,
+        &manifest.encoded,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist duplicate fixture manifest")
+    .expect("duplicate fixture manifest path");
+    let pin_intent = build_da_pin_intent(request, manifest).expect("build duplicate pin intent");
+    persistence::persist_da_pin_intent(
+        spool_dir,
+        &pin_intent,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist duplicate fixture pin intent")
+    .expect("duplicate fixture pin-intent path");
+    let sealed_at_unix = manifest.manifest.issued_at_unix.max(1);
+    let pdp_commitment = compute_pdp_commitment(
+        &manifest.manifest_hash,
+        &manifest.manifest,
+        &chunk_store,
+        canonical.as_slice(),
+        sealed_at_unix,
+    )
+    .expect("compute duplicate fixture PDP commitment");
+    let pdp_bytes =
+        encode_pdp_commitment_bytes(&pdp_commitment).expect("encode duplicate fixture PDP");
+    persistence::persist_pdp_commitment(
+        spool_dir,
+        &pdp_commitment,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist duplicate fixture PDP")
+    .expect("duplicate fixture PDP path");
+    let signer = checked_fixture_ed25519_keypair(0x6A);
+    let receipt = build_receipt(
+        &signer,
+        request,
+        sealed_at_unix,
+        manifest.blob_hash,
+        manifest.chunk_root,
+        manifest.manifest_hash,
+        manifest.storage_ticket,
+        pdp_bytes,
+        manifest.manifest.rent_quote.clone(),
+        stripe_layout_from_manifest(&manifest.manifest),
+    )
+    .expect("build duplicate fixture receipt");
+    let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let log = open_receipt_log(spool_dir, &cursor_store, &signer)
+        .expect("open duplicate fixture receipt log");
+    assert!(matches!(
+        log.append(lane_epoch, request.sequence, receipt, manifest.fingerprint)
+            .expect("append duplicate fixture receipt"),
+        ReceiptInsertOutcome::Stored { .. }
+    ));
+    log
+}
+
+fn resign_duplicate_fixture_request(request: &mut DaIngestRequest) {
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    let digest = request.signing_digest();
+    request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
+}
+
+fn taikai_ready_path(
+    spool_dir: &Path,
+    request: &DaIngestRequest,
+    manifest: &ManifestArtifacts,
+) -> PathBuf {
+    spool_dir.join(TAIKAI_SPOOL_SUBDIR).join(format!(
+        "{TAIKAI_ANCHOR_READY_PREFIX}{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}{TAIKAI_ANCHOR_READY_SUFFIX}",
+        lane = request.lane_id.as_u32(),
+        epoch = request.epoch,
+        sequence = request.sequence,
+        ticket = hex::encode(manifest.storage_ticket.as_ref()),
+        fingerprint = hex::encode(manifest.fingerprint.as_bytes()),
+    ))
+}
+
+#[test]
+fn completed_taikai_duplicate_rejects_changed_stripped_ssm_identity() {
+    let temp_dir = tempdir().expect("temp dir");
+    let context = sample_manifest_context_for(BlobClass::TaikaiSegment);
+    let mut request = context.request;
+    let manifest = context.artifacts;
+    request.norito_manifest = Some(manifest.encoded.clone());
+    request.metadata.items.push(MetadataEntry::new(
+        taikai::META_TAIKAI_SSM,
+        b"first signed Taikai manifest".to_vec(),
+        MetadataVisibility::Public,
+    ));
+    resign_duplicate_fixture_request(&mut request);
+    let receipt_log = persist_completed_duplicate_fixture(temp_dir.path(), &request, &manifest);
+    let matching_pin_intent =
+        build_da_pin_intent(&request, &manifest).expect("matching pin intent");
+    load_duplicate_da_artifacts(
+        &receipt_log,
+        temp_dir.path(),
+        LaneEpoch::new(request.lane_id, request.epoch),
+        request.sequence,
+        &manifest.storage_ticket,
+        manifest.fingerprint,
+        &matching_pin_intent,
+    )
+    .expect("matching completed Taikai duplicate must recover");
+
+    let mut retry = request.clone();
+    retry
+        .metadata
+        .items
+        .iter_mut()
+        .find(|entry| entry.key == taikai::META_TAIKAI_SSM)
+        .expect("SSM metadata entry")
+        .value = b"different signed Taikai manifest".to_vec();
+    resign_duplicate_fixture_request(&mut retry);
+    assert_ne!(request.signing_digest(), retry.signing_digest());
+    let retry_pin_intent = build_da_pin_intent(&retry, &manifest).expect("build retry pin intent");
+    let err = load_duplicate_da_artifacts_and_publish_taikai_ready(
+        &receipt_log,
+        temp_dir.path(),
+        &retry,
+        &manifest,
+        LaneEpoch::new(retry.lane_id, retry.epoch),
+        &retry_pin_intent,
+    )
+    .expect_err("changed stripped SSM must conflict with the completed request identity");
+    assert!(matches!(err, DuplicateDaArtifactsError::Conflict(_)));
+    assert!(
+        !taikai_ready_path(temp_dir.path(), &retry, &manifest).exists(),
+        "identity-conflicting duplicate must not publish Taikai readiness"
+    );
+}
+
+#[test]
+fn completed_taikai_duplicate_rejects_changed_caller_manifest_timestamp() {
+    let temp_dir = tempdir().expect("temp dir");
+    let context = sample_manifest_context_for(BlobClass::TaikaiSegment);
+    let mut request = context.request;
+    let manifest = context.artifacts;
+    request.norito_manifest = Some(manifest.encoded.clone());
+    resign_duplicate_fixture_request(&mut request);
+    let receipt_log = persist_completed_duplicate_fixture(temp_dir.path(), &request, &manifest);
+
+    let mut retry = request.clone();
+    let mut changed_manifest = manifest.manifest.clone();
+    changed_manifest.issued_at_unix = changed_manifest.issued_at_unix.saturating_add(1);
+    retry.norito_manifest = Some(to_bytes(&changed_manifest).expect("encode changed manifest"));
+    resign_duplicate_fixture_request(&mut retry);
+    assert_ne!(request.signing_digest(), retry.signing_digest());
+    let retry_pin_intent = build_da_pin_intent(&retry, &manifest).expect("build retry pin intent");
+    let err = load_duplicate_da_artifacts_and_publish_taikai_ready(
+        &receipt_log,
+        temp_dir.path(),
+        &retry,
+        &manifest,
+        LaneEpoch::new(retry.lane_id, retry.epoch),
+        &retry_pin_intent,
+    )
+    .expect_err("changed caller manifest timestamp must conflict with completed identity");
+    assert!(matches!(err, DuplicateDaArtifactsError::Conflict(_)));
+    assert!(
+        !taikai_ready_path(temp_dir.path(), &retry, &manifest).exists(),
+        "identity-conflicting duplicate must not publish Taikai readiness"
+    );
+}
+
+#[test]
+fn completed_taikai_duplicate_fails_closed_on_corrupt_pin_intent() {
+    let temp_dir = tempdir().expect("temp dir");
+    let context = sample_manifest_context_for(BlobClass::TaikaiSegment);
+    let request = context.request;
+    let manifest = context.artifacts;
+    let receipt_log = persist_completed_duplicate_fixture(temp_dir.path(), &request, &manifest);
+    let pin_path = spool_artifact_path_for_key(
+        temp_dir.path(),
+        "da-pin-intent-",
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        *manifest.fingerprint.as_bytes(),
+    );
+    fs::write(&pin_path, b"corrupt durable pin intent").expect("corrupt pin intent");
+    let expected_pin_intent = build_da_pin_intent(&request, &manifest).expect("build pin intent");
+    let err = load_duplicate_da_artifacts_and_publish_taikai_ready(
+        &receipt_log,
+        temp_dir.path(),
+        &request,
+        &manifest,
+        LaneEpoch::new(request.lane_id, request.epoch),
+        &expected_pin_intent,
+    )
+    .expect_err("corrupt durable pin intent must fail closed");
+    assert!(matches!(err, DuplicateDaArtifactsError::Internal(_)));
+    assert!(
+        !taikai_ready_path(temp_dir.path(), &request, &manifest).exists(),
+        "corrupt duplicate identity must not publish Taikai readiness"
+    );
+}
+
+#[test]
+fn completed_duplicate_identity_conflict_maps_to_http_conflict() {
+    let error = duplicate_da_artifacts_response_error(
+        DuplicateDaArtifactsError::Conflict("identity mismatch".to_owned()),
+        "duplicate recovery",
+        ResponseFormat::Json,
+    );
+    let response = axum::response::IntoResponse::into_response(error);
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let error = duplicate_da_artifacts_response_error(
+        DuplicateDaArtifactsError::Internal(eyre!("corrupt durable artifact")),
+        "duplicate recovery",
+        ResponseFormat::Json,
+    );
+    let response = axum::response::IntoResponse::into_response(error);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 #[test]
 fn duplicate_taikai_ingest_does_not_publish_readiness_before_receipt_validation() {
     let temp_dir = tempdir().expect("temp dir");
@@ -6384,22 +7743,17 @@ fn duplicate_taikai_ingest_does_not_publish_readiness_before_receipt_validation(
     let signer = checked_random_keypair();
     let receipt_log =
         open_receipt_log(spool_dir, &cursor_store, &signer).expect("open receipt log");
+    let expected_pin_intent = build_da_pin_intent(&request, &manifest).expect("build pin intent");
     load_duplicate_da_artifacts_and_publish_taikai_ready(
         &receipt_log,
         spool_dir,
         &request,
         &manifest,
         lane_epoch,
+        &expected_pin_intent,
     )
     .expect_err("missing durable receipt artifacts must reject duplicate recovery");
-    let ready_path = spool_dir.join(TAIKAI_SPOOL_SUBDIR).join(format!(
-        "{TAIKAI_ANCHOR_READY_PREFIX}{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}{TAIKAI_ANCHOR_READY_SUFFIX}",
-        lane = request.lane_id.as_u32(),
-        epoch = request.epoch,
-        sequence = request.sequence,
-        ticket = hex::encode(manifest.storage_ticket.as_ref()),
-        fingerprint = hex::encode(manifest.fingerprint.as_bytes()),
-    ));
+    let ready_path = taikai_ready_path(spool_dir, &request, &manifest);
     assert!(
         !ready_path.exists(),
         "an invalid in-memory duplicate must not become visible to the anchor worker"
@@ -7634,6 +8988,46 @@ fn provided_manifest_with_wrong_parity_is_rejected() {
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
 }
 #[test]
+fn provided_manifest_with_parity_role_alias_is_rejected() {
+    let mut fixture = ManifestResolutionFixture::new(sample_request());
+    let artifacts = fixture.resolve(1_701_000_223).expect("resolve manifest");
+    let mut tampered = artifacts.manifest.clone();
+    let global_parity = tampered
+        .chunks
+        .iter_mut()
+        .find(|chunk| chunk.parity && chunk.role == ChunkRole::GlobalParity)
+        .expect("expected global parity chunk to mutate");
+    global_parity.role = ChunkRole::Data;
+    fixture.request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
+    let err = fixture
+        .resolve(1_701_000_334)
+        .expect_err("a parity/Data role alias must not bypass IPA field binding");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("role mismatch"));
+}
+#[test]
+fn provided_manifest_with_zero_group_alias_is_rejected() {
+    let mut request = sample_request();
+    request.payload = vec![0x5A; 9 * usize::try_from(request.chunk_size).unwrap()];
+    request.total_size = u64::try_from(request.payload.len()).unwrap();
+    request.payload_hash = BlobDigest::from_hash(blake3_hash(&request.payload));
+    let mut fixture = ManifestResolutionFixture::new(request);
+    let artifacts = fixture.resolve(1_701_000_224).expect("resolve manifest");
+    let mut tampered = artifacts.manifest.clone();
+    let later_group = tampered
+        .chunks
+        .iter_mut()
+        .find(|chunk| chunk.group_id != 0)
+        .expect("expected a non-zero stripe group to mutate");
+    later_group.group_id = 0;
+    fixture.request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
+    let err = fixture
+        .resolve(1_701_000_335)
+        .expect_err("group zero must not act as a wildcard for IPA field binding");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("group_id mismatch"));
+}
+#[test]
 fn provided_manifest_with_wrong_ipa_commitment_is_rejected() {
     let mut fixture = ManifestResolutionFixture::new(sample_request());
     let artifacts = fixture.resolve(1_701_000_920).expect("resolve manifest");
@@ -7967,6 +9361,9 @@ struct ManifestFixtureContext {
 fn sample_manifest_context_for(blob_class: BlobClass) -> ManifestFixtureContext {
     let (mut request, canonical_payload) = sample_request_with_payload();
     request.blob_class = blob_class;
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    let digest = request.signing_digest();
+    request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
     let chunk_store = build_chunk_store(&request, canonical_payload.as_slice());
     let metadata =
         encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");

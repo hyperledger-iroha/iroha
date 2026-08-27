@@ -8,6 +8,7 @@ use iroha_config::parameters::{
     },
     defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, TRUST_GOSSIP},
 };
+use iroha_config_base::WithOrigin;
 use iroha_crypto::{
     KeyPair,
     soranet::handshake::{
@@ -1308,7 +1309,6 @@ where
         .collect();
     network.update_peers_addresses(UpdatePeers(addresses));
 }
-#[cfg(feature = "p2p_tls")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_inbound_listener_smoke() {
     setup_logger();

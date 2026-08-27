@@ -120,11 +120,11 @@ use iroha_p2p::network::{
 use iroha_p2p::{
     Post, Priority,
     network::{
-        NetworkActorAdmissionError, NetworkActorAdmissionRejection, NetworkActorAdmissionTicket,
-        NetworkReplyFlushAck, NetworkReplyFlushAckStatus, NetworkReplyRoute,
-        NetworkReplyRouteError, NetworkReplyRouteSourceUpdate, NetworkReplyRoutes,
-        NetworkReplyRoutesObservedMergeReceipt, NetworkReplyRoutesStrictMergeReceipt,
-        NetworkReplySourceKey, ReliableProgressClass,
+        ConfiguredPeerBatch, NetworkActorAdmissionError, NetworkActorAdmissionRejection,
+        NetworkActorAdmissionTicket, NetworkReplyFlushAck, NetworkReplyFlushAckStatus,
+        NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteSourceUpdate,
+        NetworkReplyRoutes, NetworkReplyRoutesObservedMergeReceipt,
+        NetworkReplyRoutesStrictMergeReceipt, NetworkReplySourceKey, ReliableProgressClass,
         message::{ClassifyTopic as _, ProgressReconstruction},
         reliable_progress_class,
     },
@@ -576,6 +576,22 @@ impl RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
         class: super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1,
     ) -> Self {
         let task = RecoveredLifecycleSignTaskV1::for_test(ordinal, tag, request, class);
+        Self {
+            key: task.dispatch_key(),
+            tag: task.tag,
+            request: task.request,
+            signature,
+            outbound_payload,
+        }
+    }
+
+    /// Build guarded Sign material from the exact registry-projected worker task.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn from_registry_task_for_test(
+        task: RecoveredLifecycleSignTaskV1,
+        signature: Vec<u8>,
+        outbound_payload: Option<EncodedV2Payload>,
+    ) -> Self {
         Self {
             key: task.dispatch_key(),
             tag: task.tag,

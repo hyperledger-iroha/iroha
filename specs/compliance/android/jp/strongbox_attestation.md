@@ -7,7 +7,7 @@
 | Field | Value |
 |-------|-------|
 | Assessment Window | 2026-02-10 – 2026-02-12 |
-| Artefact Location | `artifacts/android/attestation/<device-tag>/<date>/` (bundle format per `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md`) |
+| Artefact Location | `artifacts/android/attestation/<device-tag>/<date>/` (bundle format per `specs/sdk/android/strongbox_attestation_harness_plan.md`) |
 | Capture Tooling | `scripts/android_keystore_attestation.sh`, `scripts/android_strongbox_attestation_ci.sh`, `scripts/android_strongbox_attestation_report.py` |
 | Reviewers | Hardware Lab Lead, Compliance & Legal (JP) |
 
@@ -20,14 +20,27 @@
    scripts/android_keystore_attestation.sh \
      --bundle-dir artifacts/android/attestation/${DEVICE_TAG}/2026-02-12 \
      --trust-root trust-roots/google-strongbox.pem \
+     --alias "${TRUSTED_ALIAS}" \
+     --challenge-file "${TRUSTED_EXPECTATIONS}/challenge.hex" \
+     --expected-leaf-spki-sha256 "${TRUSTED_LEAF_SPKI_SHA256}" \
+     --revocation-snapshot "${TRUSTED_SNAPSHOT}" \
+     --revocation-snapshot-sha256 "${TRUSTED_SNAPSHOT_SHA256}" \
+     --evaluation-time-ms "${EVALUATION_TIME_MS}" \
      --require-strongbox \
      --output artifacts/android/attestation/${DEVICE_TAG}/2026-02-12/result.json
    ```
-2. Commit bundle metadata (`result.json`, `chain.pem`, `challenge.hex`, `alias.txt`) to the evidence tree.
+2. Archive `result.json` and `chain.pem` as evidence. Retain alias,
+   challenge, leaf-SPKI digest, roots, and revocation inputs in a separately
+   authenticated inventory.
 3. Run the CI helper to re-verify all bundles offline:
    ```bash
    scripts/android_strongbox_attestation_ci.sh \
-     --root artifacts/android/attestation
+     --bundles-root artifacts/android/attestation \
+     --expectations-root "${TRUSTED_EXPECTATIONS_ROOT}" \
+     --trust-root trust-roots/google-strongbox.pem \
+     --revocation-snapshot "${TRUSTED_SNAPSHOT}" \
+     --revocation-snapshot-sha256 "${TRUSTED_SNAPSHOT_SHA256}" \
+     --evaluation-time-ms "${EVALUATION_TIME_MS}"
    scripts/android_strongbox_attestation_report.py \
      --input artifacts/android/attestation \
      --output artifacts/android/attestation/report_20260212.txt

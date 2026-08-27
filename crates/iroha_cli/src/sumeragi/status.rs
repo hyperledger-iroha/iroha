@@ -111,15 +111,7 @@ fn summarize_diagnostics(value: &Value) -> String {
                 .get("epoch_length_blocks")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
-            let commit = npos
-                .get("vrf_commit_deadline_offset")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let reveal = npos
-                .get("vrf_reveal_deadline_offset")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            format!("npos(epoch={epoch},commit={commit},reveal={reveal})")
+            format!("npos(epoch={epoch})")
         },
     );
     format!(
@@ -225,9 +217,7 @@ mod tests {
             "tx_queue_capacity": 10,
             "tx_queue_saturated": false,
             "npos": {
-                "epoch_length_blocks": 100,
-                "vrf_commit_deadline_offset": 20,
-                "vrf_reveal_deadline_offset": 40
+                "epoch_length_blocks": 100
             },
             "lane_commitments": [{ "lane_id": 1 }],
             "lane_relay_envelopes": [],
@@ -235,7 +225,7 @@ mod tests {
         });
         assert_eq!(
             summarize_diagnostics(&value),
-            "queue=4/10 saturated=false election=npos(epoch=100,commit=20,reveal=40) lanes=1 relays=0 sealed=0"
+            "queue=4/10 saturated=false election=npos(epoch=100) lanes=1 relays=0 sealed=0"
         );
     }
     #[test]

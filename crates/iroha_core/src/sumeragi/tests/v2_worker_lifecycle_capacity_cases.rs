@@ -644,6 +644,34 @@ impl LifecycleValidateIoSnapshotV1 {
 }
 
 impl LifecyclePlannerIoFixture {
+    /// Execute one locked-candidate lookup through the real durable store and
+    /// settle its service-side acquisition state synchronously.
+    pub(in crate::sumeragi) fn execute_one_locked_candidate_load(
+        &mut self,
+        services: &mut ProductionV2Services,
+    ) -> Option<EventTag> {
+        let command = self
+            .command_rx
+            .try_recv()
+            .expect("one locked-candidate load remains queued");
+        let V2IoCommand::LoadCandidate {
+            acquisition_id,
+            subject,
+        } = command
+        else {
+            panic!("expected the exact locked-candidate load command")
+        };
+        match load_candidate_body(&self.body_store, acquisition_id, subject) {
+            Ok(Some(loaded)) => services
+                .complete_locked_candidate_load(loaded)
+                .expect("complete the exact durable locked-candidate lookup"),
+            Ok(None) => services
+                .locked_candidate_load_unavailable(acquisition_id, subject)
+                .expect("record the exact unavailable locked-candidate lookup"),
+            Err(error) => panic!("load the exact locked candidate: {error}"),
+        }
+    }
+
     /// Capture the exact bounded queue, tracker, and completion ownership counts.
     pub(in crate::sumeragi) fn lifecycle_validate_io_snapshot(
         &self,

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from iroha_python import (
+    SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
     CompleteReplicationOrderInstruction,
     ExpireReplicationOrderInstruction,
     Instruction,
@@ -16,11 +17,10 @@ from iroha_python import (
     ProviderIngestCompletionAuthorityV1,
     ProviderIngestCompletionSignerPolicyV1,
     ProviderIngestFinalizedAnchorV1,
-    SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
     decode_replication_order_instruction,
 )
 
-_ORDER_ID = "ab" * 32
+_ORDER_ID = "2b" * 32
 _MUSUBI_ARCHIVE_ID = "cd" * 32
 _PROVIDER_ID = "10" * 32
 _PROVIDER_OWNER = (

@@ -19,20 +19,28 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
-    // protected pre-reset tree measured 945,975 bytes on the same pinned runner;
-    // The eager code-split closure is 998,331 bytes. Sumeragi's two existing
-    // async typed methods load their reviewed 71,905-byte incremental closure
-    // on demand. The unchanged 983 KiB eager ceiling leaves 8,261 bytes.
-    limitKb: 983,
-    reviewedEagerBytes: 998_331,
-    reviewedCombinedBytes: 1_070_236,
+    // protected pre-reset tree measured 945,975 bytes on the same pinned runner.
+    // SCCP, Parliament, and validation-fee proof validation now share one optional
+    // async boundary, leaving a 941,461-byte eager closure (-0.48%). The 930 KiB
+    // ceiling leaves 10,859 bytes while both lazy closures remain independently
+    // inventoried and bounded below.
+    limitKb: 930,
+    reviewedEagerBytes: 941_461,
+    reviewedCombinedBytes: 1_151_436,
     lazyChunks: Object.freeze([
+      Object.freeze({
+        specifier: "./toriiOptional.js",
+        entryPoint: join(ROOT, "src", "toriiOptional.js"),
+        edgeCount: 1,
+        reviewedBytes: 137_044,
+        limitKb: 134,
+      }),
       Object.freeze({
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "src", "sumeragiTyped.js"),
-        edgeCount: 2,
-        reviewedBytes: 71_905,
-        limitKb: 71,
+        edgeCount: 3,
+        reviewedBytes: 72_931,
+        limitKb: 72,
       }),
     ]),
   }),
@@ -44,8 +52,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The protected
     // pre-reset tree measured 290,498 bytes. Canonical ProofAttachment handling
-    // and shared validation/finalization corridors bring current V1 to 300,611
-    // bytes (+3.48%).
+    // and shared validation/finalization corridors bring current V1 to 298,553
+    // bytes (+2.77%).
     // The 297 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 297,
     forbidNodeInputs: true,
@@ -58,7 +66,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
     // pre-reset tree. Canonical ProofAttachment handling and the shared
-    // asset-definition builder bring current V1 to 384,814 bytes (+3.61%). The
+    // asset-definition builder bring current V1 to 385,674 bytes (+3.84%). The
     // 380 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
@@ -104,20 +112,20 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner. Its reviewed eager code-split closure is 480,214 bytes
-    // (+4.83%) after shared validation paths are interned. The unchanged 469 KiB
-    // eager ceiling leaves 42 bytes. The typed Sumeragi parser and deployment
+    // same pinned runner. Its reviewed eager code-split closure is 477,639 bytes
+    // (+4.27%) after shared validation paths are interned. The unchanged 469 KiB
+    // eager ceiling leaves 2,617 bytes. The typed Sumeragi parser and deployment
     // submit continuation are audited below as non-overlapping lazy closures.
     limitKb: 469,
-    reviewedEagerBytes: 480_214,
-    reviewedCombinedBytes: 561_634,
+    reviewedEagerBytes: 477_639,
+    reviewedCombinedBytes: 560_508,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "dist", "sumeragiTyped.js"),
         edgeCount: 2,
-        reviewedBytes: 72_243,
-        limitKb: 71,
+        reviewedBytes: 73_692,
+        limitKb: 72,
       }),
       Object.freeze({
         specifier: "./smartContractDeploymentSubmit.js",

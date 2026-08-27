@@ -424,6 +424,52 @@ impl PreparedPendingKuraLaneRecoveryV1 {
 }
 
 impl PendingKuraActivatedProductionLifecycleV1 {
+    fn locally_ready_for_finalized_rollover(&mut self) -> bool {
+        self.launched.executor.ready_to_finish()
+            && self.launched.pending_kura_apply_replay.is_none()
+            && self.launched.recovered_local_proposal_attempt.is_none()
+            && self
+                .launched
+                .executor
+                .pending_kura_apply_recovery_evidence()
+                .is_some_and(|evidence| {
+                    evidence.stage()
+                        == crate::sumeragi::v2_effects::PendingKuraApplyRecoveryStage::Completed
+                })
+            && self.launched.pending_lifecycle_completion.is_none()
+            && self.launched.pending_ingress_capacity.is_none()
+            && self.launched.completion_observer_activation.is_none()
+            && self
+                .launched
+                .services
+                .matches_installed_pending_kura_tip(self.installed.expected())
+            && self
+                .launched
+                .services
+                .matches_lifecycle_lane_work(&self.lane_work)
+            && self
+                .launched
+                .owner
+                .registry
+                .registry_mut()
+                .exactly_covers_finalization_work(&self.launched.owner.coordinator)
+    }
+
+    /// Return whether the interrupted-tip executor and lifecycle owner can
+    /// cross finalized rollover without abandoning exact output.
+    pub(in crate::sumeragi) fn ready_for_finalized_rollover(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> Result<bool, ProductionLifecycleFinalizationErrorV1> {
+        if !self.locally_ready_for_finalized_rollover() {
+            return Ok(false);
+        }
+        self.launched
+            .verify_published_store_marker_finalization_census()
+            .map_err(ProductionLifecycleFinalizationErrorV1::StoreMarkerCensus)?;
+        Ok(true)
+    }
+
     /// Borrow only the exact executor/service pair for decided-lane recovery.
     #[allow(dead_code, clippy::type_complexity)]
     pub(in crate::sumeragi) fn with_runner_runtime<R>(
@@ -440,6 +486,22 @@ impl PendingKuraActivatedProductionLifecycleV1 {
             &mut self.launched.services,
             &mut self.lane_work,
         )
+    }
+
+    /// Close new physical ingress while retaining this interrupted-tip
+    /// lifecycle for a finite terminal-recovery drain before rollover.
+    pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
+        &self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        receiver: &Arc<FairV2Ingress>,
+    ) -> Result<(), crate::sumeragi::v2_runner::V2RunnerError> {
+        self.runner_activation.close_ingress(receiver)?;
+        if !Arc::ptr_eq(receiver, &self.launched.leader_wire_ingress_binding.ingress) {
+            return Err(
+                crate::sumeragi::v2_runner::V2RunnerError::LifecycleActivationIngressMismatch,
+            );
+        }
+        Ok(())
     }
 
     /// Settle at most one lifecycle-owned Certified-Serve completion without
@@ -514,35 +576,7 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         (FinalizedProductionLifecycleRolloverV1, V2LaneWorkAdapter),
         ProductionLifecycleFinalizationErrorV1,
     > {
-        if !self.launched.executor.ready_to_finish()
-            || self.launched.pending_kura_apply_replay.is_some()
-            || self.launched.recovered_local_proposal_attempt.is_some()
-            || self
-                .launched
-                .executor
-                .pending_kura_apply_recovery_evidence()
-                .is_none_or(|evidence| {
-                    evidence.stage()
-                        != crate::sumeragi::v2_effects::PendingKuraApplyRecoveryStage::Completed
-                })
-            || self.launched.pending_lifecycle_completion.is_some()
-            || self.launched.pending_ingress_capacity.is_some()
-            || self.launched.completion_observer_activation.is_some()
-            || !self
-                .launched
-                .services
-                .matches_installed_pending_kura_tip(self.installed.expected())
-            || !self
-                .launched
-                .services
-                .matches_lifecycle_lane_work(&self.lane_work)
-            || !self
-                .launched
-                .owner
-                .registry
-                .registry_mut()
-                .exactly_covers_finalization_work(&self.launched.owner.coordinator)
-        {
+        if !self.locally_ready_for_finalized_rollover() {
             return Err(ProductionLifecycleFinalizationErrorV1::NotReady);
         }
         self.launched

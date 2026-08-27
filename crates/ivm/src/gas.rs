@@ -8,14 +8,18 @@
 //!
 //! Scope
 //! - Includes extended vector/parallel and cryptographic instructions.
-//! - Vector length scaling and HTM retry penalties are supported; vector costs
-//!   scale from the two-lane baseline by the active logical vector length.
+//! - Vector costs scale from the two-lane baseline by the deterministic logical
+//!   vector length.
 use crate::instruction::wide;
 use iroha_crypto::Hash;
 /// Gas accounting treats two lanes as the baseline for vector operations.
 pub const VECTOR_BASE_LANES: usize = 2;
 /// Default byte multiplier for syscall host-work gas families.
 pub const SYSCALL_GAS_PER_BYTE: u64 = 1;
+/// Version of the V1 direct signature-opcode byte gas formula.
+pub const SIGNATURE_OPCODE_GAS_FORMULA_VERSION_V1: u64 = 1;
+/// Gas charged for each payload byte consumed by a direct signature opcode.
+pub const SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE: u64 = SYSCALL_GAS_PER_BYTE;
 /// Fixed gas for `transfer_v1` FastPQ batch begin/end scope operations.
 pub const G_FASTPQ_BATCH: u64 = 16;
 /// Fixed gas for governance/admin contract-management bridge syscalls.
@@ -98,6 +102,21 @@ pub const fn ed25519_batch_extra_gas(payload_bytes: u64, entries: u64) -> u64 {
     ED25519_BATCH_GAS_PER_PAYLOAD_BYTE
         .saturating_mul(payload_bytes)
         .saturating_add(ED25519_BATCH_GAS_PER_ENTRY.saturating_mul(entries))
+}
+/// Compute the byte-linear surcharge for one direct signature opcode.
+///
+/// Aliased operands are charged independently because the opcode validates
+/// each message, signature, and public-key TLV independently.
+#[must_use]
+pub fn signature_opcode_extra_gas(
+    message_bytes: u64,
+    signature_bytes: u64,
+    public_key_bytes: u64,
+) -> Option<u64> {
+    message_bytes
+        .checked_add(signature_bytes)?
+        .checked_add(public_key_bytes)?
+        .checked_mul(SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE)
 }
 /// Fixed durable-state syscall charge before path, value, scan, or response bytes.
 pub const STATE_QUERY_GAS_BASE: u64 = 16;
@@ -555,7 +574,6 @@ pub(crate) fn cost_from_parts(
     base_cost: Option<u64>,
     wide_op: u8,
     vector_len: usize,
-    htm_retries: u32,
 ) -> Option<u64> {
     let mut cost = base_cost?;
     if matches!(
@@ -569,13 +587,12 @@ pub(crate) fn cost_from_parts(
     ) {
         cost = scaled_vector_cost(cost, vector_len);
     }
-    Some(cost.saturating_mul(htm_retries as u64 + 1))
+    Some(cost)
 }
-/// Compute gas cost considering vector length and HTM retries.
-#[allow(dead_code)]
-pub fn cost_of_with_params(instr: u32, vector_len: usize, htm_retries: u32) -> Option<u64> {
+/// Compute gas cost using the supplied deterministic logical vector length.
+pub fn cost_of_with_vector_len(instr: u32, vector_len: usize) -> Option<u64> {
     let wide_op = wide::opcode(instr);
-    cost_from_parts(cost_of(instr), wide_op, vector_len, htm_retries)
+    cost_from_parts(cost_of(instr), wide_op, vector_len)
 }
 const GAS_SCHEDULE_DOMAIN: &str = "iroha.ivm.gas-schedule.v3";
 const GAS_SCHEDULE_DESCRIPTOR_VERSION: u16 = 3;
@@ -613,6 +630,14 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
     let values = [
         ("vector_base_lanes", VECTOR_BASE_LANES as u64),
         ("syscall_per_byte", SYSCALL_GAS_PER_BYTE),
+        (
+            "signature_opcode_formula_version",
+            SIGNATURE_OPCODE_GAS_FORMULA_VERSION_V1,
+        ),
+        (
+            "signature_opcode_per_payload_byte",
+            SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE,
+        ),
         ("fastpq_batch_base", G_FASTPQ_BATCH),
         ("contract_admin_base", G_CONTRACT_ADMIN),
         ("call_contract_base", G_CALL_CONTRACT),
@@ -1164,6 +1189,36 @@ mod tests {
         );
     }
     #[test]
+    fn schedule_hash_binds_the_complete_live_signature_opcode_formula() {
+        let expected = [
+            (
+                "signature_opcode_formula_version",
+                SIGNATURE_OPCODE_GAS_FORMULA_VERSION_V1,
+            ),
+            (
+                "signature_opcode_per_payload_byte",
+                SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE,
+            ),
+        ];
+        let canonical = canonical_gas_schedule_descriptor();
+        for (name, value) in expected {
+            let matches = canonical
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, parameter)| parameter.name == name)
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1, "descriptor coverage for {name}");
+            let (index, parameter) = matches[0];
+            assert_eq!(parameter.value, value, "descriptor value for {name}");
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.parameters[index].value = changed.parameters[index].value.wrapping_add(1);
+            });
+        }
+        assert_eq!(signature_opcode_extra_gas(11, 64, 32), Some(107));
+        assert_eq!(signature_opcode_extra_gas(u64::MAX, 1, 0), None);
+    }
+    #[test]
     fn schedule_hash_binds_the_complete_live_vrf_formula() {
         let decode_limits = ivm_abi::host_payload::VRF_VERIFY_DECODE_LIMITS_V1;
         let expected = [
@@ -1433,13 +1488,11 @@ mod tests {
         for &op in SCHEDULE_OPCODES {
             let instr = u32::from(op) << 24;
             for vector_len in [0, 1, 2, 4, 16] {
-                for htm_retries in [0, 1, 3] {
-                    assert_eq!(
-                        cost_from_parts(cost_of(instr), op, vector_len, htm_retries),
-                        cost_of_with_params(instr, vector_len, htm_retries),
-                        "op=0x{op:02x} vector_len={vector_len} htm_retries={htm_retries}",
-                    );
-                }
+                assert_eq!(
+                    cost_from_parts(cost_of(instr), op, vector_len),
+                    cost_of_with_vector_len(instr, vector_len),
+                    "op=0x{op:02x} vector_len={vector_len}",
+                );
             }
         }
     }

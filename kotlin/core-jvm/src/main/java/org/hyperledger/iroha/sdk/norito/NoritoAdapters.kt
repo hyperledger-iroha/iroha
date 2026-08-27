@@ -47,18 +47,11 @@ object NoritoAdapters {
     fun <T> option(inner: TypeAdapter<T>): TypeAdapter<Optional<T>> = OptionAdapter(inner)
 
     @JvmStatic
-    fun <T, E> result(ok: TypeAdapter<T>, err: TypeAdapter<E>): TypeAdapter<Result<T, E>> =
-        ResultAdapter(ok, err)
-
-    @JvmStatic
     fun <T> sequence(element: TypeAdapter<T>): TypeAdapter<List<T>> = SequenceAdapter(element)
 
     @JvmStatic
     fun <K, V> map(key: TypeAdapter<K>, value: TypeAdapter<V>): TypeAdapter<Map<K, V>> =
         MapAdapter(key, value)
-
-    @JvmStatic
-    fun tuple(elements: List<TypeAdapter<*>>): TypeAdapter<List<Any>> = TupleAdapter(elements)
 
     @JvmStatic
     fun <T> field(name: String, adapter: TypeAdapter<T>): StructField<T> =
@@ -310,55 +303,6 @@ object NoritoAdapters {
             val value = inner.decode(child)
             require(child.remaining() == 0) { "Trailing bytes after Option payload" }
             return Optional.of(value as Any) as Optional<T>
-        }
-
-        override fun isSelfDelimiting(): Boolean = true
-    }
-
-    private class ResultAdapter<T, E>(
-        private val ok: TypeAdapter<T>,
-        private val err: TypeAdapter<E>,
-    ) : TypeAdapter<Result<T, E>> {
-
-        override fun encode(encoder: NoritoEncoder, value: Result<T, E>) {
-            when (value) {
-                is Result.Ok -> {
-                    encoder.writeByte(0)
-                    val child = encoder.childEncoder()
-                    ok.encode(child, value.value)
-                    val payload = child.toByteArray()
-                    val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
-                    encoder.writeLength(payload.size.toLong(), compact)
-                    encoder.writeBytes(payload)
-                }
-                is Result.Err -> {
-                    encoder.writeByte(1)
-                    val child = encoder.childEncoder()
-                    err.encode(child, value.error)
-                    val payload = child.toByteArray()
-                    val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
-                    encoder.writeLength(payload.size.toLong(), compact)
-                    encoder.writeBytes(payload)
-                }
-            }
-        }
-
-        override fun decode(decoder: NoritoDecoder): Result<T, E> {
-            val tag = decoder.readByte()
-            require(tag == 0 || tag == 1) { "Invalid Result tag: $tag" }
-            val length = decoder.readLength(decoder.compactLenActive())
-            require(length <= Int.MAX_VALUE) { "Result payload too large" }
-            val payload = decoder.readBytes(length.toInt())
-            val child = NoritoDecoder(payload, decoder.flags)
-            val value = if (tag == 0) ok.decode(child) else err.decode(child)
-            require(child.remaining() == 0) { "Trailing bytes after Result payload" }
-            return if (tag == 0) {
-                @Suppress("UNCHECKED_CAST")
-                Result.Ok(value as T)
-            } else {
-                @Suppress("UNCHECKED_CAST")
-                Result.Err(value as E)
-            }
         }
 
         override fun isSelfDelimiting(): Boolean = true
@@ -674,24 +618,4 @@ object NoritoAdapters {
             key.isSelfDelimiting() && value.isSelfDelimiting()
     }
 
-    private class TupleAdapter(elements: List<TypeAdapter<*>>) : TypeAdapter<List<Any>> {
-        private val elements: List<TypeAdapter<*>> = elements.toList()
-
-        override fun encode(encoder: NoritoEncoder, value: List<Any>) {
-            require(value.size == elements.size) { "Tuple size mismatch" }
-            for (i in elements.indices) {
-                encodeAdapter(elements[i], encoder, value[i])
-            }
-        }
-
-        override fun decode(decoder: NoritoDecoder): List<Any> {
-            val values = ArrayList<Any>(elements.size)
-            for (element in elements) {
-                values.add(decodeAdapter(element, decoder)!!)
-            }
-            return values
-        }
-
-        override fun isSelfDelimiting(): Boolean = elements.all { it.isSelfDelimiting() }
-    }
 }

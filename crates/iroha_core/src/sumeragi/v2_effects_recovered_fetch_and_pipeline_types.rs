@@ -749,24 +749,49 @@ impl LifecycleDecisionApplyExecutorFinalityPermitV1 {
 #[must_use = "the executor Apply-dispatch transition must commit with its worker reservation"]
 pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyExecutorDispatchV1<'executor> {
     pending: Option<PendingKuraApplyDispatchTransitionV1<'executor>>,
+    successor_outputs: Option<PendingLifecycleDecisionApplySuccessorOutputsTransitionV1<'executor>>,
 }
 struct PendingKuraApplyDispatchTransitionV1<'executor> {
     evidence: &'executor mut PendingKuraApplyRecoveryEvidence,
     last_result: &'executor mut Option<PendingTipRecoveryAttemptResult>,
 }
+struct PendingLifecycleDecisionApplySuccessorOutputsTransitionV1<'executor> {
+    installed: &'executor mut Option<AttestedLifecycleDecisionApplySuccessorOutputsV1>,
+    retained_effect_batch: &'executor mut Option<RetainedEffectBatch>,
+    attestation: AttestedLifecycleDecisionApplySuccessorOutputsV1,
+}
 impl PreparedLifecycleDecisionApplyExecutorDispatchV1<'_> {
     /// Advance exact pending-Kura evidence after the worker command is installed.
     pub(in crate::sumeragi) fn commit_after_worker_dispatch(self) {
-        let Some(pending) = self.pending else {
-            return;
-        };
-        assert_eq!(
-            pending.evidence.stage,
-            PendingKuraApplyRecoveryStage::Apply,
-            "preflighted pending-Kura Apply remains at its dispatch boundary"
-        );
-        pending.evidence.stage = PendingKuraApplyRecoveryStage::ApplicationDispatched;
-        *pending.last_result = Some(PendingTipRecoveryAttemptResult::Advanced);
+        if let Some(successor_outputs) = self.successor_outputs {
+            assert!(
+                successor_outputs.installed.is_none(),
+                "preflighted post-Apply output proof retains an empty install slot"
+            );
+            let retained = successor_outputs
+                .retained_effect_batch
+                .take()
+                .expect("preflighted post-Apply output proof retains its exact Apply suffix");
+            assert!(
+                retained.effects.len() == 1
+                    && retained.effects.front().is_some_and(|owned| {
+                        successor_outputs
+                            .attestation
+                            .exactly_matches_retransmit_apply(&owned.effect)
+                    }),
+                "preflighted post-Apply output proof retains the same exact Apply suffix"
+            );
+            *successor_outputs.installed = Some(successor_outputs.attestation);
+        }
+        if let Some(pending) = self.pending {
+            assert_eq!(
+                pending.evidence.stage,
+                PendingKuraApplyRecoveryStage::Apply,
+                "preflighted pending-Kura Apply remains at its dispatch boundary"
+            );
+            pending.evidence.stage = PendingKuraApplyRecoveryStage::ApplicationDispatched;
+            *pending.last_result = Some(PendingTipRecoveryAttemptResult::Advanced);
+        }
     }
 }
 /// Executor-authenticated global application-mode debt for lifecycle planning.
@@ -899,9 +924,12 @@ impl LiveLifecycleValidateSuccessorOwnerV1 {
         authority: &LiveLifecycleDecisionApplyReconciliationAuthorityV1,
     ) -> bool {
         let certificate = authority.certificate();
+        let validate_predecessor_ordinal = authority.validate_predecessor_ordinal();
         self.apply_is_authorized
             && self.dispatch_key.owner() == authority.dispatch_key().owner()
-            && self.dispatch_key.lifecycle_ordinal() < authority.dispatch_key().lifecycle_ordinal()
+            && validate_predecessor_ordinal != 0
+            && self.dispatch_key.lifecycle_ordinal() == validate_predecessor_ordinal
+            && validate_predecessor_ordinal < authority.dispatch_key().lifecycle_ordinal()
             && self.round == certificate.proposal_round
             && self.subject == authority.subject()
             && certificate.subject == self.subject

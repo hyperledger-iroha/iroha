@@ -632,6 +632,14 @@ fn rekey_account_id(
             ));
         }
     }
+    // A controller change ends the lifecycle of the old controller-derived AccountId. Remove
+    // permissions whose payload targets that identifier before it becomes absent; otherwise an
+    // aliasless rekey followed by re-registration of the old ID would reactivate stale direct or
+    // role-derived authority against the new account lifecycle.
+    crate::smartcontracts::isi::domain::isi::remove_account_associated_permissions(
+        state_transaction,
+        old_account,
+    );
     state_transaction
         .world
         .accounts
@@ -4604,6 +4612,112 @@ mod tests {
             "new canonical account should be present after rekey"
         );
         let _ = domain_id;
+    }
+    #[test]
+    fn aliasless_rekey_removes_inbound_permissions_before_old_account_id_reuse() {
+        tx!(
+            state,
+            block,
+            tx,
+            World::new(),
+            "multisig-rekey-permission-lifecycle"
+        );
+        let domain_id = DomainId::try_new("rekey-permissions", "universal").expect("domain id");
+        let old_account = new_account_id(&checked_keypair());
+        let new_account = new_account_id(&checked_keypair());
+        let direct_holder = new_account_id(&checked_keypair());
+        let role_holder = new_account_id(&checked_keypair());
+        domain!(tx, old_account, domain_id, "register rekey domain");
+        for (account, label) in [
+            (&old_account, "register old account"),
+            (&direct_holder, "register direct holder"),
+            (&role_holder, "register role holder"),
+        ] {
+            register_account_in_domain(&mut tx, &old_account, &domain_id, account, label);
+        }
+        let definition = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "cash".parse().expect("asset name"),
+        );
+        let scoped_permissions = [
+            Permission::from(
+                iroha_executor_data_model::permission::account::CanReplaceAccountController {
+                    account: old_account.clone(),
+                },
+            ),
+            Permission::from(
+                iroha_executor_data_model::permission::asset::CanSetAssetTransferAvailability {
+                    account: old_account.clone(),
+                    asset_definition: definition.clone(),
+                },
+            ),
+            Permission::from(
+                iroha_executor_data_model::permission::asset::CanSetAssetHoldingLimit {
+                    account: old_account.clone(),
+                    asset_definition: definition,
+                },
+            ),
+        ];
+        let unrelated: Permission =
+            iroha_executor_data_model::permission::parameter::CanSetParameters.into();
+        for permission in &scoped_permissions {
+            tx.world
+                .add_account_permission(&direct_holder, permission.clone());
+        }
+        tx.world
+            .add_account_permission(&direct_holder, unrelated.clone());
+        let role_id: RoleId = "REKEY_INBOUND_PERMISSIONS".parse().expect("role id");
+        let mut role =
+            Role::new(role_id.clone(), role_holder.clone()).add_permission(unrelated.clone());
+        for permission in &scoped_permissions {
+            role = role.add_permission(permission.clone());
+        }
+        Register::role(role)
+            .execute(&old_account, &mut tx)
+            .expect("register inbound-permission role");
+
+        rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
+            .expect("aliasless account rekey");
+
+        let direct = tx
+            .world
+            .account_permissions
+            .get(&direct_holder)
+            .expect("unrelated direct permission remains");
+        assert!(direct.contains(&unrelated));
+        assert!(
+            scoped_permissions
+                .iter()
+                .all(|permission| !direct.contains(permission)),
+            "rekey must remove every direct permission targeting the old account ID",
+        );
+        let role = tx.world.roles.get(&role_id).expect("role remains");
+        assert!(
+            role.permissions()
+                .any(|permission| permission == &unrelated)
+        );
+        assert!(role.permission_epochs().contains_key(&unrelated));
+        assert!(
+            scoped_permissions.iter().all(|permission| {
+                !role.permissions().any(|candidate| candidate == permission)
+                    && !role.permission_epochs().contains_key(permission)
+            }),
+            "rekey must remove role permissions and epochs targeting the old account ID",
+        );
+
+        Register::account(Account::new(old_account.clone()))
+            .execute(&new_account, &mut tx)
+            .expect("aliasless predecessor ID may be registered as a fresh lifecycle");
+        assert!(tx.world.account(&old_account).is_ok());
+        assert!(
+            tx.world
+                .account_permissions
+                .get(&direct_holder)
+                .is_none_or(|permissions| scoped_permissions
+                    .iter()
+                    .all(|permission| !permissions.contains(permission))),
+            "old-ID reuse must not reactivate stale delegated authority",
+        );
     }
     #[test]
     fn rekey_settlement_receipt_updates_fx_detail_accounts_with_legs() {

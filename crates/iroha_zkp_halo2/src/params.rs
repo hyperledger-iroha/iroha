@@ -34,9 +34,9 @@ pub struct Params<B: IpaBackend> {
     fingerprint: OnceCell<[u8; 32]>,
 }
 impl<B: IpaBackend> Params<B> {
-    /// Creates parameters for vectors of length `n` (must be a non-zero power of two).
+    /// Creates parameters for vectors of length `n` (must be a power of two greater than one).
     pub fn new(n: usize) -> Result<Self, Error> {
-        if n == 0 || (n & (n - 1)) != 0 {
+        if n < 2 || (n & (n - 1)) != 0 {
             return Err(Error::InvalidN(n));
         }
         let mut g = Vec::with_capacity(n);
@@ -117,7 +117,7 @@ impl<B: IpaBackend> Params<B> {
             });
         }
         let n = w.n as usize;
-        if n == 0 || (n & (n - 1)) != 0 {
+        if n < 2 || (n & (n - 1)) != 0 {
             return Err(Error::InvalidN(n));
         }
         Ok(n)

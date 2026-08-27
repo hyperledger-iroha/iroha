@@ -50,7 +50,7 @@ impl Kura {
             // Otherwise the crash temp is counted once in physical usage and
             // again as projected headroom, so a tight-cap startup can refuse
             // the very promotion needed to make retirement drainable.
-            let before_recovery = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
+            let before_recovery = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
             let recovery_accounting = self.begin_total_disk_usage_mutation();
             if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, kind) {
                 return Err(Self::invalid_lane_artifact_error(
@@ -58,7 +58,7 @@ impl Kura {
                     format!("{kind} terminal-frontier recovery failed"),
                 ));
             }
-            let before = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
+            let before = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
             self.update_disk_usage_delta(before_recovery, before);
             recovery_accounting.finish();
             // Rewrites publish one data/index temp pair at a time. The temp
@@ -113,7 +113,7 @@ impl Kura {
                     format!("{kind} terminal-frontier compaction failed"),
                 ));
             }
-            let after = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
+            let after = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
             self.update_disk_usage_delta(before, after);
             accounting_mutation.finish();
         }

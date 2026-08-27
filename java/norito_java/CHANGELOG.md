@@ -1,6 +1,13 @@
 # Changelog
 
 ## v0.1.0 (unreleased)
+- Removed unused structural-schema hashing, tuple/result adapter factories, identity transparent
+  wrappers, and raw-string compression profiles. Struct encoding is now explicit and Map-backed
+  instead of discovering object properties through reflection. `NoritoCodec.tryDecode` retains its
+  focused `Result` outcome type.
+- Made the pinned `zstd-jni` backend a direct runtime dependency and removed the optional discovery
+  branch and its test double. Direct `javac`/`jdeps` SDK gates now consume the same Gradle-resolved
+  runtime classpath.
 - Revalidated parity after the Rust Norito accelerator-output hardening now
   rejects malformed Stage-1 structural tapes and invalid GPU zstd output
   lengths before consuming helper results; Java bindings required no
@@ -88,8 +95,7 @@
 - Initial Java Norito codec (JDK 21-ready)
 - Header encode/decode, CRC64-XZ, type adapters, packed sequences/structs
 - CLI inspector (`NoritoDump`) and assertion-based test harness
-- Adds optional Zstandard compression (when `com.github.luben:zstd-jni` is on the classpath)
-- Implements structural schema hashing matching Rust's canonical JSON SHA-256 derivation
+- Adds Zstandard compression through the pinned `com.github.luben:zstd-jni` dependency
 - Provides columnar helpers and adaptive AoS layout for `(u64, String, boolean)` rows
 - Columnar helpers cover `(u64, String, boolean)`, `(u64, bytes)` (including optional bytes),
   and `(u64, enum(Name|Code), boolean)` rows.

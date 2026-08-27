@@ -79,7 +79,7 @@ contract TairaXorSccpBridge {
     bytes32 public immutable routeConfigHash;
     bytes32 public immutable destinationBindingHash;
 
-    uint64 public transferNonce;
+    mapping(address => uint64) public transferNonces;
     mapping(bytes32 => bool) public usedSourceMessages;
     mapping(bytes32 => bool) public usedDestinationMessages;
     uint256 private reentrancyState = 1;
@@ -284,8 +284,9 @@ contract TairaXorSccpBridge {
             "Amount is not aligned to Taira scale");
         uint256 tairaAmount = tokenAmount / TAIRA_TO_TOKEN_SCALE;
         require(tairaAmount != 0 && tairaAmount <= MAX_U128, "Amount exceeds SCCP u128");
-        require(transferNonce != type(uint64).max, "Transfer nonce exhausted");
-        require(expectedNonce == transferNonce, "Transfer nonce mismatch");
+        uint64 currentNonce = transferNonces[msg.sender];
+        require(currentNonce != type(uint64).max, "Transfer nonce exhausted");
+        require(expectedNonce == currentNonce, "Transfer nonce mismatch");
         require(_codeHash(address(token)) == tokenCodeHash, "Token code changed");
         uint64 nonce = expectedNonce;
         bytes memory sender = abi.encodePacked(bytes1(0x41), msg.sender);
@@ -314,7 +315,7 @@ contract TairaXorSccpBridge {
         );
         require(!usedSourceMessages[messageId], "Source message already used");
 
-        transferNonce = nonce + 1;
+        transferNonces[msg.sender] = nonce + 1;
         usedSourceMessages[messageId] = true;
         require(token.burnFrom(msg.sender, tokenAmount), "Token burn failed");
         emit SccpTransfer(

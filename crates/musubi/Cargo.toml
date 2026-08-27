@@ -24,7 +24,7 @@ eyre = { workspace = true }
 hex = { workspace = true }
 iroha = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
-ivm = { workspace = true, default-features = false, features = ["runtime"] }
+ivm = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_manifest = { workspace = true }

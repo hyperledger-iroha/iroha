@@ -6839,11 +6839,11 @@ redistributable schemas, and official trust/revocation bundles.
   relay capability advertisement and runtime GREASE append now check TLV payload
   lengths before writing the two-byte length field, and relay config validation
   rejects configured GREASE payloads that cannot fit that wire field;
-  relay
-  replay-filter bit counts are now bounded before power-of-two rounding, and
-  direct replay-filter construction plus `DoSControls::new` now propagate
-  oversized filter shapes as `ConfigError::ReplayFilter` instead of reaching
-  overflow-prone arithmetic; relay incentive uptime/scheduled-uptime and
+  relay descriptor replay filtering is retired because its input is relay-static;
+  `pow.replay_filter.enabled = true` now fails configuration explicitly while verified
+  credential replay remains in the bounded durable ticket/token stores; the same static
+  descriptor is no longer accepted as a pre-authentication quota key, and nonzero
+  `per_descriptor_burst` values fail configuration; relay incentive uptime/scheduled-uptime and
   verified-bandwidth epoch accumulators now saturate on overflow instead of
   panicking on extreme telemetry or proof totals; SoraNet relay admission now
   uses one static configured difficulty and rejects the retired `adaptive` key
@@ -9083,25 +9083,10 @@ redistributable schemas, and official trust/revocation bundles.
 
 ## Validation corridor
 
-- Carry the Sumeragi NPoS/permissioned QC and VRF hardening through the next
-  full workspace corridor.
-  - A 2026-05-05 workspace rerun exposed three remaining
-    `consensus_and_da` cases after the UAID replay/checkpoint fixes:
-    stale evidence persistence, NPoS baseline timing, and late VRF reveal
-    penalty recovery. The stale-evidence and NPoS performance focused reruns
-    are green after the Torii horizon filter and baseline budget update. The
-    late-reveal path now has code-level fixes for VRF vote-queue routing and
-    deferring committed-block catch-up until after VRF metadata handling,
-    epoch-record hydration before reveal validation, stale pending-seal
-    retention, and external Torii VRF metadata gossip. The focused core units
-    for those paths are green. The four-peer NPoS/DA late-reveal persistence
-    gate was rerun on 2026-06-10 after the DA/RBC cleanup hardening and passed:
-    `sumeragi_randomness::npos_late_vrf_reveal_clears_penalty_and_preserves_seed`
-    advanced past the earlier height-4 READY/DELIVER stall, recorded the late
-    reveal, and finalized the epoch with clean peer shutdown.
-  - Focused commit, block-sync, VRF, QC-validation, roster-selection, Torii VRF
-    OpenAPI/parser, and data-model consensus roundtrip tests are green as of
-    2026-05-02 with `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-verify`.
+- Carry the first-release Sumeragi NPoS/permissioned QC, signed RS16
+  availability, exact evidence, and global threshold-beacon paths through the
+  next full workspace corridor. Pre-release commit/reveal VRF tests and Torii
+  surfaces are not release evidence and must not be restored.
   - Additional Sumeragi/DA adversarial coverage is green as of 2026-05-02 with
     `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor` for the debug
     witness-root unit, witness-corruption recovery, chunk-drop recovery,
@@ -9705,13 +9690,13 @@ redistributable schemas, and official trust/revocation bundles.
 ## Consensus and Izanami
 
 - Maintain Izanami communication vulnerability publication evidence.
-  - The exact-injector 75% packet-loss 2026-04-26 paper-shaped run at `dist/izanami-exact-packet-paper-20260426` is green for both permissioned and NPoS Sumeragi and is recorded in `status.md`; keep this as the current full-matrix resilience baseline.
-  - Native in-process P2P packet-drop injection is wired into `packet-loss` and leader-targeted `leader-isolation`; the matrix runner now supports the paper's 133s-266s timed fault window plus configurable packet-loss sweeps (`75%` quick, `25%/50%/75%` paper). The explicit 25%/50%/75% paper packet-loss sweep at `dist/izanami-packet-sweep-paper-20260427-loss-only` is green for both permissioned and NPoS Sumeragi and is recorded in `status.md`.
-  - The 2026-04-27 quick matrix at `dist/izanami-quick-both-20260427` is green for all ten permissioned/NPoS rows, and the post-ingress-hardening leader-isolation rerun at `dist/izanami-quick-leader-retry-20260427` keeps both modes resilient with zero acceptance markers.
+  - The exact-injector 75% packet-loss run at `dist/izanami-exact-packet-paper-20260426` and the 25%/50%/75% sweep at `dist/izanami-packet-sweep-paper-20260427-loss-only` are archived pre-release evidence recorded in `status.md`; they used the retired production-wide P2P packet-drop controls and are not a current release baseline.
+  - First-release Izanami has no executable `packet-loss` profile. The matrix preserves the paper's Loss column as a reference-only `not-run` row, while `leader-isolation` follows Sumeragi leader telemetry and applies the existing network-partition approximation.
+  - The 2026-04-27 quick matrix at `dist/izanami-quick-both-20260427` is historical pre-hard-cut evidence. The post-ingress-hardening leader-isolation rerun at `dist/izanami-quick-leader-retry-20260427` also predates the switch from packet-drop injection to the network-partition approximation.
   - The result-strengthened matrix and sweep tooling is implemented as of 2026-04-28, including bounded shutdown-drain accounting, latency/recovery evidence, NPoS repair-coverage telemetry, generated `paper-style-final-report.md`, and separate `stress-400` / `stress-800` profiles.
-  - Seed-7 real stress evidence at `dist/izanami-stress-400-seed7-20260428` and `dist/izanami-stress-800-seed7-20260428` is refreshed and green as of 2026-04-29: both `stress-400` and `stress-800` report 14/14 resilient rows across permissioned and NPoS Sumeragi, with no real `confirmation_queue_dropped` pressure in the fresh artifacts. This is recorded in `status.md`.
-  - Run the full paper/stress seed sweep with fresh binaries when validation budget allows: `scripts/run_izanami_communication_vulnerability_sweep.sh --profiles paper,stress-400,stress-800 --sumeragi-mode both --seed-list 7,11,13,17,19,23,29,31,37,41`. Paper rows must remain `resilient`; stress rows should stay reported separately as margin evidence across broader seeds.
-  - Keep any future publication reruns split with `--sumeragi-mode both` so permissioned and NPoS Sumeragi classifications are not collapsed, and preserve per-loss packet-loss subrows when comparing against the paper's Algorand/Aptos/Avalanche/Redbelly/Solana baseline.
+  - Archived seed-7 stress evidence at `dist/izanami-stress-400-seed7-20260428` and `dist/izanami-stress-800-seed7-20260428` was green as of 2026-04-29: both profiles reported 14/14 resilient pre-hard-cut rows across permissioned and NPoS Sumeragi, with no `confirmation_queue_dropped` pressure. This remains historical evidence in `status.md`, not the current scenario count.
+  - Run the full paper/stress seed sweep with fresh binaries when validation budget allows: `scripts/run_izanami_communication_vulnerability_sweep.sh --profiles paper,stress-400,stress-800 --sumeragi-mode both --seed-list 7,11,13,17,19,23,29,31,37,41`. Executable paper rows must remain `resilient`; stress rows should stay reported separately as margin evidence across broader seeds.
+  - Keep future publication reruns split with `--sumeragi-mode both` so permissioned and NPoS Sumeragi classifications are not collapsed. Preserve the paper's packet-loss classifications as reference data, but do not emit executable or per-loss Iroha subrows.
 - Recalibrate the Izanami stable-profile acceptance envelope for sustained workload targets.
   - The fresh 4-peer permissioned `1 TPS` / `300s` / `100 blocks` gate at `dist/izanami-stable-gate-20260427-target100` is green and recorded in `status.md`.
   - The matching `200`-block diagnostic at `dist/izanami-stable-gate-20260427-rerun` crossed the prior stall region and reached strict/quorum height `107` with zero submission or confirmation failures, but missed the target because the stable workload drained before `200` blocks.

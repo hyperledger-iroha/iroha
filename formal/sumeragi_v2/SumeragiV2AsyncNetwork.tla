@@ -63,8 +63,10 @@ production-refinement premise rather than a theorem of this byte-abstract
 module.
 
 `AsyncNetworkItem.source` is the authenticated transport/relay hop.  A
-historical response separately carries the authenticated archive server, the
-exact signed-request hash, and one frozen certificate signer citation.  Every
+historical response separately carries the current authenticated archive
+responder and the exact signed-request hash.  The historical certificate
+authenticates the requested subject; it does not assign the responder's
+current peer identity a historical validator index.  Every
 fully authenticated certified response is charged to the aggregate untrusted
 physical ingress lane independently of that relay hop; all other traffic is
 charged to `item.source`.  The outer response remains the reducer candidate's
@@ -211,8 +213,11 @@ AsyncUntrustedSource == N
 
 \* `N` counts every configured authenticated peer, not only the current
 \* positive-power roster.  Archive servers consume those same finite source
-\* identities.  Only malformed or unattributed relay traffic may name the one
-\* aggregate untrusted signature owner.
+\* identities.  `AsyncArchiveServerIds` abstracts current authenticated
+\* `PeerId`s, even though the finite model reuses `ValidatorIds` for source
+\* geometry; membership therefore implies no historical certificate index.
+\* Only malformed or unattributed relay traffic may name the one aggregate
+\* untrusted signature owner.
 AsyncArchiveServerIds == ValidatorIds
 AsyncAuthenticatedDeliverySources == AsyncArchiveServerIds
 AsyncCertifiedResponseSignatureOwners ==
@@ -791,20 +796,14 @@ AsyncCommitCertificateRequestRegistrationIdentity(request) ==
    requester |-> request.source,
    height |-> request.envelope.height]
 
-AsyncCertifiedCitedResponder(request) ==
-  IF request.envelope.certificate.signers # {}
-  THEN CHOOSE signer \in request.envelope.certificate.signers: TRUE
-  ELSE request.envelope.requester
-
 AsyncCertifiedResponseEnvelope(
-    request, archiveServer, citedResponder, signatureOwner) ==
+    request, responder, signatureOwner) ==
   [recipient |-> request.envelope.requester,
    height |-> request.envelope.height,
    view |-> request.envelope.view,
    subject |-> request.envelope.subject,
    requestHash |-> AsyncCertifiedRequestHash(request),
-   archiveServer |-> archiveServer,
-   citedResponder |-> citedResponder,
+   responder |-> responder,
    signatureOwner |-> signatureOwner]
 
 AsyncCommitCertificateResponseEnvelope(request, qc) ==
@@ -831,7 +830,7 @@ AsyncUntrustedCertifiedResponseItem(recipient, nonce) ==
   IN AsyncNetworkItem(
        "CertifiedResponse", AsyncUntrustedSource,
        AsyncCertifiedResponseEnvelope(
-         request, recipient, recipient, AsyncUntrustedSource))
+         request, recipient, AsyncUntrustedSource))
 
 AsyncUntrustedTransportCompletionItem(kind, recipient, nonce) ==
   LET bodyEnvelope ==
@@ -867,11 +866,9 @@ AsyncNetworkItems ==
   \cup {AsyncNetworkItem(
            "CertifiedResponse", source,
            AsyncCertifiedResponseEnvelope(
-             request, archiveServer,
-             AsyncCertifiedCitedResponder(request),
-             archiveServer)):
+             request, responder, responder)):
           source \in AsyncIngressSources,
-          archiveServer \in AsyncArchiveServerIds,
+          responder \in AsyncArchiveServerIds,
           request \in AsyncCertifiedRequestItems}
   \cup {AsyncUntrustedCertifiedResponseItem(recipient, nonce):
           recipient \in ValidatorIds,
@@ -1131,8 +1128,7 @@ AsyncRouteNeutralCandidateItem(item) ==
                   requestHash |->
                     AsyncCandidateCertifiedRequestHashSemanticPayload(
                       item.envelope.requestHash),
-                  archiveServer |-> item.envelope.archiveServer,
-                  citedResponder |-> item.envelope.citedResponder,
+                  responder |-> item.envelope.responder,
                   signatureOwner |-> item.envelope.signatureOwner]
             [] item.kind = "CommitCertificateResponse" ->
                  [recipient |-> item.envelope.recipient,
@@ -1976,14 +1972,13 @@ AsyncReplyRequestItemTyped(item, kind) ==
 AsyncCertifiedResponseEnvelopeTyped(envelope) ==
   /\ DOMAIN envelope =
        {"recipient", "height", "view", "subject", "requestHash",
-        "archiveServer", "citedResponder", "signatureOwner"}
+        "responder", "signatureOwner"}
   /\ envelope.recipient \in ValidatorIds
   /\ envelope.height \in Heights
   /\ envelope.view \in Views
   /\ envelope.subject \in Subjects
   /\ envelope.requestHash \in AsyncCertifiedRequestHashes
-  /\ envelope.archiveServer \in AsyncArchiveServerIds
-  /\ envelope.citedResponder \in ValidatorIds
+  /\ envelope.responder \in AsyncArchiveServerIds
   /\ envelope.signatureOwner
        \in AsyncCertifiedResponseSignatureOwners
 
@@ -7358,8 +7353,9 @@ The request producer freezes the complete height roster before emitting any
 wire occurrence.  Availability and the certificate signer set do not rewrite
 that route identity: every remote frozen-roster peer receives the same exact
 signed request hash.  Response authority is narrower and is checked by
-`CertifiedServeCanRespond` below.  In particular, a routed non-signer
-deterministically closes its local Serve lifecycle without signing.
+`CertifiedServeCanRespond` below.  Before local Apply, a routed non-signer
+deterministically closes its local Serve lifecycle without signing; an applied
+archive instead uses the historical Kura authority described below.
 ***************************************************************************)
 CertifiedArchiveRoutes(node, qc) ==
   AsyncArchiveServerIds \ {node}
@@ -7393,12 +7389,11 @@ CommitCertificateRequestOutbox(node) ==
                        AsyncHeartbeatSubject, NoAsyncChunk, 0)):
        server \in CurrentVoters \ {node}}
 
-CertifiedResponseItem(via, archiveServer, request) ==
+CertifiedResponseItem(via, responder, request) ==
   AsyncNetworkItem(
     "CertifiedResponse", via,
     AsyncCertifiedResponseEnvelope(
-      request, archiveServer, AsyncCertifiedCitedResponder(request),
-      archiveServer))
+      request, responder, responder))
 
 (***************************************************************************
 Response authentication binds the canonical signed wire identity, not its
@@ -7427,7 +7422,7 @@ AsyncCertifiedResponseWaiterFamily(item) ==
 
 AsyncCertifiedResponseOccurrenceIdentity(item) ==
   [requestHash |-> item.envelope.requestHash,
-   authenticatedResponder |-> item.envelope.archiveServer,
+   authenticatedResponder |-> item.envelope.responder,
    responseHash |-> AsyncCertifiedResponseHash(item)]
 
 AsyncCertifiedResponseClaimRecord(
@@ -7455,12 +7450,12 @@ AsyncCertifiedResponseAuthProjection(item) ==
 
 CertifiedResponseAuthenticatedOccurrence(item) ==
   /\ item.kind = "CertifiedResponse"
-  /\ item.envelope.signatureOwner = item.envelope.archiveServer
+  /\ item.envelope.signatureOwner = item.envelope.responder
   /\ \E sent \in asyncSentItems:
        /\ sent.kind = "CertifiedResponse"
        /\ AsyncCertifiedResponseCanonicalWireIdentity(sent)
             = AsyncCertifiedResponseCanonicalWireIdentity(item)
-       /\ sent.envelope.signatureOwner = sent.envelope.archiveServer
+       /\ sent.envelope.signatureOwner = sent.envelope.responder
 
 (***************************************************************************
 The active exact signed request is the per-request response authority.  Its
@@ -7516,20 +7511,19 @@ FrozenCertifiedRequestRegistration(request) ==
         /\ request.envelope.view = qc.view
         /\ request.envelope.subject = qc.subject
 
+\* The responder is the current authenticated archive `PeerId`.  The frozen
+\* QC binds the request coordinates and subject, but its signer indices do not
+\* constrain a historical archive identity after validator-key rotation.
 FrozenCertifiedResponseBinding(item, request) ==
   /\ item.kind = "CertifiedResponse"
   /\ FrozenCertifiedRequestRegistration(request)
   /\ CertifiedResponseAuthenticatedOccurrence(item)
-  /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+  /\ item.envelope.responder \in AsyncArchiveServerIds
   /\ AsyncCertifiedRequestHash(request) = item.envelope.requestHash
   /\ request.envelope.requester = item.envelope.recipient
   /\ request.envelope.height = item.envelope.height
   /\ request.envelope.view = item.envelope.view
   /\ request.envelope.subject = item.envelope.subject
-  /\ item.envelope.archiveServer
-       \in request.envelope.certificate.signers
-  /\ item.envelope.citedResponder
-       \in request.envelope.certificate.signers
 
 CertifiedResponseCapabilityAuthorized(item) ==
   /\ item.kind = "CertifiedResponse"
@@ -7544,7 +7538,7 @@ IngressItemHasAuthenticatedHistory(item) ==
 CertifiedResponseAuthorized(item) ==
   /\ item.kind = "CertifiedResponse"
   /\ CertifiedResponseAuthenticatedOccurrence(item)
-  /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+  /\ item.envelope.responder \in AsyncArchiveServerIds
   /\ MatchingCertifiedRequests(item) # {}
   /\ \E request \in MatchingCertifiedRequests(item):
        FrozenCertifiedResponseBinding(item, request)
@@ -7726,7 +7720,7 @@ CertifiedResponseClaimAuthorized(item) ==
   /\ item.kind = "CertifiedResponse"
   /\ CertifiedResponseClaimMatches(item)
   /\ CertifiedResponseAuthenticatedOccurrence(item)
-  /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+  /\ item.envelope.responder \in AsyncArchiveServerIds
   /\ MatchingCertifiedRequests(item) # {}
   /\ \E request \in MatchingCertifiedRequests(item):
        FrozenCertifiedResponseBinding(item, request)
@@ -7735,7 +7729,7 @@ CertifiedResponseClaimProjectionAuthenticated(projection) ==
   \E item \in AsyncCertifiedResponseItems:
     /\ AsyncCertifiedResponseCanonicalWireIdentity(item) = projection
     /\ CertifiedResponseAuthenticatedOccurrence(item)
-    /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+    /\ item.envelope.responder \in AsyncArchiveServerIds
     /\ MatchingCertifiedRequests(item) # {}
     /\ \E request \in MatchingCertifiedRequests(item):
          FrozenCertifiedResponseBinding(item, request)
@@ -7785,17 +7779,18 @@ CommitCertificateResponseItem(request, qc) ==
     AsyncCommitCertificateResponseEnvelope(request, qc))
 
 (***************************************************************************
-Production serves a certified request only from a local frozen-QC signer
-which retains the exact canonical body.  The full-roster request fanout is
-therefore intentionally wider than response authority.  A routed observer or
-non-signer records `LocalRetentionAuthorityAbsent`; it never signs merely
-because it has an applied body.  The validation cache remains consumer-local
-pipeline state and is not an additional serving premise.
+Before Apply, production serves a certified request only from a local frozen-
+QC signer which retains the exact canonical body.  After Apply, the historical
+Kura path may serve from any current authenticated archive which retains that
+canonical applied body; validator-key rotation must not force the current
+`PeerId` into the old QC signer-index set.  The validation cache remains
+consumer-local pipeline state and is not an additional serving premise.
 ***************************************************************************)
 CertifiedServeCanRespond(server, request) ==
   /\ request.kind = "CertifiedRequest"
   /\ request.envelope.recipient = server
-  /\ server \in request.envelope.certificate.signers
+  /\ \/ NodeHasApplication(server)
+     \/ server \in request.envelope.certificate.signers
   /\ BodyHeldBy(durableBodies, server, request.envelope.certificate.context,
                 request.envelope.view, request.envelope.subject)
 
@@ -10447,7 +10442,7 @@ same physical lane occurrence.  Exact retries reuse the record.  A distinct
 identity in the same finite protocol
 slot cannot replace a live owner; after Terminal only a strictly newer view
 may replace its high-water record.  Chunk slots include the finite chunk
-index, while certified responses use the cited authenticated responder so a
+index, while certified responses use the current authenticated responder so a
 different outer relay route cannot manufacture a second lifecycle.
 ***************************************************************************)
 AsyncLeaderWireLifecycleStatuses ==
@@ -10456,7 +10451,7 @@ AsyncLeaderWireLifecycleStatuses ==
 
 AsyncLeaderWireLifecyclePhysicalOwner(item) ==
   IF item.kind = "CertifiedResponse"
-  THEN item.envelope.citedResponder
+  THEN item.envelope.responder
   ELSE item.source
 
 AsyncLeaderWireLifecycleChunk(item) ==
@@ -10829,7 +10824,8 @@ AsyncServeReconstructedTerminalOutcome(node, item) ==
                        # AsyncServeDurableDecisionSubject(node)
             THEN AsyncServeSupersededByDurableDecisionOutcome(
                    AsyncServeDurableDecisionSubject(node))
-            ELSE IF node \notin item.envelope.certificate.signers
+            ELSE IF /\ ~NodeHasApplication(node)
+                    /\ node \notin item.envelope.certificate.signers
                  THEN AsyncServeLocalRetentionAuthorityAbsentOutcome
                  ELSE AsyncServeResponseOutcome
 
@@ -10889,7 +10885,7 @@ AsyncServeLifecycleConflict(node, item) ==
 AsyncServeTombstoneOutputMatchesIdentity(tombstone, output) ==
   IF tombstone.identity.request.kind = "CertifiedRequest"
   THEN /\ output.kind = "CertifiedResponse"
-       /\ output.envelope.archiveServer = tombstone.node
+       /\ output.envelope.responder = tombstone.node
        /\ output.envelope.requestHash =
             tombstone.identity.request.requestHash
   ELSE /\ tombstone.identity.request.kind =

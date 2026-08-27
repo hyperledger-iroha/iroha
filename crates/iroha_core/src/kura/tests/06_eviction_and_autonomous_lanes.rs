@@ -695,16 +695,13 @@ fn evicted_remote_body_rehydrates_after_restart_and_new_adverts() {
     assert_eq!(rehydrated.hash(), block_hash);
 }
 #[test]
-fn fast_init_preserves_remote_only_metadata_after_restart() {
+fn fast_init_preserves_remote_only_hash_without_rebuilding_status_index() {
     let temp_dir = TempDir::new().unwrap();
     let mut config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let lane_config = RuntimeLaneConfig::default();
     let height = nonzero!(2_usize);
     let block_hash = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("kura init");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         let blocks = store_dummy_block_arcs(&kura, 4);
         let block_hash = blocks[1].hash();
         advertise_required_replicas(&kura, height);
@@ -724,7 +721,7 @@ fn fast_init_preserves_remote_only_metadata_after_restart() {
     };
     config.init_mode = InitMode::Fast;
     let (kura, block_count) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("fast reopen");
     assert_eq!(block_count.0, 4);
     assert_eq!(
@@ -734,8 +731,8 @@ fn fast_init_preserves_remote_only_metadata_after_restart() {
     );
     assert_eq!(
         kura.block_body_status_by_hash(block_hash),
-        Some(BlockBodyStatus::Missing),
-        "fresh process has no replica evidence for the remote-only body yet"
+        None,
+        "Fast must not rebuild the historical hash-to-height status index"
     );
 }
 #[test]
@@ -1989,7 +1986,9 @@ fn default_pipeline_sidecar_fixture() -> (
     HashOf<BlockHeader>,
     PipelineRecoverySidecar,
 ) {
-    let (temp_dir, config, kura) = unwrapped_kura_fixture();
+    let (temp_dir, config) = unwrapped_kura_storage_fixture(BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -2009,6 +2008,15 @@ fn test_kura_with_default_lane_markers(
 ) -> (Arc<Kura>, BlockCount) {
     let (kura, block_count) = Kura::open_test_kura_with_configured_lane_config(config, lane_config)
         .expect("init Kura test fixture");
+    establish_configured_lane_markers_for_test(&kura, lane_config);
+    (kura, block_count)
+}
+
+fn establish_configured_lane_markers_for_test(kura: &Kura, lane_config: &RuntimeLaneConfig) {
+    let configured_catalog_hash = kura
+        .configured_lane_catalog_baseline()
+        .expect("read configured Kura catalog baseline")
+        .expect("configured Kura catalog baseline");
     for entry in lane_config.entries() {
         let incarnation = Hash::new(
             format!(
@@ -2018,10 +2026,25 @@ fn test_kura_with_default_lane_markers(
             )
             .as_bytes(),
         );
-        kura.install_lane_incarnation_marker_for_test(entry, incarnation, 0)
-            .expect("install explicit Kura test lane marker");
+        if entry.lane_id == lane_config.primary().lane_id {
+            kura.establish_or_verify_configured_primary_geometry_anchor(
+                entry,
+                incarnation,
+                configured_catalog_hash,
+            )
+            .expect("bind configured primary Kura test geometry");
+        } else {
+            kura.install_lane_incarnation_marker_for_test(entry, incarnation, 0)
+                .expect("install explicit Kura test lane marker");
+        }
     }
-    (kura, block_count)
+}
+
+fn populate_strict_kura_store(dir: &TempDir, count: usize) {
+    let config = kura_config_for_dir(dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let _ = store_dummy_blocks(&kura, count);
 }
 fn autonomous_lane_payload_for_kura(
     lane_id: LaneId,

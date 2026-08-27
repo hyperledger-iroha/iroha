@@ -577,11 +577,6 @@ impl FastJsonWrite for SoranetHandshakePowUpdate {
                 out.push(',');
             }
         };
-        if let Some(value) = self.required {
-            field(out);
-            out.push_str("\"required\":");
-            out.push_str(if value { "true" } else { "false" });
-        }
         if let Some(value) = self.difficulty {
             field(out);
             out.push_str("\"difficulty\":");
@@ -612,11 +607,6 @@ impl FastJsonWrite for SoranetHandshakePowUpdate {
             out.push_str("\"inbound_verify_capacity\":");
             let _ = write!(out, "{value}");
         }
-        if let Some(key_hex) = &self.signed_ticket_public_key_hex {
-            field(out);
-            out.push_str("\"signed_ticket_public_key_hex\":");
-            json::write_json_string(key_hex, out);
-        }
         if let Some(puzzle) = &self.puzzle {
             field(out);
             out.push_str("\"puzzle\":");
@@ -628,9 +618,6 @@ impl FastJsonWrite for SoranetHandshakePowUpdate {
 impl FastJsonWrite for SoranetHandshakePowSummary {
     fn write_json(&self, out: &mut String) {
         out.push('{');
-        out.push_str("\"required\":");
-        out.push_str(if self.required { "true" } else { "false" });
-        out.push(',');
         out.push_str("\"difficulty\":");
         let _ = write!(out, "{}", self.difficulty);
         out.push(',');
@@ -648,16 +635,9 @@ impl FastJsonWrite for SoranetHandshakePowSummary {
         out.push(',');
         out.push_str("\"inbound_verify_capacity\":");
         let _ = write!(out, "{}", self.inbound_verify_capacity);
-        if let Some(key_hex) = &self.signed_ticket_public_key_hex {
-            out.push(',');
-            out.push_str("\"signed_ticket_public_key_hex\":");
-            json::write_json_string(key_hex, out);
-        }
-        if let Some(puzzle) = &self.puzzle {
-            out.push(',');
-            out.push_str("\"puzzle\":");
-            puzzle.write_json(out);
-        }
+        out.push(',');
+        out.push_str("\"puzzle\":");
+        self.puzzle.write_json(out);
         out.push('}');
     }
 }
@@ -2781,10 +2761,8 @@ impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
     }
 }
 /// Summary of the proof-of-work admission settings.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePowSummary {
-    /// Indicates whether `PoW` tickets are required.
-    pub required: bool,
     /// Required difficulty in leading zero bits.
     pub difficulty: u8,
     /// Maximum allowed ticket future skew in seconds.
@@ -2797,23 +2775,19 @@ pub struct SoranetHandshakePowSummary {
     pub outbound_mint_capacity: usize,
     /// Maximum concurrent remote Argon2 ticket verifications.
     pub inbound_verify_capacity: usize,
-    /// Optional Argon2 puzzle parameters.
-    pub puzzle: Option<SoranetHandshakePuzzleSummary>,
-    /// Optional ML-DSA-44 public key for verifying signed tickets (hex).
-    pub signed_ticket_public_key_hex: Option<String>,
+    /// Mandatory Argon2 puzzle parameters.
+    pub puzzle: SoranetHandshakePuzzleSummary,
 }
 impl From<&'_ base::SoranetPow> for SoranetHandshakePowSummary {
     fn from(value: &'_ base::SoranetPow) -> Self {
         Self {
-            required: value.required,
             difficulty: value.difficulty,
             max_future_skew_secs: value.max_future_skew.as_secs(),
             min_ticket_ttl_secs: value.min_ticket_ttl.as_secs(),
             ticket_ttl_secs: value.ticket_ttl.as_secs(),
             outbound_mint_capacity: value.outbound_mint_capacity.get(),
             inbound_verify_capacity: value.inbound_verify_capacity.get(),
-            puzzle: value.puzzle.map(SoranetHandshakePuzzleSummary::from),
-            signed_ticket_public_key_hex: value.signed_ticket_public_key.as_ref().map(hex::encode),
+            puzzle: SoranetHandshakePuzzleSummary::from(value.puzzle),
         }
     }
 }
@@ -2889,8 +2863,6 @@ impl SoranetHandshakePuzzleSummary {
 /// Partial update directive for Argon2 puzzle parameters.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePuzzleUpdate {
-    /// Toggle the puzzle requirement.
-    pub enabled: Option<bool>,
     /// Override memory cost (KiB).
     pub memory_kib: Option<u32>,
     /// Override time cost (iterations).
@@ -2909,11 +2881,6 @@ impl SoranetHandshakePuzzleUpdate {
                 out.push(',');
             }
         };
-        if let Some(enabled) = self.enabled {
-            emit(out);
-            out.push_str("\"enabled\":");
-            out.push_str(if enabled { "true" } else { "false" });
-        }
         if let Some(memory) = self.memory_kib {
             emit(out);
             out.push_str("\"memory_kib\":");
@@ -2936,11 +2903,9 @@ fn parse_soranet_puzzle_update(
     w: &mut TapeWalker<'_>,
 ) -> Result<SoranetHandshakePuzzleUpdate, NoritoError> {
     w.expect_object_start()?;
-    let mut enabled = None;
     let mut memory_kib = None;
     let mut time_cost = None;
     let mut lanes = None;
-    let kh_enabled = norito::json::key_hash_const("enabled");
     let kh_memory = norito::json::key_hash_const("memory_kib");
     let kh_time = norito::json::key_hash_const("time_cost");
     let kh_lanes = norito::json::key_hash_const("lanes");
@@ -2948,9 +2913,6 @@ fn parse_soranet_puzzle_update(
         let kh = w.read_key_hash()?;
         w.expect_colon_resync()?;
         match kh {
-            x if x == kh_enabled && w.last_key() == "enabled" => {
-                enabled = Some(w.parse_bool_inline()?);
-            }
             x if x == kh_memory && w.last_key() == "memory_kib" => {
                 memory_kib = Some(
                     u32::try_from(w.parse_u64_inline()?)
@@ -2975,7 +2937,6 @@ fn parse_soranet_puzzle_update(
     }
     w.expect_object_end()?;
     Ok(SoranetHandshakePuzzleUpdate {
-        enabled,
         memory_kib,
         time_cost,
         lanes,
@@ -3008,10 +2969,8 @@ pub struct SoranetHandshakeUpdate {
     pub pow: Option<SoranetHandshakePowUpdate>,
 }
 /// Partial update DTO for `PoW` admission configuration.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePowUpdate {
-    /// Override the required flag.
-    pub required: Option<bool>,
     /// Override difficulty.
     pub difficulty: Option<u8>,
     /// Override future skew.
@@ -3026,13 +2985,10 @@ pub struct SoranetHandshakePowUpdate {
     pub inbound_verify_capacity: Option<usize>,
     /// Override puzzle parameters.
     pub puzzle: Option<SoranetHandshakePuzzleUpdate>,
-    /// Override the signed-ticket verification key (hex).
-    pub signed_ticket_public_key_hex: Option<String>,
 }
 impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
-        let mut required = None;
         let mut difficulty = None;
         let mut max_future_skew = None;
         let mut min_ticket_ttl = None;
@@ -3040,24 +2996,17 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
         let mut outbound_mint_capacity = None;
         let mut inbound_verify_capacity = None;
         let mut puzzle = None;
-        let mut signed_ticket_public_key_hex = None;
-        let kh_required = norito::json::key_hash_const("required");
         let kh_difficulty = norito::json::key_hash_const("difficulty");
         let kh_max_future_skew = norito::json::key_hash_const("max_future_skew_secs");
         let kh_min_ticket_ttl = norito::json::key_hash_const("min_ticket_ttl_secs");
         let kh_ticket_ttl = norito::json::key_hash_const("ticket_ttl_secs");
         let kh_outbound_mint_capacity = norito::json::key_hash_const("outbound_mint_capacity");
         let kh_inbound_verify_capacity = norito::json::key_hash_const("inbound_verify_capacity");
-        let kh_signed_ticket_public_key =
-            norito::json::key_hash_const("signed_ticket_public_key_hex");
         let kh_puzzle = norito::json::key_hash_const("puzzle");
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
             match kh {
-                x if x == kh_required && w.last_key() == "required" => {
-                    required = Some(w.parse_bool_inline()?);
-                }
                 x if x == kh_difficulty && w.last_key() == "difficulty" => {
                     difficulty = Some(
                         u8::try_from(w.parse_u64_inline()?)
@@ -3087,12 +3036,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
                             .map_err(|_| NoritoError::Message("usize overflow".into()))?,
                     );
                 }
-                x if x == kh_signed_ticket_public_key
-                    && w.last_key() == "signed_ticket_public_key_hex" =>
-                {
-                    signed_ticket_public_key_hex =
-                        Some(w.parse_string_ref_inline(arena)?.to_string());
-                }
                 x if x == kh_puzzle && w.last_key() == "puzzle" => {
                     puzzle = Some(SoranetHandshakePuzzleSummary::parse(w, arena)?);
                 }
@@ -3102,15 +3045,15 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
         }
         w.expect_object_end()?;
         Ok(Self {
-            required: required.unwrap_or(false),
             difficulty: difficulty.unwrap_or(0),
             max_future_skew_secs: max_future_skew.unwrap_or(0),
             min_ticket_ttl_secs: min_ticket_ttl.unwrap_or(0),
             ticket_ttl_secs: ticket_ttl.unwrap_or(0),
             outbound_mint_capacity: outbound_mint_capacity.unwrap_or(0),
             inbound_verify_capacity: inbound_verify_capacity.unwrap_or(0),
-            puzzle,
-            signed_ticket_public_key_hex,
+            puzzle: puzzle.ok_or_else(|| {
+                NoritoError::Message("missing mandatory SoraNet puzzle summary".into())
+            })?,
         })
     }
 }
@@ -3123,7 +3066,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         let _ = arena;
         w.expect_object_start()?;
-        let mut required = None;
         let mut difficulty = None;
         let mut max_future_skew = None;
         let mut min_ticket_ttl = None;
@@ -3131,24 +3073,17 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
         let mut outbound_mint_capacity = None;
         let mut inbound_verify_capacity = None;
         let mut puzzle = None;
-        let mut signed_ticket_public_key_hex = None;
-        let kh_required = norito::json::key_hash_const("required");
         let kh_difficulty = norito::json::key_hash_const("difficulty");
         let kh_max_future_skew = norito::json::key_hash_const("max_future_skew_secs");
         let kh_min_ticket_ttl = norito::json::key_hash_const("min_ticket_ttl_secs");
         let kh_ticket_ttl = norito::json::key_hash_const("ticket_ttl_secs");
         let kh_outbound_mint_capacity = norito::json::key_hash_const("outbound_mint_capacity");
         let kh_inbound_verify_capacity = norito::json::key_hash_const("inbound_verify_capacity");
-        let kh_signed_ticket_public_key =
-            norito::json::key_hash_const("signed_ticket_public_key_hex");
         let kh_puzzle = norito::json::key_hash_const("puzzle");
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
             match kh {
-                x if x == kh_required && w.last_key() == "required" => {
-                    required = Some(w.parse_bool_inline()?);
-                }
                 x if x == kh_difficulty && w.last_key() == "difficulty" => {
                     difficulty = Some(
                         u8::try_from(w.parse_u64_inline()?)
@@ -3178,12 +3113,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
                             .map_err(|_| NoritoError::Message("usize overflow".into()))?,
                     );
                 }
-                x if x == kh_signed_ticket_public_key
-                    && w.last_key() == "signed_ticket_public_key_hex" =>
-                {
-                    signed_ticket_public_key_hex =
-                        Some(w.parse_string_ref_inline(arena)?.to_string());
-                }
                 x if x == kh_puzzle && w.last_key() == "puzzle" => {
                     puzzle = Some(parse_soranet_puzzle_update(w)?);
                 }
@@ -3193,7 +3122,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
         }
         w.expect_object_end()?;
         Ok(Self {
-            required,
             difficulty,
             max_future_skew_secs: max_future_skew,
             min_ticket_ttl_secs: min_ticket_ttl,
@@ -3201,7 +3129,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
             outbound_mint_capacity,
             inbound_verify_capacity,
             puzzle,
-            signed_ticket_public_key_hex,
         })
     }
 }
@@ -3447,19 +3374,17 @@ mod test {
                     sig_id: 1,
                     resume_hash_hex: None,
                     pow: SoranetHandshakePowSummary {
-                        required: true,
                         difficulty: iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY,
                         max_future_skew_secs: 300,
                         min_ticket_ttl_secs: 30,
                         ticket_ttl_secs: 300,
                         outbound_mint_capacity: 3,
                         inbound_verify_capacity: 3,
-                        puzzle: Some(SoranetHandshakePuzzleSummary {
+                        puzzle: SoranetHandshakePuzzleSummary {
                             memory_kib: 64 * 1024,
                             time_cost: 2,
                             lanes: 1,
-                        }),
-                        signed_ticket_public_key_hex: None,
+                        },
                     },
                 },
                 soranet_privacy: SoranetPrivacySummary {
@@ -3545,7 +3470,6 @@ mod test {
                 sig_id: Some(11),
                 resume_hash_hex: Some(ResumeHashDirective::Set("deadbeef".to_string())),
                 pow: Some(SoranetHandshakePowUpdate {
-                    required: Some(true),
                     difficulty: Some(4),
                     max_future_skew_secs: Some(900),
                     min_ticket_ttl_secs: Some(45),
@@ -3553,7 +3477,6 @@ mod test {
                     outbound_mint_capacity: Some(2),
                     inbound_verify_capacity: Some(3),
                     puzzle: None,
-                    signed_ticket_public_key_hex: None,
                 }),
             }),
             transport: None,
@@ -3574,7 +3497,6 @@ mod test {
             Some(ResumeHashDirective::Set("deadbeef".to_string()))
         );
         let pow = handshake.pow.expect("pow update should be present");
-        assert_eq!(pow.required, Some(true));
         assert_eq!(pow.difficulty, Some(4));
         assert_eq!(pow.max_future_skew_secs, Some(900));
         assert_eq!(pow.min_ticket_ttl_secs, Some(45));

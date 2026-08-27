@@ -56,6 +56,9 @@ const GAS_LIMIT_BOUND_DIVISOR: u64 = 1_024;
 const MAX_HEADER_BYTES: usize = 128 * 1_024;
 const MAX_EXTRA_BYTES: usize = 64 * 1_024;
 const MAX_VALIDATORS: usize = 64;
+// Active, pending, and every retained recent-vote-context roster can be
+// validated independently of continuation attestations.
+const MAX_ANCHOR_CONTEXT_ROSTERS: usize = BSC_NATIVE_ATTESTATION_ANCESTOR_DEPTH + 2;
 const MAX_TURN_LENGTH: u8 = 64;
 const MAX_ATTESTATION_EXTRA_BYTES: usize = 256;
 const MAX_RECEIPT_BYTES: usize = 1_024 * 1_024;
@@ -279,7 +282,8 @@ pub struct BscNativeFinalityWorkEstimateV1 {
     pub secp256k1_recoveries: u16,
     /// Maximum BLS aggregate checks, one optional attestation per continuation.
     pub bls_aggregate_checks_upper_bound: u16,
-    /// Maximum aggregate public-key contributions at the 64-validator cap.
+    /// Maximum public-key validations and aggregate contributions at the
+    /// 64-validator cap, including anchor-context and epoch-embedded rosters.
     pub bls_signer_contributions_upper_bound: u32,
 }
 /// Merkle-Patricia inclusion proof for one successful execution receipt.
@@ -1854,10 +1858,26 @@ pub fn bsc_native_finality_work_estimate(
     let secp256k1_recoveries = continuation_headers
         .checked_add(1)
         .ok_or(BscNativeFinalityError::ResourceLimit)?;
-    let bls_signer_contributions_upper_bound = u32::from(continuation_headers)
-        .checked_mul(
-            u32::try_from(MAX_VALIDATORS).map_err(|_| BscNativeFinalityError::ResourceLimit)?,
+    let maximum_validators =
+        u32::try_from(MAX_VALIDATORS).map_err(|_| BscNativeFinalityError::ResourceLimit)?;
+    let epoch_length = u32::try_from(BSC_NATIVE_EPOCH_LENGTH)
+        .map_err(|_| BscNativeFinalityError::ResourceLimit)?;
+    let anchor_and_continuation_headers = u32::from(continuation_headers)
+        .checked_add(1)
+        .ok_or(BscNativeFinalityError::ResourceLimit)?;
+    // Header-number continuity is checked before any continuation extra-data
+    // parse. The anchor plus H headers can therefore cross at most
+    // ceil((H + 1) / epoch_length) epoch boundaries in total.
+    let epoch_embedded_rosters = anchor_and_continuation_headers.div_ceil(epoch_length);
+    let charged_rosters = u32::from(continuation_headers)
+        .checked_add(
+            u32::try_from(MAX_ANCHOR_CONTEXT_ROSTERS)
+                .map_err(|_| BscNativeFinalityError::ResourceLimit)?,
         )
+        .and_then(|count| count.checked_add(epoch_embedded_rosters))
+        .ok_or(BscNativeFinalityError::ResourceLimit)?;
+    let bls_signer_contributions_upper_bound = charged_rosters
+        .checked_mul(maximum_validators)
         .ok_or(BscNativeFinalityError::ResourceLimit)?;
     Ok(BscNativeFinalityWorkEstimateV1 {
         continuation_headers,
@@ -3073,13 +3093,26 @@ mod tests {
         assert_eq!(estimate.continuation_headers, 1);
         assert_eq!(estimate.secp256k1_recoveries, 2);
         assert_eq!(estimate.bls_aggregate_checks_upper_bound, 1);
-        assert_eq!(
-            estimate.bls_signer_contributions_upper_bound,
-            u32::try_from(MAX_VALIDATORS).unwrap()
-        );
+        assert_eq!(estimate.bls_signer_contributions_upper_bound, 448);
         assert_eq!(
             estimate.framed_header_bytes,
             u32::try_from(anchor_header_bytes + 1).unwrap()
+        );
+        proof.headers_rlp = vec![vec![0xc0]; 999];
+        proof.target_header_index = 998;
+        assert_eq!(
+            bsc_native_finality_work_estimate(&proof)
+                .unwrap()
+                .bls_signer_contributions_upper_bound,
+            64_320
+        );
+        proof.headers_rlp = vec![vec![0xc0]; BSC_NATIVE_MAX_TARGET_HEADERS];
+        proof.target_header_index = u16::try_from(BSC_NATIVE_MAX_TARGET_HEADERS - 1).unwrap();
+        assert_eq!(
+            bsc_native_finality_work_estimate(&proof)
+                .unwrap()
+                .bls_signer_contributions_upper_bound,
+            64_448
         );
         proof.headers_rlp = vec![vec![0xc0]; BSC_NATIVE_MAX_FINALITY_HEADERS];
         proof.target_header_index = u16::try_from(BSC_NATIVE_MAX_TARGET_HEADERS - 1).unwrap();
@@ -3088,6 +3121,7 @@ mod tests {
             usize::from(boundary.continuation_headers),
             BSC_NATIVE_MAX_FINALITY_HEADERS
         );
+        assert_eq!(boundary.bls_signer_contributions_upper_bound, 64_704);
         proof.target_header_index = u16::try_from(BSC_NATIVE_MAX_TARGET_HEADERS).unwrap();
         assert_eq!(
             bsc_native_finality_work_estimate(&proof),

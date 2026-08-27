@@ -23,7 +23,7 @@ public sealed class CancelAssetLockInstructionTests
         + "0e55fb7ed463b87302212073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11b"
         + "dc799dfdb7ea29851f0b0501000000140400000000";
     private const string JavascriptInstructionBoxV1 =
-        "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCOAAAAAAAAAGrhL/hjm91RAi8uaXJvaGFfZGF0YV9tb2RlbDo6aXNpOjplc2Nyb3c6OkNhbmNlbEFzc2V0TG9ja11VAAAAAAAAAE5SVDAAALXIpmWn3oDi7vdcyyhwePoALQAAAAAAAACfqHPruEYnlQIgmWJkyEeQxkCGqrDvaTodM+wY/AscEil3TEYaAJOaZocLBQEAAAB9BAIAAAA=";
+        "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCNAAAAAAAAAHyPhQgH6/N3Ai4taXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmVzY3Jvdzo6Q2FuY2VsQXNzZXRMb2NrXVUAAAAAAAAATlJUMAAAtcimZafegOLu91zLKHB4+gAtAAAAAAAAAJ+oc+u4RieVAiCZYmTIR5DGQIaqsO9pOh0z7Bj8CxwSKXdMRhoAk5pmhwsFAQAAAH0EAgAAAA==";
 
     [Fact]
     public void BuilderEmitsTheExactTwoFieldV1Shape()
@@ -32,8 +32,8 @@ public sealed class CancelAssetLockInstructionTests
             "merchant-lock-001",
             "1500");
 
-        Assert.Equal(CancelAssetLockInstruction.NativeTypeName, instruction.WireId);
-        Assert.Equal(instruction.WireId, instruction.TypeName);
+        Assert.Equal(CancelAssetLockInstruction.NativeWireId, instruction.WireId);
+        Assert.Equal(CancelAssetLockInstruction.NativeTypeName, instruction.TypeName);
         Assert.Equal(MerchantEscrowId, instruction.EscrowId);
         Assert.Equal("1500", instruction.ExpectedRemainingAmount);
         Assert.Equal(

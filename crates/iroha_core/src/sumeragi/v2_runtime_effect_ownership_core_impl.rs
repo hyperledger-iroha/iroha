@@ -107,6 +107,28 @@ impl RuntimeEffectOwnership {
             .is_ok_and(|expected| expected == self.owner)
     }
 
+    /// Recheck the exact two-effect periodic batch edge from CommitQC
+    /// Broadcast to its Decision Apply successor.
+    pub(in crate::sumeragi) fn exactly_follows_two_effect_batch(
+        &self,
+        predecessor: &Self,
+        predecessor_effect: &AdapterEffect,
+        effect: &AdapterEffect,
+    ) -> bool {
+        predecessor.exactly_binds_adapter_effect(predecessor_effect)
+            && self.exactly_binds_adapter_effect(effect)
+            && predecessor.owner == self.owner
+            && predecessor.causality == self.causality
+            && predecessor.binding.effect_count == 2
+            && self.binding.effect_count == 2
+            && predecessor.binding.effect_position == 1
+            && self.binding.effect_position == 2
+            && predecessor.binding.candidate_count == 1
+            && self.binding.candidate_count == 1
+            && predecessor.binding.candidate_position == 0
+            && self.binding.candidate_position == 1
+    }
+
     fn validate_exact(&self) -> bool {
         self.owner.validate_exact() && self.binding.validate_exact(&self.owner, self.causality)
     }

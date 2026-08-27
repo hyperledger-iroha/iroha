@@ -665,8 +665,9 @@ pub fn validate_soracloud_service_revision_identity(
 }
 /// Resolve one authoritative Inrou placement record through its exact active deployment binding.
 ///
-/// Missing or inactive state resolves to `None`. Malformed records and cross-keyed authoritative
-/// state are errors so callers can fail closed and reconciliation can repair the row.
+/// Missing or retained non-current state resolves to `None`. An active rollout, malformed record,
+/// or cross-keyed authoritative state is an error so callers fail closed and reconciliation can
+/// repair the row. First-release Inrou admits exactly one active revision.
 pub fn resolve_active_inrou_placement_record(
     world: &impl WorldReadOnly,
     service_name: &str,
@@ -712,14 +713,12 @@ pub fn resolve_active_inrou_placement_record(
             deployment.service_name
         ));
     }
-    let version_is_active = deployment.active_rollout.as_ref().map_or_else(
-        || deployment.current_service_version == service_version,
-        |rollout| {
-            rollout.baseline_version == service_version
-                || rollout.candidate_version == service_version
-        },
-    );
-    if !version_is_active {
+    if deployment.active_rollout.is_some() {
+        return Err(format!(
+            "service `{service_name}` carries an unsupported active Inrou canary; first-release host-local lease disks require one active revision"
+        ));
+    }
+    if deployment.current_service_version != service_version {
         return Ok(None);
     }
 
@@ -776,9 +775,8 @@ pub fn resolve_active_inrou_placement_record(
             bundle.service.replicas.get()
         ));
     }
-    if service_version == deployment.current_service_version
-        && (deployment.current_service_manifest_hash != bundle.service_manifest_hash()
-            || deployment.current_container_manifest_hash != bundle.container_manifest_hash())
+    if deployment.current_service_manifest_hash != bundle.service_manifest_hash()
+        || deployment.current_container_manifest_hash != bundle.container_manifest_hash()
     {
         return Err(format!(
             "active Inrou placement for service `{service_name}` revision `{service_version}` does not match the deployment's admitted manifest hashes"
@@ -1396,7 +1394,8 @@ pub struct SoracloudLocalReadRequest {
     pub handler_path: String,
     /// Optional raw query string without the leading `?`.
     pub request_query: Option<String>,
-    /// Canonicalized request headers made visible to the handler.
+    /// Canonicalized end-to-end application headers made visible after Torii removes platform and
+    /// hop-by-hop metadata.
     pub request_headers: BTreeMap<String, String>,
     /// Opaque request payload bytes supplied to the handler.
     pub request_body: Vec<u8>,

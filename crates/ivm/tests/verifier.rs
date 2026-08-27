@@ -16,7 +16,13 @@ fn test_verify_trace_pass() {
     let res = vm.run();
     assert!(res.is_ok());
     let trace = vm.register_trace();
-    verify_trace(&trace, vm.constraints(), vm.memory_log(), vm.register_log()).unwrap();
+    verify_trace(
+        &trace,
+        vm.constraints(),
+        vm.memory_log(),
+        &vm.register_log(),
+    )
+    .unwrap();
 }
 #[test]
 fn test_verify_trace_fail() {
@@ -33,6 +39,11 @@ fn test_verify_trace_fail() {
     let res = vm.run();
     assert!(res.is_err());
     let trace = vm.register_trace();
-    let verify = verify_trace(&trace, vm.constraints(), vm.memory_log(), vm.register_log());
+    let verify = verify_trace(
+        &trace,
+        vm.constraints(),
+        vm.memory_log(),
+        &vm.register_log(),
+    );
     assert!(verify.is_err());
 }

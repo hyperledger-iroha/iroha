@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.address
 
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
+import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKeyAdmission
 import org.hyperledger.iroha.sdk.norito.Varint
 
 class PublicKeyPayload(
@@ -44,6 +45,7 @@ fun decodePublicKeyLiteral(literal: String?): PublicKeyPayload? {
     if (algorithmPrefix != null && algorithmPrefix != algorithmForCurveId(curveId)) return null
     val keyBytes = bytes.copyOfRange(payloadOffset, payloadOffset + payloadLength)
     if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) return null
+    if (curveId == 0x02 && !MlDsaPublicKeyAdmission.isValid(keyBytes)) return null
     return PublicKeyPayload(curveId, keyBytes)
 }
 
@@ -79,6 +81,7 @@ fun decodeCompactPublicKeyPayload(payload: ByteArray?): PublicKeyPayload? {
     if (curveId < 0) return null
     val keyBytes = payload.copyOfRange(1, payload.size)
     if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) return null
+    if (curveId == 0x02 && !MlDsaPublicKeyAdmission.isValid(keyBytes)) return null
     return PublicKeyPayload(curveId, keyBytes)
 }
 
@@ -101,6 +104,9 @@ fun algorithmForCurveId(curveId: Int): String? = when (curveId) {
 private fun requireValidPublicKeyForEncoding(curveId: Int, keyBytes: ByteArray) {
     require(curveId != 0x01 || Ed25519PublicKeyAdmission.isValid(keyBytes)) {
         "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup"
+    }
+    require(curveId != 0x02 || MlDsaPublicKeyAdmission.isValid(keyBytes)) {
+        "invalid ML-DSA-65 public key: expected ${MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH} nonzero bytes"
     }
 }
 

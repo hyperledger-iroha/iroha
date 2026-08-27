@@ -1221,6 +1221,20 @@ fn stale_validation_completion_uses_the_current_tag_when_decision_arrives_first(
         adapter.pending_live_decision_apply.is_some(),
         "a decided Durable body must retain its WAL seal for the Ready Validate join"
     );
+    assert!(adapter.has_exact_pending_live_decision_apply(
+        current_tag,
+        decision.round,
+        decision.proposal_round,
+        decision.subject,
+        decision.execution_commitment,
+    ));
+    assert!(!adapter.has_exact_pending_live_decision_apply(
+        stale_tag,
+        decision.round,
+        decision.proposal_round,
+        decision.subject,
+        decision.execution_commitment,
+    ));
 
     let DirectValidationSucceededPreparation::Apply(preview) = adapter
         .prepare_direct_validation_succeeded(

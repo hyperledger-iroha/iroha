@@ -166,6 +166,11 @@ fn kaigi_relay_openapi_matches_runtime_output_bounds() {
         summary["hpke_fingerprint_hex"]["pattern"].as_str(),
         Some("^[0-9a-f]{64}$")
     );
+    assert!(
+        summary["hpke_fingerprint_hex"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("marked Blake2b-32"))
+    );
     assert_eq!(
         schemas["KaigiRelaySummaryList"]["properties"]["items"]["maxItems"].as_u64(),
         Some(500)

@@ -2799,11 +2799,12 @@ fn extract_transaction_hash_from_submit_result_rejects_noncanonical_json_receipt
             .expect_err("receipt hashes must already use canonical lowercase Iroha text");
     }
 
+    let canonical_entrypoint_hash = format!("{}1", "0".repeat(63));
     let entrypoint_only = norito::json!({
         "status": 202,
         "body": {
             "payload": {
-                "entrypoint_hash": format!("{}1", "0".repeat(63))
+                "entrypoint_hash": (canonical_entrypoint_hash)
             }
         }
     });

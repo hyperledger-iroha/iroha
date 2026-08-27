@@ -1357,7 +1357,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     );
     assert_source_tokens_in_order(
         activated_finalization,
-        &["!self.launched.ready_for_finalized_rollover()?", owner_token],
+        &[
+            "!self.launched.ready_for_finalized_rollover()?",
+            owner_token,
+        ],
     );
     assert_source_tokens_in_order(
         activated_finalization,

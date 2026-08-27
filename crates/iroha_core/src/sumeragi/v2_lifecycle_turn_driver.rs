@@ -413,8 +413,9 @@ pub(in crate::sumeragi) enum ProductionPreTimeoutLockedPrepareQcIngressTurnV1 {
     Empty,
     /// One WAL-obsolete pre-cut predecessor crossed the ordinary dequeue tail.
     ObsoletePredecessor(ProductionPreparedOrdinaryIngressTurnV1),
-    /// The exact deeply-previewed PrepareQC crossed the ordinary dequeue tail.
-    ExactPrepareQc(ProductionPreparedOrdinaryIngressTurnV1),
+    /// One exact deeply-previewed Prepare vote/QC carrier crossed the ordinary
+    /// dequeue tail.
+    ExactPrepareProgress(ProductionPreparedOrdinaryIngressTurnV1),
     /// Queue ownership or exact dequeue authority failed closed.
     RestartRequired,
 }
@@ -1271,7 +1272,7 @@ impl LaunchedProductionLifecycleV1 {
             )) => {
                 iroha_logger::error!(
                     %error,
-                    "ordinary certified-Fetch durable ingress terminal requires cold restart"
+                    "ordinary certified-Fetch post-commit terminal requires cold restart"
                 );
                 services
                     .lifecycle_output_guard()
@@ -1699,8 +1700,8 @@ impl LaunchedProductionLifecycleV1 {
 
     /// Move at most one fair-ingress row under an already-frozen timeout cut.
     ///
-    /// The exact PrepareQC predicate is a read-only runtime preview. Ordinary
-    /// obsolete retirement remains enabled only to release a durable
+    /// The exact Prepare-progress predicate is a read-only runtime preview.
+    /// Ordinary obsolete retirement remains enabled only to release a durable
     /// leader-wire predecessor; every non-obsolete row must match the exact
     /// preview, and the queue's Blocked verdict is never bypassed.
     pub(in crate::sumeragi) fn prepare_pre_timeout_locked_prepare_qc_ingress_turn(
@@ -1729,13 +1730,7 @@ impl LaunchedProductionLifecycleV1 {
                     else {
                         return false;
                     };
-                    matches!(
-                        &message.payload,
-                        iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::QuorumCertificate(_)
-                    ) && executor.wire_previews_pre_timeout_locked_prepare_qc(
-                        cut,
-                        &message.payload,
-                    )
+                    executor.wire_previews_pre_timeout_locked_prepare_qc(cut, &message.payload)
                 },
             )
         };
@@ -1765,7 +1760,7 @@ impl LaunchedProductionLifecycleV1 {
                 ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ObsoletePredecessor(turn)
             }
             PreparedOrdinaryIngressDequeueV1::Prepared(turn) => {
-                ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ExactPrepareQc(turn)
+                ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ExactPrepareProgress(turn)
             }
             PreparedOrdinaryIngressDequeueV1::RestartRequired => {
                 ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired
@@ -2367,13 +2362,16 @@ impl LaunchedProductionLifecycleV1 {
 }
 
 impl ActivatedProductionLifecycleV1 {
-    /// Reconcile only current-height Serve owners retained across a terminal barrier.
+    /// Reconcile current-height capacity observations retained across a terminal barrier.
     ///
     /// A capacity-blocked Serve has not committed its fair-ingress dequeue, so the direct
     /// decided-lane recovery driver remains its sole consumer after this handoff. This includes
     /// repair of a terminal-ready executor whose process-local claim returned to `Eligible`.
     /// A completed Serve, by contrast, must publish its lifecycle terminal before finalization.
-    /// No ordinary Completion, Runtime, Ingress, or Fetch owner is admitted by this transition.
+    /// An ordinary capacity-blocked Fetch likewise has not committed its dequeue or admitted a
+    /// new durable row, so its service-generation observation can be dropped while sealed height
+    /// retirement owns the queued occurrence and any older recovered row. A recovered Decision
+    /// Fetch already owns a durable row before capacity capture and therefore remains fail-closed.
     pub(in crate::sumeragi) fn reconcile_decided_lane_certified_serve(
         &mut self,
         _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
@@ -2441,10 +2439,10 @@ impl ActivatedProductionLifecycleV1 {
                 match wait.capacity_status(&self.launched.services) {
                     ProductionIngressCapacityStatus::Pending
                     | ProductionIngressCapacityStatus::Released => {
-                        // Ordinary Fetch capacity is captured before durable
-                        // admission. The fair-ingress occurrence was never
-                        // dequeued, so sealed height retirement remains its
-                        // sole terminal owner after this observation is dropped.
+                        // This attempt captured capacity before admitting a new
+                        // durable row and never dequeued fair ingress. Sealed
+                        // height retirement owns both that occurrence and any
+                        // pre-existing row after this observation is dropped.
                         drop(wait);
                         Ok(true)
                     }
@@ -2581,6 +2579,8 @@ impl ActivatedProductionLifecycleV1 {
         &mut self,
         _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
         producer_claim: crate::sumeragi::v2_runner::LifecycleProducerClaimDispositionV1,
+        terminal_finalization_cut_active: bool,
+        finalized_ingress_closed: bool,
         ingress: &FairV2Ingress,
         ingress_oldest_age: Option<Duration>,
         ingress_service_idle_age: Option<Duration>,
@@ -2634,6 +2634,24 @@ impl ActivatedProductionLifecycleV1 {
             Claim::ApplyTerminalSettled => ("ApplyTerminalSettled", None, None, None, None),
             Claim::AwaitingReplayCompletion => ("AwaitingReplayCompletion", None, None, None, None),
         };
+        let executor_ready_to_finish_blockers = self.launched.executor.ready_to_finish_blockers();
+        let executor_ready_to_finish = executor_ready_to_finish_blockers.is_empty();
+        let validate_retry_census = self
+            .launched
+            .executor
+            .durable_validate_retry_finalization_diagnostic();
+        let registry_exactly_covers_finalization_work = self
+            .launched
+            .owner
+            .registry
+            .registry()
+            .exactly_covers_finalization_work(&self.launched.owner.coordinator);
+        let finalization_scheduler = self.launched.owner.finalization_scheduler_diagnostic(
+            self.launched.executor.lifecycle_reducer_fence_observation(),
+        );
+        let store_marker_census = self
+            .launched
+            .verify_published_store_marker_finalization_census();
         let active_lease = self
             .launched
             .owner
@@ -2698,6 +2716,8 @@ impl ActivatedProductionLifecycleV1 {
             height = self.launched.executor.context().height,
             context_id = ?self.launched.executor.context().id(),
             producer_claim_kind,
+            terminal_finalization_cut_active,
+            finalized_ingress_closed,
             ?producer_claim_ordinal,
             ?producer_claim_child_ordinal,
             ?producer_claim_wait_source,
@@ -2709,6 +2729,26 @@ impl ActivatedProductionLifecycleV1 {
             ?ingress_service_idle_age,
             ?last_advance_executor_yield,
             recovered_lifecycle_outputs,
+            executor_ready_to_finish,
+            ?executor_ready_to_finish_blockers,
+            validate_retry_census = %validate_retry_census,
+            registry_exactly_covers_finalization_work,
+            pending_kura_apply_replay = self.launched.pending_kura_apply_replay.is_some(),
+            recovered_local_proposal_attempt = self
+                .launched
+                .recovered_local_proposal_attempt
+                .is_some(),
+            pending_lifecycle_completion_present = self
+                .launched
+                .pending_lifecycle_completion
+                .is_some(),
+            pending_ingress_capacity_present = self.launched.pending_ingress_capacity.is_some(),
+            completion_observer_activation_present = self
+                .launched
+                .completion_observer_activation
+                .is_some(),
+            ?store_marker_census,
+            finalization_scheduler = %finalization_scheduler,
             pending_completion = ?pending_completion,
             pending_capacity_kind = ?pending_capacity_kind,
             pending_capacity_status = ?pending_capacity_status,
@@ -2734,7 +2774,7 @@ impl ActivatedProductionLifecycleV1 {
             ?io,
             ?exact_output,
             fair_selector = %fair_selector,
-            "Sumeragi v2 outer scheduler starvation ownership census"
+            "Sumeragi v2 scheduler/finalization stall ownership census"
         );
     }
 
@@ -2758,7 +2798,6 @@ impl ActivatedProductionLifecycleV1 {
         block_sync_request: &mut Option<
             iroha_crypto::HashOf<iroha_data_model::block::consensus_v2::CommitCertificateRequest>,
         >,
-        npos_vrf: &mut crate::sumeragi::v2_npos::V2NposVrfLifecycle,
         npos_beacon: &mut crate::sumeragi::v2_beacon::V2GlobalBeaconLifecycle,
     ) -> Result<
         ProductionPreparedOrdinaryIngressConsumptionV1,
@@ -2787,7 +2826,6 @@ impl ActivatedProductionLifecycleV1 {
             block_sync_server,
             block_sync,
             block_sync_request,
-            npos_vrf,
             npos_beacon,
         )
     }

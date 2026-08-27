@@ -17,12 +17,15 @@ import {
   buildRegisterAssetDefinitionAndMintTransaction,
   buildRegisterAssetDefinitionMintAndTransferTransaction,
 } from "../src/transaction.js";
-import { ToriiClient } from "../src/toriiClient.js";
+import {
+  LocalSigningContext,
+  ToriiClient as BaseToriiClient,
+} from "../src/toriiClient.js";
 import { AccountAddress } from "../src/address.js";
 import { NetworkId } from "../src/networkId.js";
 import { makeNativeTest } from "./helpers/native.js";
 
-const BASE_URL = "http://localhost:8080";
+const BASE_URL = "https://localhost:8080";
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
 const NETWORK_ID = NetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -47,6 +50,24 @@ const CANONICAL_ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`;
 const SECOND_CANONICAL_ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`;
 const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
 const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
+const CANONICAL_REQUEST_AUTH = Object.freeze({
+  accountId: AUTHORITY_ID_RAW,
+  privateKey: Buffer.alloc(32, 0x31),
+});
+const CANONICAL_SIGNED_TRANSACTION_NATIVE = Object.freeze({
+  encodeSignedTransactionVersioned: (payload) => Buffer.from(payload),
+});
+class ToriiClient extends BaseToriiClient {
+  constructor(baseUrl, options = {}) {
+    super(baseUrl, {
+      __nativeBinding: CANONICAL_SIGNED_TRANSACTION_NATIVE,
+      canonicalRequestAuth: CANONICAL_REQUEST_AUTH,
+      localSigningContext: LOCAL_SIGNING_CONTEXT,
+      ...options,
+    });
+  }
+}
 const NODE_CAPABILITIES = {
   abi_version: 1,
   data_model_version: 4,
@@ -224,7 +245,7 @@ test("hashInstructionBatch serializes instructions and delegates to native", () 
 
 test("submitSignedTransaction submits payload and polls until exact Applied finality", async () => {
   const txBytes = Buffer.from([0xaa]);
-  const signedBytes = Buffer.from([0xbb]);
+  const signedBytes = Buffer.from([0x01, 0xbb]);
   const hashBytes = Buffer.alloc(32, 0x11);
   const submissionResponse = createResponse({
     status: 202,
@@ -260,7 +281,7 @@ test("submitSignedTransaction submits payload and polls until exact Applied fina
     }
     if (url.endsWith("/v1/pipeline/transactions")) {
       assert.ok(Buffer.isBuffer(init.body));
-      assert.deepEqual([...init.body.values()], [0x01, ...signedBytes.values()]);
+      assert.deepEqual([...init.body.values()], [...signedBytes.values()]);
       return submissionResponse;
     }
     return statusQueue.shift() ?? statusQueue[statusQueue.length - 1];
@@ -371,7 +392,7 @@ test("submitSignedTransaction times out without state-resolved Applied finality"
   const txBytes = Buffer.from([0x99]);
   const binding = {
     hashSignedTransaction: () => Buffer.alloc(32, 0x43),
-    signTransaction: () => txBytes,
+    signTransaction: () => Buffer.concat([Buffer.from([0x01]), txBytes]),
   };
   const fetchImpl = async (url) => {
     if (url.endsWith("/v1/node/capabilities")) {
@@ -413,7 +434,7 @@ test("submitSignedTransaction times out without state-resolved Applied finality"
 
 test("submitSignedTransaction rejects a deceptive non-canonical status envelope", async () => {
   const txBytes = Buffer.from([0x44]);
-  const signedBytes = Buffer.from([0x55]);
+  const signedBytes = Buffer.from([0x01, 0x55]);
   const binding = {
     hashSignedTransaction: () => Buffer.alloc(32, 0x33),
     signTransaction: () => signedBytes,
@@ -457,7 +478,7 @@ test("submitSignedTransaction rejects a deceptive non-canonical status envelope"
           networkId: NETWORK_ID,
           privateKey: Buffer.alloc(32, 0x03),
         }),
-      /missing or unsupported/i,
+      /unsupported fields: content/i,
     );
   });
 });
@@ -1007,6 +1028,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
           assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
           owningDomain: null, balanceScopePolicy: "Global",
           metadata: { description: "Rose asset" },
           mintable: "Not",
@@ -1027,6 +1049,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
     Register: {
       AssetDefinition: {
         id: ASSET_DEFINITION_ID,
+        name: "Rose",
         logo: null,
         metadata: { description: "Rose asset" },
         mintable: "Not",
@@ -1055,6 +1078,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects confidential policy
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
           assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
           owningDomain: null,
           balanceScopePolicy: "Global",
           confidentialPolicy: { mode: "Convertible" },
@@ -1086,7 +1110,12 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "4" },
           { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "2" },
@@ -1124,6 +1153,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction requires ownership intent",
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
           assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
           balanceScopePolicy: "Global",
         },
         privateKey: PRIVATE_KEY,
@@ -1141,11 +1171,57 @@ test("buildRegisterAssetDefinitionAndMintTransaction requires balance policy int
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
           assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
           owningDomain: null,
         },
         privateKey: PRIVATE_KEY,
       }),
     /balanceScopePolicy is required/u,
+  );
+});
+
+test("buildRegisterAssetDefinitionAndMintTransaction requires an exact asset name", () => {
+  for (const name of [
+    undefined,
+    "",
+    " Rose ",
+    "rose#retail",
+    "rose@retail",
+    "rose\nretail",
+    "é".repeat(65),
+  ]) {
+    assert.throws(
+      () =>
+        buildRegisterAssetDefinitionAndMintTransaction({
+          networkId: NETWORK_ID,
+          authority: AUTHORITY_ID_INPUT,
+          feePayment: AUTHORITY_FEE_PAYMENT,
+          assetDefinition: {
+            assetDefinitionId: ASSET_DEFINITION_ID,
+            name,
+            owningDomain: null,
+            balanceScopePolicy: "Global",
+          },
+          privateKey: PRIVATE_KEY,
+        }),
+      /assetDefinition\.name must /u,
+    );
+  }
+  assert.throws(
+    () =>
+      buildRegisterAssetDefinitionAndMintTransaction({
+        networkId: NETWORK_ID,
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "\uD800",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+    /unpaired UTF-16 surrogates/u,
   );
 });
 
@@ -1156,7 +1232,12 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects both mint and mints
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "1" },
         mints: [],
         privateKey: PRIVATE_KEY,
@@ -1172,7 +1253,12 @@ test("buildRegisterAssetDefinitionAndMintTransaction enforces mint destination f
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mints: [{ quantity: "1" }],
         privateKey: PRIVATE_KEY,
       }),
@@ -1187,7 +1273,12 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects mismatched assetId/
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,
@@ -1219,7 +1310,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "5" },
         transfer: { destinationAccountId: AUTHORITY_ID_INPUT, quantity: "2" },
         privateKey: PRIVATE_KEY,
@@ -1271,7 +1367,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "6" },
           { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "1" },
@@ -1317,7 +1418,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects both transf
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "3" },
         transfer: { destinationAccountId: AUTHORITY_ID_INPUT, quantity: "2" },
         transfers: [],
@@ -1334,7 +1440,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects both mint a
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "2" },
         mints: [],
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
@@ -1351,7 +1462,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction requires mint spec"
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
         privateKey: PRIVATE_KEY,
       }),
@@ -1366,7 +1482,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction validates mint dest
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mints: [{ quantity: "1" }],
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
         privateKey: PRIVATE_KEY,
@@ -1382,7 +1503,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched 
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "Rose",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        },
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,

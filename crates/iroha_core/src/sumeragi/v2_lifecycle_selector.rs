@@ -603,24 +603,51 @@ fn certified_fetch_ingress_ownership_is_exact(
         && ownership.matches_semantic_origin(inbound.sender())
         && ownership.matches_reply_routes(inbound.reply_routes())
 }
-/// Validate the exact queued productive stage without mutating ingress or its gate.
-pub(crate) fn certified_fetch_preledger_productive_ingress_token(
+/// Sealed pre-ledger ownership mode for one exact certified-Fetch response.
+///
+/// Current-roster responders retain the generic durable leader-wire path. A
+/// current archive outside that roster is serialized by the independently
+/// authenticated outstanding-request family and therefore carries no generic
+/// lifecycle slot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CertifiedFetchPreLedgerIngressModeV1 {
+    DurableLeaderWire(FairV2IngressLeaderWireToken),
+    RequestBoundArchive,
+}
+fn certified_fetch_preledger_ingress_mode(
     inbound: &InboundBlockMessage,
-) -> Result<FairV2IngressLeaderWireToken, CertifiedFetchPreLedgerProductiveIngressErrorV1> {
+) -> Result<CertifiedFetchPreLedgerIngressModeV1, CertifiedFetchPreLedgerProductiveIngressErrorV1> {
     let ownership = inbound
         .ingress_ownership()
         .ok_or(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership)?;
     if !certified_fetch_ingress_ownership_is_exact(inbound, ownership) {
         return Err(CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership);
     }
-    let token = ownership
-        .leader_wire_token()
-        .cloned()
-        .ok_or(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken)?;
     if ownership.leader_wire_runtime_receipt().is_some() {
         return Err(CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound);
     }
-    Ok(token)
+    match ownership.leader_wire_token().cloned() {
+        Some(token) if !ownership.request_bound_non_roster_completion() => Ok(
+            CertifiedFetchPreLedgerIngressModeV1::DurableLeaderWire(token),
+        ),
+        None if ownership.request_bound_non_roster_completion() => {
+            Ok(CertifiedFetchPreLedgerIngressModeV1::RequestBoundArchive)
+        }
+        Some(_) | None => {
+            Err(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken)
+        }
+    }
+}
+/// Validate the exact queued productive stage without mutating ingress or its gate.
+pub(crate) fn certified_fetch_preledger_productive_ingress_token(
+    inbound: &InboundBlockMessage,
+) -> Result<FairV2IngressLeaderWireToken, CertifiedFetchPreLedgerProductiveIngressErrorV1> {
+    match certified_fetch_preledger_ingress_mode(inbound)? {
+        CertifiedFetchPreLedgerIngressModeV1::DurableLeaderWire(token) => Ok(token),
+        CertifiedFetchPreLedgerIngressModeV1::RequestBoundArchive => {
+            Err(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken)
+        }
+    }
 }
 /// Validate and clone the sole Runtime receipt installed by exact dequeue.
 pub(crate) fn certified_fetch_postdequeue_runtime_receipt(
@@ -643,6 +670,31 @@ pub(crate) fn certified_fetch_postdequeue_runtime_receipt(
         return Err(CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MismatchedRuntimeReceipt);
     }
     Ok(receipt.clone())
+}
+/// Validate the post-dequeue ownership installed for the selected pre-ledger mode.
+fn certified_fetch_postdequeue_ingress_handoff(
+    inbound: &InboundBlockMessage,
+    expected: &CertifiedFetchPreLedgerIngressModeV1,
+) -> Result<Option<LeaderWireLifecycleRuntimeReceipt>, CertifiedFetchPostDequeueRuntimeHandoffErrorV1>
+{
+    match expected {
+        CertifiedFetchPreLedgerIngressModeV1::DurableLeaderWire(token) => {
+            certified_fetch_postdequeue_runtime_receipt(inbound, token).map(Some)
+        }
+        CertifiedFetchPreLedgerIngressModeV1::RequestBoundArchive => {
+            let ownership = inbound
+                .ingress_ownership()
+                .ok_or(CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MissingOwnership)?;
+            if !certified_fetch_ingress_ownership_is_exact(inbound, ownership)
+                || !ownership.request_bound_non_roster_completion()
+                || ownership.leader_wire_token().is_some()
+                || ownership.leader_wire_runtime_receipt().is_some()
+            {
+                return Err(CertifiedFetchPostDequeueRuntimeHandoffErrorV1::InvalidOwnership);
+            }
+            Ok(None)
+        }
+    }
 }
 /// Exact fresh queue witness retained after LedgerV1 may have advanced.
 struct PreparedCertifiedFetchExactDequeue {
@@ -814,7 +866,7 @@ pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {
     /// Ledger and exact queue handoff committed, but the volatile registry,
     /// coordinator, executor, service, and work-ack tail did not run.
     RestartRequiredAfterDequeue(String),
-    /// Every volatile owner committed, but the exact durable ingress terminal failed.
+    /// Every primary volatile owner committed, but a post-commit terminal or wake failed.
     RestartRequiredAfterCommit(String),
 }
 /// Typed reason an authenticated selected response could not wake its exact
@@ -2016,6 +2068,19 @@ impl PreparedLifecycleIngressSelector {
                     && ownership.leader_wire_runtime_receipt().is_none()
             })
     }
+    /// Whether the selected response owns the production-sealed exact-request
+    /// archive path rather than a generic leader-wire lifecycle slot.
+    #[cfg(test)]
+    pub(crate) fn selected_certified_fetch_is_request_bound_archive_for_test(&self) -> bool {
+        self.selected_claimed_response_family()
+            .ok()
+            .is_some_and(|family| {
+                matches!(
+                    certified_fetch_preledger_ingress_mode(family.inbound.as_ref()),
+                    Ok(CertifiedFetchPreLedgerIngressModeV1::RequestBoundArchive)
+                )
+            })
+    }
     /// Prove that this real prepared selector crosses the sealed
     /// selector-to-registry preflight against an exact installed Fetch and that
     /// dropping the borrow-bound token leaves that incumbent byte-for-byte
@@ -2344,7 +2409,7 @@ impl LifecycleCoordinator {
                     );
                 }
             };
-        let (selected_response_matches, selected_leader_wire_token) = {
+        let (selected_response_matches, selected_ingress_mode) = {
             let family = match selector.persisted_family(id, &authenticated) {
                 Ok(family) => family,
                 Err(error) => {
@@ -2352,21 +2417,21 @@ impl LifecycleCoordinator {
                     retry!(error, receipt);
                 }
             };
-            let leader_wire_token =
-                match certified_fetch_preledger_productive_ingress_token(family.inbound.as_ref()) {
-                    Ok(token) => token,
-                    Err(error) => {
-                        let receipt = durable_registry.abort_before_dequeue();
-                        restart_invalid_leader_wire!(error, receipt);
-                    }
-                };
+            let ingress_mode = match certified_fetch_preledger_ingress_mode(family.inbound.as_ref())
+            {
+                Ok(mode) => mode,
+                Err(error) => {
+                    let receipt = durable_registry.abort_before_dequeue();
+                    restart_invalid_leader_wire!(error, receipt);
+                }
+            };
             (
                 durable_registry.matches_selected_response(
                     family.ingress_identity,
                     family.inbound.as_ref(),
                     selector.queue_witness.selected_disposition(),
                 ),
-                leader_wire_token,
+                ingress_mode,
             )
         };
         if !selected_response_matches {
@@ -2562,15 +2627,13 @@ impl LifecycleCoordinator {
                 );
             }
         };
-        let runtime_receipt = certified_fetch_postdequeue_runtime_receipt(
-            dequeued.inbound(),
-            &selected_leader_wire_token,
-        )
-        .map_err(|error| {
-            CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(
-                error.detail().to_owned(),
-            )
-        })?;
+        let runtime_receipt =
+            certified_fetch_postdequeue_ingress_handoff(dequeued.inbound(), &selected_ingress_mode)
+                .map_err(|error| {
+                    CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(
+                        error.detail().to_owned(),
+                    )
+                })?;
         let durable_body = durable_registry.durable_body_receipt().clone();
         durable_registry.commit_after_exact_dequeue(dequeued);
         match ready {
@@ -2580,11 +2643,20 @@ impl LifecycleCoordinator {
         executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated);
         service_prepared.commit(operation.permit());
         work_ack.commit();
-        if let Err(error) =
-            ingress.mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)
-        {
+        if let Some(runtime_receipt) = runtime_receipt {
+            if let Err(error) =
+                ingress.mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)
+            {
+                return Err(
+                    CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(error),
+                );
+            }
+        }
+        if let Err(error) = services.retry_locked_candidate_after_durable_body(subject) {
             return Err(
-                CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(error),
+                CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(format!(
+                    "failed to wake the exact locked-body acquisition after certified Fetch persistence: {error}"
+                )),
             );
         }
         operation.complete();

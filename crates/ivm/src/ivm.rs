@@ -6,9 +6,9 @@
 //! supported and `MAXCYCLES` is enforced when a cycle limit is set.
 //!
 //! This implementation incorporates the updated architecture with 256 tagged
-//! registers, optional hardware transactional memory and basic hardware feature
-//! detection. Vector operations use a deterministic logical lane count capped by
-//! the ABI, with hardware helpers kept behind byte-identical fallbacks.
+//! registers and basic hardware feature detection. Vector operations use a
+//! deterministic logical lane count capped by the ABI, with hardware helpers
+//! kept behind byte-identical fallbacks.
 use crate::{
     SyscallPolicy, decoder,
     error::{
@@ -25,12 +25,11 @@ use crate::{
         decode_literal_descriptor,
     },
     parallel::{
-        self, Block, BlockResult, ExecutionContext, Scheduler, State, Transaction, TxResult,
+        Block, BlockResult, ExecutionContext, Scheduler, State, StateUpdate, Transaction, TxResult,
     },
     pointer_abi::PointerPolicyGuard,
     prepared::PreparedContract,
     registers::Registers,
-    simple_instruction::Instruction as SimpleInstruction,
     stack_policy::IvmStackPolicy,
     syscall_metering::{
         STAGED_SYSCALL_ENTRY_GAS, StagedSyscallContext, SyscallCompletion, SyscallMetering,
@@ -40,7 +39,7 @@ use crate::{
     vector::SimdChoice,
     zk::{self, Constraint, DeltaTraceLog, MemEvent, MemLog, RegisterState},
 };
-use likely_stable::{likely, unlikely};
+use likely_stable::unlikely;
 #[cfg(feature = "beep")]
 use rodio::{
     OutputStream, OutputStreamBuilder, Sink, Source, StreamError, mixer::Mixer, source::SineWave,
@@ -50,7 +49,7 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex, OnceLock,
@@ -66,8 +65,6 @@ const LOGICAL_VECTOR_MAX: usize = crate::metadata::VECTOR_LENGTH_MAX as usize;
 const DEFAULT_VECTOR_LENGTH: usize = 4;
 /// Canonical instruction width for first-release IVM bytecode.
 const WIDE_INSTRUCTION_LEN: u64 = 4;
-/// Avoid Rayon scheduling overhead for tiny straight-line simple blocks.
-const ILP_MIN_PARALLEL_BLOCK_LEN: usize = 16;
 /// Number of prepared instruction streams retained outside the decode cache.
 const PREPARED_PROGRAM_CACHE_CAPACITY: usize = 128;
 /// Approximate byte budget for cached prepared instruction streams.
@@ -87,6 +84,10 @@ fn require_registered_syscall_metering(
 ) -> Result<SyscallMetering, VMError> {
     metering.ok_or(VMError::UnknownSyscall(number))
 }
+fn host_allows_syscall_masked(host: &dyn IVMHost, policy: SyscallPolicy, number: u32) -> bool {
+    let _host_logger_mask = zk::RegLoggerGuard::mask();
+    host.allows_syscall(policy, number)
+}
 fn resolve_syscall_metering(
     host: &dyn IVMHost,
     policy: SyscallPolicy,
@@ -101,7 +102,7 @@ fn resolve_syscall_metering(
     // reserved path so the host must provide a deterministic quote before it
     // can perform work. Public ABI calls still fail closed above when their
     // mandatory registry entry is missing.
-    host.allows_syscall(policy, number)
+    host_allows_syscall_masked(host, policy, number)
         .then_some(SyscallMetering::Reserved)
         .ok_or(VMError::UnknownSyscall(number))
 }
@@ -221,6 +222,13 @@ struct SavedSyscallOutputRegisters {
     values: [u64; 5],
     private: [bool; 5],
     len: usize,
+}
+struct HostRegisterLogIsolation {
+    invocation_log: zk::SharedRegLog,
+    detached_log: zk::SharedRegLog,
+    proof_state_epoch: u64,
+    code_hash: [u8; 32],
+    zk_mode: bool,
 }
 include!(concat!(env!("OUT_DIR"), "/syscall_signatures.rs"));
 fn default_vector_length() -> usize {
@@ -490,7 +498,7 @@ impl WorkerResources {
             template_input_bump,
         }
     }
-    fn execute(&mut self, tx: Transaction) -> TxResult {
+    fn execute(&mut self, tx: Transaction) -> (TxResult, Vec<StateUpdate>) {
         self.vm.private_memory_bytes.clear();
         self.vm
             .memory
@@ -502,10 +510,8 @@ impl WorkerResources {
         self.vm.input_bump_next = self.template_input_bump;
         self.ctx.init_for_transaction(&tx, &self.vm.state);
         let result = self.vm.execute_transaction(&tx, &mut self.ctx);
-        if result.success {
-            self.vm.commit_transaction(&self.ctx, &tx.access.reg_tags);
-        }
-        result
+        let writes = std::mem::take(&mut self.ctx.write_set);
+        (result, writes)
     }
 }
 /// Control whether the VM prints the ASCII banner and hardware feature summary
@@ -513,38 +519,6 @@ impl WorkerResources {
 #[allow(dead_code)]
 pub fn set_banner_enabled(enabled: bool) {
     SUPPRESS_BANNER.store(!enabled, Ordering::Relaxed);
-}
-pub(crate) fn rtm_available() -> bool {
-    #[cfg(all(feature = "htm", target_arch = "x86_64"))]
-    {
-        use std::arch::x86_64::{__cpuid_count, __get_cpuid_max};
-        const RTM_FLAG: u32 = 1 << 11;
-        // RTM detection is not available on stable via `is_x86_feature_detected!`, so use CPUID
-        // leaf 7 (EBX bit 11) which is supported on all processors implementing RTM.
-        unsafe {
-            let (max_leaf, _) = __get_cpuid_max(0);
-            if max_leaf < 7 {
-                return false;
-            }
-            (__cpuid_count(0x7, 0).ebx & RTM_FLAG) != 0
-        }
-    }
-    #[cfg(all(feature = "htm", target_arch = "x86"))]
-    {
-        use std::arch::x86::{__cpuid_count, __get_cpuid_max};
-        const RTM_FLAG: u32 = 1 << 11;
-        unsafe {
-            let (max_leaf, _) = __get_cpuid_max(0);
-            if max_leaf < 7 {
-                return false;
-            }
-            (__cpuid_count(0x7, 0).ebx & RTM_FLAG) != 0
-        }
-    }
-    #[cfg(not(all(feature = "htm", any(target_arch = "x86", target_arch = "x86_64"))))]
-    {
-        false
-    }
 }
 fn hardware_capabilities_snapshot() -> &'static HardwareCapabilities {
     HARDWARE_CAPABILITIES.get_or_init(|| {
@@ -978,12 +952,10 @@ impl IvmBuilder {
         if let Some(config) = self.host_config {
             config(&mut vm);
         }
-        let scheduler_threads = vm.scheduler.thread_count();
-        vm.core_count = scheduler_threads;
+        let scheduler_threads = vm.scheduler_limits.0;
         IVM::startup_banner(
             scheduler_threads,
             vm.max_vector_lanes,
-            vm.htm_supported,
             vm.hardware_capabilities(),
             vm.use_metal,
             vm.use_cuda,
@@ -1014,14 +986,12 @@ impl From<IvmConfigBuilder> for IvmBuilder {
 #[derive(Clone)]
 struct PreparedOp {
     inst: u32,
-    len: u32,
     wide_op: u8,
     base_gas: Option<u64>,
-    simple: Option<SimpleInstruction>,
 }
 impl PreparedOp {
     fn from_decoded(op: &crate::ivm_cache::DecodedOp) -> Result<Self, VMError> {
-        if op.len as u64 != WIDE_INSTRUCTION_LEN || !op.pc.is_multiple_of(WIDE_INSTRUCTION_LEN) {
+        if !op.pc.is_multiple_of(WIDE_INSTRUCTION_LEN) {
             return Err(VMError::DecodeError);
         }
         let wide_op = instruction::wide::opcode(op.inst);
@@ -1030,19 +1000,15 @@ impl PreparedOp {
         }
         Ok(Self {
             inst: op.inst,
-            len: op.len,
             wide_op,
             base_gas: gas::cost_of(op.inst),
-            simple: to_simple(op.inst),
         })
     }
     fn fetched(&self) -> FetchedOp {
         FetchedOp {
             inst: self.inst,
-            len: self.len,
             wide_op: self.wide_op,
             base_gas: self.base_gas,
-            simple: self.simple,
         }
     }
 }
@@ -1103,15 +1069,9 @@ impl PreparedProgram {
         self.op_at(pc).is_some()
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct PreparedProgramCacheKey {
-    hash: [u8; 32],
-    version_major: u8,
-    version_minor: u8,
-}
+type PreparedProgramCacheKey = [u8; 32];
 struct PreparedProgramCache {
     map: HashMap<PreparedProgramCacheKey, Arc<[PreparedOp]>>,
-    sizes: HashMap<PreparedProgramCacheKey, usize>,
     order: VecDeque<PreparedProgramCacheKey>,
     bytes: usize,
 }
@@ -1119,30 +1079,24 @@ impl PreparedProgramCache {
     fn new() -> Self {
         Self {
             map: HashMap::new(),
-            sizes: HashMap::new(),
             order: VecDeque::new(),
             bytes: 0,
         }
     }
-    fn key_for(code: &[u8], metadata: &ProgramMetadata) -> PreparedProgramCacheKey {
+    fn key_for(code: &[u8]) -> PreparedProgramCacheKey {
         let mut hasher = Sha256::new();
         hasher.update(code);
         let hash = hasher.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(&hash);
-        PreparedProgramCacheKey {
-            hash: out,
-            version_major: metadata.version_major,
-            version_minor: metadata.version_minor,
-        }
+        out
     }
     fn get_or_prepare(
         &mut self,
         code: &[u8],
-        metadata: &ProgramMetadata,
         decoded: &[crate::ivm_cache::DecodedOp],
     ) -> Result<Arc<[PreparedOp]>, VMError> {
-        let key = Self::key_for(code, metadata);
+        let key = Self::key_for(code);
         if let Some(hit) = self.map.get(&key).cloned() {
             self.touch(key);
             return Ok(hit);
@@ -1152,7 +1106,6 @@ impl PreparedProgramCache {
         if size <= PREPARED_PROGRAM_CACHE_MAX_BYTES {
             self.bytes = self.bytes.saturating_add(size);
             self.map.insert(key, Arc::clone(&prepared));
-            self.sizes.insert(key, size);
             self.touch(key);
             self.enforce_capacity();
         }
@@ -1179,9 +1132,8 @@ impl PreparedProgramCache {
         }
     }
     fn remove_entry(&mut self, key: PreparedProgramCacheKey) {
-        if self.map.remove(&key).is_some() {
-            let size = self.sizes.remove(&key).unwrap_or(0);
-            self.bytes = self.bytes.saturating_sub(size);
+        if let Some(prepared) = self.map.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(Self::entry_size(&prepared));
         }
     }
 }
@@ -1231,7 +1183,6 @@ fn validate_generic_program_syscalls(
 }
 pub(crate) fn prepare_instruction_stream(
     code: &[u8],
-    metadata: &ProgramMetadata,
     decoded: &[crate::ivm_cache::DecodedOp],
     first_pc: u64,
     literals: &[DecodedLiteral],
@@ -1241,7 +1192,7 @@ pub(crate) fn prepare_instruction_stream(
         let mut guard = prepared_program_cache()
             .lock()
             .unwrap_or_else(|err| err.into_inner());
-        guard.get_or_prepare(code, metadata, decoded)?
+        guard.get_or_prepare(code, decoded)?
     };
     PreparedProgram::from_prepared_ops(prepared_ops, first_pc, code.len())
 }
@@ -1261,10 +1212,8 @@ struct ProgramLoadImage<'a> {
 #[derive(Clone, Copy)]
 struct FetchedOp {
     inst: u32,
-    len: u32,
     wide_op: u8,
     base_gas: Option<u64>,
-    simple: Option<SimpleInstruction>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TraceMode {
@@ -1281,63 +1230,91 @@ pub struct RuntimeTemplate {
     memory: Memory,
     registers: Registers,
     private_memory_bytes: PrivateMemoryRanges,
+    code_hash: [u8; 32],
     pc: u64,
     gas_limit: u64,
     max_cycles: u64,
     trace_mode: TraceMode,
+    zk_mode: bool,
     zk_trace_enabled: bool,
     entrypoint_pc: Option<u64>,
     input_bump_next: u64,
 }
-/// A warmed VM cannot be reset from a baseline with different memory geometry.
+/// A warmed VM cannot be reset from a different program or memory geometry.
 ///
 /// Runtime pools must discard the mismatched VM instead of replacing its full
 /// memory image. A subsequent checkout can construct a correctly sized VM.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeTemplateResetError {
-    current_memory_bytes: usize,
-    template_memory_bytes: usize,
-    current_stack_limit: u64,
-    template_stack_limit: u64,
-    current_heap_max_limit: u64,
-    template_heap_max_limit: u64,
-    current_merkle_chunk_bytes: usize,
-    template_merkle_chunk_bytes: usize,
-    current_merkle_leaves: usize,
-    template_merkle_leaves: usize,
+    kind: RuntimeTemplateResetErrorKind,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeTemplateResetErrorKind {
+    ProgramIdentity {
+        current: [u8; 32],
+        template: [u8; 32],
+    },
+    MemoryGeometry {
+        current_memory_bytes: usize,
+        template_memory_bytes: usize,
+        current_stack_limit: u64,
+        template_stack_limit: u64,
+        current_heap_max_limit: u64,
+        template_heap_max_limit: u64,
+        current_merkle_chunk_bytes: usize,
+        template_merkle_chunk_bytes: usize,
+        current_merkle_leaves: usize,
+        template_merkle_leaves: usize,
+    },
 }
 impl RuntimeTemplateResetError {
+    fn from_program_identity(current: [u8; 32], template: [u8; 32]) -> Self {
+        Self {
+            kind: RuntimeTemplateResetErrorKind::ProgramIdentity { current, template },
+        }
+    }
     fn from_memory(error: MemoryTemplateMismatch) -> Self {
         Self {
-            current_memory_bytes: error.current.bytes,
-            template_memory_bytes: error.template.bytes,
-            current_stack_limit: error.current.stack_limit,
-            template_stack_limit: error.template.stack_limit,
-            current_heap_max_limit: error.current.heap_max_limit,
-            template_heap_max_limit: error.template.heap_max_limit,
-            current_merkle_chunk_bytes: error.current.merkle_chunk_bytes,
-            template_merkle_chunk_bytes: error.template.merkle_chunk_bytes,
-            current_merkle_leaves: error.current.merkle_leaves,
-            template_merkle_leaves: error.template.merkle_leaves,
+            kind: RuntimeTemplateResetErrorKind::MemoryGeometry {
+                current_memory_bytes: error.current.bytes,
+                template_memory_bytes: error.template.bytes,
+                current_stack_limit: error.current.stack_limit,
+                template_stack_limit: error.template.stack_limit,
+                current_heap_max_limit: error.current.heap_max_limit,
+                template_heap_max_limit: error.template.heap_max_limit,
+                current_merkle_chunk_bytes: error.current.merkle_chunk_bytes,
+                template_merkle_chunk_bytes: error.template.merkle_chunk_bytes,
+                current_merkle_leaves: error.current.merkle_leaves,
+                template_merkle_leaves: error.template.merkle_leaves,
+            },
         }
     }
 }
 impl std::fmt::Display for RuntimeTemplateResetError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "runtime-template memory geometry mismatch: VM has {} bytes, {} stack bytes, {} heap-ceiling bytes, {}-byte Merkle chunks, and {} Merkle leaves; template has {} bytes, {} stack bytes, {} heap-ceiling bytes, {}-byte Merkle chunks, and {} Merkle leaves",
-            self.current_memory_bytes,
-            self.current_stack_limit,
-            self.current_heap_max_limit,
-            self.current_merkle_chunk_bytes,
-            self.current_merkle_leaves,
-            self.template_memory_bytes,
-            self.template_stack_limit,
-            self.template_heap_max_limit,
-            self.template_merkle_chunk_bytes,
-            self.template_merkle_leaves
-        )
+        match self.kind {
+            RuntimeTemplateResetErrorKind::ProgramIdentity { current, template } => write!(
+                formatter,
+                "runtime-template program mismatch: VM has code hash {}, template has code hash {}",
+                hex::encode(current),
+                hex::encode(template)
+            ),
+            RuntimeTemplateResetErrorKind::MemoryGeometry {
+                current_memory_bytes,
+                template_memory_bytes,
+                current_stack_limit,
+                template_stack_limit,
+                current_heap_max_limit,
+                template_heap_max_limit,
+                current_merkle_chunk_bytes,
+                template_merkle_chunk_bytes,
+                current_merkle_leaves,
+                template_merkle_leaves,
+            } => write!(
+                formatter,
+                "runtime-template memory geometry mismatch: VM has {current_memory_bytes} bytes, {current_stack_limit} stack bytes, {current_heap_max_limit} heap-ceiling bytes, {current_merkle_chunk_bytes}-byte Merkle chunks, and {current_merkle_leaves} Merkle leaves; template has {template_memory_bytes} bytes, {template_stack_limit} stack bytes, {template_heap_max_limit} heap-ceiling bytes, {template_merkle_chunk_bytes}-byte Merkle chunks, and {template_merkle_leaves} Merkle leaves"
+            ),
+        }
     }
 }
 impl std::error::Error for RuntimeTemplateResetError {}
@@ -1376,7 +1353,21 @@ pub struct IVM {
     contract_abort_code: Option<u64>,
     constraints: zk::ConstraintLog,
     mem_log: MemLog,
-    reg_log: zk::RegLog,
+    reg_log: zk::SharedRegLog,
+    /// Whether a host callback currently owns `&mut IVM` with a detached
+    /// register log.
+    host_trace_log_detached: bool,
+    /// Invocation log retained while [`Self::reg_log`] is detached for a host
+    /// callback. This also gives trace-policy setters an exact TLS identity to
+    /// match instead of trusting a sticky boolean after unwinding.
+    host_trace_invocation_log: Option<zk::SharedRegLog>,
+    /// Changes whenever proof-facing state is discarded or replaced.
+    ///
+    /// Host callbacks may invoke public VM lifecycle methods. Capturing this
+    /// epoch while the register logger is detached prevents a callback from
+    /// resetting and then reconstructing the same apparent program identity
+    /// before the logger is reattached.
+    proof_state_epoch: u64,
     trace_log: DeltaTraceLog,
     step_log: zk::StepLog,
     trace_mode: TraceMode,
@@ -1404,9 +1395,6 @@ pub struct IVM {
     contract_return_stack: Vec<u64>,
     /// Aligned outer-return sentinel captured from r1 at invocation start.
     contract_outer_return_pc: Option<u64>,
-    branch_predictor: crate::branch_predictor::BranchPredictor,
-    branch_predictions: u64,
-    branch_correct: u64,
     #[cfg(test)]
     #[allow(dead_code)]
     /// When true (tests only), prints PC and instruction words as they execute.
@@ -1419,18 +1407,16 @@ pub struct IVM {
     prepared_loads: u64,
     // Shared world state used for block execution.
     state: State,
-    // Parallel scheduler reused across blocks.
-    scheduler: std::sync::Arc<Scheduler>,
-    // Execution contexts allocated per worker thread.
-    _contexts: Vec<ExecutionContext>,
-    // Number of threads used for scheduling.
-    core_count: usize,
+    // The block scheduler is expensive and most VM instances never execute a
+    // block, so construct it only on first use and share it across VM clones.
+    scheduler: Arc<OnceLock<Scheduler>>,
+    scheduler_limits: (usize, usize),
     /// Is Metal GPU acceleration available?
     use_metal: bool,
     /// Is CUDA GPU acceleration available?
     use_cuda: bool,
     /// Flag indicating if zero-knowledge mode is active.
-    pub zk_mode: bool,
+    zk_mode: bool,
     /// Collect formal proof traces while preserving ZK-mode execution semantics.
     zk_trace_enabled: bool,
     entrypoint_pc: Option<u64>,
@@ -1438,8 +1424,6 @@ pub struct IVM {
     last_diagnostic: Option<VmExecutionDiagnostic>,
     /// Low-bit alignment shared by all valid instruction PCs in the loaded program.
     pc_alignment: u64,
-    /// Does the host CPU support hardware transactional memory?
-    htm_supported: bool,
     /// Next free offset (relative to `Memory::INPUT_START`) used by the
     /// simple INPUT TLV bump allocator for host-returned pointers.
     input_bump_next: u64,
@@ -1468,7 +1452,10 @@ impl Clone for IVM {
             contract_abort_code: self.contract_abort_code,
             constraints: self.constraints.clone(),
             mem_log: self.mem_log.clone(),
-            reg_log: self.reg_log.clone(),
+            reg_log: Arc::new(parking_lot::Mutex::new(self.reg_log.lock().clone())),
+            host_trace_log_detached: false,
+            host_trace_invocation_log: None,
+            proof_state_epoch: self.proof_state_epoch,
             trace_log: self.trace_log.clone(),
             step_log: self.step_log.clone(),
             trace_mode: self.trace_mode,
@@ -1490,9 +1477,6 @@ impl Clone for IVM {
             strict_return_integrity: self.strict_return_integrity,
             contract_return_stack: self.contract_return_stack.clone(),
             contract_outer_return_pc: self.contract_outer_return_pc,
-            branch_predictor: self.branch_predictor.clone(),
-            branch_predictions: 0,
-            branch_correct: 0,
             #[cfg(test)]
             decode_trace: false,
             #[cfg(test)]
@@ -1502,9 +1486,8 @@ impl Clone for IVM {
             #[cfg(test)]
             prepared_loads: 0,
             state: self.state.clone(),
-            scheduler: std::sync::Arc::clone(&self.scheduler),
-            _contexts: Vec::new(),
-            core_count: self.core_count,
+            scheduler: Arc::clone(&self.scheduler),
+            scheduler_limits: self.scheduler_limits,
             use_metal: self.use_metal,
             use_cuda: self.use_cuda,
             zk_mode: self.zk_mode,
@@ -1513,7 +1496,6 @@ impl Clone for IVM {
             program_prefix_len: self.program_prefix_len,
             last_diagnostic: self.last_diagnostic.clone(),
             pc_alignment: self.pc_alignment,
-            htm_supported: self.htm_supported,
             input_bump_next: self.input_bump_next,
             acceleration_policy: self.acceleration_policy,
             hardware_capabilities: self.hardware_capabilities,
@@ -1554,15 +1536,6 @@ impl IVM {
     }
     /// First general register index used to hold vector register data.
     const VECTOR_BASE: usize = 32;
-    /// Gas costs for the simple interpreter.
-    const GAS_ALU: u64 = 1;
-    const GAS_MEM: u64 = 3;
-    const GAS_JUMP: u64 = 1;
-    const GAS_SHA256_BASE: u64 = 10;
-    const GAS_SHA256_PER_BYTE: u64 = 1;
-    const GAS_ED25519_VERIFY: u64 = 1000;
-    #[allow(dead_code)]
-    const GAS_DILITHIUM_VERIFY: u64 = 5000;
     /// Play a short tune on the default audio device.
     ///
     /// This function is only available when built with the `beep` feature.
@@ -1670,7 +1643,6 @@ impl IVM {
     fn startup_banner(
         core_count: usize,
         max_vector: usize,
-        htm: bool,
         capabilities: HardwareCapabilities,
         metal: bool,
         cuda: bool,
@@ -1702,7 +1674,7 @@ impl IVM {
             std::env::consts::OS,
             std::env::consts::ARCH
         );
-        let accel = if max_vector > 1 || htm || metal || cuda {
+        let accel = if max_vector > 1 || metal || cuda {
             "yes"
         } else {
             "no"
@@ -1758,7 +1730,7 @@ impl IVM {
         // Global Rayon pool initialization is handled by the host (e.g., irohad)
         // based on configuration. Avoid initializing a large global pool here to
         // reduce oversubscription when multiple thread pools coexist.
-        let htm_supported = cfg!(all(feature = "htm", target_arch = "x86_64")) && rtm_available();
+        let scheduler_limits = crate::parallel::default_scheduler_limits();
         let mut vm = IVM {
             registers: Registers::new(),
             memory: mem,
@@ -1779,7 +1751,10 @@ impl IVM {
             contract_abort_code: None,
             constraints: zk::ConstraintLog::default(),
             mem_log: MemLog::default(),
-            reg_log: zk::RegLog::default(),
+            reg_log: Arc::new(parking_lot::Mutex::new(zk::RegLog::default())),
+            host_trace_log_detached: false,
+            host_trace_invocation_log: None,
+            proof_state_epoch: 0,
             trace_log: DeltaTraceLog::default(),
             step_log: zk::StepLog::default(),
             trace_mode: TraceMode::Off,
@@ -1801,9 +1776,6 @@ impl IVM {
             strict_return_integrity: false,
             contract_return_stack: Vec::new(),
             contract_outer_return_pc: None,
-            branch_predictor: crate::branch_predictor::BranchPredictor::new(1024),
-            branch_predictions: 0,
-            branch_correct: 0,
             #[cfg(test)]
             decode_trace: false,
             #[cfg(test)]
@@ -1813,15 +1785,8 @@ impl IVM {
             #[cfg(test)]
             prepared_loads: 0,
             state: State::new(),
-            core_count: {
-                let (min, _max) = crate::parallel::default_scheduler_limits();
-                min
-            },
-            scheduler: {
-                let (min, max) = crate::parallel::default_scheduler_limits();
-                std::sync::Arc::new(Scheduler::new_dynamic(min, max))
-            },
-            _contexts: Vec::new(),
+            scheduler: Arc::new(OnceLock::new()),
+            scheduler_limits,
             use_metal: false,
             use_cuda: false,
             zk_mode: false,
@@ -1830,595 +1795,32 @@ impl IVM {
             program_prefix_len: 0,
             last_diagnostic: None,
             pc_alignment: 0,
-            htm_supported,
             input_bump_next: 0,
             acceleration_policy: AccelerationPolicy::deterministic(),
             hardware_capabilities: config.capabilities(),
         };
-        vm.scheduler
-            .set_forced_simd(config.acceleration().forced_simd());
         vm.set_hardware_capabilities(config.capabilities());
         vm.set_acceleration_policy(config.acceleration());
-        vm.core_count = vm.scheduler.thread_count();
         vm
     }
     fn apply_acceleration_policy(&mut self, policy: AccelerationPolicy) {
         let caps = self.hardware_capabilities;
         self.acceleration_policy = policy;
         vector::set_thread_forced_simd(policy.forced_simd());
-        self.scheduler.set_forced_simd(policy.forced_simd());
+        if let Some(scheduler) = self.scheduler.get() {
+            scheduler.set_forced_simd(policy.forced_simd());
+        }
         self.use_metal = policy.allow_metal() && caps.metal_available();
         self.use_cuda = policy.allow_cuda() && caps.cuda_available();
     }
-    /// Decode the next instruction from code memory and advance the program counter.
-    ///
-    /// The simple decoder understands a compact 16-bit encoding for basic arithmetic, memory and
-    /// branch operations as well as a 32-bit form for absolute jumps. Unknown opcodes or invalid
-    /// fetches yield `VMError::DecodeError`.
-    pub fn decode_next(&self) -> Result<(crate::simple_instruction::Instruction, u8), VMError> {
-        use crate::simple_instruction::Instruction;
-        let half = self
-            .memory
-            .fetch_u16(self.pc)
-            .map_err(|_| VMError::DecodeError)?;
-        // Check for 32-bit jump prefix 0b11111xxxx_xxxxxxxx
-        if (half >> 11) == 0x1F {
-            let next = self
-                .memory
-                .fetch_u16(self.pc + 2)
-                .map_err(|_| VMError::DecodeError)?;
-            let hi = (half & 0x07FF) as u32;
-            let target = ((hi << 16) | next as u32) as u64;
-            return Ok((Instruction::Jump { target }, 4));
-        }
-        let op = (half >> 12) & 0xF;
-        let f1 = (half >> 8) & 0xF;
-        let f2 = (half >> 4) & 0xF;
-        let f3 = half & 0xF;
-        let instr = match op {
-            0x0 => Instruction::Halt,
-            0x1 => Instruction::Add {
-                rd: f1,
-                rs: f2,
-                rt: f3,
-            },
-            0x2 => Instruction::Sub {
-                rd: f1,
-                rs: f2,
-                rt: f3,
-            },
-            0x3 => {
-                let offset = ((f3 as i8) << 4) >> 4;
-                Instruction::Load {
-                    rd: f1,
-                    addr_reg: f2,
-                    offset,
-                }
-            }
-            0x4 => {
-                let offset = ((f3 as i8) << 4) >> 4;
-                Instruction::Store {
-                    rs: f1,
-                    addr_reg: f2,
-                    offset,
-                }
-            }
-            0x6 => Instruction::Xor {
-                rd: f1,
-                rs: f2,
-                rt: f3,
-            },
-            0x5 => {
-                let offset = ((f3 as i8) << 4) >> 4;
-                Instruction::Beq {
-                    rs: f1,
-                    rt: f2,
-                    offset: offset as i16,
-                }
-            }
-            _ => return Err(VMError::DecodeError),
-        };
-        Ok((instr, 2))
-    }
-    /// Execute a single simple instruction.
-    pub fn execute_instruction(&mut self, instr: SimpleInstruction) -> Result<(), VMError> {
-        // Determine gas cost for this instruction
-        let cost = match instr {
-            SimpleInstruction::Add { .. }
-            | SimpleInstruction::Sub { .. }
-            | SimpleInstruction::And { .. }
-            | SimpleInstruction::Or { .. }
-            | SimpleInstruction::AddImm { .. }
-            | SimpleInstruction::SubImm { .. }
-            | SimpleInstruction::Xor { .. }
-            | SimpleInstruction::Sll { .. }
-            | SimpleInstruction::Srl { .. }
-            | SimpleInstruction::Sra { .. }
-            | SimpleInstruction::SetVL { .. } => Self::GAS_ALU,
-            SimpleInstruction::Vadd32 { .. } => {
-                gas::scaled_vector_cost(Self::GAS_ALU * 2, self.vector_length)
-            }
-            SimpleInstruction::Load { .. } | SimpleInstruction::Store { .. } => Self::GAS_MEM,
-            SimpleInstruction::Jump { .. } | SimpleInstruction::Beq { .. } => Self::GAS_JUMP,
-            SimpleInstruction::Sha256 { len, .. } => {
-                Self::GAS_SHA256_BASE + Self::GAS_SHA256_PER_BYTE * len
-            }
-            SimpleInstruction::Ed25519Verify { .. } => Self::GAS_ED25519_VERIFY,
-            SimpleInstruction::DilithiumVerify { .. } => Self::GAS_DILITHIUM_VERIFY,
-            SimpleInstruction::Halt => 0,
-        };
-        if self.gas_remaining < cost {
-            return Err(VMError::OutOfGas);
-        }
-        self.gas_remaining -= cost;
-        match instr {
-            SimpleInstruction::Add { rd, rs, rt } => {
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                if self.zk_mode {
-                    let tag_a = self.registers.tag(rs as usize);
-                    let tag_b = self.registers.tag(rt as usize);
-                    if tag_a != tag_b {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.registers.set_tag(rd as usize, tag_a);
-                }
-                let sum = a.wrapping_add(b);
-                self.registers.set(rd as usize, sum);
-            }
-            SimpleInstruction::Sub { rd, rs, rt } => {
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                if self.zk_mode {
-                    let tag_a = self.registers.tag(rs as usize);
-                    let tag_b = self.registers.tag(rt as usize);
-                    if tag_a != tag_b {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.registers.set_tag(rd as usize, tag_a);
-                }
-                let diff = a.wrapping_sub(b);
-                self.registers.set(rd as usize, diff);
-            }
-            SimpleInstruction::And { rd, rs, rt } => {
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                if self.zk_mode {
-                    let tag_a = self.registers.tag(rs as usize);
-                    let tag_b = self.registers.tag(rt as usize);
-                    if tag_a != tag_b {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.registers.set_tag(rd as usize, tag_a);
-                }
-                self.registers.set(rd as usize, a & b);
-            }
-            SimpleInstruction::Or { rd, rs, rt } => {
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                if self.zk_mode {
-                    let tag_a = self.registers.tag(rs as usize);
-                    let tag_b = self.registers.tag(rt as usize);
-                    if tag_a != tag_b {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.registers.set_tag(rd as usize, tag_a);
-                }
-                self.registers.set(rd as usize, a | b);
-            }
-            SimpleInstruction::AddImm { rd, rs, imm } => {
-                let a = self.registers.get(rs as usize);
-                let tag = self.zk_unary_tag(rs as usize);
-                self.zk_apply_tag(rd as usize, tag);
-                self.registers
-                    .set(rd as usize, a.wrapping_add(imm as i64 as u64));
-            }
-            SimpleInstruction::SubImm { rd, rs, imm } => {
-                let a = self.registers.get(rs as usize);
-                let tag = self.zk_unary_tag(rs as usize);
-                self.zk_apply_tag(rd as usize, tag);
-                self.registers
-                    .set(rd as usize, a.wrapping_sub(imm as i64 as u64));
-            }
-            SimpleInstruction::Xor { rd, rs, rt } => {
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                if self.zk_mode {
-                    let tag_a = self.registers.tag(rs as usize);
-                    let tag_b = self.registers.tag(rt as usize);
-                    if tag_a != tag_b {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.registers.set_tag(rd as usize, tag_a);
-                }
-                self.registers.set(rd as usize, a ^ b);
-            }
-            SimpleInstruction::Sll { rd, rs, rt } => {
-                let tag = self.zk_match_tags(rs as usize, rt as usize)?;
-                self.zk_apply_tag(rd as usize, tag);
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize) & 0x3F;
-                self.registers.set(rd as usize, a << b);
-            }
-            SimpleInstruction::Srl { rd, rs, rt } => {
-                let tag = self.zk_match_tags(rs as usize, rt as usize)?;
-                self.zk_apply_tag(rd as usize, tag);
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize) & 0x3F;
-                self.registers.set(rd as usize, a >> b);
-            }
-            SimpleInstruction::Sra { rd, rs, rt } => {
-                let tag = self.zk_match_tags(rs as usize, rt as usize)?;
-                self.zk_apply_tag(rd as usize, tag);
-                let a = self.registers.get(rs as usize) as i64;
-                let b = (self.registers.get(rt as usize) & 0x3F) as u32;
-                self.registers.set(rd as usize, (a >> b) as u64);
-            }
-            SimpleInstruction::SetVL { new_vl } => {
-                if !self.vector_enabled {
-                    return Err(VMError::VectorExtensionDisabled);
-                }
-                self.vector_length = setvl_length(new_vl as usize)?;
-            }
-            SimpleInstruction::Vadd32 { rd, rs, rt } => {
-                if !self.vector_enabled {
-                    return Err(VMError::VectorExtensionDisabled);
-                }
-                let n = self.vector_length;
-                let stride = n;
-                let rd = Self::VECTOR_BASE + rd as usize * stride;
-                let rs = Self::VECTOR_BASE + rs as usize * stride;
-                let rt = Self::VECTOR_BASE + rt as usize * stride;
-                if rd + n > 256 || rs + n > 256 || rt + n > 256 {
-                    return Err(VMError::RegisterOutOfBounds);
-                }
-                for i in 0..n {
-                    let a = self.registers.get(rs + i) as u32;
-                    let b = self.registers.get(rt + i) as u32;
-                    if self.zk_mode {
-                        let tag_a = self.registers.tag(rs + i);
-                        let tag_b = self.registers.tag(rt + i);
-                        if tag_a != tag_b {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        self.registers.set_tag(rd + i, tag_a);
-                    }
-                    let sum = a.wrapping_add(b);
-                    self.registers.set(rd + i, u64::from(sum));
-                }
-            }
-            SimpleInstruction::Load {
-                rd,
-                addr_reg,
-                offset,
-            } => {
-                if self.zk_mode && self.registers.tag(addr_reg as usize) {
-                    // Disallow secret-dependent memory access in ZK mode.
-                    return Err(VMError::PrivacyViolation);
-                }
-                let base = self.registers.get(addr_reg as usize) as i64;
-                let addr = base.wrapping_add(offset as i64) as u64;
-                let value = self.memory.load_u64(addr)?;
-                let tag = self.memory_load_privacy_tag(addr, 8)?;
-                self.registers.set(rd as usize, value);
-                if self.zk_mode {
-                    self.registers.set_tag(rd as usize, tag);
-                }
-            }
-            SimpleInstruction::Store {
-                rs,
-                addr_reg,
-                offset,
-            } => {
-                if self.zk_mode && self.registers.tag(addr_reg as usize) {
-                    return Err(VMError::PrivacyViolation);
-                }
-                let base = self.registers.get(addr_reg as usize) as i64;
-                let addr = base.wrapping_add(offset as i64) as u64;
-                let value = self.registers.get(rs as usize);
-                let tag = self.zk_mode && self.registers.tag(rs as usize);
-                self.validate_memory_store_privacy(addr, 8, tag)?;
-                self.memory.store_u64(addr, value)?;
-                self.record_memory_store_privacy(addr, 8, tag);
-            }
-            SimpleInstruction::Jump { target } => {
-                self.pc = target;
-            }
-            SimpleInstruction::Beq { rs, rt, offset } => {
-                if self.zk_mode {
-                    let cond_left_private = self.registers.tag(rs as usize);
-                    let cond_right_private = self.registers.tag(rt as usize);
-                    if cond_left_private || cond_right_private {
-                        // Branching on private data would leak information.
-                        return Err(VMError::PrivacyViolation);
-                    }
-                }
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                let predicted = self.branch_predictor.predict(self.pc);
-                let taken = a == b;
-                self.branch_predictions += 1;
-                if likely(predicted == taken) {
-                    self.branch_correct += 1;
-                } else {
-                    self.cycles += 1;
-                }
-                self.branch_predictor.update(self.pc, taken);
-                if likely(taken) {
-                    // Offset is in units of instructions (2 bytes each)
-                    let offs = offset as i64 * 2;
-                    self.pc = ((self.pc as i64) + offs) as u64;
-                }
-            }
-            SimpleInstruction::Sha256 {
-                dest,
-                src_addr,
-                len,
-            } => {
-                self.ensure_public_memory(src_addr, len)?;
-                let data = self.memory.load_region(src_addr, len)?;
-                use sha2::{Digest, Sha256};
-                let digest = Sha256::digest(data);
-                for i in 0..4 {
-                    let mut chunk = [0u8; 8];
-                    chunk.copy_from_slice(&digest[i * 8..(i + 1) * 8]);
-                    let val = u64::from_le_bytes(chunk);
-                    self.registers.set(dest as usize + i, val);
-                    if self.zk_mode {
-                        self.registers.set_tag(dest as usize + i, false);
-                    }
-                }
-            }
-            SimpleInstruction::Ed25519Verify {
-                pubkey_addr,
-                sig_addr,
-                msg_addr,
-                msg_len,
-                result_reg,
-            } => {
-                use ed25519_dalek::Signature;
-                self.ensure_public_memory(pubkey_addr, 32)?;
-                self.ensure_public_memory(sig_addr, 64)?;
-                self.ensure_public_memory(msg_addr, msg_len)?;
-                let pk_slice = self.memory.load_region(pubkey_addr, 32)?;
-                let sig_slice = self.memory.load_region(sig_addr, 64)?;
-                let msg = self.memory.load_region(msg_addr, msg_len)?;
-                let pk_bytes: [u8; 32] = match pk_slice.try_into() {
-                    Ok(b) => b,
-                    Err(_) => {
-                        self.registers.set(result_reg as usize, 0);
-                        return Ok(());
-                    }
-                };
-                let sig_bytes_arr: [u8; 64] = match sig_slice.try_into() {
-                    Ok(b) => b,
-                    Err(_) => {
-                        self.registers.set(result_reg as usize, 0);
-                        return Ok(());
-                    }
-                };
-                if crate::signature::signature_bytes_are_all_zero(&sig_bytes_arr) {
-                    self.registers.set(result_reg as usize, 0);
-                    return Ok(());
-                }
-                if crate::signature::signature_has_invalid_ed25519_r(&sig_bytes_arr) {
-                    self.registers.set(result_reg as usize, 0);
-                    return Ok(());
-                }
-                let Some(pk) =
-                    crate::signature::parse_ed25519_public_key_for_verification(&pk_bytes)
-                else {
-                    self.registers.set(result_reg as usize, 0);
-                    return Ok(());
-                };
-                #[cfg(feature = "cuda")]
-                if self.use_cuda
-                    && let Some(res) =
-                        crate::cuda::ed25519_verify_cuda(msg, &sig_bytes_arr, &pk_bytes)
-                {
-                    let value = if res { 1 } else { 0 };
-                    self.registers.set(result_reg as usize, value);
-                    if self.zk_mode {
-                        self.registers.set_tag(result_reg as usize, false);
-                    }
-                    return Ok(());
-                }
-                let sig = match Signature::from_slice(&sig_bytes_arr) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        self.registers.set(result_reg as usize, 0);
-                        return Ok(());
-                    }
-                };
-                let valid = pk.verify_strict(msg, &sig).is_ok();
-                let value = if valid { 1 } else { 0 };
-                self.registers.set(result_reg as usize, value);
-                if self.zk_mode {
-                    self.registers.set_tag(result_reg as usize, false);
-                }
-            }
-            SimpleInstruction::DilithiumVerify {
-                level,
-                pubkey_addr,
-                sig_addr,
-                msg_addr,
-                msg_len,
-                result_reg,
-            } => {
-                use pqcrypto_mldsa::{
-                    mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5,
-                };
-                use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
-                self.ensure_public_memory(msg_addr, msg_len)?;
-                let msg = self.memory.load_region(msg_addr, msg_len)?;
-                let valid = match level {
-                    2 => {
-                        self.ensure_public_memory(
-                            pubkey_addr,
-                            dilithium2::public_key_bytes() as u64,
-                        )?;
-                        self.ensure_public_memory(sig_addr, dilithium2::signature_bytes() as u64)?;
-                        let pk_slice = self
-                            .memory
-                            .load_region(pubkey_addr, dilithium2::public_key_bytes() as u64)?;
-                        let sig_slice = self
-                            .memory
-                            .load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
-                        if crate::signature::material_bytes_are_all_zero(pk_slice)
-                            || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                        {
-                            self.registers.set(result_reg as usize, 0);
-                            return Ok(());
-                        }
-                        let pk = match dilithium2::PublicKey::from_bytes(pk_slice) {
-                            Ok(p) => p,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        let sig = match dilithium2::DetachedSignature::from_bytes(sig_slice) {
-                            Ok(s) => s,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        dilithium2::verify_detached_signature(&sig, msg, &pk).is_ok()
-                    }
-                    3 => {
-                        self.ensure_public_memory(
-                            pubkey_addr,
-                            dilithium3::public_key_bytes() as u64,
-                        )?;
-                        self.ensure_public_memory(sig_addr, dilithium3::signature_bytes() as u64)?;
-                        let pk_slice = self
-                            .memory
-                            .load_region(pubkey_addr, dilithium3::public_key_bytes() as u64)?;
-                        let sig_slice = self
-                            .memory
-                            .load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
-                        if crate::signature::material_bytes_are_all_zero(pk_slice)
-                            || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                        {
-                            self.registers.set(result_reg as usize, 0);
-                            return Ok(());
-                        }
-                        let pk = match dilithium3::PublicKey::from_bytes(pk_slice) {
-                            Ok(p) => p,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        let sig = match dilithium3::DetachedSignature::from_bytes(sig_slice) {
-                            Ok(s) => s,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        dilithium3::verify_detached_signature(&sig, msg, &pk).is_ok()
-                    }
-                    5 => {
-                        self.ensure_public_memory(
-                            pubkey_addr,
-                            dilithium5::public_key_bytes() as u64,
-                        )?;
-                        self.ensure_public_memory(sig_addr, dilithium5::signature_bytes() as u64)?;
-                        let pk_slice = self
-                            .memory
-                            .load_region(pubkey_addr, dilithium5::public_key_bytes() as u64)?;
-                        let sig_slice = self
-                            .memory
-                            .load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
-                        if crate::signature::material_bytes_are_all_zero(pk_slice)
-                            || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                        {
-                            self.registers.set(result_reg as usize, 0);
-                            return Ok(());
-                        }
-                        let pk = match dilithium5::PublicKey::from_bytes(pk_slice) {
-                            Ok(p) => p,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        let sig = match dilithium5::DetachedSignature::from_bytes(sig_slice) {
-                            Ok(s) => s,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        dilithium5::verify_detached_signature(&sig, msg, &pk).is_ok()
-                    }
-                    _ => false,
-                };
-                let value = if valid { 1 } else { 0 };
-                self.registers.set(result_reg as usize, value);
-                if self.zk_mode {
-                    self.registers.set_tag(result_reg as usize, false);
-                }
-            }
-            SimpleInstruction::Halt => {}
-        }
-        Ok(())
-    }
-    /// Execute a program made of `SimpleInstruction`s.
-    pub fn run_simple(&mut self) -> Result<(), VMError> {
-        const MAX_STEPS: u64 = 1_000_000;
-        let mut steps = 0u64;
-        let _pointer_policy_guard =
-            PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
-        loop {
-            if steps >= MAX_STEPS {
-                return Err(VMError::ExceededMaxCycles);
-            }
-            let mut block = Vec::new();
-            let mut terminal = None;
-            loop {
-                let (instr, len) = self.decode_next()?;
-                self.pc = self.pc.wrapping_add(len as u64);
-                if matches!(
-                    instr,
-                    SimpleInstruction::Jump { .. }
-                        | SimpleInstruction::Beq { .. }
-                        | SimpleInstruction::Halt
-                ) {
-                    terminal = Some(instr);
-                    break;
-                } else {
-                    block.push(instr);
-                    steps += 1;
-                    if steps >= MAX_STEPS {
-                        break;
-                    }
-                }
-            }
-            if !block.is_empty() {
-                self.execute_block_parallel(&block)?;
-            }
-            if let Some(term) = terminal {
-                if matches!(term, SimpleInstruction::Halt) {
-                    // In the simple pipeline, require at least one unit of gas to
-                    // complete the final step so that programs with N instructions
-                    // need >= N gas. This matches edge-case expectations in tests.
-                    if self.gas_remaining == 0 {
-                        return Err(VMError::OutOfGas);
-                    }
-                    // HALT itself has zero cost; the gas check above enforces step budget.
-                    break;
-                }
-                self.execute_instruction(term)?;
-                steps += 1;
-            } else {
-                break;
-            }
-        }
-        self.commit_memory_after_run_if_needed();
-        Ok(())
+    fn scheduler(&self) -> &Scheduler {
+        let (min_threads, max_threads) = self.scheduler_limits;
+        let forced_simd = self.acceleration_policy.forced_simd();
+        self.scheduler.get_or_init(|| {
+            let scheduler = Scheduler::new_dynamic(min_threads, max_threads);
+            scheduler.set_forced_simd(forced_simd);
+            scheduler
+        })
     }
     /// Create a new IVM with custom state and optional core count.
     pub fn new_with_options(core_count: Option<usize>, state: State, gas_limit: u64) -> Self {
@@ -2436,16 +1838,12 @@ impl IVM {
             Some(n) => (n.max(1), n.max(1)),
             None => crate::parallel::default_scheduler_limits(),
         };
-        vm.core_count = min;
-        vm.scheduler = std::sync::Arc::new(Scheduler::new_dynamic(min, max));
+        vm.scheduler_limits = (min, max);
+        vm.scheduler = Arc::new(OnceLock::new());
         vm.state = state;
-        vm.htm_supported = cfg!(all(feature = "htm", target_arch = "x86_64")) && rtm_available();
-        let scheduler_threads = vm.scheduler.thread_count();
-        vm.core_count = scheduler_threads;
         IVM::startup_banner(
-            scheduler_threads,
+            min,
             vm.max_vector_lanes,
-            vm.htm_supported,
             vm.hardware_capabilities(),
             vm.use_metal,
             vm.use_cuda,
@@ -2458,7 +1856,8 @@ impl IVM {
     /// When enabled and no explicit cycle limit has been set, the default
     /// [`zk::MAX_CYCLES`] value is used. Disabling ZK clears the cycle limit.
     pub fn set_zk_mode(&mut self, enabled: bool) {
-        if self.zk_mode && !enabled && !self.scrub_private_memory() {
+        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
+        if !enabled && !self.scrub_private_state() {
             return;
         }
         self.zk_mode = enabled;
@@ -2474,10 +1873,22 @@ impl IVM {
     ///
     /// This does not change ZK-mode execution semantics: ZK opcodes, privacy
     /// tags, assertion handling, max-cycle padding, and gas accounting remain
-    /// active. Disabling this only suppresses proof/telemetry artifacts.
+    /// active. Disabling this only suppresses proof/telemetry artifacts. A
+    /// change made by a host during execution applies to the next invocation;
+    /// the current invocation keeps the trace policy selected at its start.
     pub fn set_zk_trace_enabled(&mut self, enabled: bool) {
         self.zk_trace_enabled = enabled;
-        if !enabled {
+        let scoped_invocation_log = zk::scoped_reg_logger();
+        let invocation_owns_this_log = scoped_invocation_log
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, &self.reg_log));
+        let active_callback_owns_this_log = self.host_trace_log_detached
+            && scoped_invocation_log.as_ref().is_some_and(|active| {
+                self.host_trace_invocation_log
+                    .as_ref()
+                    .is_some_and(|invocation| Arc::ptr_eq(active, invocation))
+            });
+        if !enabled && !invocation_owns_this_log && !active_callback_owns_this_log {
             self.clear_zk_trace_logs();
         }
     }
@@ -2488,6 +1899,10 @@ impl IVM {
     }
     /// Set the maximum cycle count used for zero-knowledge padding and enforcement.
     pub fn set_max_cycles(&mut self, max: u64) {
+        // The active trace shape is fixed at invocation start. A host callback
+        // may configure a later invocation, but it must not silently truncate
+        // or backfill the proof that is currently being collected.
+        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
         self.max_cycles = max;
     }
     /// Load raw code bytes under the default non-ZK, non-vector execution profile.
@@ -2498,7 +1913,7 @@ impl IVM {
         if code.len() > Memory::HEAP_START as usize {
             return Err(VMError::MemoryOutOfBounds);
         }
-        if !self.scrub_private_memory() {
+        if !self.scrub_private_state() {
             return Err(VMError::PrivacyViolation);
         }
         self.metadata = ProgramMetadata::default();
@@ -2574,11 +1989,10 @@ impl IVM {
         let (predecoded, prepared) = if instruction_region.is_empty() {
             (None, None)
         } else {
-            let decoded = crate::ivm_cache::global_get_with_meta(instruction_region, &meta)?;
+            let decoded = crate::ivm_cache::global_get(instruction_region)?;
             validate_generic_program_syscalls(decoded.as_ref())?;
             let prepared = prepare_instruction_stream(
                 instruction_region,
-                &meta,
                 decoded.as_ref(),
                 entry_pc,
                 literal_table.entries(),
@@ -2646,7 +2060,7 @@ impl IVM {
         if code_len > Memory::HEAP_START || image.entry_pc > code_len {
             return Err(VMError::InvalidMetadata);
         }
-        if !self.scrub_private_memory() {
+        if !self.scrub_private_state() {
             return Err(VMError::PrivacyViolation);
         }
         self.metadata = image.metadata.clone();
@@ -2687,7 +2101,9 @@ impl IVM {
         self.contract_abort_code = None;
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
-        self.reg_log = zk::RegLog::default();
+        self.reg_log.lock().scrub();
+        self.host_trace_log_detached = false;
+        self.host_trace_invocation_log = None;
         self.trace_log = DeltaTraceLog::default();
         self.step_log = zk::StepLog::default();
         self.pc_trace.clear();
@@ -2798,14 +2214,12 @@ impl IVM {
                 perm: Perm::EXECUTE,
             });
         }
-        let (inst, len) = decoder::decode(&self.memory, self.pc)?;
+        let inst = decoder::decode(&self.memory, self.pc)?;
         let wide_op = instruction::wide::opcode(inst);
         Ok(FetchedOp {
             inst,
-            len,
             wide_op,
             base_gas: gas::cost_of(inst),
-            simple: to_simple(inst),
         })
     }
     fn classify_trap(err: &VMError) -> VmTrapKind {
@@ -2814,9 +2228,7 @@ impl IVM {
             VMError::OutOfMemory => VmTrapKind::OutOfMemory,
             VMError::MemoryAccessViolation { .. }
             | VMError::MisalignedAccess { .. }
-            | VMError::MemoryOutOfBounds
-            | VMError::UnalignedAccess
-            | VMError::MemoryPermissionDenied => VmTrapKind::MemoryFault,
+            | VMError::MemoryOutOfBounds => VmTrapKind::MemoryFault,
             VMError::DecodeError => VmTrapKind::DecodeError,
             VMError::InvalidOpcode(_) => VmTrapKind::InvalidOpcode,
             VMError::UnknownSyscall(_) => VmTrapKind::UnknownSyscall,
@@ -2848,7 +2260,6 @@ impl IVM {
             | VMError::PermissionDenied => VmTrapKind::PermissionDenied,
             VMError::PrivacyViolation => VmTrapKind::PrivacyViolation,
             VMError::RegisterOutOfBounds => VmTrapKind::RegisterOutOfBounds,
-            VMError::HTMAbort => VmTrapKind::HTMAbort,
             VMError::NoritoInvalid => VmTrapKind::NoritoInvalid,
             VMError::AbiTypeNotAllowed { .. } => VmTrapKind::AbiTypeNotAllowed,
             VMError::HostOutputBudgetExceeded { .. } => VmTrapKind::HostOutputBudgetExceeded,
@@ -2924,28 +2335,24 @@ impl IVM {
     pub fn zk_mode_enabled(&self) -> bool {
         self.zk_mode
     }
-    /// Return whether this VM carries state that must not cross a public-only
-    /// execution boundary.
-    ///
-    /// This deliberately checks the mode, register tags, and tracked private
-    /// memory independently so a stale or externally assembled VM fails
-    /// closed even when those fields are inconsistent.
-    #[must_use]
-    pub(crate) fn carries_private_execution_state(&self) -> bool {
-        self.zk_mode
-            || !self.private_memory_bytes.is_empty()
-            || self.registers.snapshot_tags().contains(&true)
-    }
     #[inline]
     fn zk_trace_collection_enabled(&self) -> bool {
-        self.zk_mode && self.zk_trace_enabled
+        zk::scoped_reg_logger_enabled().unwrap_or(self.zk_mode && self.zk_trace_enabled)
     }
     fn clear_zk_trace_logs(&mut self) {
-        self.constraints = zk::ConstraintLog::default();
-        self.mem_log = MemLog::default();
-        self.reg_log = zk::RegLog::default();
-        self.trace_log = DeltaTraceLog::default();
-        self.step_log = zk::StepLog::default();
+        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
+        self.constraints.list.clear();
+        self.mem_log.scrub();
+        self.reg_log.lock().scrub();
+        if let Some(invocation_log) = &self.host_trace_invocation_log
+            && !Arc::ptr_eq(invocation_log, &self.reg_log)
+        {
+            invocation_log.lock().scrub();
+        }
+        self.trace_log.scrub();
+        self.step_log.steps.clear();
+        self.pc_trace.clear();
+        self.delta_trace.scrub();
     }
     #[inline]
     fn zk_match_tags(&self, rs1: usize, rs2: usize) -> Result<Option<bool>, VMError> {
@@ -3070,6 +2477,18 @@ impl IVM {
             }
         }
         self.private_memory_bytes.is_empty()
+    }
+    /// Scrub every private value before a mode transition or program replacement.
+    fn scrub_private_state(&mut self) -> bool {
+        let had_private_context =
+            self.zk_mode || self.registers.has_private() || !self.private_memory_bytes.is_empty();
+        let memory_scrubbed = self.scrub_private_memory();
+        self.registers.scrub_private();
+        if had_private_context {
+            self.clear_zk_trace_logs();
+            self.memory.clear_tracking();
+        }
+        memory_scrubbed
     }
     /// Detect a direct value or complete owned TLV that overlaps private bytes.
     ///
@@ -3384,34 +2803,81 @@ impl IVM {
             .binary_search(&address)
             .is_ok()
     }
-    fn inspect_owned_public_tlv_payload_len(&self, ptr: u64) -> Result<usize, VMError> {
+    fn inspect_owned_public_tlv_header(&self, ptr: u64) -> Result<(u64, u8), VMError> {
+        ptr.checked_add(7).ok_or(VMError::NoritoInvalid)?;
         self.ensure_public_memory(ptr, 7)?;
         let hdr = self
             .memory
             .load_region(ptr, 7)
             .map_err(|_| VMError::NoritoInvalid)?;
-        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
-        let total = 7usize
+        let len = u64::from(u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]));
+        let total = 7_u64
             .checked_add(len)
-            .and_then(|size| size.checked_add(iroha_crypto::Hash::LENGTH))
+            .and_then(|size| {
+                size.checked_add(
+                    u64::try_from(iroha_crypto::Hash::LENGTH)
+                        .expect("digest length always fits u64"),
+                )
+            })
             .ok_or(VMError::NoritoInvalid)?;
-        let total = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
+        ptr.checked_add(total).ok_or(VMError::NoritoInvalid)?;
         // Privacy is a public-boundary invariant, not an owned-region
         // side-effect. Check the complete self-described range before
         // rejecting invalid provenance so stack-shaped envelopes cannot
         // declassify a private payload through a boolean decoder result.
         self.ensure_public_memory(ptr, total)?;
         self.ensure_owned_tlv_range(ptr, total)?;
-        Ok(len)
+        Ok((len, hdr[2]))
+    }
+    /// Charge the byte-linear portion of a direct signature opcode before
+    /// checksum hashing or cryptographic verification.
+    ///
+    /// All operands are inspected even after a malformed public pointer so a
+    /// later private operand still fails with `PrivacyViolation`. Aliased
+    /// operands are charged independently because validation scans each role.
+    fn preflight_signature_opcode_payloads(&mut self, pointers: [u64; 3]) -> Result<bool, VMError> {
+        let mut payload_lengths = [0_u64; 3];
+        let mut malformed = false;
+        for (index, pointer) in pointers.into_iter().enumerate() {
+            match self.inspect_owned_public_tlv_header(pointer) {
+                Ok((length, version)) => {
+                    if version == 1 {
+                        payload_lengths[index] = length;
+                    } else {
+                        // Version rejection is fixed-header work. It precedes
+                        // checksum hashing, so it must not receive the
+                        // byte-linear surcharge.
+                        malformed = true;
+                    }
+                }
+                Err(VMError::PrivacyViolation) => return Err(VMError::PrivacyViolation),
+                Err(_) => malformed = true,
+            }
+        }
+        if malformed {
+            return Ok(false);
+        }
+        let extra_gas = crate::gas::signature_opcode_extra_gas(
+            payload_lengths[0],
+            payload_lengths[1],
+            payload_lengths[2],
+        )
+        .ok_or(VMError::GasCostOverflow)?;
+        self.debit_gas(extra_gas)?;
+        Ok(true)
     }
     /// Validate a pointer-ABI TLV in any owned public region and return its decoded view.
     pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
-        let len = self.inspect_owned_public_tlv_payload_len(ptr)?;
-        let total = 7usize
+        let (len, _) = self.inspect_owned_public_tlv_header(ptr)?;
+        let total = 7_u64
             .checked_add(len)
-            .and_then(|size| size.checked_add(iroha_crypto::Hash::LENGTH))
+            .and_then(|size| {
+                size.checked_add(
+                    u64::try_from(iroha_crypto::Hash::LENGTH)
+                        .expect("digest length always fits u64"),
+                )
+            })
             .ok_or(VMError::NoritoInvalid)?;
-        let total = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
         let envelope = self
             .memory
             .load_region(ptr, total)
@@ -3549,10 +3015,8 @@ impl IVM {
     /// Execute a full block of transactions using the parallel scheduler.
     ///
     /// Each transaction is run on a cloned instance of the VM so worker threads never share mutable
-    /// state. When hardware transactional memory is available the scheduler wraps the entire
-    /// execution in an RTM region which eliminates the global mutex normally used for committing
-    /// updates. The shared [`State`] uses a `DashMap` internally for thread-safe access so applying
-    /// the write sets is safe from multiple threads.
+    /// state. Successful transactions publish their ordered write sets through
+    /// the shared [`State`] lock.
     pub fn execute_block(&mut self, block: Block) -> BlockResult {
         let allow_parallel = self
             .host
@@ -3561,6 +3025,8 @@ impl IVM {
         if !allow_parallel {
             return self.execute_block_sequential(block);
         }
+        self.scheduler();
+        let scheduler = Arc::clone(&self.scheduler);
         // Capture the current host (if any) so worker clones can access it via
         // a thread-safe wrapper. The original host is restored before returning
         // to preserve downcast behaviour for the caller.
@@ -3575,23 +3041,33 @@ impl IVM {
         let template = Arc::new(Mutex::new(self.clone()));
         let template_ref = &template;
         let host_for_workers_ref = &host_for_workers;
+        let state = self.state.clone();
         let cache_id = WORKER_CACHE_ID.fetch_add(1, Ordering::Relaxed);
         let scheduled = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            parallel::execute_block_predicted(&self.scheduler, block, |tx| {
-                WORKER_CACHE.with(|slot| {
-                    let mut slot = slot.borrow_mut();
-                    if slot.as_ref().map(|cache| cache.id) != Some(cache_id) {
-                        let resources =
-                            WorkerResources::new(template_ref, host_for_workers_ref.0.as_ref());
-                        *slot = Some(WorkerCache {
-                            id: cache_id,
-                            resources,
-                        });
-                    }
-                    let cache = slot.as_mut().expect("worker cache must be initialized");
-                    cache.resources.execute(tx)
-                })
-            })
+            scheduler
+                .get()
+                .expect("scheduler was initialized")
+                .schedule_block_with_ordered_commit(
+                    block,
+                    |tx| {
+                        WORKER_CACHE.with(|slot| {
+                            let mut slot = slot.borrow_mut();
+                            if slot.as_ref().map(|cache| cache.id) != Some(cache_id) {
+                                let resources = WorkerResources::new(
+                                    template_ref,
+                                    host_for_workers_ref.0.as_ref(),
+                                );
+                                *slot = Some(WorkerCache {
+                                    id: cache_id,
+                                    resources,
+                                });
+                            }
+                            let cache = slot.as_mut().expect("worker cache must be initialized");
+                            cache.resources.execute(tx)
+                        })
+                    },
+                    move |_, _, writes| state.apply(writes),
+                )
         }));
         if let Some(shared_host) = shared_host {
             let mut guard = shared_host.lock().unwrap_or_else(|err| err.into_inner());
@@ -3621,7 +3097,7 @@ impl IVM {
             let snapshot = self.host.as_ref().and_then(|h| h.checkpoint());
             let result = self.execute_transaction(&tx, &mut ctx);
             if result.success {
-                self.commit_transaction(&ctx, &tx.access.reg_tags);
+                self.commit_transaction(&mut ctx);
             } else if let (Some(snap), Some(host)) = (snapshot, self.host.as_deref_mut()) {
                 let _ = host.restore(snap.as_ref());
             }
@@ -3703,13 +3179,12 @@ impl IVM {
         ctx.reset();
     }
     /// Commit a transaction's state updates to the shared state.
-    fn commit_transaction(&mut self, ctx: &ExecutionContext, tags: &HashSet<usize>) {
-        self.state
-            .apply_atomic(&ctx.write_set, tags, self.htm_supported);
+    fn commit_transaction(&mut self, ctx: &mut ExecutionContext) {
+        self.state.apply(std::mem::take(&mut ctx.write_set));
     }
     /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
     pub fn reset(&mut self) {
-        let _ = self.scrub_private_memory();
+        let _ = self.scrub_private_state();
         let resume_pc = self
             .entrypoint_pc
             .or_else(|| self.prepared.as_ref().map(|prepared| prepared.first_pc))
@@ -3723,7 +3198,11 @@ impl IVM {
         self.contract_abort_code = None;
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
-        self.reg_log = zk::RegLog::default();
+        self.reg_log.lock().scrub();
+        self.host_trace_log_detached = false;
+        if let Some(invocation_log) = self.host_trace_invocation_log.take() {
+            invocation_log.lock().scrub();
+        }
         self.trace_log = DeltaTraceLog::default();
         self.step_log = zk::StepLog::default();
         self.pc_trace.clear();
@@ -3741,10 +3220,6 @@ impl IVM {
         } else {
             usize::from(self.metadata.vector_length)
         };
-        self.branch_predictions = 0;
-        self.branch_correct = 0;
-        let sz = self.branch_predictor.size();
-        self.branch_predictor = crate::branch_predictor::BranchPredictor::new(sz);
     }
     /// Capture the current post-load state as a reusable execution baseline.
     ///
@@ -3756,10 +3231,12 @@ impl IVM {
             memory: self.memory.clone(),
             registers: self.registers.clone(),
             private_memory_bytes: self.private_memory_bytes.clone(),
+            code_hash: self.code_hash,
             pc: self.pc,
             gas_limit: self.gas_limit,
             max_cycles: self.max_cycles,
             trace_mode: self.trace_mode,
+            zk_mode: self.zk_mode,
             zk_trace_enabled: self.zk_trace_enabled,
             entrypoint_pc: self.entrypoint_pc,
             input_bump_next: self.input_bump_next,
@@ -3773,13 +3250,20 @@ impl IVM {
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeTemplateResetError`] when the VM and template memory
-    /// geometries differ. The VM is left unchanged so a runtime pool can
-    /// discard it without performing a full-memory clone.
+    /// Returns [`RuntimeTemplateResetError`] when the VM and template refer to
+    /// different programs or their memory geometries differ. The VM is left
+    /// unchanged so a runtime pool can discard it without performing a
+    /// full-memory clone.
     pub fn reset_from_runtime_template(
         &mut self,
         template: &RuntimeTemplate,
     ) -> Result<(), RuntimeTemplateResetError> {
+        if self.code_hash != template.code_hash {
+            return Err(RuntimeTemplateResetError::from_program_identity(
+                self.code_hash,
+                template.code_hash,
+            ));
+        }
         // The template restores dirty memory chunks, so stale tags must not
         // cause reset() to scrub bytes restored from that baseline.
         self.memory
@@ -3797,6 +3281,7 @@ impl IVM {
         self.input_bump_next = template.input_bump_next;
         self.set_host(DefaultHost::default());
         self.reset();
+        self.zk_mode = template.zk_mode;
         self.registers = template.registers.clone();
         self.private_memory_bytes = template.private_memory_bytes.clone();
         self.pc = template.pc;
@@ -3993,9 +3478,20 @@ impl IVM {
     pub fn memory_log(&self) -> &[MemEvent] {
         &self.mem_log.events
     }
-    /// Access the log of register events collected during the last run.
-    pub fn register_log(&self) -> &[zk::RegEvent] {
-        &self.reg_log.events
+    /// Return an owned snapshot of register events collected during the last run.
+    ///
+    /// The snapshot cannot alias the active logger while a host callback reads
+    /// registers or replaces the VM.
+    pub fn register_log(&self) -> Vec<zk::RegEvent> {
+        self.reg_log.lock().events.clone()
+    }
+    fn proof_register_log_handle(&self) -> zk::SharedRegLog {
+        if self.host_trace_log_detached
+            && let Some(invocation_log) = &self.host_trace_invocation_log
+        {
+            return Arc::clone(invocation_log);
+        }
+        Arc::clone(&self.reg_log)
     }
     fn finish_digest(hasher: Sha256) -> [u8; 32] {
         hasher.finalize().into()
@@ -4147,17 +3643,20 @@ impl IVM {
     /// Count trace/log events priced by the execution-proof syscall without
     /// materializing or hashing the proof summary.
     pub(crate) fn execution_proof_event_count(&self) -> u64 {
+        let register_log = self.proof_register_log_handle();
         u64::try_from(self.pc_trace.len())
             .unwrap_or(u64::MAX)
             .saturating_add(u64::try_from(self.delta_trace.entries.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.trace_log.entries.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.constraints.list.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.mem_log.events.len()).unwrap_or(u64::MAX))
-            .saturating_add(u64::try_from(self.reg_log.events.len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(register_log.lock().events.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.step_log.steps.len()).unwrap_or(u64::MAX))
     }
     /// Build a deterministic proof summary for the current execution state.
     pub fn execution_proof(&mut self) -> ExecutionProof {
+        let register_log = self.proof_register_log_handle();
+        let register_log = register_log.lock();
         let output = self.memory.read_output();
         let mut output_hasher = Sha256::new();
         output_hasher.update(b"ivm-proof:output:v1");
@@ -4175,7 +3674,7 @@ impl IVM {
             register_trace_hash: Self::hash_delta_trace(&self.trace_log.entries),
             constraint_hash: Self::hash_constraints(&self.constraints.list),
             memory_log_hash: Self::hash_memory_log(&self.mem_log.events),
-            register_log_hash: Self::hash_register_log(&self.reg_log.events),
+            register_log_hash: Self::hash_register_log(&register_log.events),
             step_log_hash: Self::hash_step_log(&self.step_log.steps),
             cycles: self.cycles,
             max_cycles: self.max_cycles,
@@ -4186,7 +3685,7 @@ impl IVM {
             register_trace_len: self.trace_log.entries.len() as u64,
             constraint_len: self.constraints.list.len() as u64,
             memory_log_len: self.mem_log.events.len() as u64,
-            register_log_len: self.reg_log.events.len() as u64,
+            register_log_len: register_log.events.len() as u64,
             step_log_len: self.step_log.steps.len() as u64,
             zk_mode: self.zk_mode,
             halted: self.halted,
@@ -4197,21 +3696,14 @@ impl IVM {
     pub fn register_root(&self) -> [u8; 32] {
         *self.registers.merkle_root().as_ref()
     }
-    /// Fraction of correctly predicted branches during last run.
-    pub fn branch_prediction_accuracy(&self) -> f64 {
-        if self.branch_predictions == 0 {
-            1.0
-        } else {
-            self.branch_correct as f64 / self.branch_predictions as f64
-        }
-    }
     pub fn trace_mode(&self) -> TraceMode {
         self.trace_mode
     }
     pub fn set_trace_mode(&mut self, mode: TraceMode) {
+        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
         self.trace_mode = mode;
         self.pc_trace.clear();
-        self.delta_trace = zk::DeltaTraceLog::default();
+        self.delta_trace.scrub();
     }
     pub fn trace_pcs(&self) -> &[u64] {
         &self.pc_trace
@@ -4392,7 +3884,26 @@ impl IVM {
         debug_assert!(self.staged_syscall.is_none());
         self.validate_syscall_privacy(number)?;
         let saved_outputs = self.sanitize_syscall_output_privacy(number);
-        let quoted = match host.prepare_syscall(number, self) {
+        let prepare_isolation = self.isolate_host_register_log()?;
+        let prepared = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Host code may create or inspect unrelated VMs on this thread.
+            // Mask the invocation logger so those accesses cannot contaminate
+            // or disclose values through this VM's proof log.
+            let _host_logger_mask = zk::RegLoggerGuard::mask();
+            host.prepare_syscall(number, self)
+        })) {
+            Ok(prepared) => prepared,
+            Err(payload) => {
+                {
+                    let _host_logger_mask = zk::RegLoggerGuard::mask();
+                    self.restore_syscall_output_privacy(saved_outputs);
+                }
+                self.abort_host_register_log_isolation(prepare_isolation);
+                std::panic::resume_unwind(payload);
+            }
+        };
+        self.restore_host_register_log(prepare_isolation)?;
+        let quoted = match prepared {
             Ok(quoted) => quoted,
             Err(error) => {
                 self.restore_syscall_output_privacy(saved_outputs);
@@ -4408,7 +3919,41 @@ impl IVM {
             return Err(error);
         }
         self.syscall_gas_reserve = quoted;
-        let (actual, outcome) = match host.syscall(number, self) {
+        let register_values_before = self.registers.snapshot();
+        let register_tags_before = self.registers.snapshot_tags();
+        let syscall_isolation = match self.isolate_host_register_log() {
+            Ok(isolation) => isolation,
+            Err(error) => {
+                self.syscall_gas_reserve = 0;
+                return Err(error);
+            }
+        };
+        let host_result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _host_logger_mask = zk::RegLoggerGuard::mask();
+            host.syscall(number, self)
+        })) {
+            Ok(host_result) => host_result,
+            Err(payload) => {
+                {
+                    let _host_logger_mask = zk::RegLoggerGuard::mask();
+                    self.restore_syscall_output_privacy(saved_outputs);
+                }
+                self.syscall_gas_reserve = 0;
+                self.abort_host_register_log_isolation(syscall_isolation);
+                std::panic::resume_unwind(payload);
+            }
+        };
+        match self.restore_host_register_log(syscall_isolation) {
+            Ok(true) => {
+                self.record_host_register_changes(&register_values_before, &register_tags_before);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.syscall_gas_reserve = 0;
+                return Err(error);
+            }
+        }
+        let (actual, outcome) = match host_result {
             Ok(actual) => (actual, Ok(())),
             Err(error) => {
                 let (metered_gas, source) = error.split_metered();
@@ -4459,7 +4004,36 @@ impl IVM {
             return Err(error);
         }
         self.sanitize_syscall_output_privacy(number);
-        let host_result = host.syscall(number, self);
+        let register_values_before = self.registers.snapshot();
+        let register_tags_before = self.registers.snapshot_tags();
+        let syscall_isolation = match self.isolate_host_register_log() {
+            Ok(isolation) => isolation,
+            Err(error) => {
+                self.finish_staged_syscall(SyscallCompletion::Trap);
+                return Err(error);
+            }
+        };
+        let host_result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _host_logger_mask = zk::RegLoggerGuard::mask();
+            host.syscall(number, self)
+        })) {
+            Ok(host_result) => host_result,
+            Err(payload) => {
+                self.finish_staged_syscall(SyscallCompletion::Trap);
+                self.abort_host_register_log_isolation(syscall_isolation);
+                std::panic::resume_unwind(payload);
+            }
+        };
+        match self.restore_host_register_log(syscall_isolation) {
+            Ok(true) => {
+                self.record_host_register_changes(&register_values_before, &register_tags_before);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.finish_staged_syscall(SyscallCompletion::Trap);
+                return Err(error);
+            }
+        }
         match host_result {
             Ok(0) => {
                 let completion = self
@@ -4498,12 +4072,91 @@ impl IVM {
             self.last_staged_syscall = Some(context);
         }
     }
+    fn isolate_host_register_log(&mut self) -> Result<Option<HostRegisterLogIsolation>, VMError> {
+        let Some(invocation_log) = zk::event_reg_logger() else {
+            return Ok(None);
+        };
+        if !Arc::ptr_eq(&self.reg_log, &invocation_log) {
+            invocation_log.lock().scrub();
+            self.host_trace_log_detached = false;
+            if let Some(stale_log) = self.host_trace_invocation_log.take() {
+                stale_log.lock().scrub();
+            }
+            self.clear_zk_trace_logs();
+            return Err(VMError::PrivacyViolation);
+        }
+        let detached_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
+        self.reg_log = Arc::clone(&detached_log);
+        self.host_trace_log_detached = true;
+        self.host_trace_invocation_log = Some(Arc::clone(&invocation_log));
+        Ok(Some(HostRegisterLogIsolation {
+            invocation_log,
+            detached_log,
+            proof_state_epoch: self.proof_state_epoch,
+            code_hash: self.code_hash,
+            zk_mode: self.zk_mode,
+        }))
+    }
+    fn restore_host_register_log(
+        &mut self,
+        isolation: Option<HostRegisterLogIsolation>,
+    ) -> Result<bool, VMError> {
+        let Some(isolation) = isolation else {
+            return Ok(false);
+        };
+        if !self.host_trace_log_detached
+            || !Arc::ptr_eq(&self.reg_log, &isolation.detached_log)
+            || !self
+                .host_trace_invocation_log
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, &isolation.invocation_log))
+            || self.proof_state_epoch != isolation.proof_state_epoch
+            || self.code_hash != isolation.code_hash
+            || self.zk_mode != isolation.zk_mode
+        {
+            isolation.invocation_log.lock().scrub();
+            isolation.detached_log.lock().scrub();
+            self.host_trace_log_detached = false;
+            self.clear_zk_trace_logs();
+            self.host_trace_invocation_log = None;
+            return Err(VMError::PrivacyViolation);
+        }
+        isolation.detached_log.lock().scrub();
+        self.host_trace_log_detached = false;
+        self.host_trace_invocation_log = None;
+        self.reg_log = isolation.invocation_log;
+        Ok(true)
+    }
+    fn abort_host_register_log_isolation(&mut self, isolation: Option<HostRegisterLogIsolation>) {
+        // A caught host panic must leave the VM safe for an outer
+        // `catch_unwind` caller to inspect or reuse. Restore ownership when it
+        // is still valid, then scrub every proof-facing artifact before
+        // resuming the original panic.
+        let _host_logger_mask = zk::RegLoggerGuard::mask();
+        let _ = self.restore_host_register_log(isolation);
+        self.host_trace_log_detached = false;
+        if let Some(invocation_log) = self.host_trace_invocation_log.take() {
+            invocation_log.lock().scrub();
+        }
+        self.clear_zk_trace_logs();
+    }
+    fn record_host_register_changes(&self, values_before: &[u64; 256], tags_before: &[bool; 256]) {
+        let values_after = self.registers.snapshot();
+        let tags_after = self.registers.snapshot_tags();
+        for index in 1..values_after.len() {
+            if values_before[index] != values_after[index]
+                || tags_before[index] != tags_after[index]
+            {
+                self.registers.record_write_proof(index);
+            }
+        }
+    }
     pub(crate) fn execute_metered_syscall_with_host(
         &mut self,
         host: &mut dyn IVMHost,
         number: u32,
     ) -> Result<(), VMError> {
-        if !host.allows_syscall(self.syscall_policy(), number) {
+        if !host_allows_syscall_masked(host, self.syscall_policy(), number) {
             return Err(VMError::UnknownSyscall(number));
         }
         self.execute_syscall(host, number)
@@ -4511,8 +4164,8 @@ impl IVM {
     /// Execute the loaded program starting at the current `pc`.
     ///
     /// This is the heart of the VM: a classic fetch‑decode‑execute loop. For each instruction we
-    /// deduct gas, perform the operation and then advance the program counter by the actual length
-    /// of the instruction (16 or 32 bits). When zero-knowledge trace collection is active the
+    /// deduct gas, perform the operation and then advance the program counter by one 32-bit word.
+    /// When zero-knowledge trace collection is active the
     /// register state is logged on every cycle so that a prover can later reconstruct a trace. The
     /// loop terminates on `HALT` or when an error is encountered.
     pub fn run(&mut self) -> Result<(), VMError> {
@@ -4534,6 +4187,38 @@ impl IVM {
         }
     }
     fn run_with_host_ref(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
+        if self.host_trace_log_detached || self.host_trace_invocation_log.is_some() {
+            // A VM moved out of a host callback still borrows both logger
+            // allocations from the active outer invocation. Do not scrub or
+            // adopt those shared allocations here: sever the aliases, clear
+            // this VM's independent proof state, and make the attempted reuse
+            // fail closed. The owning isolation guard scrubs its logs.
+            self.host_trace_log_detached = false;
+            self.host_trace_invocation_log = None;
+            self.reg_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
+            self.clear_zk_trace_logs();
+            self.memory.clear_tracking();
+            return Err(VMError::PrivacyViolation);
+        }
+        self.host_trace_log_detached = false;
+        self.reg_log.lock().scrub();
+        self.reg_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
+        // Select this invocation's policy from the VM configuration, not from
+        // a possibly active outer VM's thread-local scope. Install the scope
+        // before any register access and retain it through trap diagnostics.
+        let invocation_log = if self.zk_mode && self.zk_trace_enabled {
+            Some(Arc::clone(&self.reg_log))
+        } else {
+            None
+        };
+        let _reg_logger_guard = zk::RegLoggerGuard::install(invocation_log);
+        // Proof-facing accessors describe the most recent invocation. Clear
+        // prior artifacts even when this run has tracing disabled.
+        self.clear_zk_trace_logs();
+        if !self.zk_mode && (self.registers.has_private() || !self.private_memory_bytes.is_empty())
+        {
+            return Err(VMError::PrivacyViolation);
+        }
         self.last_diagnostic = None;
         self.halted = false;
         self.constraint_failed = false;
@@ -4546,24 +4231,9 @@ impl IVM {
             let raw_target = self.registers.get(1);
             ((raw_target.wrapping_sub(self.pc_alignment)) & !3) | self.pc_alignment
         });
-        let result = (|| {
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _pointer_policy_guard =
                 PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
-            let _reg_logger_guard = if self.zk_trace_collection_enabled() {
-                Some(zk::RegLoggerGuard::install(&mut self.reg_log))
-            } else {
-                None
-            };
-            // Basic instruction-level parallelism: build blocks of simple
-            // arithmetic instructions that have no side effects and execute them
-            // using the parallel scheduler. Complex instructions are still executed
-            // sequentially.
-            let enable_ilp = false;
-            let mut ilp_block: Vec<SimpleInstruction> = Vec::new();
-            if self.zk_trace_collection_enabled() {
-                self.trace_log = DeltaTraceLog::default();
-                self.step_log = zk::StepLog::default();
-            }
             self.pc_trace.clear();
             self.delta_trace = zk::DeltaTraceLog::default();
             let mut last_logged_cycle = 0;
@@ -4585,29 +4255,15 @@ impl IVM {
                 self.record_runtime_trace();
                 let fetched = self.fetch_instruction()?;
                 let instr = fetched.inst;
-                let length = fetched.len;
+                let length = WIDE_INSTRUCTION_LEN;
                 let wide_op = fetched.wide_op;
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!(
                         "pc=0x{pc:08x} instr=0x{w:08x} len={len}",
                         pc = self.pc,
                         w = instr,
-                        len = length
+                        len = WIDE_INSTRUCTION_LEN
                     );
-                }
-                // Keep contract execution sequential until the ILP path is covered by
-                // canonical ordering/gas proofs for all host-observable effects.
-                if enable_ilp && self.max_cycles == 0 {
-                    if let Some(simple) = fetched.simple {
-                        // Part of a parallelisable block – defer execution.
-                        self.pc = self.pc.wrapping_add(length as u64);
-                        ilp_block.push(simple);
-                        continue;
-                    } else if !ilp_block.is_empty() {
-                        self.execute_block_parallel(&ilp_block)?;
-                        self.cycles += ilp_block.len() as u64;
-                        ilp_block.clear();
-                    }
                 }
                 let opcode_hi = (instr >> 24) as u8;
                 if !instruction::wide::is_valid_opcode(wide_op) {
@@ -4615,8 +4271,7 @@ impl IVM {
                 }
                 // Determine the gas cost for this operation and deduct it.
                 // Scale vector op costs by the current logical vector length.
-                // Future: include HTM retry penalties if enabled.
-                let cost = gas::cost_from_parts(fetched.base_gas, wide_op, self.vector_length, 0)
+                let cost = gas::cost_from_parts(fetched.base_gas, wide_op, self.vector_length)
                     .ok_or(VMError::InvalidOpcode((instr & 0xFFFF) as u16))?;
                 if unlikely(self.gas_remaining < cost) {
                     return Err(VMError::OutOfGas);
@@ -4636,27 +4291,27 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
                     instruction::wide::system::SCALL => {
                         let imm8 = instruction::wide::imm8(instr) as u8 as u32;
-                        if !host.allows_syscall(self.syscall_policy(), imm8) {
+                        if !host_allows_syscall_masked(host, self.syscall_policy(), imm8) {
                             return Err(VMError::UnknownSyscall(imm8));
                         }
                         self.execute_syscall(host, imm8)?;
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
                     instruction::wide::system::SYSTEM => {
                         let number = crate::encoding::wide::decode_syscallx(instr);
-                        if !host.allows_syscall(self.syscall_policy(), number) {
+                        if !host_allows_syscall_masked(host, self.syscall_policy(), number) {
                             return Err(VMError::UnknownSyscall(number));
                         }
                         self.execute_syscall(host, number)?;
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4671,7 +4326,7 @@ impl IVM {
                             .wrapping_add(self.registers.get(rs2));
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4686,7 +4341,7 @@ impl IVM {
                             .wrapping_sub(self.registers.get(rs2));
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4698,7 +4353,7 @@ impl IVM {
                         let val = self.registers.get(rs1) & self.registers.get(rs2);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4710,7 +4365,7 @@ impl IVM {
                         let val = self.registers.get(rs1) | self.registers.get(rs2);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4722,7 +4377,7 @@ impl IVM {
                         let val = self.registers.get(rs1) ^ self.registers.get(rs2);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4734,7 +4389,7 @@ impl IVM {
                         let val = self.registers.get(rs1) << (self.registers.get(rs2) & 0x3f);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4746,7 +4401,7 @@ impl IVM {
                         let val = self.registers.get(rs1) >> (self.registers.get(rs2) & 0x3f);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4760,7 +4415,7 @@ impl IVM {
                             as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4775,7 +4430,7 @@ impl IVM {
                             .wrapping_mul(self.registers.get(rs2));
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4789,7 +4444,7 @@ impl IVM {
                         let val = ((a * b) >> 64) as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4803,7 +4458,7 @@ impl IVM {
                         let val = (prod >> 64) as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4817,7 +4472,7 @@ impl IVM {
                         let val = ((a * b) >> 64) as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4832,7 +4487,7 @@ impl IVM {
                         let val = checked_div_i64(num, denom)?;
                         self.registers.set(rd, val as u64);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4849,7 +4504,7 @@ impl IVM {
                         let val = self.registers.get(rs1) / denom;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4864,7 +4519,7 @@ impl IVM {
                         let val = checked_rem_i64(num, denom)?;
                         self.registers.set(rd, val as u64);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4881,7 +4536,7 @@ impl IVM {
                         let val = self.registers.get(rs1) % denom;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4894,7 +4549,7 @@ impl IVM {
                         let rhs = self.registers.get(rs2) as i64;
                         self.registers.set(rd, u64::from(lhs < rhs));
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4907,7 +4562,7 @@ impl IVM {
                         let rhs = self.registers.get(rs2);
                         self.registers.set(rd, u64::from(lhs < rhs));
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4920,7 +4575,7 @@ impl IVM {
                         let rhs = self.registers.get(rs2);
                         self.registers.set(rd, u64::from(lhs == rhs));
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4933,7 +4588,7 @@ impl IVM {
                         let rhs = self.registers.get(rs2);
                         self.registers.set(rd, u64::from(lhs != rhs));
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4950,7 +4605,7 @@ impl IVM {
                             let tag = self.zk_unary_tag(src);
                             self.zk_apply_tag(rd, tag);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4961,7 +4616,7 @@ impl IVM {
                         let val = self.registers.get(src).wrapping_neg();
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4972,7 +4627,7 @@ impl IVM {
                         let val = !self.registers.get(src);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4985,7 +4640,7 @@ impl IVM {
                         let val = self.registers.get(src).rotate_left(sh);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4998,7 +4653,7 @@ impl IVM {
                         let val = self.registers.get(src).rotate_right(sh);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -5010,7 +4665,7 @@ impl IVM {
                         let val = self.registers.get(src).rotate_left(sh);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -5022,7 +4677,7 @@ impl IVM {
                         let val = self.registers.get(src).rotate_right(sh);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5033,7 +4688,7 @@ impl IVM {
                         let val = self.registers.get(src).count_ones() as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5044,7 +4699,7 @@ impl IVM {
                         let val = self.registers.get(src).leading_zeros() as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5055,7 +4710,7 @@ impl IVM {
                         let val = self.registers.get(src).trailing_zeros() as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5067,7 +4722,7 @@ impl IVM {
                         let root = isqrt_u64(val);
                         self.registers.set(rd, root);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 6;
                         continue;
                     }
@@ -5081,7 +4736,7 @@ impl IVM {
                         self.registers
                             .set(rd, if a < b { a as u64 } else { b as u64 });
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5095,7 +4750,7 @@ impl IVM {
                         self.registers
                             .set(rd, if a > b { a as u64 } else { b as u64 });
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5108,7 +4763,7 @@ impl IVM {
                         let abs = checked_abs_i64(v)?;
                         self.registers.set(rd, abs as u64);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5123,7 +4778,7 @@ impl IVM {
                         let val = div_ceil_i64(num, denom)?;
                         self.registers.set(rd, val as u64);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 12;
                         continue;
                     }
@@ -5137,7 +4792,7 @@ impl IVM {
                         let g = gcd_i64(a, b);
                         self.registers.set(rd, g);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 12;
                         continue;
                     }
@@ -5152,7 +4807,7 @@ impl IVM {
                         let avg = (sum / 2) as i64;
                         self.registers.set(rd, avg as u64);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 3;
                         continue;
                     }
@@ -5164,7 +4819,7 @@ impl IVM {
                         let val = (self.registers.get(rs1) as i64).wrapping_add(imm) as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5176,7 +4831,7 @@ impl IVM {
                         let val = self.registers.get(rs1) & imm;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5188,7 +4843,7 @@ impl IVM {
                         let val = self.registers.get(rs1) | imm;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5200,7 +4855,7 @@ impl IVM {
                         let val = self.registers.get(rs1) ^ imm;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5217,7 +4872,7 @@ impl IVM {
                                 self.registers.set_tag(rd, false);
                             }
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5237,7 +4892,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5257,7 +4912,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5275,7 +4930,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, tag);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5304,7 +4959,7 @@ impl IVM {
                             self.registers.set_tag(rd_lo, tag);
                             self.registers.set_tag(rd_hi, tag);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5321,7 +4976,7 @@ impl IVM {
                         self.validate_memory_store_privacy(addr, 8, tag)?;
                         self.memory.store_u64(addr, value)?;
                         self.record_memory_store_privacy(addr, 8, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5349,14 +5004,14 @@ impl IVM {
                         let value = ((hi as u128) << 64) | lo as u128;
                         self.memory.store_u128(addr, value)?;
                         self.record_memory_store_privacy(addr, 16, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
                     instruction::wide::control::HALT => {
                         self.halted = true;
                         self.cycles += 1;
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.flush_cycle_logs(&mut last_logged_cycle);
                         break;
                     }
@@ -5365,7 +5020,7 @@ impl IVM {
                             return Err(VMError::VectorExtensionDisabled);
                         }
                         self.vector_length = setvl_length(instruction::wide::rs2(instr))?;
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5488,7 +5143,7 @@ impl IVM {
                                 self.registers.set(rd + idx, u64::from(a.wrapping_add(b)));
                             }
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5501,20 +5156,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a == b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5528,20 +5175,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a != b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5555,20 +5194,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs) as i64;
                         let b = self.registers.get(rt) as i64;
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a < b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5582,20 +5213,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs) as i64;
                         let b = self.registers.get(rt) as i64;
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a >= b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5609,20 +5232,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a < b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5636,20 +5251,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a >= b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5703,7 +5310,7 @@ impl IVM {
                                 self.halted = true;
                             }
                         }
-                        let return_pc = self.pc.wrapping_add(length as u64);
+                        let return_pc = self.pc.wrapping_add(length);
                         self.registers.set(rd, return_pc);
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
@@ -5715,7 +5322,7 @@ impl IVM {
                     instruction::wide::control::JAL => {
                         let rd = instruction::wide::rd(instr);
                         let imm = instruction::wide::imm16(instr) as i64;
-                        let return_pc = self.pc.wrapping_add(length as u64);
+                        let return_pc = self.pc.wrapping_add(length);
                         if self.strict_return_integrity {
                             if rd != 0 && rd != 1 {
                                 return Err(VMError::AssertionFailed);
@@ -5740,7 +5347,7 @@ impl IVM {
                     }
                     instruction::wide::control::JALS => {
                         let imm = i64::from(instruction::wide::imm24(instr));
-                        let return_pc = self.pc.wrapping_add(length as u64);
+                        let return_pc = self.pc.wrapping_add(length);
                         self.push_contract_return(return_pc)?;
                         self.registers.set(1, return_pc);
                         if self.zk_mode {
@@ -5799,7 +5406,7 @@ impl IVM {
                             let b = self.registers.get(rt + idx) as u32;
                             self.registers.set(rd + idx, u64::from(a & b));
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5852,7 +5459,7 @@ impl IVM {
                             let b = self.registers.get(rt + idx) as u32;
                             self.registers.set(rd + idx, u64::from(a ^ b));
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5905,7 +5512,7 @@ impl IVM {
                             let b = self.registers.get(rt + idx) as u32;
                             self.registers.set(rd + idx, u64::from(a | b));
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5948,7 +5555,7 @@ impl IVM {
                             let rotated = value.rotate_left(shift) as u64;
                             self.registers.set(rd + idx, rotated);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6016,7 +5623,7 @@ impl IVM {
                                 self.registers.set_tag(second + lane, false);
                             }
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6056,7 +5663,7 @@ impl IVM {
                         }
                         self.memory.store_bytes(out_ptr, &out_bytes)?;
                         self.record_memory_store_privacy(out_ptr, out_bytes.len() as u64, false);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6099,7 +5706,7 @@ impl IVM {
                         let hi = u64::from_le_bytes(out[8..].try_into().unwrap());
                         self.registers.set(rd, lo);
                         self.registers.set(rd + 1, hi);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6142,7 +5749,7 @@ impl IVM {
                         let hi = u64::from_le_bytes(out[8..].try_into().unwrap());
                         self.registers.set(rd, lo);
                         self.registers.set(rd + 1, hi);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6173,7 +5780,7 @@ impl IVM {
                             self.registers.set_tag(rd, false);
                             self.registers.set_tag(rd + 1, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6193,7 +5800,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6222,7 +5829,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6240,7 +5847,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6261,7 +5868,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6275,7 +5882,7 @@ impl IVM {
                         let res = crate::ec::ec_add_truncated(p, q);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6289,7 +5896,7 @@ impl IVM {
                         let res = crate::ec::ec_mul_truncated(point, scalar);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6303,7 +5910,7 @@ impl IVM {
                         let res = crate::ec::pairing_check_truncated(a, b);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6316,20 +5923,20 @@ impl IVM {
                         }
                         let mut fail_index = 0u64;
                         let request_ptr = self.registers.get(rs1);
-                        let payload_len =
-                            match self.inspect_owned_public_tlv_payload_len(request_ptr) {
-                                Ok(payload_len) => Some(payload_len),
-                                Err(VMError::PrivacyViolation) => {
-                                    return Err(VMError::PrivacyViolation);
-                                }
-                                Err(_) => None,
-                            };
+                        let payload_len = match self.inspect_owned_public_tlv_header(request_ptr) {
+                            Ok((payload_len, _)) => Some(payload_len),
+                            Err(VMError::PrivacyViolation) => {
+                                return Err(VMError::PrivacyViolation);
+                            }
+                            Err(_) => None,
+                        };
                         let ok = if let Some(payload_len) = payload_len {
-                            if payload_len > crate::gas::ED25519_BATCH_MAX_PAYLOAD_BYTES {
+                            if payload_len
+                                > u64::try_from(crate::gas::ED25519_BATCH_MAX_PAYLOAD_BYTES)
+                                    .expect("batch payload limit always fits u64")
+                            {
                                 false
                             } else {
-                                let payload_len = u64::try_from(payload_len)
-                                    .map_err(|_| VMError::GasCostOverflow)?;
                                 self.debit_gas(crate::gas::ed25519_batch_extra_gas(
                                     payload_len,
                                     0,
@@ -6404,7 +6011,7 @@ impl IVM {
                             self.registers.set_tag(rd, false);
                             self.registers.set_tag(rs2, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6422,11 +6029,14 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                            self.validate_public_crypto_tlv(msg_ptr)?,
-                            self.validate_public_crypto_tlv(sig_ptr)?,
-                            self.validate_public_crypto_tlv(pk_ptr)?,
-                        ) {
+                        let operands_ready =
+                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
+                        let ok = if operands_ready
+                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                                self.validate_public_crypto_tlv(msg_ptr)?,
+                                self.validate_public_crypto_tlv(sig_ptr)?,
+                                self.validate_public_crypto_tlv(pk_ptr)?,
+                            ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                                 && tlv_sig.type_id_raw()
@@ -6447,7 +6057,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6465,11 +6075,14 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                            self.validate_public_crypto_tlv(msg_ptr)?,
-                            self.validate_public_crypto_tlv(sig_ptr)?,
-                            self.validate_public_crypto_tlv(pk_ptr)?,
-                        ) {
+                        let operands_ready =
+                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
+                        let ok = if operands_ready
+                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                                self.validate_public_crypto_tlv(msg_ptr)?,
+                                self.validate_public_crypto_tlv(sig_ptr)?,
+                                self.validate_public_crypto_tlv(pk_ptr)?,
+                            ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                                 && tlv_sig.type_id_raw()
@@ -6490,7 +6103,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6508,11 +6121,14 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                            self.validate_public_crypto_tlv(msg_ptr)?,
-                            self.validate_public_crypto_tlv(sig_ptr)?,
-                            self.validate_public_crypto_tlv(pk_ptr)?,
-                        ) {
+                        let operands_ready =
+                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
+                        let ok = if operands_ready
+                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                                self.validate_public_crypto_tlv(msg_ptr)?,
+                                self.validate_public_crypto_tlv(sig_ptr)?,
+                                self.validate_public_crypto_tlv(pk_ptr)?,
+                            ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                                 && tlv_sig.type_id_raw()
@@ -6533,7 +6149,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6553,7 +6169,7 @@ impl IVM {
                         if value != 0 {
                             self.constraint_failed = true;
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6576,7 +6192,7 @@ impl IVM {
                         if v1 != v2 {
                             self.constraint_failed = true;
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6593,7 +6209,7 @@ impl IVM {
                         let res = crate::field::add(v1, v2);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6610,7 +6226,7 @@ impl IVM {
                         let res = crate::field::sub(v1, v2);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6627,7 +6243,7 @@ impl IVM {
                         let res = crate::field::mul(v1, v2);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6649,7 +6265,7 @@ impl IVM {
                                 self.constraint_failed = true;
                             }
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6680,13 +6296,13 @@ impl IVM {
                         } else {
                             self.constraint_failed = true;
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
                     instruction::wide::crypto::PARBEGIN | instruction::wide::crypto::PAREND => {
                         // Parallel sections are markers; no state change required.
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6703,10 +6319,6 @@ impl IVM {
                         return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
                     }
                 }
-            }
-            if !ilp_block.is_empty() {
-                self.execute_block_parallel(&ilp_block)?;
-                self.cycles += ilp_block.len() as u64;
             }
             // If we exit the loop early, pad the trace so that prover and verifier
             // observe exactly `max_cycles` steps when zero‑knowledge mode is enabled.
@@ -6731,8 +6343,23 @@ impl IVM {
             } else {
                 Ok(())
             }
-        })();
+        })) {
+            Ok(result) => result,
+            Err(payload) => {
+                // Policy probes such as `allows_syscall` run before syscall
+                // callback isolation. If any host hook panics, discard the
+                // partial invocation proof before preserving the original
+                // unwind behavior for the caller.
+                self.abort_host_register_log_isolation(None);
+                std::panic::resume_unwind(payload);
+            }
+        };
         if let Err(err) = &result {
+            // Diagnostics are outside the guest execution trace. In
+            // particular, an isolation failure may already have scrubbed an
+            // invocation log retained by a replaced VM; diagnostic register
+            // reads must not repopulate that detached allocation.
+            let _host_logger_mask = zk::RegLoggerGuard::mask();
             self.last_diagnostic = Some(self.build_execution_diagnostic(err));
         }
         result
@@ -6933,811 +6560,16 @@ impl IVM {
 mod ivm_sched_tests {
     use super::*;
     #[test]
-    fn respects_global_scheduler_limits() {
-        // Set a small scheduler size and verify IVM::new picks it up.
+    fn scheduler_is_lazy_and_respects_global_limits() {
+        // Ordinary VM construction must not allocate worker threads.
         crate::parallel::set_default_scheduler_limits(Some(2), Some(2));
         let vm = IVM::new(0);
-        assert_eq!(vm.scheduler.thread_count(), 2);
-        assert_eq!(vm.core_count, 2);
+        assert!(vm.scheduler.get().is_none());
+        assert_eq!(vm.scheduler_limits, (2, 2));
+        assert_eq!(vm.scheduler().thread_count(), 2);
+        assert!(vm.scheduler.get().is_some());
         // Reset to auto for other tests
         crate::parallel::set_default_scheduler_limits(None, None);
-    }
-}
-/// Try to translate a full 32-bit instruction into a [`SimpleInstruction`].
-///
-/// Only a subset of arithmetic operations are supported for use with the
-/// parallel instruction scheduler. Unsupported instructions return `None` so
-/// that the interpreter falls back to sequential execution.
-fn to_simple(instr: u32) -> Option<SimpleInstruction> {
-    // Prefer the wide encoding when the high byte matches a known opcode.
-    {
-        use instruction::wide;
-        let op = wide::opcode(instr);
-        let rd = wide::rd(instr) as u16;
-        let rs1 = wide::rs1(instr) as u16;
-        let rs2 = wide::rs2(instr) as u16;
-        match op {
-            wide::arithmetic::ADD => {
-                return Some(SimpleInstruction::Add {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::SUB => {
-                return Some(SimpleInstruction::Sub {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::AND => {
-                return Some(SimpleInstruction::And {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::OR => {
-                return Some(SimpleInstruction::Or {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::XOR => {
-                return Some(SimpleInstruction::Xor {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::SLL => {
-                return Some(SimpleInstruction::Sll {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::SRL => {
-                return Some(SimpleInstruction::Srl {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::SRA => {
-                return Some(SimpleInstruction::Sra {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::ADDI => {
-                let imm = wide::imm8(instr) as i16;
-                if imm >= 0 {
-                    return Some(SimpleInstruction::AddImm { rd, rs: rs1, imm });
-                } else {
-                    return Some(SimpleInstruction::SubImm {
-                        rd,
-                        rs: rs1,
-                        imm: -imm,
-                    });
-                }
-            }
-            wide::memory::LOAD64 => {
-                let offset = instruction::wide::imm8(instr);
-                return Some(SimpleInstruction::Load {
-                    rd,
-                    addr_reg: rs1,
-                    offset,
-                });
-            }
-            wide::memory::STORE64 => {
-                let offset = instruction::wide::imm8(instr);
-                return Some(SimpleInstruction::Store {
-                    rs: rs1,
-                    addr_reg: rd,
-                    offset,
-                });
-            }
-            wide::crypto::SETVL => {
-                return Some(SimpleInstruction::SetVL { new_vl: rs2 });
-            }
-            wide::crypto::VADD32 => {
-                return Some(SimpleInstruction::Vadd32 {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::control::HALT => {
-                return None;
-            }
-            _ => {}
-        }
-    }
-    None
-}
-/// Metadata describing register and memory accesses of an instruction
-#[derive(Default, Clone)]
-struct InstrMeta {
-    reads: HashSet<u16>,
-    writes: HashSet<u16>,
-    mem_read: bool,
-    mem_write: bool,
-}
-/// Result of executing a single instruction in parallel
-#[derive(Clone, Debug)]
-enum ResultUpdate {
-    Reg { index: u16, value: u64, tag: bool },
-    Mem { addr: u64, value: u64 },
-    Vl { value: usize },
-}
-fn analyse_instruction(
-    instr: &SimpleInstruction,
-    vl: usize,
-    max_vector_lanes: usize,
-) -> (InstrMeta, usize) {
-    use SimpleInstruction::*;
-    let mut meta = InstrMeta::default();
-    let mut next_vl = vl;
-    match *instr {
-        Add { rd, rs, rt }
-        | Sub { rd, rs, rt }
-        | And { rd, rs, rt }
-        | Or { rd, rs, rt }
-        | Xor { rd, rs, rt } => {
-            meta.reads.insert(rs);
-            meta.reads.insert(rt);
-            meta.writes.insert(rd);
-        }
-        Sll { rd, rs, rt } | Srl { rd, rs, rt } | Sra { rd, rs, rt } => {
-            meta.reads.insert(rs);
-            meta.reads.insert(rt);
-            meta.writes.insert(rd);
-        }
-        AddImm { rd, rs, .. } | SubImm { rd, rs, .. } => {
-            meta.reads.insert(rs);
-            meta.writes.insert(rd);
-        }
-        Load {
-            rd,
-            addr_reg,
-            offset: _,
-        } => {
-            meta.reads.insert(addr_reg);
-            meta.writes.insert(rd);
-            meta.mem_read = true;
-        }
-        Store {
-            rs,
-            addr_reg,
-            offset: _,
-        } => {
-            meta.reads.insert(addr_reg);
-            meta.reads.insert(rs);
-            meta.mem_write = true;
-        }
-        Beq { rs, rt, .. } => {
-            meta.reads.insert(rs);
-            meta.reads.insert(rt);
-        }
-        Sha256 { dest, .. } => {
-            meta.writes.extend([dest, dest + 1, dest + 2, dest + 3]);
-            meta.mem_read = true;
-        }
-        Ed25519Verify { result_reg, .. } => {
-            meta.writes.insert(result_reg);
-            meta.mem_read = true;
-        }
-        DilithiumVerify { result_reg, .. } => {
-            meta.writes.insert(result_reg);
-            meta.mem_read = true;
-        }
-        SetVL { new_vl } => {
-            meta.mem_write = true; // force ordering
-            next_vl = setvl_length(new_vl as usize).unwrap_or(max_vector_lanes + 1);
-        }
-        Vadd32 { rd, rs, rt } => {
-            let stride = vl as u16;
-            let base = crate::IVM::VECTOR_BASE as u16;
-            for i in 0..vl as u16 {
-                let offset = base + i;
-                meta.reads.insert(rs * stride + offset);
-                meta.reads.insert(rt * stride + offset);
-                meta.writes.insert(rd * stride + offset);
-            }
-        }
-        Jump { .. } | Halt => {}
-    }
-    (meta, next_vl)
-}
-fn cost_of(instr: &SimpleInstruction, vl: usize) -> u64 {
-    match instr {
-        SimpleInstruction::Add { .. }
-        | SimpleInstruction::Sub { .. }
-        | SimpleInstruction::And { .. }
-        | SimpleInstruction::Or { .. }
-        | SimpleInstruction::AddImm { .. }
-        | SimpleInstruction::SubImm { .. }
-        | SimpleInstruction::Xor { .. }
-        | SimpleInstruction::Sll { .. }
-        | SimpleInstruction::Srl { .. }
-        | SimpleInstruction::Sra { .. } => IVM::GAS_ALU,
-        SimpleInstruction::Load { .. } | SimpleInstruction::Store { .. } => IVM::GAS_MEM,
-        SimpleInstruction::Jump { .. } | SimpleInstruction::Beq { .. } => IVM::GAS_JUMP,
-        SimpleInstruction::Sha256 { len, .. } => {
-            IVM::GAS_SHA256_BASE + IVM::GAS_SHA256_PER_BYTE * len
-        }
-        SimpleInstruction::SetVL { .. } => IVM::GAS_ALU,
-        SimpleInstruction::Vadd32 { .. } => gas::scaled_vector_cost(IVM::GAS_ALU * 2, vl),
-        SimpleInstruction::Ed25519Verify { .. } => IVM::GAS_ED25519_VERIFY,
-        SimpleInstruction::DilithiumVerify { .. } => IVM::GAS_DILITHIUM_VERIFY,
-        SimpleInstruction::Halt => 0,
-    }
-}
-fn compute_instruction(
-    instr: SimpleInstruction,
-    regs: &[u64; 256],
-    tags: &[bool; 256],
-    mem: &Memory,
-    zk: bool,
-    vl: usize,
-    vector_enabled: bool,
-) -> Result<Vec<ResultUpdate>, VMError> {
-    use SimpleInstruction::*;
-    let mut res = Vec::with_capacity(2);
-    match instr {
-        Add { rd, rs, rt } => {
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let sum = regs[rs as usize].wrapping_add(regs[rt as usize]);
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: sum,
-                tag,
-            });
-        }
-        Sub { rd, rs, rt } => {
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let diff = regs[rs as usize].wrapping_sub(regs[rt as usize]);
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: diff,
-                tag,
-            });
-        }
-        And { rd, rs, rt } => {
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let val = regs[rs as usize] & regs[rt as usize];
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Or { rd, rs, rt } => {
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let val = regs[rs as usize] | regs[rt as usize];
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        AddImm { rd, rs, imm } => {
-            let val = regs[rs as usize].wrapping_add(imm as i64 as u64);
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        SubImm { rd, rs, imm } => {
-            let val = regs[rs as usize].wrapping_sub(imm as i64 as u64);
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Xor { rd, rs, rt } => {
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let val = regs[rs as usize] ^ regs[rt as usize];
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Sll { rd, rs, rt } => {
-            let sh = regs[rt as usize] & 0x3F;
-            let val = regs[rs as usize] << sh;
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Srl { rd, rs, rt } => {
-            let sh = regs[rt as usize] & 0x3F;
-            let val = regs[rs as usize] >> sh;
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Sra { rd, rs, rt } => {
-            let sh = (regs[rt as usize] & 0x3F) as u32;
-            let val = ((regs[rs as usize] as i64) >> sh) as u64;
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Load {
-            rd,
-            addr_reg,
-            offset,
-        } => {
-            if zk && tags[addr_reg as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let base = regs[addr_reg as usize] as i64;
-            let addr = base.wrapping_add(offset as i64) as u64;
-            let value = mem.load_u64(addr)?;
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value,
-                tag: false,
-            });
-        }
-        Store {
-            rs,
-            addr_reg,
-            offset,
-        } => {
-            if zk && tags[addr_reg as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let base = regs[addr_reg as usize] as i64;
-            let addr = base.wrapping_add(offset as i64) as u64;
-            let value = regs[rs as usize];
-            res.push(ResultUpdate::Mem { addr, value });
-        }
-        Sha256 {
-            dest,
-            src_addr,
-            len,
-        } => {
-            let data = mem.load_region(src_addr, len)?;
-            use sha2::{Digest, Sha256};
-            let digest = Sha256::digest(data);
-            for i in 0..4u16 {
-                let mut chunk = [0u8; 8];
-                chunk.copy_from_slice(&digest[i as usize * 8..(i as usize + 1) * 8]);
-                let val = u64::from_le_bytes(chunk);
-                res.push(ResultUpdate::Reg {
-                    index: dest + i,
-                    value: val,
-                    tag: false,
-                });
-            }
-        }
-        Ed25519Verify {
-            pubkey_addr,
-            sig_addr,
-            msg_addr,
-            msg_len,
-            result_reg,
-        } => {
-            use ed25519_dalek::Signature;
-            let pk_slice = mem.load_region(pubkey_addr, 32)?;
-            let sig_slice = mem.load_region(sig_addr, 64)?;
-            let msg = mem.load_region(msg_addr, msg_len)?;
-            let pk_bytes: [u8; 32] = match pk_slice.try_into() {
-                Ok(b) => b,
-                Err(_) => {
-                    res.push(ResultUpdate::Reg {
-                        index: result_reg,
-                        value: 0,
-                        tag: false,
-                    });
-                    return Ok(res);
-                }
-            };
-            let sig_bytes_arr: [u8; 64] = match sig_slice.try_into() {
-                Ok(b) => b,
-                Err(_) => {
-                    res.push(ResultUpdate::Reg {
-                        index: result_reg,
-                        value: 0,
-                        tag: false,
-                    });
-                    return Ok(res);
-                }
-            };
-            if crate::signature::signature_bytes_are_all_zero(&sig_bytes_arr) {
-                res.push(ResultUpdate::Reg {
-                    index: result_reg,
-                    value: 0,
-                    tag: false,
-                });
-                return Ok(res);
-            }
-            if crate::signature::signature_has_invalid_ed25519_r(&sig_bytes_arr) {
-                res.push(ResultUpdate::Reg {
-                    index: result_reg,
-                    value: 0,
-                    tag: false,
-                });
-                return Ok(res);
-            }
-            let Some(pk) = crate::signature::parse_ed25519_public_key_for_verification(&pk_bytes)
-            else {
-                res.push(ResultUpdate::Reg {
-                    index: result_reg,
-                    value: 0,
-                    tag: false,
-                });
-                return Ok(res);
-            };
-            let sig = match Signature::from_slice(&sig_bytes_arr) {
-                Ok(s) => s,
-                Err(_) => {
-                    res.push(ResultUpdate::Reg {
-                        index: result_reg,
-                        value: 0,
-                        tag: false,
-                    });
-                    return Ok(res);
-                }
-            };
-            let valid = pk.verify_strict(msg, &sig).is_ok();
-            res.push(ResultUpdate::Reg {
-                index: result_reg,
-                value: if valid { 1 } else { 0 },
-                tag: false,
-            });
-        }
-        DilithiumVerify {
-            level,
-            pubkey_addr,
-            sig_addr,
-            msg_addr,
-            msg_len,
-            result_reg,
-        } => {
-            use pqcrypto_mldsa::{
-                mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5,
-            };
-            use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
-            let msg = mem.load_region(msg_addr, msg_len)?;
-            let valid = match level {
-                2 => {
-                    let pk_slice =
-                        mem.load_region(pubkey_addr, dilithium2::public_key_bytes() as u64)?;
-                    let sig_slice =
-                        mem.load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
-                    if crate::signature::material_bytes_are_all_zero(pk_slice)
-                        || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                    {
-                        res.push(ResultUpdate::Reg {
-                            index: result_reg,
-                            value: 0,
-                            tag: false,
-                        });
-                        return Ok(res);
-                    }
-                    let pk = match dilithium2::PublicKey::from_bytes(pk_slice) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    let sig = match dilithium2::DetachedSignature::from_bytes(sig_slice) {
-                        Ok(s) => s,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    dilithium2::verify_detached_signature(&sig, msg, &pk).is_ok()
-                }
-                3 => {
-                    let pk_slice =
-                        mem.load_region(pubkey_addr, dilithium3::public_key_bytes() as u64)?;
-                    let sig_slice =
-                        mem.load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
-                    if crate::signature::material_bytes_are_all_zero(pk_slice)
-                        || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                    {
-                        res.push(ResultUpdate::Reg {
-                            index: result_reg,
-                            value: 0,
-                            tag: false,
-                        });
-                        return Ok(res);
-                    }
-                    let pk = match dilithium3::PublicKey::from_bytes(pk_slice) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    let sig = match dilithium3::DetachedSignature::from_bytes(sig_slice) {
-                        Ok(s) => s,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    dilithium3::verify_detached_signature(&sig, msg, &pk).is_ok()
-                }
-                5 => {
-                    let pk_slice =
-                        mem.load_region(pubkey_addr, dilithium5::public_key_bytes() as u64)?;
-                    let sig_slice =
-                        mem.load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
-                    if crate::signature::material_bytes_are_all_zero(pk_slice)
-                        || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                    {
-                        res.push(ResultUpdate::Reg {
-                            index: result_reg,
-                            value: 0,
-                            tag: false,
-                        });
-                        return Ok(res);
-                    }
-                    let pk = match dilithium5::PublicKey::from_bytes(pk_slice) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    let sig = match dilithium5::DetachedSignature::from_bytes(sig_slice) {
-                        Ok(s) => s,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    dilithium5::verify_detached_signature(&sig, msg, &pk).is_ok()
-                }
-                _ => {
-                    res.push(ResultUpdate::Reg {
-                        index: result_reg,
-                        value: 0,
-                        tag: false,
-                    });
-                    return Ok(res);
-                }
-            };
-            res.push(ResultUpdate::Reg {
-                index: result_reg,
-                value: if valid { 1 } else { 0 },
-                tag: false,
-            });
-        }
-        SetVL { new_vl } => {
-            if !vector_enabled {
-                return Err(VMError::VectorExtensionDisabled);
-            }
-            res.push(ResultUpdate::Vl {
-                value: setvl_length(new_vl as usize)?,
-            });
-        }
-        Vadd32 { rd, rs, rt } => {
-            if !vector_enabled {
-                return Err(VMError::VectorExtensionDisabled);
-            }
-            let stride = vl;
-            let rd = crate::IVM::VECTOR_BASE + rd as usize * stride;
-            let rs = crate::IVM::VECTOR_BASE + rs as usize * stride;
-            let rt = crate::IVM::VECTOR_BASE + rt as usize * stride;
-            if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                return Err(VMError::RegisterOutOfBounds);
-            }
-            for i in 0..vl {
-                let a = regs[rs + i] as u32;
-                let b = regs[rt + i] as u32;
-                if zk && tags[rs + i] != tags[rt + i] {
-                    return Err(VMError::PrivacyViolation);
-                }
-                let tag = if zk { tags[rs + i] } else { false };
-                let sum = a.wrapping_add(b);
-                res.push(ResultUpdate::Reg {
-                    index: (rd + i) as u16,
-                    value: u64::from(sum),
-                    tag,
-                });
-            }
-        }
-        Beq { .. } | Jump { .. } | Halt => {}
-    }
-    Ok(res)
-}
-fn conflict(a: &InstrMeta, b: &InstrMeta) -> bool {
-    if !a.writes.is_disjoint(&b.reads) {
-        return true;
-    }
-    if !a.writes.is_disjoint(&b.writes) {
-        return true;
-    }
-    if !b.writes.is_disjoint(&a.reads) {
-        return true;
-    }
-    if (a.mem_write && (b.mem_write || b.mem_read)) || (b.mem_write && (a.mem_write || a.mem_read))
-    {
-        return true;
-    }
-    false
-}
-fn schedule_batches(metas: &[InstrMeta]) -> Vec<Vec<usize>> {
-    let mut batches: Vec<Vec<usize>> = Vec::new();
-    for (idx, meta) in metas.iter().enumerate() {
-        if batches.is_empty() {
-            batches.push(Vec::new());
-        }
-        let cur = batches.last_mut().unwrap();
-        let has_conflict = cur.iter().any(|j| conflict(meta, &metas[*j]));
-        if has_conflict {
-            batches.push(vec![idx]);
-        } else {
-            cur.push(idx);
-        }
-    }
-    batches
-}
-impl IVM {
-    /// Execute a slice of instructions using simple ILP scheduling.
-    ///
-    /// Gas for each independent batch is reserved before any worker starts. Once work begins, the
-    /// full reservation remains charged even if an instruction in that batch faults.
-    pub fn execute_block_parallel(&mut self, block: &[SimpleInstruction]) -> Result<(), VMError> {
-        let zk_memory_access = self.zk_mode
-            && block.iter().any(|instruction| {
-                matches!(
-                    instruction,
-                    SimpleInstruction::Load { .. }
-                        | SimpleInstruction::Store { .. }
-                        | SimpleInstruction::Sha256 { .. }
-                        | SimpleInstruction::Ed25519Verify { .. }
-                        | SimpleInstruction::DilithiumVerify { .. }
-                )
-            });
-        if block.len() < ILP_MIN_PARALLEL_BLOCK_LEN || zk_memory_access {
-            for instr in block {
-                self.execute_instruction(*instr)?;
-            }
-            return Ok(());
-        }
-        let mut vl = self.vector_length;
-        let mut metas = Vec::with_capacity(block.len());
-        let mut vls = Vec::with_capacity(block.len());
-        for instr in block {
-            vls.push(vl);
-            let (m, next_vl) = analyse_instruction(instr, vl, LOGICAL_VECTOR_MAX);
-            metas.push(m);
-            vl = next_vl;
-        }
-        let batches = schedule_batches(&metas);
-        for batch in batches {
-            let batch_gas = batch.iter().try_fold(0_u64, |total, &idx| {
-                total
-                    .checked_add(cost_of(&block[idx], vls[idx]))
-                    .ok_or(VMError::OutOfGas)
-            })?;
-            if self.gas_remaining < batch_gas {
-                return Err(VMError::OutOfGas);
-            }
-            self.gas_remaining -= batch_gas;
-            let regs_snapshot = self.registers.snapshot();
-            let tags_snapshot = self.registers.snapshot_tags();
-            let vector_enabled = self.vector_enabled;
-            let results_lock = Mutex::new(Vec::new());
-            rayon::scope(|s| {
-                for &idx in &batch {
-                    let instr = block[idx];
-                    let regs = &regs_snapshot;
-                    let tags = &tags_snapshot;
-                    let mem = &self.memory;
-                    let zk = self.zk_mode;
-                    let vl = vls[idx];
-                    let results = &results_lock;
-                    s.spawn(move |_| {
-                        let result =
-                            compute_instruction(instr, regs, tags, mem, zk, vl, vector_enabled);
-                        results
-                            .lock()
-                            .expect("results mutex poisoned")
-                            .push((idx, result));
-                    });
-                }
-            });
-            let mut results = results_lock.into_inner().expect("results mutex poisoned");
-            results.sort_by_key(|(i, _)| *i);
-            for (_, result) in results {
-                let updates = result?;
-                for upd in updates {
-                    match upd {
-                        ResultUpdate::Reg { index, value, tag } => {
-                            if index != 0 {
-                                self.registers.set(index as usize, value);
-                                if self.zk_mode {
-                                    self.registers.set_tag(index as usize, tag);
-                                }
-                            }
-                        }
-                        ResultUpdate::Mem { addr, value } => {
-                            self.memory.store_u64(addr, value)?;
-                        }
-                        ResultUpdate::Vl { value } => {
-                            self.vector_length = value;
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 }
 #[cfg(test)]
@@ -8195,10 +7027,6 @@ mod tests {
             vm.acceleration_policy(),
             AccelerationPolicy::deterministic()
         );
-    }
-    #[test]
-    fn rtm_detection_does_not_panic() {
-        let _ = std::panic::catch_unwind(rtm_available);
     }
     #[test]
     fn deterministic_policy_disables_acceleration() {
@@ -8742,6 +7570,28 @@ mod tests {
                 .as_ptr(),
             mismatched_allocation
         ));
+    }
+    #[test]
+    fn runtime_template_rejects_a_different_program_before_mutating_the_vm() {
+        let mut template_vm = quiet_vm(u64::MAX);
+        template_vm
+            .load_program(&program_with_imm(7))
+            .expect("template program loads");
+        let template = template_vm.runtime_template();
+
+        let mut vm = quiet_vm(u64::MAX);
+        vm.load_program(&program_with_imm(8))
+            .expect("worker program loads");
+        vm.set_register(7, 99);
+        let code_hash = vm.code_hash();
+
+        let error = vm
+            .reset_from_runtime_template(&template)
+            .expect_err("a template for another program must be rejected");
+
+        assert!(error.to_string().contains("program mismatch"));
+        assert_eq!(vm.code_hash(), code_hash);
+        assert_eq!(vm.register(7), 99, "failed reset must not touch VM state");
     }
     #[test]
     fn runtime_template_rejects_a_different_heap_authority() {

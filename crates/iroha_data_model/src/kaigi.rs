@@ -16,6 +16,21 @@ use std::{
 const KAIGI_ROSTER_LEAF_TAG: &[u8] = b"iroha:kaigi:roster:leaf:v1\x00";
 /// Seed used for the deterministic empty Kaigi roster root.
 const KAIGI_ROSTER_EMPTY_SEED: &[u8] = b"iroha:kaigi:roster:empty:v1\x00";
+/// Minimum relay hops required by the first-release Kaigi onion route.
+pub const KAIGI_RELAY_MANIFEST_MIN_HOPS_V1: usize = 3;
+/// Maximum relay hops accepted by the first-release Kaigi onion route.
+pub const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: usize = 8;
+/// Maximum opaque HPKE public-key descriptor size accepted by Kaigi V1.
+///
+/// This accommodates every ML-KEM public key currently supported by the
+/// workspace, plus headroom for hybrid-suite framing, while bounding ledger
+/// and operator-snapshot work before Kaigi gains an explicit suite tag.
+pub const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: usize = 4 * 1024;
+/// Maximum number of live relay descriptors in the first-release Kaigi registry.
+///
+/// The bound is shared by native admission and operator-facing snapshots so a
+/// descriptor accepted on-chain can always be inspected through bounded APIs.
+pub const KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1: usize = 500;
 fn empty_roster_root() -> Hash {
     Hash::new(KAIGI_ROSTER_EMPTY_SEED)
 }
@@ -793,10 +808,12 @@ pub fn kaigi_relay_allowlist_key() -> Result<Name, crate::error::ParseError> {
 /// Prelude re-export for Kaigi data structures.
 pub mod prelude {
     pub use super::{
-        KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-        KaigiRecord, KaigiRelayAllowlist, KaigiRelayFeedback, KaigiRelayHealthStatus,
-        KaigiRelayHop, KaigiRelayManifest, KaigiRelayRegistration, KaigiRoomPolicy, KaigiStatus,
-        NewKaigi, kaigi_metadata_key, kaigi_relay_allowlist_key, kaigi_relay_feedback_key,
+        KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1, KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
+        KAIGI_RELAY_MANIFEST_MIN_HOPS_V1, KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1, KaigiId,
+        KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode, KaigiRecord,
+        KaigiRelayAllowlist, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayHop,
+        KaigiRelayManifest, KaigiRelayRegistration, KaigiRoomPolicy, KaigiStatus, NewKaigi,
+        kaigi_metadata_key, kaigi_relay_allowlist_key, kaigi_relay_feedback_key,
         kaigi_relay_metadata_key,
     };
 }

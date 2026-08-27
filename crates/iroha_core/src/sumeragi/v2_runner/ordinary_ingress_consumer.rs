@@ -273,8 +273,8 @@ pub(in crate::sumeragi) fn settle_prepared_certified_serve_for_test(
 
 /// Consume one exact already-dequeued row through the established runner tail.
 ///
-/// This is the sole post-selection implementation used by both legacy drain
-/// and the activated lifecycle handoff. Every failure leaves both the local
+/// This is the sole post-selection implementation used by the activated
+/// lifecycle handoff. Every failure leaves both the local
 /// non-permit scope and the move-only handoff armed for restart.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
@@ -288,7 +288,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     block_sync_server: &mut V2BlockSyncServer,
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
-    npos_vrf: &mut V2NposVrfLifecycle,
     npos_beacon: &mut V2GlobalBeaconLifecycle,
 ) -> Result<ProductionPreparedOrdinaryIngressConsumptionV1, V2RunnerError> {
     let services_output_guard = services.lifecycle_output_guard();
@@ -331,15 +330,26 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
         }};
     }
 
-    if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
-        admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
-        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-    }
-    if inbound.message().is_lane_local() {
-        let _ = lane_work
-            .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
-        let _ = lane_work.service_next_historical_recovery()?;
-        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
+    match inbound.message() {
+        BlockMessage::KuraReplicaAdvert(_) => {
+            admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
+            finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
+        }
+        BlockMessage::LaneBlockProposal(_)
+        | BlockMessage::LaneExecutablePayload(_)
+        | BlockMessage::LaneBlockNewViewVote(_)
+        | BlockMessage::LaneBlockNewViewCertificate(_)
+        | BlockMessage::LaneBlockVote(_)
+        | BlockMessage::LaneBlockQc(_)
+        | BlockMessage::LaneBlockCertificate(_)
+        | BlockMessage::LaneHistoricalRecoveryRequest(_)
+        | BlockMessage::LaneHistoricalRecoveryResponse(_) => {
+            let _ = lane_work
+                .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
+            let _ = lane_work.service_next_historical_recovery()?;
+            finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
+        }
+        BlockMessage::V2(_) => {}
     }
     let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
         V2RunnerError::Service(
@@ -385,10 +395,20 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
             "global Sumeragi v2 ingress changed its authenticated reply routes".to_owned(),
         ));
     }
-    let BlockMessage::V2(message) = message else {
-        iroha_logger::debug!("rejected legacy global message on v2-only consensus ingress");
-        mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
+    let message = match message {
+        BlockMessage::V2(message) => message,
+        BlockMessage::KuraReplicaAdvert(_)
+        | BlockMessage::LaneBlockProposal(_)
+        | BlockMessage::LaneExecutablePayload(_)
+        | BlockMessage::LaneBlockNewViewVote(_)
+        | BlockMessage::LaneBlockNewViewCertificate(_)
+        | BlockMessage::LaneBlockVote(_)
+        | BlockMessage::LaneBlockQc(_)
+        | BlockMessage::LaneBlockCertificate(_)
+        | BlockMessage::LaneHistoricalRecoveryRequest(_)
+        | BlockMessage::LaneHistoricalRecoveryResponse(_) => {
+            unreachable!("non-global ingress was consumed before ownership binding")
+        }
     };
     if let Err(error) = message.validate_version() {
         iroha_logger::debug!(%error, "rejected wrong-version Sumeragi v2 envelope");
@@ -405,26 +425,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 Err(error) => {
                     iroha_logger::debug!(%error, "rejected global threshold-beacon partial");
                 }
-            }
-        }
-        wire::ConsensusMessageV2Payload::VrfCommit(commit) => {
-            drop(ingress_ownership);
-            let outcome = npos_vrf.accept_commit(commit, Some(&sender));
-            if matches!(
-                outcome,
-                super::super::v2_npos::V2VrfIngressOutcome::Rejected(_)
-            ) {
-                iroha_logger::debug!(?outcome, "rejected NPoS VRF commitment");
-            }
-        }
-        wire::ConsensusMessageV2Payload::VrfReveal(reveal) => {
-            drop(ingress_ownership);
-            let outcome = npos_vrf.accept_reveal(reveal, Some(&sender));
-            if matches!(
-                outcome,
-                super::super::v2_npos::V2VrfIngressOutcome::Rejected(_)
-            ) {
-                iroha_logger::debug!(?outcome, "rejected NPoS VRF reveal");
             }
         }
         wire::ConsensusMessageV2Payload::Proposal(proposal) => {
@@ -650,6 +650,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                 finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
             }
+            let response_request_hash = response.request_hash;
             let discovered = match block_sync.authenticate_response(response, &sender) {
                 Ok(discovered) => discovered,
                 Err(error) => {
@@ -662,7 +663,11 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 executor.enqueue_discovered_commit_certificate(message, ingress_ownership)
             });
             if commit_certificate_admission_completed(admission)? {
-                *block_sync_request = None;
+                retire_admitted_block_sync_request(
+                    block_sync_request,
+                    response_request_hash,
+                    services,
+                )?;
             }
         }
     }

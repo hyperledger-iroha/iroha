@@ -23,7 +23,7 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::BTreeMap,
     marker::PhantomData,
     rc::Rc,
@@ -35,6 +35,11 @@ struct BlockWitness {
     reads: BTreeMap<Vec<u8>, Vec<u8>>,  // key -> value (pre)
     writes: BTreeMap<Vec<u8>, Vec<u8>>, // key -> value (post; empty for delete)
     fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
+}
+#[derive(Default)]
+struct WitnessOverlayFrame {
+    witness: BlockWitness,
+    replaces_fastpq_transcripts: bool,
 }
 /// Exclusive access guard for the global execution witness recorder.
 ///
@@ -52,6 +57,63 @@ static SLOT: OnceLock<Mutex<BlockWitness>> = OnceLock::new();
 static EXEC_WITNESS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 thread_local! {
     static WITNESS_RECORDING_SUPPRESSION_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static EXEC_WITNESS_OVERLAYS: RefCell<Vec<WitnessOverlayFrame>> = const { RefCell::new(Vec::new()) };
+}
+/// Transaction-local execution-witness overlay.
+///
+/// Records emitted on the creating thread remain private until [`Self::commit`]
+/// is called. Dropping the guard without committing discards reads, writes, and
+/// FASTPQ transcripts recorded since the overlay began. Overlays are nestable
+/// and must be completed in last-in, first-out order.
+#[must_use = "dropping an execution-witness overlay rolls back its records"]
+pub(crate) struct ExecWitnessOverlay {
+    depth: usize,
+    finished: bool,
+    _not_send_or_sync: PhantomData<Rc<()>>,
+}
+impl ExecWitnessOverlay {
+    /// Merge this overlay into its parent overlay or the active block witness.
+    pub(crate) fn commit(mut self) {
+        self.finish(true);
+    }
+    fn finish(&mut self, commit: bool) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let commit = commit && !witness_recording_suppressed();
+        let frame_for_block = EXEC_WITNESS_OVERLAYS.with(|overlays| {
+            let mut overlays = overlays.borrow_mut();
+            assert_eq!(
+                overlays.len(),
+                self.depth,
+                "execution-witness overlays must be completed in last-in, first-out order"
+            );
+            let frame = overlays
+                .pop()
+                .expect("execution-witness overlay stack must contain the active guard");
+            if !commit {
+                return None;
+            }
+            if let Some(parent) = overlays.last_mut() {
+                merge_overlay_frame(parent, frame);
+                None
+            } else {
+                Some(frame)
+            }
+        });
+        if let Some(frame) = frame_for_block {
+            let mut witness = lock_slot();
+            if witness.active {
+                merge_overlay_into_witness(&mut witness, frame);
+            }
+        }
+    }
+}
+impl Drop for ExecWitnessOverlay {
+    fn drop(&mut self) {
+        self.finish(false);
+    }
 }
 /// Current-thread guard that prevents speculative execution from writing the global recorder.
 ///
@@ -74,6 +136,55 @@ impl Drop for WitnessRecordingSuppressionGuard {
 }
 fn witness_recording_suppressed() -> bool {
     WITNESS_RECORDING_SUPPRESSION_DEPTH.with(|depth| depth.get() != 0)
+}
+fn merge_witness_records(
+    target: &mut BlockWitness,
+    source: BlockWitness,
+    replaces_fastpq_transcripts: bool,
+) {
+    for (key, value) in source.reads {
+        target.reads.entry(key).or_insert(value);
+    }
+    target.writes.extend(source.writes);
+    if replaces_fastpq_transcripts {
+        target.fastpq_transcripts = source.fastpq_transcripts;
+    } else {
+        for (batch_hash, mut transcripts) in source.fastpq_transcripts {
+            target
+                .fastpq_transcripts
+                .entry(batch_hash)
+                .or_default()
+                .append(&mut transcripts);
+        }
+    }
+}
+fn merge_overlay_frame(target: &mut WitnessOverlayFrame, source: WitnessOverlayFrame) {
+    let replaces_fastpq_transcripts = source.replaces_fastpq_transcripts;
+    merge_witness_records(
+        &mut target.witness,
+        source.witness,
+        replaces_fastpq_transcripts,
+    );
+    target.replaces_fastpq_transcripts |= replaces_fastpq_transcripts;
+}
+fn merge_overlay_into_witness(target: &mut BlockWitness, source: WitnessOverlayFrame) {
+    merge_witness_records(target, source.witness, source.replaces_fastpq_transcripts);
+}
+/// Begin a transaction-local execution-witness overlay on the current thread.
+///
+/// Records are merged into the active block witness only after
+/// [`ExecWitnessOverlay::commit`]. Dropping the returned guard rolls them back.
+pub(crate) fn begin_exec_witness_overlay() -> ExecWitnessOverlay {
+    let depth = EXEC_WITNESS_OVERLAYS.with(|overlays| {
+        let mut overlays = overlays.borrow_mut();
+        overlays.push(WitnessOverlayFrame::default());
+        overlays.len()
+    });
+    ExecWitnessOverlay {
+        depth,
+        finished: false,
+        _not_send_or_sync: PhantomData,
+    }
 }
 /// Suppress writes to the process-global witness recorder on the current thread.
 ///
@@ -126,8 +237,21 @@ fn with_active_slot(f: impl FnOnce(&mut BlockWitness)) {
         return;
     }
     let mut g = lock_slot();
-    if g.active {
-        f(&mut g);
+    if !g.active {
+        return;
+    }
+    let mut f = Some(f);
+    let recorded_in_overlay = EXEC_WITNESS_OVERLAYS.with(|overlays| {
+        let mut overlays = overlays.borrow_mut();
+        let Some(overlay) = overlays.last_mut() else {
+            return false;
+        };
+        f.take()
+            .expect("witness recorder closure must be available")(&mut overlay.witness);
+        true
+    });
+    if !recorded_in_overlay {
+        f.expect("witness recorder closure must be available")(&mut g);
     }
 }
 fn clear_block() {
@@ -430,9 +554,28 @@ pub fn record_fastpq_transcript(transcript: &TransferTranscript) {
 /// [`StateTransaction`](crate::state::StateTransaction) commits. A later instruction can still
 /// reject that transaction, so the global copy is not authoritative. The block-local map is
 /// updated only by `StateTransaction::apply`; copying it wholesale here both installs finalized
-/// digests and removes transcripts from rolled-back transactions.
+/// digests and removes transcripts from rolled-back transactions. When an execution-witness
+/// overlay is active, the replacement remains private until the overlay commits.
 pub(crate) fn synchronize_fastpq_transcripts(finalized: &BTreeMap<Hash, Vec<TransferTranscript>>) {
-    with_active_slot(|witness| witness.fastpq_transcripts.clone_from(finalized));
+    if witness_recording_suppressed() {
+        return;
+    }
+    let mut witness = lock_slot();
+    if !witness.active {
+        return;
+    }
+    let synchronized_overlay = EXEC_WITNESS_OVERLAYS.with(|overlays| {
+        let mut overlays = overlays.borrow_mut();
+        let Some(overlay) = overlays.last_mut() else {
+            return false;
+        };
+        overlay.witness.fastpq_transcripts.clone_from(finalized);
+        overlay.replaces_fastpq_transcripts = true;
+        true
+    });
+    if !synchronized_overlay {
+        witness.fastpq_transcripts.clone_from(finalized);
+    }
 }
 /// Record a read (pre-value) of asset-definition metadata.
 pub fn record_read_asset_def_kv(
@@ -1391,6 +1534,137 @@ mod tests {
             drain_exec_witness().reads.is_empty(),
             "drain must deactivate capture so inactive records are ignored"
         );
+    }
+    #[test]
+    fn transaction_overlay_drop_discards_all_record_types() {
+        let _guard = exec_witness_guard();
+        start_block();
+        let account = (*ALICE_ID).clone();
+        let retained_key: Name = "retained".parse().expect("metadata key");
+        let rolled_back_key: Name = "rolled_back".parse().expect("metadata key");
+        let retained_value = Json::new("retained");
+        let rolled_back_value = Json::new("rolled_back");
+        let retained_hash = Hash::prehashed([0x71; Hash::LENGTH]);
+        let rolled_back_hash = Hash::prehashed([0x72; Hash::LENGTH]);
+        let (retained_transcript, _) = sample_fastpq_transcript(7, retained_hash);
+        let (rolled_back_transcript, _) = sample_fastpq_transcript(8, rolled_back_hash);
+
+        record_read_account_kv(&account, &retained_key, Some(&retained_value));
+        record_write_account_kv(&account, &retained_key, &retained_value);
+        record_fastpq_transcript(&retained_transcript);
+        {
+            let _overlay = begin_exec_witness_overlay();
+            record_read_account_kv(&account, &rolled_back_key, Some(&rolled_back_value));
+            record_write_account_kv(&account, &rolled_back_key, &rolled_back_value);
+            record_fastpq_transcript(&rolled_back_transcript);
+
+            let snapshot = snapshot_exec_witness();
+            assert_no_read_key(&snapshot, key_account_kv(&account, &rolled_back_key));
+            assert!(
+                snapshot
+                    .fastpq_transcripts
+                    .iter()
+                    .all(|bundle| bundle.entry_hash != rolled_back_hash),
+                "uncommitted transcripts must remain private"
+            );
+        }
+
+        let witness = drain_exec_witness();
+        assert_eq!(witness.reads.len(), 1);
+        assert_eq!(witness.writes.len(), 1);
+        assert_read_value(
+            &witness,
+            key_account_kv(&account, &retained_key),
+            bytes_from_json(&retained_value),
+        );
+        assert!(
+            witness
+                .writes
+                .iter()
+                .all(|kv| kv.key != key_account_kv(&account, &rolled_back_key))
+        );
+        assert_eq!(witness.fastpq_transcripts.len(), 1);
+        assert_eq!(witness.fastpq_transcripts[0].entry_hash, retained_hash);
+    }
+    #[test]
+    fn transaction_overlay_commit_merges_all_record_types() {
+        let _guard = exec_witness_guard();
+        start_block();
+        let account = (*ALICE_ID).clone();
+        let key: Name = "committed".parse().expect("metadata key");
+        let value = Json::new("committed");
+        let batch_hash = Hash::prehashed([0x73; Hash::LENGTH]);
+        let (transcript, _) = sample_fastpq_transcript(9, batch_hash);
+
+        let overlay = begin_exec_witness_overlay();
+        record_read_account_kv(&account, &key, Some(&value));
+        record_write_account_kv(&account, &key, &value);
+        record_fastpq_transcript(&transcript);
+        overlay.commit();
+
+        let witness = drain_exec_witness();
+        assert_read_value(
+            &witness,
+            key_account_kv(&account, &key),
+            bytes_from_json(&value),
+        );
+        assert_eq!(witness.writes.len(), 1);
+        assert_eq!(witness.writes[0].key, key_account_kv(&account, &key));
+        assert_eq!(witness.writes[0].value, bytes_from_json(&value));
+        assert_eq!(witness.fastpq_transcripts.len(), 1);
+        assert_eq!(witness.fastpq_transcripts[0].entry_hash, batch_hash);
+    }
+    #[test]
+    fn nested_overlay_commit_is_still_rolled_back_with_its_parent() {
+        let _guard = exec_witness_guard();
+        start_block();
+        let account = (*ALICE_ID).clone();
+        let outer_key: Name = "outer".parse().expect("metadata key");
+        let inner_key: Name = "inner".parse().expect("metadata key");
+        let value = Json::new("value");
+
+        {
+            let _outer = begin_exec_witness_overlay();
+            record_write_account_kv(&account, &outer_key, &value);
+            let inner = begin_exec_witness_overlay();
+            record_write_account_kv(&account, &inner_key, &value);
+            inner.commit();
+        }
+
+        let witness = drain_exec_witness();
+        assert!(witness.reads.is_empty());
+        assert!(witness.writes.is_empty());
+        assert!(witness.fastpq_transcripts.is_empty());
+    }
+    #[test]
+    fn transaction_overlay_preserves_fastpq_replacement_semantics() {
+        let _guard = exec_witness_guard();
+        let original_hash = Hash::prehashed([0x74; Hash::LENGTH]);
+        let replacement_hash = Hash::prehashed([0x75; Hash::LENGTH]);
+        let (original, _) = sample_fastpq_transcript(10, original_hash);
+        let (replacement, _) = sample_fastpq_transcript(11, replacement_hash);
+        let finalized = BTreeMap::from([(replacement_hash, vec![replacement])]);
+
+        start_block();
+        record_fastpq_transcript(&original);
+        {
+            let _overlay = begin_exec_witness_overlay();
+            synchronize_fastpq_transcripts(&finalized);
+        }
+        let rolled_back = drain_exec_witness();
+        assert_eq!(rolled_back.fastpq_transcripts.len(), 1);
+        assert_eq!(rolled_back.fastpq_transcripts[0].entry_hash, original_hash);
+
+        start_block();
+        record_fastpq_transcript(&original);
+        let outer = begin_exec_witness_overlay();
+        let inner = begin_exec_witness_overlay();
+        synchronize_fastpq_transcripts(&finalized);
+        inner.commit();
+        outer.commit();
+        let committed = drain_exec_witness();
+        assert_eq!(committed.fastpq_transcripts.len(), 1);
+        assert_eq!(committed.fastpq_transcripts[0].entry_hash, replacement_hash);
     }
     #[test]
     fn recorder_recovers_poisoned_witness_locks() {

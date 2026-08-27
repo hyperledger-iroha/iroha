@@ -1,13 +1,14 @@
 //! Exact bounded Microsoft Vega-MC verifier-key codec and digest.
-use std::collections::BTreeSet;
-
 use super::super::{
     VegaMdlProofDimensionsV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
 };
 use super::{
     sha256::Sha256,
-    wire::{McCodecError, Reader, write_len, write_point, write_scalar},
+    wire::{McCodecError, Reader, try_vec_with_capacity, write_len, write_point, write_scalar},
 };
+const LENGTH_BYTES: usize = 8;
+const POINT_BYTES: usize = 33;
+const SCALAR_BYTES: usize = 32;
 const DEFAULT_COMMITMENT_WIDTH: usize = 2_048;
 const MAX_VERIFIER_KEY_BYTES: usize = 512 * 1024 * 1024;
 const MAX_KEY_COLUMNS: usize = DEFAULT_COMMITMENT_WIDTH;
@@ -147,7 +148,11 @@ impl McVerifierKeyWire {
     /// Encode the ordinary fixed-little-endian verifier-key representation.
     pub(super) fn encode(&self) -> Result<Vec<u8>, McCodecError> {
         self.validate()?;
-        let mut output = Vec::new();
+        let encoded_len = self.encoded_len()?;
+        if encoded_len > MAX_VERIFIER_KEY_BYTES {
+            return Err(McCodecError::InvalidEncoding);
+        }
+        let mut output = try_vec_with_capacity(encoded_len)?;
         write_hyrax_key(&mut output, &self.application_key)?;
         write_hyrax_key(&mut output, &self.evaluation_key)?;
         write_split_shape(&mut output, &self.step_shape)?;
@@ -157,10 +162,24 @@ impl McVerifierKeyWire {
         write_hyrax_key(&mut output, &self.verifier_commitment_key)?;
         write_hyrax_key(&mut output, &self.verifier_evaluation_key)?;
         write_usize(&mut output, self.num_steps)?;
-        if output.len() > MAX_VERIFIER_KEY_BYTES {
+        if output.len() != encoded_len {
             return Err(McCodecError::InvalidEncoding);
         }
         Ok(output)
+    }
+
+    fn encoded_len(&self) -> Result<usize, McCodecError> {
+        checked_sum(&[
+            hyrax_key_encoded_len(&self.application_key)?,
+            hyrax_key_encoded_len(&self.evaluation_key)?,
+            split_shape_encoded_len(&self.step_shape)?,
+            split_shape_encoded_len(&self.core_shape)?,
+            multi_round_shape_encoded_len(&self.verifier_shape)?,
+            regular_shape_encoded_len(&self.verifier_regular_shape)?,
+            hyrax_key_encoded_len(&self.verifier_commitment_key)?,
+            hyrax_key_encoded_len(&self.verifier_evaluation_key)?,
+            LENGTH_BYTES,
+        ])
     }
     /// Compute the exact mixed raw/bincode SHA-256 verifier-key digest.
     pub(super) fn digest(&self) -> Result<[u8; 32], McCodecError> {
@@ -182,12 +201,17 @@ impl McVerifierKeyWire {
         self.validate()?;
         let commitment_points = |values: usize, width: usize| values.div_ceil(width);
         let width = self.verifier_shape.commitment_width;
-        let verifier_round_commitment_points = self
-            .verifier_shape
-            .variables_per_round
-            .iter()
-            .map(|values| commitment_points(*values, width))
-            .collect();
+        let mut verifier_round_commitment_points =
+            try_vec_with_capacity(self.verifier_shape.variables_per_round.len())?;
+        verifier_round_commitment_points.extend(
+            self.verifier_shape
+                .variables_per_round
+                .iter()
+                .map(|values| commitment_points(*values, width)),
+        );
+        let mut verifier_challenges_per_round =
+            try_vec_with_capacity(self.verifier_shape.challenges_per_round.len())?;
+        verifier_challenges_per_round.extend_from_slice(&self.verifier_shape.challenges_per_round);
         let step_variables = self.step_shape.variables()?;
         let core_variables = self.core_shape.variables()?;
         Ok(VegaMdlProofDimensionsV1 {
@@ -222,7 +246,7 @@ impl McVerifierKeyWire {
             evaluation_response_scalars: DEFAULT_COMMITMENT_WIDTH,
             verifier_round_commitment_points,
             verifier_public_values: self.verifier_shape.public_values,
-            verifier_challenges_per_round: self.verifier_shape.challenges_per_round.clone(),
+            verifier_challenges_per_round,
             nova_cross_term_points: commitment_points(
                 self.verifier_regular_shape.constraints,
                 width,
@@ -284,38 +308,35 @@ pub(super) fn read_hyrax_key(reader: &mut Reader<'_>) -> Result<HyraxKeyWire, Mc
     })
 }
 fn read_points(reader: &mut Reader<'_>, expected: usize) -> Result<Vec<Point>, McCodecError> {
-    if reader.encoded_len()? != expected
-        || expected
-            .checked_mul(33)
-            .is_none_or(|bytes| bytes > reader.remaining())
-    {
+    if reader.encoded_len()? != expected {
         return Err(McCodecError::InvalidEncoding);
     }
-    let mut points = Vec::with_capacity(expected);
+    reader.require_remaining_elements(expected, POINT_BYTES)?;
+    let mut points = try_vec_with_capacity(expected)?;
     for _ in 0..expected {
         points.push(reader.point()?);
     }
     Ok(points)
 }
 fn read_sparse_matrix(reader: &mut Reader<'_>) -> Result<SparseMatrixWire, McCodecError> {
-    let data_len = bounded_count(reader, 32, MAX_MATRIX_ENTRIES)?;
-    let mut data = Vec::with_capacity(data_len);
+    let data_len = bounded_count(reader, SCALAR_BYTES, MAX_MATRIX_ENTRIES)?;
+    let mut data = try_vec_with_capacity(data_len)?;
     for _ in 0..data_len {
         data.push(reader.scalar()?);
     }
-    let indices_len = bounded_count(reader, 8, MAX_MATRIX_ENTRIES)?;
+    let indices_len = bounded_count(reader, LENGTH_BYTES, MAX_MATRIX_ENTRIES)?;
     if indices_len != data_len {
         return Err(McCodecError::InvalidEncoding);
     }
-    let mut indices = Vec::with_capacity(indices_len);
+    let mut indices = try_vec_with_capacity(indices_len)?;
     for _ in 0..indices_len {
         indices.push(reader.encoded_len()?);
     }
-    let offsets_len = bounded_count(reader, 8, MAX_MATRIX_ROWS + 1)?;
+    let offsets_len = bounded_count(reader, LENGTH_BYTES, MAX_MATRIX_ROWS + 1)?;
     if offsets_len == 0 {
         return Err(McCodecError::InvalidEncoding);
     }
-    let mut row_offsets = Vec::with_capacity(offsets_len);
+    let mut row_offsets = try_vec_with_capacity(offsets_len)?;
     for _ in 0..offsets_len {
         row_offsets.push(reader.encoded_len()?);
     }
@@ -335,13 +356,10 @@ fn bounded_count(
     maximum: usize,
 ) -> Result<usize, McCodecError> {
     let count = reader.encoded_len()?;
-    if count > maximum
-        || count
-            .checked_mul(element_bytes)
-            .is_none_or(|bytes| bytes > reader.remaining())
-    {
+    if count > maximum {
         return Err(McCodecError::InvalidEncoding);
     }
+    reader.require_remaining_elements(count, element_bytes)?;
     Ok(count)
 }
 pub(super) fn read_split_shape(reader: &mut Reader<'_>) -> Result<SplitShapeWire, McCodecError> {
@@ -406,7 +424,8 @@ fn read_usize_vec(reader: &mut Reader<'_>, expected: usize) -> Result<Vec<usize>
     if expected > MAX_VERIFIER_ROUNDS || reader.encoded_len()? != expected {
         return Err(McCodecError::InvalidEncoding);
     }
-    let mut values = Vec::with_capacity(expected);
+    reader.require_remaining_elements(expected, LENGTH_BYTES)?;
+    let mut values = try_vec_with_capacity(expected)?;
     for _ in 0..expected {
         values.push(reader.encoded_len()?);
     }
@@ -429,7 +448,8 @@ fn validate_hyrax_key(key: &HyraxKeyWire) -> Result<(), McCodecError> {
         .negate()
         .to_non_identity_wire_bytes()
         .map_err(|_| McCodecError::InvalidEncoding)?;
-    let mut seen = BTreeSet::new();
+    let hiding_representative = hiding.min(hiding_negated);
+    let mut representatives = try_vec_with_capacity(key.generators.len())?;
     for point in key.generators.iter().copied() {
         let encoded = point
             .to_non_identity_wire_bytes()
@@ -438,14 +458,18 @@ fn validate_hyrax_key(key: &HyraxKeyWire) -> Result<(), McCodecError> {
             .negate()
             .to_non_identity_wire_bytes()
             .map_err(|_| McCodecError::InvalidEncoding)?;
-        if encoded == hiding
-            || encoded == hiding_negated
-            || seen.contains(&encoded)
-            || seen.contains(&negated)
-        {
+        let representative = encoded.min(negated);
+        if representative == hiding_representative {
             return Err(McCodecError::InvalidEncoding);
         }
-        seen.insert(encoded);
+        representatives.push(representative);
+    }
+    representatives.sort_unstable();
+    if representatives
+        .windows(2)
+        .any(|window| window[0] == window[1])
+    {
+        return Err(McCodecError::InvalidEncoding);
     }
     Ok(())
 }
@@ -711,18 +735,52 @@ fn digest_multi_round_shape(
     digest: &mut Sha256,
     shape: &MultiRoundShapeWire,
 ) -> Result<(), McCodecError> {
-    let mut encoded = Vec::new();
-    write_multi_round_shape(&mut encoded, shape)?;
-    digest
-        .update(&encoded)
-        .map_err(|_| McCodecError::InvalidEncoding)
+    digest_usize(digest, shape.constraints)?;
+    digest_usize(digest, shape.constraints_unpadded)?;
+    digest_usize(digest, shape.rounds)?;
+    digest_usize_vec_wire(digest, &shape.variables_per_round_unpadded)?;
+    digest_usize_vec_wire(digest, &shape.variables_per_round)?;
+    digest_usize_vec_wire(digest, &shape.challenges_per_round)?;
+    digest_usize(digest, shape.public_values)?;
+    digest_usize(digest, shape.commitment_width)?;
+    digest_sparse_matrix_wire(digest, &shape.a)?;
+    digest_sparse_matrix_wire(digest, &shape.b)?;
+    digest_sparse_matrix_wire(digest, &shape.c)
 }
 fn digest_regular_shape(digest: &mut Sha256, shape: &RegularShapeWire) -> Result<(), McCodecError> {
-    let mut encoded = Vec::new();
-    write_regular_shape(&mut encoded, shape)?;
-    digest
-        .update(&encoded)
-        .map_err(|_| McCodecError::InvalidEncoding)
+    digest_usize(digest, shape.constraints)?;
+    digest_usize(digest, shape.variables)?;
+    digest_usize(digest, shape.public_values)?;
+    digest_sparse_matrix_wire(digest, &shape.a)?;
+    digest_sparse_matrix_wire(digest, &shape.b)?;
+    digest_sparse_matrix_wire(digest, &shape.c)
+}
+fn digest_sparse_matrix_wire(
+    digest: &mut Sha256,
+    matrix: &SparseMatrixWire,
+) -> Result<(), McCodecError> {
+    digest_usize(digest, matrix.data.len())?;
+    for value in &matrix.data {
+        digest
+            .update(&value.to_le_bytes())
+            .map_err(|_| McCodecError::InvalidEncoding)?;
+    }
+    digest_usize(digest, matrix.indices.len())?;
+    for index in &matrix.indices {
+        digest_usize(digest, *index)?;
+    }
+    digest_usize(digest, matrix.row_offsets.len())?;
+    for offset in &matrix.row_offsets {
+        digest_usize(digest, *offset)?;
+    }
+    digest_usize(digest, matrix.columns)
+}
+fn digest_usize_vec_wire(digest: &mut Sha256, values: &[usize]) -> Result<(), McCodecError> {
+    digest_usize(digest, values.len())?;
+    for value in values {
+        digest_usize(digest, *value)?;
+    }
+    Ok(())
 }
 fn digest_usize(digest: &mut Sha256, value: usize) -> Result<(), McCodecError> {
     digest
@@ -746,6 +804,67 @@ fn split_dimensions(shape: &SplitShapeWire) -> [usize; 10] {
         shape.public_values,
         shape.challenges,
     ]
+}
+pub(super) fn hyrax_key_encoded_len(key: &HyraxKeyWire) -> Result<usize, McCodecError> {
+    checked_sum(&[
+        LENGTH_BYTES,
+        encoded_vec_len(key.generators.len(), POINT_BYTES)?,
+        POINT_BYTES,
+    ])
+}
+pub(super) fn split_shape_encoded_len(shape: &SplitShapeWire) -> Result<usize, McCodecError> {
+    checked_sum(&[
+        10 * LENGTH_BYTES,
+        sparse_matrix_encoded_len(&shape.a)?,
+        sparse_matrix_encoded_len(&shape.b)?,
+        sparse_matrix_encoded_len(&shape.c)?,
+    ])
+}
+pub(super) fn multi_round_shape_encoded_len(
+    shape: &MultiRoundShapeWire,
+) -> Result<usize, McCodecError> {
+    checked_sum(&[
+        3 * LENGTH_BYTES,
+        encoded_vec_len(shape.variables_per_round_unpadded.len(), LENGTH_BYTES)?,
+        encoded_vec_len(shape.variables_per_round.len(), LENGTH_BYTES)?,
+        encoded_vec_len(shape.challenges_per_round.len(), LENGTH_BYTES)?,
+        2 * LENGTH_BYTES,
+        sparse_matrix_encoded_len(&shape.a)?,
+        sparse_matrix_encoded_len(&shape.b)?,
+        sparse_matrix_encoded_len(&shape.c)?,
+    ])
+}
+pub(super) fn regular_shape_encoded_len(shape: &RegularShapeWire) -> Result<usize, McCodecError> {
+    checked_sum(&[
+        3 * LENGTH_BYTES,
+        sparse_matrix_encoded_len(&shape.a)?,
+        sparse_matrix_encoded_len(&shape.b)?,
+        sparse_matrix_encoded_len(&shape.c)?,
+    ])
+}
+fn sparse_matrix_encoded_len(matrix: &SparseMatrixWire) -> Result<usize, McCodecError> {
+    checked_sum(&[
+        encoded_vec_len(matrix.data.len(), SCALAR_BYTES)?,
+        encoded_vec_len(matrix.indices.len(), LENGTH_BYTES)?,
+        encoded_vec_len(matrix.row_offsets.len(), LENGTH_BYTES)?,
+        LENGTH_BYTES,
+    ])
+}
+fn encoded_vec_len(elements: usize, element_bytes: usize) -> Result<usize, McCodecError> {
+    LENGTH_BYTES
+        .checked_add(
+            elements
+                .checked_mul(element_bytes)
+                .ok_or(McCodecError::InvalidEncoding)?,
+        )
+        .ok_or(McCodecError::InvalidEncoding)
+}
+pub(super) fn checked_sum(lengths: &[usize]) -> Result<usize, McCodecError> {
+    lengths.iter().try_fold(0_usize, |total, length| {
+        total
+            .checked_add(*length)
+            .ok_or(McCodecError::InvalidEncoding)
+    })
 }
 fn log2_exact(value: usize) -> Result<usize, McCodecError> {
     if value == 0 || !value.is_power_of_two() {
@@ -830,6 +949,50 @@ mod tests {
         assert_eq!(
             McVerifierKeyWire::decode(&bomb),
             Err(McCodecError::InvalidEncoding)
+        );
+    }
+
+    #[test]
+    fn sequence_readers_reject_impossible_encoded_lengths_before_reserving() {
+        let sparse_bomb_bytes = u64::MAX.to_le_bytes();
+        let mut sparse_bomb = Reader::new(&sparse_bomb_bytes);
+        assert_eq!(
+            read_sparse_matrix(&mut sparse_bomb),
+            Err(McCodecError::InvalidEncoding)
+        );
+
+        let encoded_rounds = 2_u64.to_le_bytes();
+        let mut truncated_rounds = Reader::new(&encoded_rounds);
+        assert_eq!(
+            read_usize_vec(&mut truncated_rounds, 2),
+            Err(McCodecError::InvalidEncoding)
+        );
+    }
+
+    #[test]
+    fn streamed_shape_digests_preserve_exact_wire_order() {
+        let key = McVerifierKeyWire::decode(PYTHON_VK).expect("canonical Python key");
+
+        let mut multi_round_wire = Vec::new();
+        write_multi_round_shape(&mut multi_round_wire, &key.verifier_shape)
+            .expect("multi-round shape wire");
+        let mut multi_round_digest = Sha256::new();
+        digest_multi_round_shape(&mut multi_round_digest, &key.verifier_shape)
+            .expect("streamed multi-round digest");
+        assert_eq!(
+            multi_round_digest.finalize(),
+            sha256(&multi_round_wire).expect("bounded multi-round wire")
+        );
+
+        let mut regular_wire = Vec::new();
+        write_regular_shape(&mut regular_wire, &key.verifier_regular_shape)
+            .expect("regular shape wire");
+        let mut regular_digest = Sha256::new();
+        digest_regular_shape(&mut regular_digest, &key.verifier_regular_shape)
+            .expect("streamed regular digest");
+        assert_eq!(
+            regular_digest.finalize(),
+            sha256(&regular_wire).expect("bounded regular wire")
         );
     }
 

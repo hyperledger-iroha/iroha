@@ -2380,6 +2380,37 @@ fn deployment_active_bundle_binding_rejects_economic_and_volume_drift() {
 }
 
 #[test]
+fn deployment_active_bundle_binding_rejects_inrou_active_rollout() {
+    let (bundle, mut deployment) = sample_hosted_active_bundle_and_deployment();
+    let rollout = SoraServiceRolloutStateV1 {
+        schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+        rollout_handle: "portal:rollout:1".to_owned(),
+        baseline_version: "0.9.0".to_owned(),
+        candidate_version: deployment.current_service_version.clone(),
+        canary_percent: 25,
+        traffic_percent: 25,
+        stage: SoraRolloutStageV1::Canary,
+        health_failures: 0,
+        max_health_failures: 2,
+        health_window_secs: 30,
+        created_sequence: 1,
+        updated_sequence: 1,
+    };
+    deployment.active_rollout = Some(rollout.clone());
+    deployment.last_rollout = Some(rollout);
+    deployment
+        .validate()
+        .expect("active rollout remains structurally valid before bundle binding");
+
+    assert_soracloud_invalid_field(
+        deployment
+            .validate_against_active_bundle(&bundle)
+            .expect_err("first-release Inrou must reject a second active revision"),
+        "active_rollout",
+    );
+}
+
+#[test]
 fn service_lease_norito_rejects_retired_implicit_audit_sequence_clock_layout() {
     #[derive(Encode)]
     struct RetiredImplicitClockLeaseStateV1 {

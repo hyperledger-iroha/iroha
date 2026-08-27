@@ -8,7 +8,7 @@
 //! hashes do not need to be recomputed after every operation.  The VM records
 //! authentication paths for each access together with the resulting Merkle roots, allowing external
 //! circuits to verify the trace without storing the full register file.
-/// Default maximum trace length used for padding. Default maximum trace length used for padding.
+/// Default maximum trace length used for padding.
 ///
 /// The original implementation limited zero-knowledge execution to 2^16
 /// cycles. As the proving backend and hardware improved we can handle larger
@@ -19,51 +19,103 @@ use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::{
     cell::RefCell,
+    marker::PhantomData,
     num::NonZeroU64,
+    rc::Rc,
     sync::{
-        LazyLock, OnceLock,
+        Arc, LazyLock, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
+pub(crate) type SharedRegLog = Arc<parking_lot::Mutex<RegLog>>;
+#[derive(Clone)]
+struct RegLoggerState {
+    log: Option<SharedRegLog>,
+    logging_enabled: bool,
+}
 thread_local! {
-    /// Global pointer used by [`Registers`] to log Merkle proofs.
-    pub(crate) static REG_LOGGER: RefCell<Option<*mut RegLog>> = const { RefCell::new(None) };
+    /// Thread-local, ownership-safe sink used by [`Registers`] to log Merkle proofs.
+    ///
+    /// The outer `Option` distinguishes execution outside a VM run from an
+    /// explicitly masked run. That distinction prevents an untraced nested VM
+    /// from inheriting its caller's logger.
+    static REG_LOGGER: RefCell<Option<RegLoggerState>> = const { RefCell::new(None) };
 }
 static PROVER_THREADS: AtomicUsize = AtomicUsize::new(0);
 static PROVER_STACK_SIZE: LazyLock<AtomicUsize> =
     LazyLock::new(|| AtomicUsize::new(crate::parallel::thread_stack_size()));
 static PROVER_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
-/// Install a register logger for the current thread.
-pub fn set_reg_logger(ptr: Option<*mut RegLog>) {
-    REG_LOGGER.with(|l| *l.borrow_mut() = ptr);
-}
 /// RAII helper that clears the register logger when dropped.
-pub struct RegLoggerGuard {
-    installed: bool,
+pub(crate) struct RegLoggerGuard {
+    previous: Option<RegLoggerState>,
+    // A thread-local installation must be removed on the thread that created it.
+    _not_send_or_sync: PhantomData<Rc<()>>,
 }
 impl RegLoggerGuard {
-    /// Install the register logger and return a guard that will clear it on drop.
-    pub fn install(log: &mut RegLog) -> Self {
-        set_reg_logger(Some(log as *mut _));
-        Self { installed: true }
+    /// Install an active or explicitly masked register logger scope and restore
+    /// any outer scope on drop.
+    pub(crate) fn install(log: Option<SharedRegLog>) -> Self {
+        let logging_enabled = log.is_some();
+        let previous = REG_LOGGER.with(|slot| {
+            slot.replace(Some(RegLoggerState {
+                log,
+                logging_enabled,
+            }))
+        });
+        Self {
+            previous,
+            _not_send_or_sync: PhantomData,
+        }
     }
-    /// Return a no-op guard for cases where register logging is disabled.
-    pub const fn noop() -> Self {
-        Self { installed: false }
+    /// Temporarily suppress events while retaining the surrounding
+    /// invocation's logger identity and fixed trace policy.
+    pub(crate) fn mask() -> Self {
+        let previous = REG_LOGGER.with(|slot| {
+            let masked = slot.borrow().as_ref().map(|state| RegLoggerState {
+                log: state.log.clone(),
+                logging_enabled: false,
+            });
+            slot.replace(masked)
+        });
+        Self {
+            previous,
+            _not_send_or_sync: PhantomData,
+        }
     }
 }
 impl Drop for RegLoggerGuard {
     fn drop(&mut self) {
-        if self.installed {
-            set_reg_logger(None);
-        }
+        REG_LOGGER.with(|slot| *slot.borrow_mut() = self.previous.take());
     }
+}
+/// Return whether the current VM invocation fixed trace collection as enabled.
+///
+/// `None` means execution is outside a VM run and the VM's configured mode
+/// should be consulted instead.
+pub(crate) fn scoped_reg_logger_enabled() -> Option<bool> {
+    REG_LOGGER.with(|slot| slot.borrow().as_ref().map(|state| state.log.is_some()))
+}
+/// Clone the invocation-owned logger, if trace collection is active.
+pub(crate) fn scoped_reg_logger() -> Option<SharedRegLog> {
+    REG_LOGGER.with(|slot| slot.borrow().as_ref().and_then(|state| state.log.clone()))
+}
+/// Clone the invocation logger only when the current scope may emit events.
+pub(crate) fn event_reg_logger() -> Option<SharedRegLog> {
+    REG_LOGGER.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|state| state.logging_enabled.then(|| state.log.clone()).flatten())
+    })
 }
 /// Execute `f` if a register logger is installed.
 pub(crate) fn with_reg_logger<F: FnOnce(&mut RegLog)>(f: F) {
     REG_LOGGER.with(|l| {
-        if let Some(ptr) = *l.borrow() {
-            unsafe { f(&mut *ptr) };
+        let installed = l
+            .borrow()
+            .as_ref()
+            .and_then(|state| state.logging_enabled.then(|| state.log.clone()).flatten());
+        if let Some(log) = installed {
+            f(&mut log.lock());
         }
     });
 }
@@ -106,9 +158,9 @@ mod tests {
     use super::*;
     #[test]
     fn reg_logger_guard_clears_on_drop() {
-        let mut log = RegLog::default();
+        let log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
         {
-            let _guard = RegLoggerGuard::install(&mut log);
+            let _guard = RegLoggerGuard::install(Some(Arc::clone(&log)));
             let mut observed = false;
             with_reg_logger(|_| {
                 observed = true;
@@ -123,9 +175,9 @@ mod tests {
     }
     #[test]
     fn reg_logger_guard_clears_on_unwind() {
-        let mut log = RegLog::default();
+        let log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = RegLoggerGuard::install(&mut log);
+            let _guard = RegLoggerGuard::install(Some(Arc::clone(&log)));
             panic!("intentional");
         }));
         assert!(result.is_err(), "expected panic to be captured");
@@ -134,6 +186,78 @@ mod tests {
             ran_after_panic = true;
         });
         assert!(!ran_after_panic, "logger should be cleared after panic");
+    }
+    #[test]
+    fn nested_reg_logger_install_restores_outer_logger() {
+        let outer_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let outer_address = {
+            let log = outer_log.lock();
+            std::ptr::from_ref(&*log) as usize
+        };
+        let guard = RegLoggerGuard::install(Some(Arc::clone(&outer_log)));
+        let inner_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let inner_address = {
+            let log = inner_log.lock();
+            std::ptr::from_ref(&*log) as usize
+        };
+        {
+            let _nested = RegLoggerGuard::install(Some(Arc::clone(&inner_log)));
+            with_reg_logger(|installed| {
+                assert_eq!(
+                    std::ptr::from_mut(installed) as usize,
+                    inner_address,
+                    "nested logger must be active in its scope"
+                );
+            });
+        }
+        with_reg_logger(|installed| {
+            assert_eq!(
+                std::ptr::from_mut(installed) as usize,
+                outer_address,
+                "nested scope must restore the outer logger"
+            );
+        });
+        drop(guard);
+    }
+    #[test]
+    fn masked_nested_reg_logger_scope_restores_outer_logger() {
+        let outer_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let _outer = RegLoggerGuard::install(Some(Arc::clone(&outer_log)));
+        assert_eq!(scoped_reg_logger_enabled(), Some(true));
+        {
+            let _masked = RegLoggerGuard::install(None);
+            assert_eq!(scoped_reg_logger_enabled(), Some(false));
+            let mut observed = false;
+            with_reg_logger(|_| observed = true);
+            assert!(
+                !observed,
+                "masked nested scope must suppress the outer logger"
+            );
+        }
+        assert_eq!(scoped_reg_logger_enabled(), Some(true));
+        assert!(Arc::ptr_eq(
+            &scoped_reg_logger().expect("outer logger restored"),
+            &outer_log
+        ));
+    }
+    #[test]
+    fn callback_mask_suppresses_events_but_retains_invocation_identity() {
+        let outer_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let _outer = RegLoggerGuard::install(Some(Arc::clone(&outer_log)));
+        {
+            let _masked = RegLoggerGuard::mask();
+            assert_eq!(scoped_reg_logger_enabled(), Some(true));
+            assert!(Arc::ptr_eq(
+                &scoped_reg_logger().expect("invocation logger retained"),
+                &outer_log
+            ));
+            let mut observed = false;
+            with_reg_logger(|_| observed = true);
+            assert!(!observed, "callback mask must suppress register events");
+        }
+        let mut observed = false;
+        with_reg_logger(|_| observed = true);
+        assert!(observed, "dropping callback mask restores event logging");
     }
     #[test]
     fn prover_thread_override_round_trips() {
@@ -154,6 +278,18 @@ mod tests {
             .build_global();
         let result = verify_trace(&[], &[], &[], &[]);
         assert!(result.is_ok());
+    }
+    #[test]
+    fn verify_trace_accepts_arbitrary_register_data() {
+        let mut gpr = [0u64; 256];
+        gpr[0] = 0xDEAD_BEEF_DEAD_BEEF;
+        let trace = [RegisterState {
+            pc: 0,
+            gpr,
+            tags: [false; 256],
+        }];
+
+        assert!(verify_trace(&trace, &[], &[], &[]).is_ok());
     }
     #[test]
     fn verify_trace_rejects_cross_chunk_memory_writes() {
@@ -263,6 +399,15 @@ impl MemLog {
     pub fn record(&mut self, e: MemEvent) {
         self.events.push(e);
     }
+    /// Zero retained memory values before discarding the event log.
+    pub(crate) fn scrub(&mut self) {
+        for event in &mut self.events {
+            match event {
+                MemEvent::Load { value, .. } | MemEvent::Store { value, .. } => *value = 0,
+            }
+        }
+        self.events.clear();
+    }
 }
 /// Record of a register access together with its Merkle proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +434,15 @@ pub struct RegLog {
 impl RegLog {
     pub fn record(&mut self, e: RegEvent) {
         self.events.push(e);
+    }
+    /// Zero retained register values before discarding the event log.
+    pub(crate) fn scrub(&mut self) {
+        for event in &mut self.events {
+            match event {
+                RegEvent::Read { value, .. } | RegEvent::Write { value, .. } => *value = 0,
+            }
+        }
+        self.events.clear();
     }
 }
 /// Snapshot of the VM state for one cycle used when generating ZK proofs.
@@ -372,6 +526,21 @@ impl DeltaTraceLog {
             });
         }
         result
+    }
+    /// Zero retained register values before discarding the compact trace.
+    pub(crate) fn scrub(&mut self) {
+        for entry in &mut self.entries {
+            for (_, value, tag) in &mut entry.changes {
+                *value = 0;
+                *tag = false;
+            }
+        }
+        if let Some(last) = &mut self.last {
+            last.gpr.fill(0);
+            last.tags.fill(false);
+        }
+        self.entries.clear();
+        self.last = None;
     }
 }
 /// Merkle roots of registers and memory for a single cycle.
@@ -534,15 +703,7 @@ pub fn verify_trace(
                 Err(crate::error::VMError::AssertionFailed)
             }
         })?;
-        if trace
-            .last()
-            .map(|state| state.gpr.contains(&0xDEAD_BEEF_DEAD_BEEFu64))
-            .unwrap_or(false)
-        {
-            Err(crate::error::VMError::AssertionFailed)
-        } else {
-            Ok(())
-        }
+        Ok(())
     })
 }
 

@@ -83,11 +83,8 @@ fn fair_v2_ingress_leader_wire_selector_projection(
                 .iter()
                 .filter(|entry| entry.admission_ordinal < carrier_ordinal)
                 .count();
-            let retained_predecessors = owner
-                .ingress_predecessors
-                .get(source)
-                .copied()
-                .unwrap_or(0);
+            let retained_predecessors =
+                owner.ingress_predecessors.get(source).copied().unwrap_or(0);
             if retained_predecessors != actual_predecessors {
                 return Err(format!(
                     "leader-wire selector changed its exact ingress predecessor geometry for \
@@ -169,8 +166,6 @@ fn fair_v2_ingress_leader_wire_selector_projection(
                     | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
                     | ConsensusMessageV2Payload::CommitCertificateRequest(_)
                     | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-                    | ConsensusMessageV2Payload::VrfCommit(_)
-                    | ConsensusMessageV2Payload::VrfReveal(_)
                     | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
                 }
             })
@@ -207,6 +202,9 @@ fn fair_v2_ingress_queue_gate_verdict(
     let leader_wire_barrier = leader.selected_barrier.as_ref();
     let leader_wire_body_dependency = leader.body_dependency;
     let leader_wire_control_barrier = leader.control_barrier;
+    let leader_wire_chunk_barrier = leader_wire_barrier.is_some_and(|owner| {
+        owner.token.source_class == FairV2IngressLeaderWireSourceClass::Chunk
+    });
     // A control occurrence may wait for downstream capacity, but a later view
     // or conflicting carrier in the same semantic slot cannot replace it.
     let has_live_control_predecessor = lane
@@ -247,9 +245,10 @@ fn fair_v2_ingress_queue_gate_verdict(
             fair_v2_ingress_certified_fence_escape_advances_owner(&owner.token, &entry.inbound)
         });
     let dependency_bypass = !ingress_barrier_allows
-        && (certified_fence_escape_dependency
+        && ((leader_wire_control_barrier && earlier_dependency)
             || timeout_control_dependency
-            || (leader_wire_control_barrier && earlier_dependency));
+            || ((leader_wire_control_barrier || leader_wire_chunk_barrier)
+                && certified_fence_escape_dependency));
     if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
         FairV2IngressQueueGateVerdict::Blocked
     } else if dependency_bypass {
@@ -265,8 +264,7 @@ impl FairV2Ingress {
     /// clock, rotates a source, or observes durable obsolescence.
     pub(crate) fn scheduler_stall_diagnostic(&self) -> Result<String, String> {
         let state = self.state.lock();
-        let projection =
-            fair_v2_ingress_leader_wire_selector_projection(&state, false, None)?;
+        let projection = fair_v2_ingress_leader_wire_selector_projection(&state, false, None)?;
         let mut message_counts = BTreeMap::<u8, (FairV2IngressMessageKind, usize)>::new();
         let mut blocked = 0usize;
         let mut strict = 0usize;

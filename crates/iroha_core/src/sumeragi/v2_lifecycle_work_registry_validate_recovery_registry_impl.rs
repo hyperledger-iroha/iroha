@@ -1,5 +1,6 @@
 impl ConcreteLifecycleWorkRegistry {
-    /// Join every exact cold Ready Validate carrier to its replay authority.
+    /// Join every exact cold Ready Validate carrier to its replay authority
+    /// and classify its mutually exclusive retry owner.
     ///
     /// This read-only launch cut deliberately returns no owner when the runtime
     /// has no Ready Validate row. Every carrier is accepted only after its
@@ -151,6 +152,7 @@ impl ConcreteLifecycleWorkRegistry {
                 durable_receipt: validate.durable_receipt.clone(),
                 binding,
                 lifecycle_ordinal: address.ordinal,
+                owner_class: validate.replay_evidence.cold_retry_owner_class(),
             };
             if owners.insert(key, owner).is_some() {
                 return Err(RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers);

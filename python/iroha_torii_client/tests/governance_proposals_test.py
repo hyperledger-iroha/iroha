@@ -5,19 +5,8 @@ from __future__ import annotations
 import copy
 
 import pytest
-
 from client_test_support import CANONICAL_OWNER
 from iroha_torii_client.governance_proposals import (
-    GovernanceSccpAdvanceLaneTrustAnchor,
-    GovernanceSccpEvmDestinationDeployment,
-    GovernanceSccpGovernedRoute,
-    GovernanceSccpInitializeLaneTrustAnchor,
-    GovernanceSccpRegisterRoute,
-    GovernanceSccpRouteAction,
-    GovernanceSccpRouteKey,
-    GovernanceSccpSetRouteActivation,
-    GovernanceSccpSolanaDestinationDeployment,
-    GovernanceSccpSwitchRouteRevision,
     GovernanceProposalDeployContract,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
@@ -28,6 +17,16 @@ from iroha_torii_client.governance_proposals import (
     GovernanceProposalSorafsProviderGovernance,
     GovernanceProposalValidationFeePayoutLifecycle,
     GovernanceProposalValidationFeePolicy,
+    GovernanceSccpAdvanceLaneTrustAnchor,
+    GovernanceSccpEvmDestinationDeployment,
+    GovernanceSccpGovernedRoute,
+    GovernanceSccpInitializeLaneTrustAnchor,
+    GovernanceSccpRegisterRoute,
+    GovernanceSccpRouteAction,
+    GovernanceSccpRouteKey,
+    GovernanceSccpSetRouteActivation,
+    GovernanceSccpSolanaDestinationDeployment,
+    GovernanceSccpSwitchRouteRevision,
 )
 
 CONTRACT_ADDRESS = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"

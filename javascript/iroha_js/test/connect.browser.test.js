@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { ed25519, x25519 } from "@noble/curves/ed25519";
@@ -248,11 +249,7 @@ function approvalPreimage(preview, walletPublicKey, accountId, relayToken) {
   ]);
 }
 
-function encodeApproveControl(preview, walletPublicKey, accountId, accountPrivateKey, relayToken) {
-  const signature = ed25519.sign(
-    approvalPreimage(preview, walletPublicKey, accountId, relayToken),
-    accountPrivateKey,
-  );
+function encodeApproveControlWithSignature(walletPublicKey, accountId, signature) {
   const body = encodeStruct([
     Buffer.from(walletPublicKey),
     encodeString(accountId),
@@ -264,6 +261,49 @@ function encodeApproveControl(preview, walletPublicKey, accountId, accountPrivat
     }),
   ]);
   return Buffer.concat([u32(1), u64(body.length), body]);
+}
+
+function encodeApproveControl(preview, walletPublicKey, accountId, accountPrivateKey, relayToken) {
+  return encodeApproveControlWithSignature(
+    walletPublicKey,
+    accountId,
+    ed25519.sign(
+      approvalPreimage(preview, walletPublicKey, accountId, relayToken),
+      accountPrivateKey,
+    ),
+  );
+}
+
+function mixedTorsionSignature(message, privateKey) {
+  const extended = ed25519.utils.getExtendedPublicKey(privateKey);
+  const Point = ed25519.Point ?? ed25519.ExtendedPoint;
+  const orderTwoTorsion = Point.fromHex(
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  );
+  const scalarFromDigest = (digest) => {
+    let scalar = 0n;
+    for (let index = digest.length - 1; index >= 0; index -= 1) {
+      scalar = (scalar << 8n) | BigInt(digest[index]);
+    }
+    return scalar % ed25519.CURVE.n;
+  };
+  const hashToScalar = (...parts) => scalarFromDigest(
+    createHash("sha512")
+      .update(Buffer.concat(parts.map((part) => Buffer.from(part))))
+      .digest(),
+  );
+  const nonce = hashToScalar(extended.prefix, message);
+  const encodedNonce = Buffer.from(
+    Point.BASE.multiply(nonce).add(orderTwoTorsion).toRawBytes(),
+  );
+  const challenge = hashToScalar(encodedNonce, extended.point.toRawBytes(), message);
+  let response = (nonce + challenge * extended.scalar) % ed25519.CURVE.n;
+  const encodedResponse = Buffer.alloc(32);
+  for (let index = 0; index < encodedResponse.length; index += 1) {
+    encodedResponse[index] = Number(response & 0xffn);
+    response >>= 8n;
+  }
+  return Buffer.concat([encodedNonce, encodedResponse]);
 }
 
 function encodeRejectControl(codeId, reason, code = 401) {
@@ -855,6 +895,48 @@ test("createConnectAppSession handles approval and sign success", async () => {
   assert.deepEqual(Buffer.from(detached), signature);
 });
 
+test("createConnectAppSession rejects a mixed-torsion approval signature", async () => {
+  RecordingWebSocket.instances.length = 0;
+  const preview = makePreview();
+  const account = makeAccount();
+  const relayToken = "relay-token";
+  const walletPrivateKey = new Uint8Array(32).fill(0x55);
+  const walletPublicKey = x25519.getPublicKey(walletPrivateKey);
+  const session = createConnectAppSession({
+    baseUrl: "https://taira.sora.org",
+    preview,
+    session: {
+      sid: preview.sidBase64Url,
+      token_app: "token-app",
+      token_relay: relayToken,
+    },
+    webSocketImpl: RecordingWebSocket,
+  });
+  const socket = RecordingWebSocket.instances[0];
+  socket.open();
+  const preimage = approvalPreimage(
+    preview,
+    walletPublicKey,
+    account.accountId,
+    relayToken,
+  );
+  socket.receive(
+    encodeControlFrame({
+      sidBytes: preview.sidBytes,
+      dir: 1,
+      seq: 1,
+      control: encodeApproveControlWithSignature(
+        walletPublicKey,
+        account.accountId,
+        mixedTorsionSignature(preimage, account.privateKey),
+      ),
+    }),
+  );
+
+  await assert.rejects(session.waitForApproval(), /approval signature verification failed/u);
+  assert.equal(session.approvedAccountId, null);
+});
+
 test("createConnectAppSession requests sign_raw permission and signs raw bytes under the exact domain", async () => {
   const { account, keys, preview, session, socket } = await createApprovedTestSession({
     permissions: {
@@ -894,6 +976,28 @@ test("createConnectAppSession rejects a raw signature that is not bound to the a
       keys,
       signRequest.seq,
       ed25519.sign(message, otherPrivateKey),
+    ),
+  );
+
+  await assert.rejects(signPromise, (error) => {
+    assert.ok(error instanceof ConnectSignRequestError);
+    assert.equal(error.code, "INVALID_SIGNATURE");
+    return true;
+  });
+});
+
+test("createConnectAppSession rejects a mixed-torsion raw signature", async () => {
+  const { account, keys, preview, session, socket } = await createApprovedTestSession();
+  const message = Buffer.from("canonical request", "utf8");
+  const signPromise = session.signRaw(TORII_CANONICAL_REQUEST_DOMAIN_TAG, message);
+  await Promise.resolve();
+  const signRequest = decodeAppSignRequest(preview, keys, socket.sent[1]);
+  socket.receive(
+    encodeSignResultOk(
+      preview,
+      keys,
+      signRequest.seq,
+      mixedTorsionSignature(message, account.privateKey),
     ),
   );
 
@@ -1024,6 +1128,26 @@ test("createConnectCanonicalRequestAuth rejects invalid wallet signatures", asyn
     },
     async signRaw() {
       return new Uint8Array(64);
+    },
+  });
+  await assert.rejects(
+    auth.sign({ message: Buffer.from("canonical request", "utf8") }),
+    (error) => {
+      assert.ok(error instanceof ConnectSignRequestError);
+      assert.equal(error.code, "INVALID_SIGNATURE");
+      return true;
+    },
+  );
+});
+
+test("createConnectCanonicalRequestAuth rejects mixed-torsion wallet signatures", async () => {
+  const account = makeAccount();
+  const auth = await createConnectCanonicalRequestAuth({
+    async waitForApproval() {
+      return { accountId: account.accountId };
+    },
+    async signRaw(_domainTag, message) {
+      return mixedTorsionSignature(message, account.privateKey);
     },
   });
   await assert.rejects(

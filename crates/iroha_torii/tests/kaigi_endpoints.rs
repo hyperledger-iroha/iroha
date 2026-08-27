@@ -11,7 +11,10 @@ use iroha_core::{kiso::KisoHandle, kura::Kura, query::store::LiveQueryStore, sta
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ChainId, Registrable,
-    account::Account,
+    account::{
+        Account, AccountAddress,
+        rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
+    },
     domain::Domain,
     kaigi::{
         KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
@@ -20,9 +23,10 @@ use iroha_data_model::{
     metadata::Metadata,
     peer::PeerId,
     prelude::{AccountId, DomainId, Name},
+    sns::{NameControllerV1, NameRecordV1},
 };
 use iroha_primitives::{json::Json, time::TimeSource};
-use std::{str::FromStr, sync::Arc};
+use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 use tower::ServiceExt;
 #[path = "fixtures.rs"]
 mod fixtures;
@@ -31,6 +35,55 @@ const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
 fn checked_kaigi_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked Kaigi Ed25519 fixture keypair")
+}
+fn seed_relay_primary_alias(
+    world: &mut iroha_core::prelude::World,
+    domain_id: &DomainId,
+    relay_id: &AccountId,
+) {
+    let alias = AccountAlias::new(
+        Name::from_str("relay").expect("relay alias label"),
+        Some(AccountAliasDomain::new(domain_id.name().clone())),
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    );
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+    let selector = iroha_core::sns::selector_for_account_alias(&alias, &catalog)
+        .expect("relay alias selector");
+    let address = AccountAddress::from_account_id(relay_id).expect("relay account address");
+    let lease = NameRecordV1::new(
+        selector.clone(),
+        relay_id.clone(),
+        vec![NameControllerV1::account(&address)],
+        0,
+        0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        Metadata::default(),
+    );
+    let mut block = world.block();
+    let mut transaction = block
+        .transaction_without_telemetry(iroha_config::parameters::actual::LaneConfig::default(), 0);
+    transaction
+        .account_mut(relay_id)
+        .expect("relay account")
+        .set_label(Some(alias.clone()));
+    transaction
+        .account_aliases_mut_for_testing()
+        .insert(alias.clone(), relay_id.clone());
+    transaction
+        .account_aliases_by_account_mut_for_testing()
+        .insert(relay_id.clone(), BTreeSet::from([alias.clone()]));
+    transaction.account_rekey_records_mut_for_testing().insert(
+        alias.clone(),
+        AccountRekeyRecord::new(alias, relay_id.clone()),
+    );
+    transaction.smart_contract_state_mut_for_testing().insert(
+        iroha_core::sns::record_storage_key(&selector),
+        norito::codec::Encode::encode(&lease),
+    );
+    transaction.apply();
+    block.commit();
 }
 #[test]
 fn kaigi_ed25519_fixture_uses_checked_key_generation() {
@@ -88,6 +141,7 @@ fn build_app() -> (axum::Router, AccountId, AccountId, KeyPair) {
         [owner, relay],
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
+    seed_relay_primary_alias(&mut world, &domain_id, &relay_id);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -572,7 +626,7 @@ async fn kaigi_relay_detail_rejects_invalid_relay_path_literal() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         resp.headers().get(CONTENT_TYPE),
-        Some(&HeaderValue::from_static(NORITO_MIME_TYPE))
+        Some(&HeaderValue::from_static(JSON_CONTENT_TYPE))
     );
 }
 #[tokio::test]
@@ -589,7 +643,7 @@ async fn kaigi_relay_detail_returns_not_found_for_unregistered_relay() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     assert_eq!(
         resp.headers().get(CONTENT_TYPE),
-        Some(&HeaderValue::from_static(NORITO_MIME_TYPE))
+        Some(&HeaderValue::from_static(JSON_CONTENT_TYPE))
     );
 }
 #[tokio::test]

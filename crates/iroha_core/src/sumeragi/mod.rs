@@ -396,7 +396,7 @@ pub(crate) fn epoch_for_height_from_world(
     match frozen_mode {
         ConsensusMode::Permissioned => Ok(0),
         ConsensusMode::Npos => {
-            let epoch_length = v2_npos::committed_epoch_params(world)?.epoch_length_blocks;
+            let epoch_length = v2_npos::committed_epoch_length_blocks(world)?;
             Ok(height.saturating_sub(1) / epoch_length)
         }
     }
@@ -417,8 +417,6 @@ mod epoch_schedule_tests {
         );
         let mut parameters = SumeragiNposParameters::default();
         parameters.epoch_length_blocks = NonZeroU64::new(7).expect("non-zero epoch length");
-        parameters.vrf_commit_window_blocks = 2;
-        parameters.vrf_reveal_window_blocks = 2;
         parameters
             .validate()
             .expect("test NPoS parameters must be internally consistent");
@@ -971,8 +969,6 @@ enum FairV2IngressMessageKind {
     V2CertifiedBodyResponse,
     V2CommitCertificateRequest,
     V2CommitCertificateResponse,
-    V2VrfCommit,
-    V2VrfReveal,
     V2GlobalBeaconPartialSignature,
     KuraReplicaAdvert,
     LaneBlockProposal,
@@ -1020,8 +1016,6 @@ fn fair_v2_ingress_control_kind(message: &BlockMessage) -> Option<FairV2IngressC
         | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-        | ConsensusMessageV2Payload::VrfCommit(_)
-        | ConsensusMessageV2Payload::VrfReveal(_)
         | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
     })
 }
@@ -1046,8 +1040,6 @@ fn fair_v2_ingress_same_control_slot(
             | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | ConsensusMessageV2Payload::VrfCommit(_)
-            | ConsensusMessageV2Payload::VrfReveal(_)
             | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
         })
     };
@@ -1133,13 +1125,13 @@ fn fair_v2_ingress_timeout_control_advances_owner(
         && round.height == owner.identity.height
         && view_advances
 }
-/// Whether a certified reducer input can retire the selected leader-wire owner.
+/// Whether a certified reducer input can advance the selected productive leader-wire owner.
 ///
 /// Fair ingress observes only authenticated transport provenance at this
 /// point; the reducer still verifies the certificate and sender before any
 /// state transition. This dependency edge merely prevents a retained
 /// Proposal, vote, or body owner from hiding the TC or CommitQC that can
-/// supersede it. Exact context, height, and nondecreasing-view checks keep the
+/// advance it. Exact context, height, and nondecreasing-view checks keep the
 /// escape scoped to the owner's own consensus incarnation.
 fn fair_v2_ingress_certified_fence_escape_advances_owner(
     owner: &FairV2IngressLeaderWireToken,
@@ -1348,8 +1340,6 @@ fn fair_v2_ingress_leader_wire_identity(
         | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-        | ConsensusMessageV2Payload::VrfCommit(_)
-        | ConsensusMessageV2Payload::VrfReveal(_)
         | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
             return FairV2IngressLeaderWireDerivation::NotApplicable;
         }
@@ -1579,19 +1569,17 @@ impl FairV2IngressMessageKind {
             Self::V2CertifiedBodyResponse => 8,
             Self::V2CommitCertificateRequest => 9,
             Self::V2CommitCertificateResponse => 10,
-            Self::V2VrfCommit => 11,
-            Self::V2VrfReveal => 12,
-            Self::KuraReplicaAdvert => 13,
-            Self::LaneBlockProposal => 14,
-            Self::LaneExecutablePayload => 15,
-            Self::LaneBlockNewViewVote => 16,
-            Self::LaneBlockNewViewCertificate => 17,
-            Self::LaneBlockVote => 18,
-            Self::LaneBlockQc => 19,
-            Self::LaneBlockCertificate => 20,
-            Self::LaneHistoricalRecoveryRequest => 21,
-            Self::LaneHistoricalRecoveryResponse => 22,
-            Self::V2GlobalBeaconPartialSignature => 23,
+            Self::KuraReplicaAdvert => 11,
+            Self::LaneBlockProposal => 12,
+            Self::LaneExecutablePayload => 13,
+            Self::LaneBlockNewViewVote => 14,
+            Self::LaneBlockNewViewCertificate => 15,
+            Self::LaneBlockVote => 16,
+            Self::LaneBlockQc => 17,
+            Self::LaneBlockCertificate => 18,
+            Self::LaneHistoricalRecoveryRequest => 19,
+            Self::LaneHistoricalRecoveryResponse => 20,
+            Self::V2GlobalBeaconPartialSignature => 21,
         }
     }
     fn classify(message: &BlockMessage) -> Option<Self> {
@@ -1615,8 +1603,6 @@ impl FairV2IngressMessageKind {
                 ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
                     Self::V2CommitCertificateResponse
                 }
-                ConsensusMessageV2Payload::VrfCommit(_) => Self::V2VrfCommit,
-                ConsensusMessageV2Payload::VrfReveal(_) => Self::V2VrfReveal,
                 ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                     Self::V2GlobalBeaconPartialSignature
                 }
@@ -1651,10 +1637,39 @@ impl FairV2IngressMessageKind {
                 | Self::V2CertifiedBodyResponse
                 | Self::V2CommitCertificateRequest
                 | Self::V2CommitCertificateResponse
-                | Self::V2VrfCommit
-                | Self::V2VrfReveal
                 | Self::V2GlobalBeaconPartialSignature
         )
+    }
+}
+#[cfg(test)]
+#[test]
+fn fair_v2_ingress_projection_codes_are_dense() {
+    let kinds = [
+        FairV2IngressMessageKind::V2Proposal,
+        FairV2IngressMessageKind::V2Vote,
+        FairV2IngressMessageKind::V2QuorumCertificate,
+        FairV2IngressMessageKind::V2TimeoutVote,
+        FairV2IngressMessageKind::V2TimeoutCertificate,
+        FairV2IngressMessageKind::V2PayloadManifest,
+        FairV2IngressMessageKind::V2PayloadChunk,
+        FairV2IngressMessageKind::V2CertifiedBodyRequest,
+        FairV2IngressMessageKind::V2CertifiedBodyResponse,
+        FairV2IngressMessageKind::V2CommitCertificateRequest,
+        FairV2IngressMessageKind::V2CommitCertificateResponse,
+        FairV2IngressMessageKind::KuraReplicaAdvert,
+        FairV2IngressMessageKind::LaneBlockProposal,
+        FairV2IngressMessageKind::LaneExecutablePayload,
+        FairV2IngressMessageKind::LaneBlockNewViewVote,
+        FairV2IngressMessageKind::LaneBlockNewViewCertificate,
+        FairV2IngressMessageKind::LaneBlockVote,
+        FairV2IngressMessageKind::LaneBlockQc,
+        FairV2IngressMessageKind::LaneBlockCertificate,
+        FairV2IngressMessageKind::LaneHistoricalRecoveryRequest,
+        FairV2IngressMessageKind::LaneHistoricalRecoveryResponse,
+        FairV2IngressMessageKind::V2GlobalBeaconPartialSignature,
+    ];
+    for (expected, kind) in (0_u8..).zip(kinds) {
+        assert_eq!(kind.projection_code(), expected);
     }
 }
 fn fair_v2_ingress_consensus_round(
@@ -1678,9 +1693,7 @@ fn fair_v2_ingress_consensus_round(
         }
         ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => Some(partial.round),
         ConsensusMessageV2Payload::PayloadChunk(_)
-        | ConsensusMessageV2Payload::CommitCertificateRequest(_)
-        | ConsensusMessageV2Payload::VrfCommit(_)
-        | ConsensusMessageV2Payload::VrfReveal(_) => None,
+        | ConsensusMessageV2Payload::CommitCertificateRequest(_) => None,
     }
 }
 #[cfg(test)]
@@ -1763,6 +1776,15 @@ struct FairV2IngressOwnershipOccurrence {
 pub(crate) struct FairV2IngressOwnershipEvidence {
     first: FairV2IngressOwnershipOccurrence,
     latest: FairV2IngressOwnershipOccurrence,
+    /// Production-gate exception for one authenticated current archive which
+    /// is outside the frozen validator roster and may answer only an exact
+    /// outstanding certified-body request.
+    ///
+    /// This carrier deliberately owns no generic leader-wire lifecycle slot:
+    /// the downstream request-family claim serializes it instead. The bit is
+    /// minted only while the production gate is required and remains sealed
+    /// into every ownership projection and merge.
+    request_bound_non_roster_completion: bool,
     /// First receiver-local physical ordinal which was not yet admitted when
     /// this occurrence crossed from fair ingress into serialized runtime.
     ///
@@ -1805,12 +1827,14 @@ impl FairV2IngressOwnershipEvidence {
     fn new(
         occurrence: FairV2IngressOwnershipOccurrence,
         leader_wire_token: Option<FairV2IngressLeaderWireToken>,
+        request_bound_non_roster_completion: bool,
     ) -> Self {
         let mut action_counts = [0; FairV2IngressOwnershipAction::COUNT];
         action_counts[occurrence.action.index()] = 1;
         Self {
             leader_wire_token,
             leader_wire_runtime_receipt: None,
+            request_bound_non_roster_completion,
             runtime_physical_cut: None,
             current_routes: occurrence.routes_after.clone(),
             attempts: occurrence.attempts_after.clone(),
@@ -1831,6 +1855,7 @@ impl FairV2IngressOwnershipEvidence {
             first: self.first.clone(),
             leader_wire_token: self.leader_wire_token.clone(),
             leader_wire_runtime_receipt: self.leader_wire_runtime_receipt.clone(),
+            request_bound_non_roster_completion: self.request_bound_non_roster_completion,
             runtime_physical_cut: self.runtime_physical_cut,
             admission_count: self.admission_count,
             current_routes: occurrence.routes_after.clone(),
@@ -1987,6 +2012,7 @@ impl FairV2IngressOwnershipEvidence {
             latest: candidate.latest,
             leader_wire_token: self.leader_wire_token.clone(),
             leader_wire_runtime_receipt: self.leader_wire_runtime_receipt.clone(),
+            request_bound_non_roster_completion: self.request_bound_non_roster_completion,
             runtime_physical_cut: self.runtime_physical_cut,
             admission_count,
             occurrence_count,
@@ -2016,6 +2042,7 @@ impl FairV2IngressOwnershipEvidence {
             && self.first.encoded_bytes == other.first.encoded_bytes
             && self.leader_wire_token == other.leader_wire_token
             && self.leader_wire_runtime_receipt == other.leader_wire_runtime_receipt
+            && self.request_bound_non_roster_completion == other.request_bound_non_roster_completion
     }
     /// Exact productive leader-wire admission carried across downstream cuts.
     pub(crate) const fn leader_wire_token(&self) -> Option<&FairV2IngressLeaderWireToken> {
@@ -2026,6 +2053,11 @@ impl FairV2IngressOwnershipEvidence {
         &self,
     ) -> Option<&serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt> {
         self.leader_wire_runtime_receipt.as_ref()
+    }
+    /// Whether production ingress sealed this exact certified response as a
+    /// request-bound completion from outside the current frozen roster.
+    pub(crate) const fn request_bound_non_roster_completion(&self) -> bool {
+        self.request_bound_non_roster_completion
     }
     /// Earliest actor-global lifecycle position carried into serialized runtime.
     pub(crate) fn runtime_lifecycle_ordinal(&self) -> Option<u128> {
@@ -2112,7 +2144,7 @@ impl FairV2IngressOwnershipEvidence {
     /// because their wire bytes and counters match.
     pub(crate) fn process_local_projection_hash(&self) -> CryptoHash {
         let mut projection = Vec::new();
-        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v11");
+        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v12");
         for occurrence in [&self.first, &self.latest] {
             projection.push(u8::try_from(occurrence.action.index()).unwrap_or(u8::MAX));
             projection.extend_from_slice(&occurrence.physical_admission_ordinal.to_le_bytes());
@@ -2211,6 +2243,7 @@ impl FairV2IngressOwnershipEvidence {
                 projection.extend_from_slice(&receipt.owner().admission_ordinal().to_le_bytes());
             }
         }
+        projection.push(u8::from(self.request_bound_non_roster_completion));
         // `validate_exact` proves this digest and length are the canonical
         // encoding of `first`. Reusing that admission-time seal keeps every
         // later ownership projection bounded independently of body size.
@@ -2365,6 +2398,11 @@ impl FairV2IngressOwnershipEvidence {
                 }
                 (None, Some(_)) => false,
             }
+            && (!self.request_bound_non_roster_completion
+                || (self.first.message_kind == FairV2IngressMessageKind::V2CertifiedBodyResponse
+                    && self.first.class == FairV2IngressClass::TransportCompletion
+                    && self.leader_wire_token.is_none()
+                    && self.leader_wire_runtime_receipt.is_none()))
             && self.first.validate_exact()
             && self.latest.validate_exact()
             && self.attempts_hash == fair_v2_ingress_attempt_cursor_hash(&self.attempts)
@@ -2682,8 +2720,6 @@ impl FairV2IngressClass {
             | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | ConsensusMessageV2Payload::VrfCommit(_)
-            | ConsensusMessageV2Payload::VrfReveal(_)
             | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => Self::Progress,
             ConsensusMessageV2Payload::PayloadChunk(_)
             | ConsensusMessageV2Payload::CertifiedBodyResponse(_) => Self::TransportCompletion,
@@ -3321,21 +3357,15 @@ fn fair_v2_ingress_network_message_bytes(consensus_envelope_bytes: usize) -> Opt
 }
 /// Exact plaintext P2P data-frame ceiling for one bare v2 envelope.
 ///
-/// The protocol-wide maximum public-key payload is used as both relay origin
-/// and direct target, covering validators, observers, and rotated responders
-/// independently of the active roster or compiled crypto features. The direct
-/// frame dominates broadcast. Arithmetic failures fail closed as `usize::MAX`.
+/// Relay origin and direct target use the exact first-release BLS-normal node
+/// identity geometry. The direct frame dominates broadcast. Arithmetic
+/// failures fail closed as `usize::MAX`.
 fn fair_v2_ingress_required_p2p_frame_bytes(consensus_envelope_bytes: usize) -> usize {
     let required = || -> Option<usize> {
         let network_message_bytes =
             fair_v2_ingress_network_message_bytes(consensus_envelope_bytes)?;
         Some(
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                crate::NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+            iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
                 network_message_bytes,
             ),
         )
@@ -3348,12 +3378,7 @@ fn fair_v2_ingress_required_lane_p2p_frame_bytes(block_message_bytes: usize) -> 
         let network_message_bytes =
             fair_v2_ingress_network_message_bytes_from_block_message(block_message_bytes)?;
         Some(
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                crate::NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+            iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
                 network_message_bytes,
             ),
         )
@@ -3420,8 +3445,9 @@ fn fair_v2_ingress_required_merge_sidecar_chunk_network_message_bytes_for_key(
 /// Exact plaintext direct P2P frame required by a maximum sidecar chunk.
 ///
 /// Protocol-maximum public-key payloads cover the embedded requester and
-/// responder as well as the relay origin and target. Arithmetic failures map
-/// to `usize::MAX`, so context activation fails closed.
+/// responder; relay origin and target use the canonical BLS-normal node
+/// geometry. Arithmetic failures map to `usize::MAX`, so context activation
+/// fails closed.
 fn fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes() -> usize {
     let required = || -> Option<usize> {
         let network_message_bytes =
@@ -3429,12 +3455,7 @@ fn fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes() -> usize {
                 iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
             )?;
         Some(
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                crate::NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+            iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
                 network_message_bytes,
             ),
         )
@@ -3514,7 +3535,8 @@ fn fair_v2_ingress_required_commit_certificate_response_bytes(roster_len: usize)
         iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
     )
 }
-/// Exact canonical-wire ceiling for either payload transport completion.
+/// Exact canonical-wire ceiling for either payload transport completion whose
+/// certified-body responder key has `raw_key_bytes` algorithm-specific bytes.
 ///
 /// The checked calculation mirrors bare Norito's fixed v1 layout with default
 /// compact lengths. `F(x)` is one compact length prefix plus `x` payload
@@ -3523,18 +3545,25 @@ fn fair_v2_ingress_required_commit_certificate_response_bytes(roster_len: usize)
 /// constants are the exact maxima for the remaining bounded structural fields
 /// (including a 256-byte consensus signature) at each nesting layer. Overflow
 /// maps to `usize::MAX`, making height activation fail closed before ingress
-/// opens.
-fn fair_v2_ingress_required_transport_completion_bytes(
+/// opens. `raw_key_bytes` excludes the compact public-key algorithm tag.
+fn fair_v2_ingress_required_transport_completion_bytes_for_key(
     layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
+    raw_key_bytes: usize,
 ) -> usize {
     let required = || -> Option<usize> {
+        let signature_bytes = iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES;
         let payload_bytes = usize::try_from(layout.max_payload_size_bytes).ok()?;
         let chunk_bytes = usize::try_from(layout.chunk_size_bytes).ok()?;
         let manifest_bytes = fair_v2_ingress_required_manifest_bytes(layout)?;
         let encoded_body_bytes = payload_bytes.checked_add(8)?;
-        let response_bytes = fair_v2_ingress_framed_bytes(manifest_bytes)?
+        let responder_bytes = fair_v2_ingress_embedded_peer_id_bytes(raw_key_bytes)?;
+        let response_bytes = 33_usize
+            .checked_add(fair_v2_ingress_framed_bytes(manifest_bytes)?)?
             .checked_add(fair_v2_ingress_framed_bytes(encoded_body_bytes)?)?
-            .checked_add(304)?;
+            .checked_add(responder_bytes)?
+            .checked_add(fair_v2_ingress_framed_bytes(
+                signature_bytes.checked_add(8)?,
+            )?)?;
         let encoded_chunk_bytes = chunk_bytes.checked_add(8)?;
         let chunk_bytes = fair_v2_ingress_framed_bytes(encoded_chunk_bytes)?.checked_add(309)?;
         let response_payload = fair_v2_ingress_framed_bytes(response_bytes)?.checked_add(4)?;
@@ -3544,6 +3573,14 @@ fn fair_v2_ingress_required_transport_completion_bytes(
         Some(response_envelope.max(chunk_envelope))
     };
     required().unwrap_or(usize::MAX)
+}
+fn fair_v2_ingress_required_transport_completion_bytes(
+    layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
+) -> usize {
+    fair_v2_ingress_required_transport_completion_bytes_for_key(
+        layout,
+        iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
+    )
 }
 /// Exact BlockSync-topic P2P frame requirement for one frozen context.
 ///
@@ -3682,7 +3719,8 @@ fn select_fair_v2_ingress_candidate<T>(
 /// Canonical wire bytes are charged to fixed aggregate and per-source budgets.
 /// Within each validator partition, ordinary traffic, certified fence escape,
 /// TimeoutVote, and payload transport completion own disjoint byte regions.
-/// Authenticated non-validator partitions isolate certified escape as well.
+/// Authenticated non-validator partitions isolate certified escape and
+/// request-bound historical transport completion as well.
 /// Lane-local control uses ordinary progress while atomic certificate recovery
 /// owns its isolated certified reservation; exact
 /// executable-payload and proof-carrying historical-recovery response bytes
@@ -5323,21 +5361,30 @@ impl FairV2Ingress {
         let uses_certified_fence_escape_reserve =
             fair_v2_ingress_is_certified_fence_escape(&inbound);
         let is_current_validator_origin = state.roster.contains(inbound.sender());
-        let is_historical_recovery_response =
-            message_kind == FairV2IngressMessageKind::LaneHistoricalRecoveryResponse;
         // Ordinary transport completions are protocol-valid only for a
-        // current frozen-roster semantic origin. A historical lane-recovery
-        // response is the one narrow exception: its responder authority comes
-        // from the outstanding request's frozen CommitQC or READY certificate,
-        // which the lane adapter verifies before persistence. Keep that proof-
-        // carrying response in the bounded completion partition and require an
-        // authenticated semantic origin, so a validator removed from the
-        // successor roster can finish an old lane without granting arbitrary
-        // old peers current-height completion authority.
-        let authenticated_historical_recovery_response = is_historical_recovery_response;
+        // current frozen-roster semantic origin. Request-bound historical
+        // responses are the narrow exceptions: the lane adapter verifies the
+        // frozen CommitQC or READY certificate, while certified-body handling
+        // verifies the exact request/QC/manifest/body binding and the current
+        // responder signature before persistence. Keep those responses in the
+        // bounded authenticated completion partition without granting
+        // non-roster peers current-height PayloadChunk authority.
+        let authenticated_request_bound_response = matches!(
+            message_kind,
+            FairV2IngressMessageKind::LaneHistoricalRecoveryResponse
+                | FairV2IngressMessageKind::V2CertifiedBodyResponse
+        );
+        // A current archive outside the frozen roster cannot consume the
+        // roster-sized generic leader-wire lifecycle. Seal that fact into the
+        // physical ownership only when the production gate is mandatory; the
+        // certified-Fetch selector must later prove an exact outstanding
+        // request before this carrier may complete.
+        let request_bound_non_roster_completion = state.requires_leader_wire_lifecycle_gate
+            && message_kind == FairV2IngressMessageKind::V2CertifiedBodyResponse
+            && !is_current_validator_origin;
         if is_transport_completion
             && !is_current_validator_origin
-            && !authenticated_historical_recovery_response
+            && !authenticated_request_bound_response
         {
             return Err(FairV2IngressPushError::rejected(
                 inbound,
@@ -5407,6 +5454,7 @@ impl FairV2Ingress {
         let attempts_after_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_after);
         let leader_wire_derivation = if state.requires_leader_wire_lifecycle_gate
             && fair_v2_ingress_is_productive_leader_wire(inbound.message())
+            && !request_bound_non_roster_completion
         {
             let semantic_origin = inbound.sender().clone();
             if !state.roster.contains(&semantic_origin) {
@@ -5510,7 +5558,7 @@ impl FairV2Ingress {
         if uses_certified_fence_escape_reserve && lane_certified_fence_escape_len != 0 {
             return Err(FairV2IngressPushError::Full(inbound));
         }
-        // A validator also has one source-isolated payload-completion owner.
+        // Every authenticated source has one source-isolated payload-completion owner.
         if is_transport_completion && lane_transport_completion_len != 0 {
             return Err(FairV2IngressPushError::Full(inbound));
         }
@@ -5782,8 +5830,11 @@ impl FairV2Ingress {
         }
         debug_assert!(state.last_admission_ordinal <= admission_ordinal);
         state.last_admission_ordinal = admission_ordinal;
-        let ingress_ownership =
-            FairV2IngressOwnershipEvidence::new(occurrence, leader_wire_token.clone());
+        let ingress_ownership = FairV2IngressOwnershipEvidence::new(
+            occurrence,
+            leader_wire_token.clone(),
+            request_bound_non_roster_completion,
+        );
         let ownership_snapshot = Arc::new(ingress_ownership.clone());
         inbound.ingress_ownership = Some(ingress_ownership);
         let queue_was_empty = state.len == 0;
@@ -6435,7 +6486,6 @@ pub(crate) fn fair_v2_ingress_admit_with_roster_for_test(
 }
 /// Bounded ingress handle for the serialized Sumeragi v2 runner.
 ///
-/// Global v1 frames are decode-only and are rejected before any queue handoff.
 /// Fixed-small live auxiliary messages share the exact fair-ingress ownership
 /// path but are terminalized before either consensus reducer.
 /// All accepted queues are bounded and non-blocking. Reducer- and lane-owned
@@ -6541,62 +6591,52 @@ impl SumeragiHandle {
             );
             return SumeragiIngressDisposition::Retry(inbound);
         }
-        if matches!(inbound.message(), BlockMessage::V2(_))
-            || inbound.message().is_lane_local()
-            || inbound.message().is_live_auxiliary()
-        {
-            let queue = status::WorkerQueueKind::Blocks;
-            return match self.block.try_push(inbound) {
-                Ok(FairV2IngressPushDisposition::Enqueued) => {
-                    status::record_worker_queue_enqueue(queue);
-                    self.wake();
-                    SumeragiIngressDisposition::Accepted
-                }
-                Ok(FairV2IngressPushDisposition::Coalesced) => {
-                    SumeragiIngressDisposition::Coalesced
-                }
-                Err(FairV2IngressPushError::Full(inbound)) => {
-                    iroha_logger::debug!(
-                        ?queue,
-                        "bounded per-source Sumeragi ingress queue is full; retaining caller ownership"
-                    );
-                    SumeragiIngressDisposition::Retry(inbound)
-                }
-                Err(FairV2IngressPushError::Closed(inbound)) => {
-                    iroha_logger::debug!(
-                        ?queue,
-                        "Sumeragi ingress queue closed during height rollover; retaining caller ownership"
-                    );
-                    SumeragiIngressDisposition::Retry(inbound)
-                }
-                Err(FairV2IngressPushError::FailStop(inbound)) => {
-                    iroha_logger::error!(
-                        ?queue,
-                        "durable Sumeragi ingress lifecycle failed; requiring process restart"
-                    );
-                    self.output_guard
-                        .activate_restart_required_from_permit(permit);
-                    SumeragiIngressDisposition::FailStop(inbound)
-                }
-                Err(FairV2IngressPushError::Rejected(rejection)) => {
-                    let message_kind =
-                        FairV2IngressMessageKind::classify(rejection.inbound.message());
-                    let round = fair_v2_ingress_consensus_round(rejection.inbound.message());
-                    iroha_logger::warn!(
-                        ?queue,
-                        reason = ?rejection.reason,
-                        ?message_kind,
-                        ?round,
-                        semantic_origin = ?rejection.inbound.sender(),
-                        authenticated_via = ?rejection.inbound.via(),
-                        "permanently rejected Sumeragi ingress envelope"
-                    );
-                    SumeragiIngressDisposition::Rejected(rejection.inbound)
-                }
-            };
+        let queue = status::WorkerQueueKind::Blocks;
+        match self.block.try_push(inbound) {
+            Ok(FairV2IngressPushDisposition::Enqueued) => {
+                status::record_worker_queue_enqueue(queue);
+                self.wake();
+                SumeragiIngressDisposition::Accepted
+            }
+            Ok(FairV2IngressPushDisposition::Coalesced) => SumeragiIngressDisposition::Coalesced,
+            Err(FairV2IngressPushError::Full(inbound)) => {
+                iroha_logger::debug!(
+                    ?queue,
+                    "bounded per-source Sumeragi ingress queue is full; retaining caller ownership"
+                );
+                SumeragiIngressDisposition::Retry(inbound)
+            }
+            Err(FairV2IngressPushError::Closed(inbound)) => {
+                iroha_logger::debug!(
+                    ?queue,
+                    "Sumeragi ingress queue closed during height rollover; retaining caller ownership"
+                );
+                SumeragiIngressDisposition::Retry(inbound)
+            }
+            Err(FairV2IngressPushError::FailStop(inbound)) => {
+                iroha_logger::error!(
+                    ?queue,
+                    "durable Sumeragi ingress lifecycle failed; requiring process restart"
+                );
+                self.output_guard
+                    .activate_restart_required_from_permit(permit);
+                SumeragiIngressDisposition::FailStop(inbound)
+            }
+            Err(FairV2IngressPushError::Rejected(rejection)) => {
+                let message_kind = FairV2IngressMessageKind::classify(rejection.inbound.message());
+                let round = fair_v2_ingress_consensus_round(rejection.inbound.message());
+                iroha_logger::warn!(
+                    ?queue,
+                    reason = ?rejection.reason,
+                    ?message_kind,
+                    ?round,
+                    semantic_origin = ?rejection.inbound.sender(),
+                    authenticated_via = ?rejection.inbound.via(),
+                    "permanently rejected Sumeragi ingress envelope"
+                );
+                SumeragiIngressDisposition::Rejected(rejection.inbound)
+            }
         }
-        iroha_logger::debug!("rejecting decode-only Sumeragi v1 frame on the v2 live ingress");
-        SumeragiIngressDisposition::Obsolete
     }
     /// Try to enqueue a canonical message and preserve it on retryable pressure.
     pub fn try_incoming_block_message_from_owned(
@@ -7974,7 +8014,7 @@ mod authoritative_runtime_gate_tests {
         let progress = v2_commit_certificate_request(0, &validator);
         let second_progress = v2_commit_certificate_request(1, &validator);
         let timeout = v2_timeout_vote();
-        let body_response = v2_certified_body_response(0, 0, 64);
+        let body_response = v2_certified_body_response(0, validator.clone(), 64);
         let chunk = v2_message_with_bytes(0, 64);
         let ordinary_bytes = encoded_v2_len(&auxiliary)
             .checked_add(encoded_v2_len(&progress))
@@ -8046,8 +8086,13 @@ mod authoritative_runtime_gate_tests {
         let second = validators[1].clone();
         let outsider = validators[2].clone();
         let chunk = v2_message_with_bytes(0, 64);
-        let response = v2_certified_body_response(0, 0, 64);
-        let completion_bytes = encoded_v2_len(&chunk).max(encoded_v2_len(&response));
+        let response = v2_certified_body_response(0, first.clone(), 64);
+        let second_response = v2_certified_body_response(0, second.clone(), 64);
+        let rotated_response = v2_certified_body_response(0, outsider.clone(), 64);
+        let completion_bytes = encoded_v2_len(&chunk)
+            .max(encoded_v2_len(&response))
+            .max(encoded_v2_len(&second_response))
+            .max(encoded_v2_len(&rotated_response));
         let source_bytes = completion_bytes + 1;
         let ingress =
             super::FairV2Ingress::new(12, 3 * source_bytes, source_bytes, 0, completion_bytes);
@@ -8068,12 +8113,25 @@ mod authoritative_runtime_gate_tests {
         );
         assert_push!(
             ingress,
-            response.clone(),
+            second_response,
             second.clone(),
             Ok(Enqueued),
             "one validator cannot consume another validator's completion owner"
         );
-        assert_push!(ingress, response.clone(), outsider, Err(Rejected));
+        assert_push!(
+            ingress,
+            rotated_response,
+            outsider.clone(),
+            Ok(Enqueued),
+            "a current authenticated archive can complete an exact historical request after rotation"
+        );
+        assert_push!(
+            ingress,
+            v2_message_with_bytes(1, 64),
+            outsider,
+            Err(Rejected),
+            "a non-roster archive cannot inject current-height PayloadChunk authority"
+        );
         let first_completion = ingress
             .try_recv_if(|inbound| inbound.sender() == &first)
             .expect("fair service releases the first validator's completion owner");
@@ -8161,7 +8219,7 @@ mod authoritative_runtime_gate_tests {
         );
         let required = super::fair_v2_ingress_required_transport_completion_bytes(layout);
         assert_eq!(
-            required, 16_811_581,
+            required, 16_828_108,
             "recommended wire ceiling is a regression boundary"
         );
         let required_proposal =
@@ -8245,15 +8303,10 @@ mod authoritative_runtime_gate_tests {
         let network_message_bytes = network_message.encoded_len();
         assert_eq!(
             required_control_frame,
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                crate::NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                network_message_bytes,
+            iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
+                network_message_bytes
             ),
-            "protocol-maximum identities must use the exact complete direct P2P wire"
+            "canonical node identities must use the exact complete direct P2P wire"
         );
         assert!(required_control_frame >= exact_direct_frame);
         assert!(exact_direct_frame > exact_broadcast_frame);
@@ -8349,15 +8402,24 @@ mod authoritative_runtime_gate_tests {
             max_payload_size_bytes: 8 * 1024 * 1024,
             max_chunk_count: 64,
         };
-        let response = v2_maximum_certified_body_response(layout);
-        let required = super::fair_v2_ingress_required_transport_completion_bytes(layout);
-        assert_eq!(encoded_v2_len(&response), required);
         let validator = validator_peers(1).pop().expect("validator fixture");
+        let (_, responder_key_bytes) = validator
+            .public_key()
+            .try_to_bytes()
+            .expect("validator fixture key encodes");
+        let response = v2_maximum_certified_body_response(layout, validator.clone());
+        let actual_required = super::fair_v2_ingress_required_transport_completion_bytes_for_key(
+            layout,
+            responder_key_bytes.len(),
+        );
+        let required = super::fair_v2_ingress_required_transport_completion_bytes(layout);
+        assert_eq!(encoded_v2_len(&response), actual_required);
+        assert!(actual_required <= required);
         let network_response = crate::NetworkMessage::SumeragiBlock(Arc::new(
             super::message::BlockMessageWire::new(response.clone()),
         ));
         assert_eq!(
-            super::fair_v2_ingress_network_message_bytes(required),
+            super::fair_v2_ingress_network_message_bytes(actual_required),
             Some(network_response.encoded_len()),
             "maximum completion must cross the exact full NetworkMessage framing"
         );
@@ -8379,18 +8441,16 @@ mod authoritative_runtime_gate_tests {
         );
         let protocol_maximum_response_frame =
             super::fair_v2_ingress_required_p2p_frame_bytes(required);
+        let actual_response_frame =
+            super::fair_v2_ingress_required_p2p_frame_bytes(actual_required);
         assert_eq!(
-            protocol_maximum_response_frame,
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                crate::NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                network_response.encoded_len(),
+            actual_response_frame,
+            iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
+                network_response.encoded_len()
             ),
-            "maximum completion must retain exact protocol-maximum direct-relay geometry"
+            "the concrete responder key must retain exact canonical direct-relay geometry"
         );
+        assert!(protocol_maximum_response_frame >= actual_response_frame);
         assert!(protocol_maximum_response_frame >= actual_direct_response_frame);
         let network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
         let roster_len = 1;
@@ -8573,7 +8633,7 @@ mod authoritative_runtime_gate_tests {
             .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect("exact completion ceiling leaves a reviewed ordinary partition");
         ingress.open().expect("exactly sized ingress opens");
-        let oversized = v2_certified_body_response(9, 0, required + 1);
+        let oversized = v2_certified_body_response(9, validator.clone(), required + 1);
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 oversized,
@@ -8715,7 +8775,7 @@ mod authoritative_runtime_gate_tests {
         ));
         assert!(handle.try_incoming_block_message_from(
             completion_source.clone(),
-            v2_certified_body_response(7, 0, 64),
+            v2_certified_body_response(7, completion_source.clone(), 64),
         ));
         assert!(
             handle.try_incoming_block_message_from(priority_source.clone(), v2_timeout_vote(),)
@@ -8788,7 +8848,7 @@ mod authoritative_runtime_gate_tests {
             .configure_roster([validator.clone()])
             .expect("validator protected owners fit");
         ingress.open().expect("open configured roster");
-        let message = v2_certified_body_response(7, 0, 64);
+        let message = v2_certified_body_response(7, validator.clone(), 64);
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 message.clone(),

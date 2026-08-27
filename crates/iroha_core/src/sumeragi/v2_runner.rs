@@ -47,7 +47,7 @@ use super::{
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
-    v2_body_store::{BlockSignaturePolicy, V2BodyStore},
+    v2_body_store::{BlockSignaturePolicy, V2BodyStore, V2BodyStoreCapacity},
     v2_candidate::{
         CandidateAssemblyOutcome, CandidateAttachments, CandidateLimits, CandidateParent,
         CandidateRequest, V2CandidateAssembler, candidate_block_has_proposal_work,
@@ -74,7 +74,6 @@ use super::{
         AutonomousLifecycleDeferredTerminalRecoveryHandoff, reconcile_autonomous_lifecycle_startup,
         reconcile_pending_autonomous_lifecycle_terminal_outcomes,
     },
-    v2_npos::V2NposVrfLifecycle,
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
         RecoveredSuccessorActivationAuthority, SnapshotSuccessorActivationAuthority,
@@ -1168,6 +1167,18 @@ fn locked_body_recovery_plan(
             && can_admit_local_proposal,
     }
 }
+fn locked_body_reproposal_is_capacity_blocked(
+    plan: LockedBodyRecoveryPlan,
+    directive: LocalProposalDirective,
+    local_validator: wire::ValidatorIndex,
+    attempted: Option<LocalProposalOwner>,
+    can_admit_local_proposal: bool,
+) -> bool {
+    !can_admit_local_proposal
+        && plan.request.is_some()
+        && directive.leader() == local_validator
+        && attempted != Some(LocalProposalOwner::from(directive))
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LocalConsensusDuties {
     autonomous_lane_view: Option<wire::View>,
@@ -1201,7 +1212,6 @@ fn schedule_local_proposal(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
-    npos_vrf: &V2NposVrfLifecycle,
     npos_beacon: &V2GlobalBeaconLifecycle,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
@@ -1278,13 +1288,30 @@ fn schedule_local_proposal(
             return Err(V2RunnerError::LaneCandidateBinding);
         }
         let current_owner = proposal_state.reconcile(LocalProposalOwner::from(current));
+        let can_admit_local_proposal = executor.can_admit_local_proposal();
+        let can_schedule_local_proposal = executor.can_schedule_local_proposal()?;
         let current_recovery_plan = locked_body_recovery_plan(
             current,
             local_validator,
             proposal_state.attempted,
-            executor.can_schedule_local_proposal()?,
+            can_schedule_local_proposal,
         );
         if !current_recovery_plan.may_repropose {
+            if locked_body_reproposal_is_capacity_blocked(
+                current_recovery_plan,
+                current,
+                local_validator,
+                proposal_state.attempted,
+                can_admit_local_proposal,
+            ) {
+                services
+                    .rearm_loaded_candidate_delivery(current.tag(), loaded_round, loaded_subject)
+                    .map_err(V2RunnerError::Service)?;
+                // Yield to completion/retransmission processing. Continuing
+                // this inner drain would immediately consume the rearmed body
+                // against the same saturated executor.
+                return Ok(());
+            }
             continue;
         }
         // Keep the immutable bytes available under the PrepareQC round before
@@ -1422,7 +1449,6 @@ fn schedule_local_proposal(
             parent,
             directive.tag().view(),
             &carrier_context_header,
-            npos_vrf,
             npos_beacon,
             queue_plan_admissions,
         )?;
@@ -1613,7 +1639,7 @@ fn drive_block_sync(
             .retransmit(*hash)
             .ok_or(V2RunnerError::BlockSyncRequestDisappeared)?;
         services
-            .broadcast_to_voters_while_guarded(message, operation.permit())
+            .broadcast_block_sync_while_guarded(message, operation.permit())
             .map_err(V2RunnerError::Service)?;
         operation.complete();
     } else {
@@ -1626,7 +1652,7 @@ fn drive_block_sync(
             return Err(V2RunnerError::BlockSyncRequestDisappeared);
         };
         *request_hash = Some(HashOf::new(request));
-        if let Err(error) = services.broadcast_to_voters_while_guarded(message, operation.permit())
+        if let Err(error) = services.broadcast_block_sync_while_guarded(message, operation.permit())
         {
             drop(operation);
             return Err(V2RunnerError::Service(error));
@@ -1636,7 +1662,48 @@ fn drive_block_sync(
     *next_attempt = next;
     Ok(())
 }
-fn broadcast_npos_vrf_messages(
+/// Retire the exact request fanout after its authenticated response enters
+/// reducer ownership.
+pub(in crate::sumeragi) fn retire_admitted_block_sync_request(
+    request_hash: &mut Option<HashOf<wire::CommitCertificateRequest>>,
+    admitted_request_hash: HashOf<wire::CommitCertificateRequest>,
+    services: &ProductionV2Services,
+) -> Result<(), V2RunnerError> {
+    let active_request_hash = request_hash
+        .as_ref()
+        .copied()
+        .ok_or(V2RunnerError::BlockSyncRequestDisappeared)?;
+    if active_request_hash != admitted_request_hash {
+        return Err(V2RunnerError::RuntimeAdmissionInvariant(
+            "authenticated CommitQC response completed another discovery request".to_owned(),
+        ));
+    }
+    services
+        .cancel_block_sync_request(active_request_hash)
+        .map_err(V2RunnerError::Service)?;
+    *request_hash = None;
+    Ok(())
+}
+/// Retire an unnecessary discovery owner after ordinary consensus reaches
+/// Decision through another authenticated path.
+pub(in crate::sumeragi) fn retire_block_sync_request_after_decision(
+    request_hash: &mut Option<HashOf<wire::CommitCertificateRequest>>,
+    discovery: &mut V2BlockSyncDiscovery,
+    services: &ProductionV2Services,
+) -> Result<bool, V2RunnerError> {
+    let Some(request_hash_value) = request_hash.as_ref().copied() else {
+        return Ok(false);
+    };
+    services
+        .cancel_block_sync_request(request_hash_value)
+        .map_err(V2RunnerError::Service)?;
+    if !discovery.cancel(request_hash_value) {
+        return Err(V2RunnerError::BlockSyncRequestDisappeared);
+    }
+    *request_hash = None;
+    Ok(true)
+}
+fn broadcast_npos_beacon_messages(
     messages: impl IntoIterator<Item = wire::ConsensusMessageV2>,
     output_guard: &ConsensusOutputGuard,
     services: &ProductionV2Services,
@@ -2363,7 +2430,6 @@ fn candidate_attachments(
     parent: CandidateParent<'_>,
     view: wire::View,
     round_header: &BlockHeader,
-    npos_vrf: &V2NposVrfLifecycle,
     npos_beacon: &V2GlobalBeaconLifecycle,
     queue_plan_admissions: Vec<Vec<u8>>,
 ) -> Result<CandidateAttachments, V2RunnerError> {
@@ -2378,14 +2444,14 @@ fn candidate_attachments(
         ));
     }
     let mut effects = if context.mode == wire::ConsensusMode::Npos {
-        super::penalties::PenaltyApplier::from_parts(
+        super::penalties::PenaltyApplier::new(
             state,
             #[cfg(feature = "telemetry")]
             Some(state.metrics()),
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(context.height, npos_vrf.pending_records())
+        .derive_npos_consensus_effects(context.height)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
     } else {
         Default::default()
@@ -2394,7 +2460,7 @@ fn candidate_attachments(
         .attach_candidate_effects(view, &mut effects)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
-    super::v2_npos::validate_candidate_records(context, state, npos_consensus_effects.as_ref())
+    super::v2_npos::validate_candidate_context(context)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     let merge_selection = certified_merge_selection_for_npos(npos_consensus_effects.is_some());
     if merge_selection == PendingCertifiedMergeSelection::ControlOnly {

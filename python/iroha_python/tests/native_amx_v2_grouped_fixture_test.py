@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, get_type_hints
 
 import pytest
+from iroha_torii_client.client import (
+    SumeragiDiagnosticsStatus as CanonicalSumeragiDiagnosticsStatus,
+)
+from iroha_torii_client.native_amx import (
+    compute_native_amx_application_manifest_singleton_root,
+)
 
 import iroha_python.client as iroha_python_client
 from iroha_python import (
@@ -19,13 +25,6 @@ from iroha_python import (
     SumeragiNativeAmxTransactionEntrypointHash,
     SumeragiV2ExecutionCommitment,
 )
-from iroha_torii_client.client import (
-    SumeragiDiagnosticsStatus as CanonicalSumeragiDiagnosticsStatus,
-)
-from iroha_torii_client.native_amx import (
-    compute_native_amx_application_manifest_singleton_root,
-)
-
 
 FIXTURE_PATH = (
     Path(__file__).resolve().parents[3]
@@ -194,12 +193,12 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
         and len(source_ids) == len(set(source_ids))
         and all(
             left["entrypoint_index"] < right["entrypoint_index"]
-            for left, right in zip(members, members[1:])
+            for left, right in zip(members, members[1:], strict=False)
         ),
         "manifest member geometry",
     )
     carrier_entrypoints = set(evidence["carrier_entrypoint_hashes"])
-    for receipt, member in zip(group["native_amx_receipts"], members):
+    for receipt, member in zip(group["native_amx_receipts"], members, strict=True):
         leg = next(
             (
                 candidate

@@ -8,8 +8,24 @@
 //! `cargo bench -p iroha_crypto --bench parliament_crypto --no-default-features --features bls`.
 //! Append `-- parliament/threshold_bls` or `-- parliament/timed_ovn` to select
 //! one family and avoid constructing the unrelated fixture.
+//! Set `IROHA_PARLIAMENT_CRYPTO_ALLOCATION_EVIDENCE_V1` to a fresh output path
+//! to skip Criterion sampling and record the fixed workload matrix's scoped
+//! logical heap requests for the allocation-budget gate. The counter covers
+//! only requests made on the measured thread; any future primitive that moves
+//! work to another thread needs a separate process-level memory gate.
 
-use std::{env, hint::black_box, time::Duration};
+#![allow(unsafe_code)]
+
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    cell::Cell,
+    env,
+    fs::OpenOptions,
+    hint::black_box,
+    io::{BufWriter, Write as _},
+    path::Path,
+    time::Duration,
+};
 
 use blstrs::{G2Affine, G2Projective, Scalar};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
@@ -36,6 +52,158 @@ use rand_core::SeedableRng as _;
 const THRESHOLD_COMMITTEE_SIZES: [u16; 3] = [4, 16, 31];
 const TIMED_OVN_ROSTER_SIZES: [usize; 3] = [3, 32, TIMED_OVN_MAX_PARTICIPANTS_V1];
 const COMBINE_PAYLOAD_BYTES: usize = 128;
+const ALLOCATION_EVIDENCE_PATH_ENV: &str = "IROHA_PARLIAMENT_CRYPTO_ALLOCATION_EVIDENCE_V1";
+const ALLOCATION_EVIDENCE_SCHEMA_V1: &str = "iroha.sora_parliament.crypto_allocations.v1";
+
+struct TrackingAllocator;
+
+thread_local! {
+    static TRACK_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
+    static ALLOCATION_CALLS: Cell<u64> = const { Cell::new(0) };
+    static REALLOCATION_CALLS: Cell<u64> = const { Cell::new(0) };
+    static ALLOCATED_BYTES: Cell<u64> = const { Cell::new(0) };
+    static REALLOCATED_BYTES: Cell<u64> = const { Cell::new(0) };
+    static ALLOCATION_COUNTER_OVERFLOWED: Cell<bool> = const { Cell::new(false) };
+}
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: TrackingAllocator = TrackingAllocator;
+
+fn add_allocation_metric(cell: &'static std::thread::LocalKey<Cell<u64>>, value: u64) {
+    cell.with(|metric| match metric.get().checked_add(value) {
+        Some(total) => metric.set(total),
+        None => ALLOCATION_COUNTER_OVERFLOWED.with(|overflowed| overflowed.set(true)),
+    });
+}
+
+fn record_allocation(bytes: usize, reallocation: bool) {
+    TRACK_ALLOCATIONS.with(|tracking| {
+        if !tracking.get() {
+            return;
+        }
+        let bytes = u64::try_from(bytes).unwrap_or_else(|_| {
+            ALLOCATION_COUNTER_OVERFLOWED.with(|overflowed| overflowed.set(true));
+            u64::MAX
+        });
+        if reallocation {
+            add_allocation_metric(&REALLOCATION_CALLS, 1);
+            add_allocation_metric(&REALLOCATED_BYTES, bytes);
+        } else {
+            add_allocation_metric(&ALLOCATION_CALLS, 1);
+            add_allocation_metric(&ALLOCATED_BYTES, bytes);
+        }
+    });
+}
+
+// SAFETY: every allocation operation delegates to `System` with the exact
+// pointer/layout contract it received. The additional thread-local counters do
+// not affect allocation ownership or layout.
+unsafe impl GlobalAlloc for TrackingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: the caller supplies the `GlobalAlloc` layout contract unchanged.
+        let pointer = unsafe { System.alloc(layout) };
+        if !pointer.is_null() {
+            record_allocation(layout.size(), false);
+        }
+        pointer
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: the caller supplies the `GlobalAlloc` layout contract unchanged.
+        let pointer = unsafe { System.alloc_zeroed(layout) };
+        if !pointer.is_null() {
+            record_allocation(layout.size(), false);
+        }
+        pointer
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        // SAFETY: the pointer and layout are forwarded unchanged to their allocator.
+        unsafe { System.dealloc(pointer, layout) };
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: the pointer, old layout, and requested size are forwarded unchanged.
+        let replacement = unsafe { System.realloc(pointer, layout, new_size) };
+        if !replacement.is_null() {
+            record_allocation(new_size, true);
+        }
+        replacement
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AllocationMetrics {
+    allocation_calls: u64,
+    reallocation_calls: u64,
+    allocated_bytes: u64,
+    reallocated_bytes: u64,
+}
+
+struct AllocationTrackingGuard;
+
+impl Drop for AllocationTrackingGuard {
+    fn drop(&mut self) {
+        TRACK_ALLOCATIONS.with(|tracking| tracking.set(false));
+    }
+}
+
+fn allocations_during<T>(operation: impl FnOnce() -> T) -> (T, AllocationMetrics) {
+    TRACK_ALLOCATIONS.with(|tracking| {
+        assert!(!tracking.replace(false), "allocation measurement nested");
+    });
+    ALLOCATION_CALLS.with(|count| count.set(0));
+    REALLOCATION_CALLS.with(|count| count.set(0));
+    ALLOCATED_BYTES.with(|bytes| bytes.set(0));
+    REALLOCATED_BYTES.with(|bytes| bytes.set(0));
+    ALLOCATION_COUNTER_OVERFLOWED.with(|overflowed| overflowed.set(false));
+    TRACK_ALLOCATIONS.with(|tracking| tracking.set(true));
+    let guard = AllocationTrackingGuard;
+    let output = operation();
+    drop(guard);
+    assert!(
+        !ALLOCATION_COUNTER_OVERFLOWED.with(Cell::get),
+        "allocation evidence counter overflowed"
+    );
+    let metrics = AllocationMetrics {
+        allocation_calls: ALLOCATION_CALLS.with(Cell::get),
+        reallocation_calls: REALLOCATION_CALLS.with(Cell::get),
+        allocated_bytes: ALLOCATED_BYTES.with(Cell::get),
+        reallocated_bytes: REALLOCATED_BYTES.with(Cell::get),
+    };
+    (output, metrics)
+}
+
+struct AllocationEvidenceRecord {
+    benchmark_id: String,
+    metrics: AllocationMetrics,
+}
+
+fn measure_allocation_case<Setup, Input, Routine, Output>(
+    records: &mut Vec<AllocationEvidenceRecord>,
+    benchmark_id: String,
+    mut setup: Setup,
+    mut routine: Routine,
+) where
+    Setup: FnMut() -> Input,
+    Routine: FnMut(Input) -> Output,
+{
+    assert!(
+        !benchmark_id
+            .bytes()
+            .any(|byte| matches!(byte, b'\t' | b'\n' | b'\r')),
+        "benchmark identifier must be one TSV field"
+    );
+    let warm_input = setup();
+    let _ = black_box(routine(warm_input));
+    let measured_input = setup();
+    let (output, metrics) = allocations_during(|| routine(black_box(measured_input)));
+    let _ = black_box(output);
+    records.push(AllocationEvidenceRecord {
+        benchmark_id,
+        metrics,
+    });
+}
 
 // These expressions intentionally mirror the fixed-width public wire contract.
 // The production constants are private implementation details, so the benchmark
@@ -542,7 +710,206 @@ fn bench_timed_ovn(c: &mut Criterion) {
     aggregate.finish();
 }
 
+fn threshold_allocation_evidence(records: &mut Vec<AllocationEvidenceRecord>) {
+    let fixtures = THRESHOLD_COMMITTEE_SIZES
+        .into_iter()
+        .map(threshold_fixture)
+        .collect::<Vec<_>>();
+    for fixture in &fixtures {
+        measure_allocation_case(
+            records,
+            format!(
+                "parliament/threshold_bls/combine/threshold/{}",
+                fixture.committee_size
+            ),
+            || (),
+            |()| {
+                fixture
+                    .transcript
+                    .combine_partial_signatures(
+                        black_box(&fixture.payload),
+                        black_box(&fixture.partials[..fixture.threshold]),
+                    )
+                    .expect("threshold subset remains valid")
+            },
+        );
+        measure_allocation_case(
+            records,
+            format!(
+                "parliament/threshold_bls/combine/full/{}",
+                fixture.committee_size
+            ),
+            || (),
+            |()| {
+                fixture
+                    .transcript
+                    .combine_partial_signatures(
+                        black_box(&fixture.payload),
+                        black_box(&fixture.partials),
+                    )
+                    .expect("full committee remains valid")
+            },
+        );
+
+        let mut reordered = fixture.partials[..fixture.threshold].to_vec();
+        reordered.swap(0, 1);
+        measure_allocation_case(
+            records,
+            format!(
+                "parliament/threshold_bls/invalid_fast_fail/reordered/{}",
+                fixture.committee_size
+            ),
+            || (),
+            |()| {
+                let result = fixture
+                    .transcript
+                    .combine_partial_signatures(black_box(&fixture.payload), black_box(&reordered));
+                assert_eq!(
+                    result,
+                    Err(ThresholdBlsError::NonCanonicalPartialSignatureSet)
+                );
+                result
+            },
+        );
+    }
+
+    let largest = fixtures
+        .last()
+        .expect("threshold fixture matrix is nonempty");
+    for (payload, signature) in &largest.verify_cases {
+        measure_allocation_case(
+            records,
+            format!("parliament/threshold_bls/final_verify/{}", payload.len()),
+            || (),
+            |()| {
+                largest
+                    .transcript
+                    .verify_final_signature(black_box(payload), black_box(signature))
+                    .expect("final signature remains valid");
+            },
+        );
+    }
+}
+
+fn timed_ovn_allocation_evidence(records: &mut Vec<AllocationEvidenceRecord>) {
+    let fixture = timed_ovn_fixture();
+    for survivor_case in &fixture.survivor_cases {
+        let count = survivor_case.participant_ids.len();
+        measure_allocation_case(
+            records,
+            format!("parliament/timed_ovn/registration_roster_freeze/{count}"),
+            || fixture.roster.registrations()[..count].to_vec(),
+            |registrations| {
+                TimedOvnRosterV1::new(*fixture.roster.session(), registrations)
+                    .expect("proof-verified roster remains valid")
+            },
+        );
+        measure_allocation_case(
+            records,
+            format!("parliament/timed_ovn/survivor_freeze/{count}"),
+            || (),
+            |()| {
+                TimedOvnSurvivorRosterV1::new(
+                    black_box(&fixture.roster),
+                    black_box(&survivor_case.participant_ids),
+                    survivor_case.release_identity,
+                )
+                .expect("survivor roster remains valid")
+            },
+        );
+    }
+
+    measure_allocation_case(
+        records,
+        "parliament/timed_ovn/wire/registration_encode_3624_bytes".to_owned(),
+        || (),
+        |()| black_box(&fixture.roster.registrations()[0]).to_bytes(),
+    );
+    measure_allocation_case(
+        records,
+        "parliament/timed_ovn/wire/registration_decode_verify_3624_bytes".to_owned(),
+        || (),
+        |()| {
+            TimedOvnRegistrationV1::from_bytes(
+                black_box(fixture.roster.session()),
+                black_box(&fixture.registration_wire),
+            )
+            .expect("registration wire remains valid")
+        },
+    );
+    measure_allocation_case(
+        records,
+        "parliament/timed_ovn/wire/ballot_encode_2858_bytes".to_owned(),
+        || (),
+        |()| black_box(&fixture.small_ballots[0]).to_bytes(),
+    );
+    measure_allocation_case(
+        records,
+        "parliament/timed_ovn/wire/ballot_decode_verify_2858_bytes".to_owned(),
+        || (),
+        |()| {
+            TimedOvnMaskedBallotV1::from_bytes(
+                black_box(&fixture.small_survivors),
+                black_box(&fixture.ballot_wire),
+            )
+            .expect("ballot wire remains valid")
+        },
+    );
+    measure_allocation_case(
+        records,
+        "parliament/timed_ovn/aggregate/proof_verified_3".to_owned(),
+        || (),
+        |()| {
+            aggregate_timed_ovn_ballots_v1(
+                black_box(&fixture.small_survivors),
+                black_box(&fixture.small_ballots),
+            )
+            .expect("small ballot corpus remains valid")
+        },
+    );
+}
+
+fn write_allocation_evidence(path: &Path) -> std::io::Result<()> {
+    let mut records = Vec::with_capacity(23);
+    threshold_allocation_evidence(&mut records);
+    timed_ovn_allocation_evidence(&mut records);
+    assert_eq!(records.len(), 23, "allocation evidence matrix changed");
+
+    let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut output = BufWriter::new(file);
+    writeln!(output, "schema\t{ALLOCATION_EVIDENCE_SCHEMA_V1}")?;
+    writeln!(output, "scope\tmeasured-thread-logical-heap-requests-only")?;
+    writeln!(
+        output,
+        "benchmark_id\tallocation_calls\treallocation_calls\tallocated_bytes\treallocated_bytes"
+    )?;
+    for record in records {
+        writeln!(
+            output,
+            "{}\t{}\t{}\t{}\t{}",
+            record.benchmark_id,
+            record.metrics.allocation_calls,
+            record.metrics.reallocation_calls,
+            record.metrics.allocated_bytes,
+            record.metrics.reallocated_bytes,
+        )?;
+    }
+    output.flush()?;
+    output.get_ref().sync_all()
+}
+
 fn main() {
+    if let Some(path) = env::var_os(ALLOCATION_EVIDENCE_PATH_ENV) {
+        let path = Path::new(&path);
+        write_allocation_evidence(path).unwrap_or_else(|error| {
+            panic!(
+                "failed to write Parliament allocation evidence to {}: {error}",
+                path.display()
+            )
+        });
+        return;
+    }
+
     // Criterion's positional filter is also used to avoid constructing the
     // unrelated heavyweight fixture when a complete family name is selected.
     let arguments = env::args().collect::<Vec<_>>();

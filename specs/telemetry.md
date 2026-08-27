@@ -53,8 +53,10 @@ Network time telemetry
 - `nts_fallback` (gauge) — 1 when NTS falls back to local time.
 - `nts_healthy` (gauge) — 1 when health thresholds pass and no fallback.
 - `nts_min_samples_ok` / `nts_offset_ok` / `nts_confidence_ok` (gauges) — per-check health flags.
-- `nts_rtt_ms_bucket{le="..."}` / `nts_rtt_ms_sum` / `nts_rtt_ms_count` — RTT histogram buckets (ms) and aggregates.
+- `nts_rtt_ms_bucket{le="..."}` / `nts_rtt_ms_sum` / `nts_rtt_ms_count` — cumulative RTT histogram buckets (ms, including `+Inf`) and aggregates.
 - `torii_nts_unhealthy_reject_total` (counter) — time-sensitive transactions rejected during admission because NTS is unhealthy.
+
+NTS status gauges and RTT counters are captured under one service lock per scrape, so one export cannot mix sampler generations.
 
 Runbook guidance
 - Alert when `max_over_time(nts_healthy[5m]) == 0` or `max_over_time(nts_fallback[5m]) > 0`; these indicate the time service is unsynchronized or missing samples.
@@ -707,16 +709,13 @@ Notes
 - All metrics have deterministic semantics across hardware. Parallel paths publish counters only after deterministic commit.
 - Extend dashboards with Torii endpoint metrics (`torii_*`) once wired; see roadmap for status.
 
-## Retired consensus-VRF telemetry
+## Alerting — Threshold-Beacon Progress
 
-Do not alert on `sumeragi_vrf_*`; those retired commit/reveal series are absent
-from the registry and export catalog. Production rejects legacy VRF ingress,
-emits no VRF frames, and rejects nonempty `vrf_epoch_seals`; the former rule
-group and Grafana panels have therefore been removed. Qualify randomness from
-authenticated height context and committed finalized threshold-beacon pulses,
-and qualify safety evidence through the generic Sumeragi-v2 evidence count/list
-and `sumeragi_evidence_records_total`.
-
+First-release Sumeragi has no VRF commit/reveal messages or VRF penalty counters. Monitor the
+authenticated height/view, view-change totals, consensus ingress drops, and committed-block
+progress instead. A missing or invalid finalized threshold-beacon pulse fails the NPoS epoch
+transition closed; preserve the signed height context and beacon validation logs when escalating an
+epoch-boundary stall.
 ## Alerting — Consensus Membership Mismatch
 
 

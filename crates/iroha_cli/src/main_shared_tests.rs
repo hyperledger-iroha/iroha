@@ -855,15 +855,16 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
         "iroha",
         "taira",
         "write-canary",
-        "--alias-prefix",
-        "rollout",
         "--faucet-asset-id",
         "asset",
+        "--faucet-authority",
+        "authority",
+        "--faucet-amount",
+        "25000",
         "--onboarding-token-file",
         "/tmp/taira-onboarding.token",
-        "--use-config-signer",
         "--operation",
-        "final-canary",
+        "faucet",
         "--authorization-sha256",
         "abababababababababababababababababababababababababababababababab",
         "--authorization-nonce",
@@ -883,13 +884,13 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
         panic!("expected taira write-canary command");
     };
     assert_eq!(cmd.public_root, "https://taira.sora.org");
-    assert_eq!(cmd.alias_prefix, "rollout");
-    assert_eq!(cmd.faucet_asset_id, "asset");
+    assert_eq!(cmd.faucet_authority.as_deref(), Some("authority"));
+    assert_eq!(cmd.faucet_asset_id.as_deref(), Some("asset"));
+    assert_eq!(cmd.faucet_amount.as_deref(), Some("25000"));
     assert_eq!(
         cmd.onboarding_token_file.as_deref(),
         Some(std::path::Path::new("/tmp/taira-onboarding.token"))
     );
-    assert!(cmd.use_config_signer);
     assert_eq!(cmd.recover_prepared_envelope_fd, Some(3));
     assert!(cmd.json);
     assert_eq!(
@@ -897,7 +898,12 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
         "abababababababababababababababababababababababababababababababab"
     );
 
-    for retired in ["--write-config", "--recover-only"] {
+    for retired in [
+        "--write-config",
+        "--recover-only",
+        "--alias-prefix",
+        "--use-config-signer",
+    ] {
         let error = Args::try_parse_from(["iroha", "taira", "write-canary", retired])
             .expect_err("retired write-canary flag must fail closed");
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
@@ -1427,6 +1433,101 @@ fn fee_quote_may_replace_limits_but_not_payer_or_gas_bound() {
     assert!(!requested.has_same_payer_and_gas_bound(&wrong_payer));
     let wrong_gas = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(41));
     assert!(!requested.has_same_payer_and_gas_bound(&wrong_gas));
+}
+#[test]
+fn fee_quote_signing_rejects_invalid_semantics_and_response_media_type() {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    use iroha::data_model::nexus::{DataSpaceId, FeeDebitSource};
+    use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation};
+
+    let invoke = |next_block_height, response_content_type: &'static str| {
+        let mut config = fallback_config();
+        let intent = FeePaymentIntent::authority(Vec::new(), None);
+        let quote = FeeQuoteResponse {
+            intent: intent.clone(),
+            observation: FeeQuoteObservation {
+                ledger_time_ms: 1,
+                next_block_height,
+                route_dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+            components: Vec::new(),
+            capacities: Vec::new(),
+            decision: FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::Account(config.account.clone()),
+                program_revision: None,
+            },
+        };
+        let body = norito::json::to_vec(&quote).expect("encode fee quote");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fee-quote server");
+        let address = listener.local_addr().expect("fee-quote server address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept fee-quote request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let read = stream.read(&mut buffer).expect("read fee-quote request");
+                assert_ne!(read, 0, "fee-quote request ended before its headers");
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let header_end = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .expect("complete fee-quote request headers")
+                + 4;
+            let headers = std::str::from_utf8(&request[..header_end])
+                .expect("UTF-8 fee-quote request headers");
+            assert!(headers.starts_with("POST /v1/fees/quote "));
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .expect("fee-quote request content length");
+            while request.len() < header_end + content_length {
+                let read = stream
+                    .read(&mut buffer)
+                    .expect("read fee-quote request body");
+                assert_ne!(read, 0, "fee-quote request body ended early");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let response_headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {response_content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream
+                .write_all(response_headers.as_bytes())
+                .expect("write fee-quote response headers");
+            stream.write_all(&body).expect("write fee-quote response");
+        });
+        config.torii_api_url = Url::parse(&format!("http://{address}/")).expect("fee-quote URL");
+        let client = Client::new(config);
+        let result = quote_and_sign_transaction(
+            &client,
+            Executable::Instructions(Vec::<InstructionBox>::new().into()),
+            intent,
+            Metadata::default(),
+        );
+        server.join().expect("fee-quote server thread");
+        result
+    };
+
+    let error = invoke(0, "application/json")
+        .expect_err("signing must reject an invalid response observation");
+    assert!(format!("{error:#}").contains("next_block_height must be non-zero"));
+
+    let error =
+        invoke(1, "text/plain").expect_err("signing must reject a non-JSON successful response");
+    assert!(format!("{error:#}").contains("Content-Type must be application/json"));
 }
 #[test]
 fn fee_quote_rejection_surfaces_capacity_and_remediation() {

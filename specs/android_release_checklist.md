@@ -38,7 +38,7 @@ Use this document together with:
 | Sample apps | `ci/check_android_samples.sh` | Builds `examples/android/{operator-console,retail-wallet}` and validates localized screenshots via `scripts/android_sample_localization.py`. |
 | Dashboard parity | `ci/check_android_dashboard_parity.sh` | Confirms CI/exported metrics align with the Rust counterparts; required during T+1 verification. |
 | SDK adoption smoke | `ci/sdk_sorafs_orchestrator.sh` | Exercises the multi-source Sorafs orchestrator bindings with the current SDK. Required before uploading staged artefacts. |
-| Attestation verification | `scripts/android_strongbox_attestation_ci.sh --summary-out artifacts/android/attestation/ci-summary.json` | Aggregates the StrongBox/TEE attestation bundles under `artifacts/android/attestation/**`; attach the summary to GA packets. |
+| Attestation verification | `scripts/android_strongbox_attestation_ci.sh --bundles-root artifacts/android/attestation --expectations-root <trusted-expectations> --trust-root <trusted-root.pem> --revocation-snapshot <snapshot> --revocation-snapshot-sha256 <trusted-digest> --evaluation-time-ms <ms> --summary-out artifacts/android/attestation/ci-summary.json` | Verifies every bundle against separately governed identity, root, and revocation inputs; zero bundles fail. Attach the summary to GA packets. |
 | Device-lab slot validation | `scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab/<slot> --json-out artifacts/android/device_lab/summary.json` | Validates instrumentation bundles before attaching evidence to release packets; CI runs against the sample slot in `fixtures/android/device_lab/slot-sample` (telemetry/attestation/queue/logs + `sha256sum.txt`). |
 
 > **Tip:** add these jobs to the `android-release` Buildkite pipeline so that
@@ -72,8 +72,11 @@ lintRelease ktlintCheck detekt dependencyGuardBaseline \
 1. Reserve Pixel + Galaxy devices using the capacity tracker referenced in
    `specs/compliance/android/device_lab_contingency.md`. Blocks releases
    if <70 % availability.
-2. Execute `scripts/android_strongbox_attestation_ci.sh --report \
-   artifacts/android/attestation/<version>` to refresh the attestation report.
+2. Execute `scripts/android_strongbox_attestation_ci.sh --bundles-root \
+   artifacts/android/attestation --expectations-root <trusted-expectations> \
+   --trust-root <trusted-root.pem> --revocation-snapshot <snapshot> \
+   --revocation-snapshot-sha256 <trusted-digest> --evaluation-time-ms <ms> \
+   --summary-out artifacts/android/attestation/<version>/summary.json`.
 3. Run the instrumentation matrix (document the suite/ABI list in the device
    tracker). Capture failures in the incident log even if retries succeed.
 4. File a ticket if fallback to Firebase Test Lab is required; link the ticket

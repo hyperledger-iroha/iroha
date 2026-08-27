@@ -441,6 +441,7 @@ fn run_pending_active_height(
 ) -> Result<Option<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError> {
     let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);
     let mut canonical_lane_body_recovered = false;
+    let mut finalized_ingress_closed = false;
     loop {
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {
@@ -499,6 +500,7 @@ fn run_pending_active_height(
                     kura.as_ref(),
                     &common_config.key_pair,
                     block_sync_server,
+                    DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                 )?;
                 drain_lane_relay_ingress(
                     lane_relay_rx,
@@ -548,21 +550,55 @@ fn run_pending_active_height(
             continue;
         }
 
-        let rollover_ready = activated.with_runner_runtime(
-            &mut active_runner,
-            |executor, _services, lane_work| {
-                super::preflight_finalized_lane_rollover(
-                    executor,
-                    lane_work,
-                    &mut canonical_lane_body_recovered,
-                )
-            },
-        )?;
+        let finalization_ready = activated.ready_for_finalized_rollover(&mut active_runner)?;
+        let rollover_ready = if finalization_ready {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |executor, _services, lane_work| {
+                    super::preflight_finalized_lane_rollover(
+                        executor,
+                        lane_work,
+                        &mut canonical_lane_body_recovered,
+                    )
+                },
+            )?
+        } else {
+            false
+        };
         if !rollover_ready {
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }
 
+        if !finalized_ingress_closed {
+            activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;
+            finalized_ingress_closed = true;
+        }
+        let drained_terminal_ingress = activated.with_runner_runtime(
+            &mut active_runner,
+            |executor, services, lane_work| {
+                let drained = drain_decided_lane_recovery_ingress(
+                    receiver,
+                    executor,
+                    services,
+                    lane_work,
+                    executor.current_tag().view(),
+                    output_guard.as_ref(),
+                    kura.as_ref(),
+                    &common_config.key_pair,
+                    block_sync_server,
+                    DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
+                )?;
+                dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
+                Ok::<_, V2RunnerError>(drained.is_some())
+            },
+        )?;
+        if drained_terminal_ingress {
+            continue;
+        }
+        receiver
+            .ensure_closed_drained_cut()
+            .map_err(V2RunnerError::Service)?;
         let (finalized, lane_work) = activated.into_finalized_rollover(&mut active_runner)?;
         let prepared_successor = {
             let (receipt, artifact) = finalized.finality();
@@ -794,6 +830,14 @@ pub(super) fn run_pending_kura_lifecycle_height(
     let consensus_key_hash: [u8; 32] =
         Hash::new(common_config.key_pair.public_key().encode()).into();
     let storage_root = kura.sumeragi_v2_storage_root();
+    let body_store_capacity = V2BodyStoreCapacity::new(
+        config.storage.body_store_max_bytes_per_height.get(),
+    )
+    .map_err(|error| {
+        V2RunnerError::Effect(super::super::v2_effects::EffectExecutorError::BodyStore(
+            error.to_string(),
+        ))
+    })?;
     let body_store = if emergency_fast {
         V2BodyStore::open_emergency_fast_read_only(
             storage_root.join("bodies"),
@@ -801,10 +845,11 @@ pub(super) fn run_pending_kura_lifecycle_height(
             signature_policy,
         )
     } else {
-        V2BodyStore::open_with_policy(
+        V2BodyStore::open_with_policy_and_capacity(
             storage_root.join("bodies"),
             context.clone(),
             signature_policy,
+            body_store_capacity,
         )
     }
     .map_err(|error| {

@@ -492,6 +492,23 @@ impl SignedBlock {
     ) -> impl ExactSizeIterator<Item = TransactionEntrypoint> + DoubleEndedIterator + '_ {
         EntrypointIterator::new(self)
     }
+    /// Clone one transaction entrypoint by its canonical execution index.
+    ///
+    /// External entrypoints precede time-triggered entrypoints. This lookup is
+    /// constant-time and clones only the selected entrypoint.
+    #[inline]
+    pub fn entrypoint_cloned_at(&self, index: usize) -> Option<TransactionEntrypoint> {
+        let external_count = self.payload.external_entrypoints.len();
+        if index < external_count {
+            return self.payload.external_entrypoints.get(index).cloned();
+        }
+        self.result
+            .as_ref()?
+            .time_triggers
+            .get(index.checked_sub(external_count)?)
+            .cloned()
+            .map(TransactionEntrypoint::from)
+    }
     /// Hashes of each transaction result (trigger sequence or rejection reason) in execution order.
     /// Indices align with those of the entrypoints.
     #[inline]

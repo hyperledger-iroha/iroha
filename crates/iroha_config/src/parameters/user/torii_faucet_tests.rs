@@ -52,7 +52,7 @@ fn sample_faucet() -> (ToriiFaucet, TestKeyFile) {
             pow_adaptive_lookback_blocks: 32,
             pow_adaptive_claims_per_extra_bit: 3,
             pow_adaptive_max_extra_bits: 5,
-            pow_vrf_seed_enabled: true,
+            pow_beacon_seed_enabled: true,
         },
         key_file,
     )
@@ -76,7 +76,7 @@ fn torii_faucet_parse_maps_enabled_config() {
     assert_eq!(parsed.pow_adaptive_lookback_blocks, 32);
     assert_eq!(parsed.pow_adaptive_claims_per_extra_bit, 3);
     assert_eq!(parsed.pow_adaptive_max_extra_bits, 5);
-    assert!(parsed.pow_vrf_seed_enabled);
+    assert!(parsed.pow_beacon_seed_enabled);
 }
 #[test]
 fn torii_faucet_parse_returns_none_when_disabled() {

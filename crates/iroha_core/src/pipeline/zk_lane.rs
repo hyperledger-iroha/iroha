@@ -55,49 +55,156 @@ impl ZkTask {
     /// Compute a stable digest of the task contents for idempotence/logging.
     pub fn digest(&self) -> [u8; 32] {
         let mut h = Sha256::new();
+        h.update(b"iroha.zk-lane.task.v1");
         h.update(self.code_hash);
-        if let Some(tx) = &self.tx_hash {
-            h.update(tx.as_ref());
+        match &self.tx_hash {
+            Some(tx) => {
+                h.update([1]);
+                h.update(tx.as_ref());
+            }
+            None => h.update([0]),
         }
         h.update((self.program.len() as u64).to_le_bytes());
-        if !self.program.is_empty() {
-            let sample = if self.program.len() <= 64 {
-                self.program.as_ref()
-            } else {
-                &self.program[..64]
-            };
-            h.update(sample);
+        h.update(self.program.as_ref());
+        match &self.header {
+            Some(header) => {
+                h.update([1]);
+                h.update(header.hash().as_ref().as_ref());
+            }
+            None => h.update([0]),
         }
-        // Keep digest bounded and deterministic: include sizes and first/last PCs.
-        let cycles = self.trace.len() as u64;
-        h.update(cycles.to_le_bytes());
-        let constraints = self.constraints.len() as u64;
-        h.update(constraints.to_le_bytes());
-        let mem = self.mem_log.len() as u64;
-        h.update(mem.to_le_bytes());
-        let regs = self.reg_log.len() as u64;
-        h.update(regs.to_le_bytes());
-        if let Some(first) = self.step_log.first() {
-            h.update(first.pc.to_le_bytes());
-            h.update(first.reg_root.as_ref().as_ref());
-            h.update(first.mem_root.as_ref().as_ref());
-        }
-        if let Some(last) = self.step_log.last() {
-            h.update(last.pc.to_le_bytes());
-            h.update(last.reg_root.as_ref().as_ref());
-            h.update(last.mem_root.as_ref().as_ref());
-        }
-        if let Some(caps) = &self.transport_capabilities {
-            h.update(caps.hpke_suite.suite_id().to_le_bytes());
-            h.update([u8::from(caps.use_datagram)]);
-            h.update(caps.max_segment_datagram_size.to_le_bytes());
-            h.update(caps.fec_feedback_interval_ms.to_le_bytes());
-            h.update([caps.privacy_bucket_granularity as u8]);
-        }
-        if let Some(flags) = self.negotiated_capabilities {
-            h.update(flags.bits().to_le_bytes());
-        }
+
+        self.hash_trace(&mut h);
+        self.hash_constraints(&mut h);
+        self.hash_memory_log(&mut h);
+        self.hash_register_log(&mut h);
+        self.hash_step_log(&mut h);
+        self.hash_transport_metadata(&mut h);
         h.finalize().into()
+    }
+    fn hash_trace(&self, h: &mut Sha256) {
+        h.update((self.trace.len() as u64).to_le_bytes());
+        for state in &self.trace {
+            h.update(state.pc.to_le_bytes());
+            for value in &state.gpr {
+                h.update(value.to_le_bytes());
+            }
+            for tag in &state.tags {
+                h.update([u8::from(*tag)]);
+            }
+        }
+    }
+    fn hash_constraints(&self, h: &mut Sha256) {
+        h.update((self.constraints.len() as u64).to_le_bytes());
+        for constraint in &self.constraints {
+            match constraint {
+                Constraint::Zero { reg, cycle } => {
+                    h.update([0]);
+                    h.update((*reg as u64).to_le_bytes());
+                    h.update(cycle.to_le_bytes());
+                }
+                Constraint::Eq { reg1, reg2, cycle } => {
+                    h.update([1]);
+                    h.update((*reg1 as u64).to_le_bytes());
+                    h.update((*reg2 as u64).to_le_bytes());
+                    h.update(cycle.to_le_bytes());
+                }
+                Constraint::Range { reg, bits, cycle } => {
+                    h.update([2]);
+                    h.update((*reg as u64).to_le_bytes());
+                    h.update([*bits]);
+                    h.update(cycle.to_le_bytes());
+                }
+            }
+        }
+    }
+    fn hash_memory_log(&self, h: &mut Sha256) {
+        h.update((self.mem_log.len() as u64).to_le_bytes());
+        for event in &self.mem_log {
+            let (kind, addr, value, size, path, root) = match event {
+                MemEvent::Load {
+                    addr,
+                    value,
+                    size,
+                    path,
+                    root,
+                } => (0, addr, value, size, path, root),
+                MemEvent::Store {
+                    addr,
+                    value,
+                    size,
+                    path,
+                    root,
+                } => (1, addr, value, size, path, root),
+            };
+            h.update([kind]);
+            h.update(addr.to_le_bytes());
+            h.update(value.to_le_bytes());
+            h.update([*size]);
+            h.update((path.len() as u64).to_le_bytes());
+            for sibling in path {
+                h.update(sibling);
+            }
+            h.update(root.as_ref().as_ref());
+        }
+    }
+    fn hash_register_log(&self, h: &mut Sha256) {
+        h.update((self.reg_log.len() as u64).to_le_bytes());
+        for event in &self.reg_log {
+            let (kind, index, value, tag, path, root) = match event {
+                RegEvent::Read {
+                    index,
+                    value,
+                    tag,
+                    path,
+                    root,
+                } => (0, index, value, tag, path, root),
+                RegEvent::Write {
+                    index,
+                    value,
+                    tag,
+                    path,
+                    root,
+                } => (1, index, value, tag, path, root),
+            };
+            h.update([kind]);
+            h.update((*index as u64).to_le_bytes());
+            h.update(value.to_le_bytes());
+            h.update([u8::from(*tag)]);
+            h.update((path.len() as u64).to_le_bytes());
+            for sibling in path {
+                h.update(sibling);
+            }
+            h.update(root.as_ref().as_ref());
+        }
+    }
+    fn hash_step_log(&self, h: &mut Sha256) {
+        h.update((self.step_log.len() as u64).to_le_bytes());
+        for step in &self.step_log {
+            h.update(step.pc.to_le_bytes());
+            h.update(step.reg_root.as_ref().as_ref());
+            h.update(step.mem_root.as_ref().as_ref());
+        }
+    }
+    fn hash_transport_metadata(&self, h: &mut Sha256) {
+        match &self.transport_capabilities {
+            Some(caps) => {
+                h.update([1]);
+                h.update(caps.hpke_suite.suite_id().to_le_bytes());
+                h.update([u8::from(caps.use_datagram)]);
+                h.update(caps.max_segment_datagram_size.to_le_bytes());
+                h.update(caps.fec_feedback_interval_ms.to_le_bytes());
+                h.update([caps.privacy_bucket_granularity as u8]);
+            }
+            None => h.update([0]),
+        }
+        match self.negotiated_capabilities {
+            Some(flags) => {
+                h.update([1]);
+                h.update(flags.bits().to_le_bytes());
+            }
+            None => h.update([0]),
+        }
     }
 }
 /// Result of background verification.
@@ -869,44 +976,105 @@ pub fn start(
 mod tests {
     //! Minimal unit tests for `ZkLane` helpers.
     use super::*;
-    #[test]
-    fn digest_changes_with_roots_and_sizes() {
-        fn mk(n: usize) -> ZkTask {
-            let mut task = ZkTask {
-                tx_hash: None,
-                code_hash: [0xAB; 32],
-                program: Arc::from(vec![0, 1, 2, 3]),
-                header: None,
-                trace: Vec::new(),
-                constraints: Vec::new(),
-                mem_log: Vec::new(),
-                reg_log: Vec::new(),
-                step_log: Vec::new(),
-                transport_capabilities: None,
-                negotiated_capabilities: None,
-            };
-            for i in 0..n {
-                task.trace.push(RegisterState {
-                    pc: i as u64,
-                    gpr: [0; 256],
-                    tags: [false; 256],
-                });
-            }
-            task.step_log.push(StepEntry {
-                pc: 0,
-                reg_root: HashOf::from_untyped_unchecked(Hash::prehashed([1; 32])),
-                mem_root: HashOf::from_untyped_unchecked(Hash::prehashed([2; 32])),
-            });
-            task.step_log.push(StepEntry {
-                pc: n as u64,
-                reg_root: HashOf::from_untyped_unchecked(Hash::prehashed([3; 32])),
-                mem_root: HashOf::from_untyped_unchecked(Hash::prehashed([4; 32])),
-            });
-            task
+    fn root(byte: u8) -> HashOf<iroha_crypto::MerkleTree<[u8; 32]>> {
+        HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32]))
+    }
+    fn digest_task() -> ZkTask {
+        let mut first_gpr = [0; 256];
+        first_gpr[128] = 7;
+        let mut first_tags = [false; 256];
+        first_tags[128] = true;
+        ZkTask {
+            tx_hash: Some(Hash::prehashed([0xCD; 32])),
+            code_hash: [0xAB; 32],
+            program: Arc::from(vec![0x55; 96]),
+            header: None,
+            trace: vec![RegisterState {
+                pc: 11,
+                gpr: first_gpr,
+                tags: first_tags,
+            }],
+            constraints: vec![Constraint::Range {
+                reg: 128,
+                bits: 8,
+                cycle: 0,
+            }],
+            mem_log: vec![MemEvent::Load {
+                addr: 64,
+                value: 7,
+                size: 1,
+                path: vec![[0x31; 32]],
+                root: root(0x41),
+            }],
+            reg_log: vec![RegEvent::Read {
+                index: 128,
+                value: 7,
+                tag: true,
+                path: vec![[0x51; 32]],
+                root: root(0x61),
+            }],
+            step_log: vec![
+                StepEntry {
+                    pc: 10,
+                    reg_root: root(1),
+                    mem_root: root(2),
+                },
+                StepEntry {
+                    pc: 11,
+                    reg_root: root(3),
+                    mem_root: root(4),
+                },
+                StepEntry {
+                    pc: 12,
+                    reg_root: root(5),
+                    mem_root: root(6),
+                },
+            ],
+            transport_capabilities: None,
+            negotiated_capabilities: None,
         }
-        let a = mk(3).digest();
-        let b = mk(4).digest();
-        assert_ne!(a, b);
+    }
+    #[test]
+    fn digest_binds_program_trace_and_constraints() {
+        let original = digest_task();
+        let digest = original.digest();
+
+        let mut changed = original.clone();
+        Arc::make_mut(&mut changed.program)[95] ^= 1;
+        assert_ne!(
+            digest,
+            changed.digest(),
+            "the complete program must be bound"
+        );
+
+        let mut changed = original.clone();
+        changed.trace[0].gpr[128] ^= 1;
+        assert_ne!(digest, changed.digest(), "register values must be bound");
+
+        let mut changed = original.clone();
+        changed.constraints[0] = Constraint::Zero { reg: 128, cycle: 0 };
+        assert_ne!(digest, changed.digest(), "constraints must be bound");
+    }
+    #[test]
+    fn digest_binds_access_logs_and_intermediate_steps() {
+        let original = digest_task();
+        let digest = original.digest();
+
+        let mut changed = original.clone();
+        if let MemEvent::Load { value, .. } = &mut changed.mem_log[0] {
+            *value ^= 1;
+        }
+        assert_ne!(digest, changed.digest(), "memory events must be bound");
+
+        let mut changed = original.clone();
+        if let RegEvent::Read { value, .. } = &mut changed.reg_log[0] {
+            *value ^= 1;
+        }
+        assert_ne!(digest, changed.digest(), "register events must be bound");
+
+        let mut changed = original;
+        changed.step_log[1].pc ^= 1;
+        assert_ne!(digest, changed.digest(), "intermediate steps must be bound");
     }
     #[test]
     fn queue_cap_defaults_scale_with_workers() {

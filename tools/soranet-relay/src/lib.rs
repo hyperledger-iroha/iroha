@@ -22,6 +22,14 @@ pub mod scheduler;
 pub mod token_tool;
 pub mod vpn;
 pub mod vpn_adapter;
+pub(crate) fn canonical_remote_ip(remote: std::net::SocketAddr) -> std::net::IpAddr {
+    match remote.ip() {
+        std::net::IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map_or(std::net::IpAddr::V6(address), std::net::IpAddr::V4),
+        address => address,
+    }
+}
 pub(crate) fn checked_ed25519_verifying_key_from_bytes(
     public_key: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
 ) -> Result<ed25519_dalek::VerifyingKey, String> {

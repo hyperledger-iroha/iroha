@@ -510,6 +510,7 @@ named_route_policy_test!(
                 runtime_governance::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE,
                 runtime_governance::GOV_PARLIAMENT_TRANSITION_DRAFT,
                 runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+                runtime_governance::VALIDATION_FEE_HIJIRI_QUOTE,
                 runtime_governance::VALIDATION_FEE_PROPOSALS,
                 runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL,
                 runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT,

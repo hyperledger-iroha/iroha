@@ -104,7 +104,7 @@ public final class RegisterOfflineDeviceAttestationTests {
 
     final RegisterOfflineDeviceAttestation request = request(registration);
     final InstructionBox instruction = request.instruction();
-    assertEquals(OfflineDeviceAttestationCodec.INSTRUCTION_SCHEMA, instruction.name());
+    assertEquals(OfflineDeviceAttestationCodec.INSTRUCTION_WIRE_ID, instruction.name());
     assertTrue(instruction.payload() instanceof InstructionBox.WirePayload);
     final byte[] payload = ((InstructionBox.WirePayload) instruction.payload()).payloadBytes();
     assertArrayEquals(hexToBytes(rust.get(1)), payload);

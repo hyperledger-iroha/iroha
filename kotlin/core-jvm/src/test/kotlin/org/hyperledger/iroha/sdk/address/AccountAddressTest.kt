@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.address
 
+import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKeyAdmission
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -77,6 +78,50 @@ class AccountAddressTest {
         val decodedCompact = assertNotNull(decodeCompactPublicKeyPayload(compact))
         assertEquals(0x04, decodedCompact.curveId)
         assertEquals(secpKey.toList(), decodedCompact.keyBytes.toList())
+    }
+
+    @Test
+    fun protocolMlDsa65AliasesAreExactAndCaseInsensitive() {
+        val key = ByteArray(MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH) { 0x02 }
+        try {
+            AccountAddress.configureCurveSupport(CurveSupportConfig.builder().allowMlDsa(true).build())
+            for (algorithm in listOf(
+                "ml-dsa",
+                "mldsa",
+                "ml_dsa",
+                "mldsa65",
+                "MLDSA65",
+                "ml-dsa-65",
+                "ML-DSA-65",
+                "ml_dsa_65",
+                "ML_DSA_65",
+                "ml_dsa-65",
+                "ML_DSA-65",
+            )) {
+                val address = AccountAddress.fromAccount(key, algorithm)
+                assertEquals(0x02, address.singleKeyPayload()?.curveId)
+            }
+
+            for (algorithm in listOf(
+                "mldsa44",
+                "ml-dsa-44",
+                "ml_dsa_44",
+                "ml_dsa-44",
+                "mldsa87",
+                "ml-dsa-87",
+                "ml_dsa_87",
+                "ml_dsa-87",
+                "ml-dsa-\uFF16\uFF15",
+                "ml\uFF0Ddsa-65",
+            )) {
+                val error = assertFailsWith<AccountAddressException> {
+                    AccountAddress.fromAccount(key, algorithm)
+                }
+                assertEquals(AccountAddressErrorCode.UNSUPPORTED_ALGORITHM, error.code)
+            }
+        } finally {
+            AccountAddress.configureCurveSupport(CurveSupportConfig.ed25519Only())
+        }
     }
 
     @Test

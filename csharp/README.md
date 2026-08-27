@@ -96,7 +96,8 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - raw contract instance inventory DTO deserialization shares the same fail-closed checks as `ToriiClient`, rejecting null, duplicate, or type-confused list/item fields, duplicate keys inside ignored instance/response extension JSON, missing or malformed unsigned counters, missing or non-exact namespace/contract-id/code-hash text, and inconsistent pagination counters before callers trust instance listings
 - sponsored onboarding starts with the secret-free
   `ToriiAccountOnboardingPlanRequest`, then passes the signed receipt and an
-  exact `ToriiTairaPublicResetMutationBindingV1` to
+  exact `ToriiTairaPublicResetMutationBindingV1` plus the caller-selected
+  `FeePaymentIntent` to
   `PrepareAccountOnboardingAsync`. Persist either the returned
   `ToriiAccountOnboardingPreparedTransactionV1` or authenticated nonterminal
   `ToriiAccountOnboardingProofRequiredPrepareResponseV1`. A proof-required
@@ -107,7 +108,8 @@ This initial slice provides the foundation needed for a usable managed SDK:
   Preparation, proof, and submission all require
   the original `ToriiAccountOnboardingPlanRequest` as an independent intent
   pin, including its exact ordered permission set. Only the prepared
-  transaction may be passed to `SubmitPreparedAccountOnboardingAsync`. Planning and preparation
+  transaction and the same independent fee intent may be passed to
+  `SubmitPreparedAccountOnboardingAsync`. Planning and preparation
   require explicit authority and chain pins plus a canonical Norito body
   encoder, recompute the signed receipt hash, and reject request substitution.
   The
@@ -408,7 +410,7 @@ sends the nonce-bearing body once without redirects or retries.
   collection mutations cannot drift the effective client serializer
 - faucet PoW solving validates `StartNonce`/`MaxAttempts` ranges before scrypt
   derivation so nonce enumeration cannot overflow mid-search
-- a managed faucet PoW solver for the first-release `scrypt-leading-zero-bits-v1` algorithm and `iroha:accounts:faucet:pow:v1` challenge domain. `PrepareAccountFaucetAsync` accepts one solved `ToriiAccountFaucetClaimV1`, reset binding, and pinned network, then returns one authenticated exact envelope for durable persistence; `SubmitPreparedAccountFaucetAsync` submits only that envelope. Puzzles carry the exact checksummed `NetworkId` and I105 chain discriminant, and the challenge binds the raw 32-byte network identity before the account and anchor; difficulty is mandatory and positive, while account ids, puzzle algorithm labels, anchor/salt/nonce hex, positive anchor-age bounds, bounded scrypt work factors including parallelization and ROMix memory, and mandatory claim PoW fields are validated before hashing or HTTP dispatch; pre-release labels are rejected
+- a managed faucet PoW solver for the first-release `scrypt-leading-zero-bits-v1` algorithm and `iroha:accounts:faucet:pow:v1` challenge domain. `PrepareAccountFaucetAsync` accepts one solved `ToriiAccountFaucetClaimV1`, reset binding, caller-selected `FeePaymentIntent`, required `ToriiAccountFaucetPolicyV1`, and pinned network, then returns one authenticated exact envelope for durable persistence; `SubmitPreparedAccountFaucetAsync` requires that same independent fee intent and policy and submits only that envelope. Both paths reject payer, sponsor-revision, gas-bound, faucet-authority, asset-definition, or amount substitution before dispatch. The policy must come from trusted deployment configuration, never the prepared response. Claim PoW anchor height and canonical lowercase nonce hex are required direct V1 fields (never null or optional transcript wrappers). Puzzles carry the exact checksummed `NetworkId` and I105 chain discriminant, and the challenge binds the raw 32-byte network identity before the account and anchor; difficulty is mandatory and positive, while account ids, puzzle algorithm labels, anchor/salt/nonce hex, positive anchor-age bounds, bounded scrypt work factors including parallelization and ROMix memory, and mandatory claim PoW fields are validated before hashing or HTTP dispatch; pre-release labels are rejected
 - `ToriiApiException` for non-success HTTP responses, preserving status code, request URI, and valid UTF-8 response bodies while redacting malformed UTF-8 bodies
 - native Ethereum and BSC mainnet SCCP helpers for execution-provider chain-id
   validation, inbound receipt/source-event evidence, outbound Groth16 calldata,
@@ -459,6 +461,17 @@ supported wallet/prover implementation, snapshot the bytes, and bind
 artifact installation, and device-key handling remain outside this SDK. The
 transport accepts at most 512 KiB for top-up and 48 MiB for redemption, matching
 Torii's route-specific request limits.
+
+Each request constructor validates the route-specific Norito schema hash,
+version, compression, CRC64, compact layout flag, non-empty payload, and exactly
+eight zero alignment bytes before snapshotting the archive. HTTP 202 responses
+must carry the matching `Location`, a positive unsigned `Retry-After`, and a
+positive submission time. Polled statuses require marker-bearing transaction
+hashes and positive finality values; applied top-ups additionally bind both the
+V4 anchor and V1 finality-proof anchor to the requested operation id. Rejection
+envelopes are exact, messages are bounded, and error codes use a stable
+lowercase grammar. Optional details remain opaque JSON objects inside the
+shared 256 KiB response-body and 128-level nesting limits.
 
 `CreateVpnQuoteAsync(...)`, `CreateVpnSessionAsync(...)`, and
 `SubmitVpnReceiptAsync(...)` call signed Torii
@@ -737,6 +750,14 @@ try
     Console.WriteLine($"Alias count for first account: {aliases?.Total ?? 0}");
     Console.WriteLine($"Faucet puzzle difficulty: {faucetPuzzle.DifficultyBits}");
     Console.WriteLine($"Faucet puzzle exact network: {faucetPuzzle.NetworkId}");
+
+    // Pin this independently from trusted deployment configuration and pass the
+    // same value to PrepareAccountFaucetAsync and SubmitPreparedAccountFaucetAsync.
+    var faucetPolicy = new ToriiAccountFaucetPolicyV1(
+        Environment.GetEnvironmentVariable("IROHA_CSHARP_FAUCET_AUTHORITY")!,
+        Environment.GetEnvironmentVariable("IROHA_CSHARP_FAUCET_ASSET_DEFINITION_ID")!,
+        NumericV1.QuantityValue.ParseCanonical(
+            Environment.GetEnvironmentVariable("IROHA_CSHARP_FAUCET_AMOUNT")!));
 
     // Transaction building is available through client.Ledger.
     //     var transaction = client.Ledger

@@ -159,10 +159,10 @@ final class KagemushaPeerTransportTests: XCTestCase {
             projection.request.payload.assetDefinitionID,
             "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
         )
-        XCTAssertEqual(offer.noritoArchive.count, 12_423)
+        XCTAssertEqual(offer.noritoArchive.count, 12_435)
         XCTAssertEqual(
             sha256Hex(offer.noritoArchive),
-            "6b38813ab66f1ecb83861d1641454e2d4de438472189b02ccca52a22bc6431df"
+            "393f8a8827b66069e8fd47d2aa301a497cf800f1ce011a2b468ef22a5f2237c6"
         )
         XCTAssertEqual(projection.request.archive.count, 753)
         XCTAssertEqual(
@@ -174,12 +174,12 @@ final class KagemushaPeerTransportTests: XCTestCase {
             sha256Hex(projection.lineageArchive),
             "b61dd641527bfb9e09479906c008b6c061b54009229e6e9ec5f0717572cfb561"
         )
-        XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 393)
+        XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 405)
         XCTAssertEqual(
             sha256Hex(projection.publisherCheckpointEnvelope),
-            "ed6f4796046ee1d35f844cc862586dbe1d7d0f59db51638c33559052f4196bef"
+            "e6f7bbdd91955dc0b1a6f94a3d8ad284ae44c48e34a710484d8753e4e800973c"
         )
-        XCTAssertEqual(message.encoded.count, 12_507)
+        XCTAssertEqual(message.encoded.count, 12_519)
         XCTAssertEqual(
             try IrohaPeerKagemushaAdapterV1.decode(
                 IrohaPeerWireMessageV1.decode(message.encoded),

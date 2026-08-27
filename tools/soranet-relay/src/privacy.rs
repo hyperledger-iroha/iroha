@@ -150,8 +150,6 @@ pub enum ThrottleScope {
     Cooldown,
     Emergency,
     RemoteQuota,
-    DescriptorQuota,
-    DescriptorReplay,
 }
 impl From<RejectReason> for SoranetPrivacyHandshakeFailureV1 {
     fn from(reason: RejectReason) -> Self {
@@ -170,8 +168,6 @@ impl From<ThrottleScope> for SoranetPrivacyThrottleScopeV1 {
             ThrottleScope::Cooldown => Self::Cooldown,
             ThrottleScope::Emergency => Self::Emergency,
             ThrottleScope::RemoteQuota => Self::RemoteQuota,
-            ThrottleScope::DescriptorQuota => Self::DescriptorQuota,
-            ThrottleScope::DescriptorReplay => Self::DescriptorReplay,
         }
     }
 }
@@ -385,8 +381,6 @@ struct BucketSummary {
     throttle_cooldown: u64,
     throttle_emergency: u64,
     throttle_remote: u64,
-    throttle_descriptor: u64,
-    throttle_descriptor_replay: u64,
     cooldown_millis_sum: u128,
     cooldown_count: u64,
     active_avg: Option<f64>,
@@ -412,8 +406,6 @@ struct PrometheusState {
     throttle_cooldown: u64,
     throttle_emergency: u64,
     throttle_remote: u64,
-    throttle_descriptor: u64,
-    throttle_descriptor_replay: u64,
     cooldown_millis_sum: u128,
     cooldown_count: u64,
     bytes_verified: u128,
@@ -435,8 +427,6 @@ struct BucketStats {
     throttle_cooldown: u64,
     throttle_emergency: u64,
     throttle_remote: u64,
-    throttle_descriptor: u64,
-    throttle_descriptor_replay: u64,
     throttle_cooldown_sum_millis: u128,
     throttle_cooldown_count: u64,
     rtt: LatencyHistogram,
@@ -547,12 +537,6 @@ impl PrometheusState {
                 .throttle_emergency
                 .saturating_add(stats.throttle_emergency);
             self.throttle_remote = self.throttle_remote.saturating_add(stats.throttle_remote);
-            self.throttle_descriptor = self
-                .throttle_descriptor
-                .saturating_add(stats.throttle_descriptor);
-            self.throttle_descriptor_replay = self
-                .throttle_descriptor_replay
-                .saturating_add(stats.throttle_descriptor_replay);
             self.cooldown_millis_sum = self
                 .cooldown_millis_sum
                 .saturating_add(stats.cooldown_millis_sum);
@@ -632,8 +616,6 @@ impl PrometheusState {
             ("cooldown", self.throttle_cooldown),
             ("emergency", self.throttle_emergency),
             ("remote_quota", self.throttle_remote),
-            ("descriptor_quota", self.throttle_descriptor),
-            ("descriptor_replay", self.throttle_descriptor_replay),
         ];
         for (scope, value) in throttles {
             if value == 0 {
@@ -897,12 +879,6 @@ impl BucketStats {
             ThrottleScope::RemoteQuota => {
                 self.throttle_remote = self.throttle_remote.saturating_add(1);
             }
-            ThrottleScope::DescriptorQuota => {
-                self.throttle_descriptor = self.throttle_descriptor.saturating_add(1);
-            }
-            ThrottleScope::DescriptorReplay => {
-                self.throttle_descriptor_replay = self.throttle_descriptor_replay.saturating_add(1);
-            }
         }
     }
     fn record_throttle_cooldown(&mut self, cooldown: Duration) {
@@ -950,8 +926,6 @@ impl BucketStats {
             throttle_cooldown,
             throttle_emergency,
             throttle_remote,
-            throttle_descriptor,
-            throttle_descriptor_replay,
             throttle_cooldown_sum_millis,
             throttle_cooldown_count,
             rtt,
@@ -972,8 +946,6 @@ impl BucketStats {
             throttle_cooldown,
             throttle_emergency,
             throttle_remote,
-            throttle_descriptor,
-            throttle_descriptor_replay,
             cooldown_millis_sum: throttle_cooldown_sum_millis,
             cooldown_count: throttle_cooldown_count,
             active_avg,

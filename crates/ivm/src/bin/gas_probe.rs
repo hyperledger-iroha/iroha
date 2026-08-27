@@ -1,4 +1,4 @@
-use ivm::{IVM, ProgramMetadata, encoding, instruction, ivm_mode, kotodama::wide as kwide};
+use ivm::{IVM, ProgramMetadata, encoding, instruction, ivm_mode};
 use std::time::Instant;
 fn assemble(code: &[u8]) -> Vec<u8> {
     let mut meta = ProgramMetadata::default();
@@ -75,7 +75,7 @@ fn main() {
     // SHA256BLOCK (wide opcode 0x80) uses vector registers in rd/rs1
     let sha256 = encoding::wide::encode_rr(instruction::wide::crypto::SHA256BLOCK, 1, 2, 0);
     // Use a 128-bit load to mimic vector fetches
-    let ldv = kwide::encode_load128(4, 1, 2);
+    let ldv = encoding::wide::encode_load128(instruction::wide::memory::LOAD128, 1, 4, 2);
     let reps = 200_000usize;
     let rounds = 5usize;
     run_case("ADD", add, reps, rounds);

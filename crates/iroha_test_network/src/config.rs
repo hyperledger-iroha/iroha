@@ -52,7 +52,7 @@ use iroha_executor_data_model::permission::{
     domain::CanUnregisterDomain,
     executor::CanUpgradeExecutor,
     governance::CanManageParliament,
-    parameter::CanSetParameters,
+    parameter::{CanSetHijiriParameters, CanSetParameters},
     peer::CanManagePeers,
     query::CanReadAllLedgerData,
     role::CanManageRoles,
@@ -707,11 +707,19 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             alice_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(
+            CanSetHijiriParameters,
+            alice_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
             CanReadAllLedgerData,
             alice_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(
             CanSetParameters,
+            genesis_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
+            CanSetHijiriParameters,
             genesis_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(

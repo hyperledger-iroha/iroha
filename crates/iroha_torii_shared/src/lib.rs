@@ -68,6 +68,7 @@ pub struct FeeQuoteRequest {
     PartialEq,
     Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub struct FeeQuoteObservation {
     /// Creation time of the latest committed block, in Unix milliseconds.
     pub ledger_time_ms: u64,
@@ -80,6 +81,7 @@ pub struct FeeQuoteObservation {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub struct FeeQuoteComponent {
     /// Fee component represented by this bound.
     pub kind: FeeChargeKind,
@@ -92,6 +94,7 @@ pub struct FeeQuoteComponent {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub struct FeeQuoteCapacity {
     /// Asset definition governed by this capacity snapshot.
     pub asset_definition_id: AssetDefinitionId,
@@ -110,7 +113,12 @@ pub struct FeeQuoteCapacity {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
-#[norito(tag = "status", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "status",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum FeeQuoteDecision {
     /// The payload is admissible at the observed state.
     #[norito(rename = "accepted")]
@@ -118,8 +126,10 @@ pub enum FeeQuoteDecision {
         /// Exact account or isolated program vault that will be debited.
         debit_source: FeeDebitSource,
         /// Exact active immutable sponsor revision, when sponsored.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        ///
+        /// The slot is mandatory in the first-release JSON shape; authority-paid
+        /// quotes encode it as `null` rather than accepting an omitted legacy field.
+        #[norito(required)]
         program_revision: Option<u64>,
     },
 }
@@ -127,6 +137,7 @@ pub enum FeeQuoteDecision {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub struct FeeQuoteResponse {
     /// Exact signature-bound intent evaluated by Core.
     pub intent: FeePaymentIntent,
@@ -138,6 +149,170 @@ pub struct FeeQuoteResponse {
     pub capacities: Vec<FeeQuoteCapacity>,
     /// Successful admission decision and selected debit source.
     pub decision: FeeQuoteDecision,
+}
+impl FeeQuoteResponse {
+    /// Validate this quote against the unsigned payload used to request it.
+    ///
+    /// The quoted intent may replace the draft's charge limits, but it must
+    /// preserve the selected payer, sponsor revision, and executable gas bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the quote is malformed, changes a draft-bound fee
+    /// selection, or is inconsistent with the payload authority.
+    pub fn validate_for_draft(&self, payload: &TransactionPayload) -> Result<(), String> {
+        payload
+            .fee_payment_intent()
+            .validate()
+            .map_err(|error| format!("invalid draft fee payment intent: {error}"))?;
+        if !self
+            .intent
+            .has_same_payer_and_gas_bound(payload.fee_payment_intent())
+        {
+            return Err(
+                "fee quote changed the draft payer, sponsor revision, or gas bound".to_owned(),
+            );
+        }
+        self.validate_semantics(payload)
+    }
+
+    /// Validate this quote against a payload containing the exact quoted intent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the signed payload does not contain the quote's
+    /// exact fee intent, or when any response field is semantically inconsistent.
+    pub fn validate_for_signed_payload(&self, payload: &TransactionPayload) -> Result<(), String> {
+        if &self.intent != payload.fee_payment_intent() {
+            return Err("fee quote intent differs from the signed payload".to_owned());
+        }
+        self.validate_semantics(payload)
+    }
+
+    fn validate_semantics(&self, payload: &TransactionPayload) -> Result<(), String> {
+        self.intent
+            .validate()
+            .map_err(|error| format!("invalid fee quote intent: {error}"))?;
+        if self.observation.next_block_height == 0 {
+            return Err("fee quote next_block_height must be non-zero".to_owned());
+        }
+
+        let charge_limits = self.intent.charge_limits();
+        let components_match = self.components.len() == charge_limits.len()
+            && self
+                .components
+                .iter()
+                .zip(charge_limits)
+                .all(|(component, limit)| {
+                    component.kind == limit.kind()
+                        && &component.asset_definition_id == limit.asset_definition_id()
+                        && &component.max_amount == limit.max_amount()
+                });
+        if !components_match {
+            return Err("fee quote components differ from the quoted intent".to_owned());
+        }
+
+        match self.intent.sponsor_program() {
+            None => {
+                match &self.decision {
+                    FeeQuoteDecision::Accepted {
+                        debit_source: FeeDebitSource::Account(account),
+                        program_revision: None,
+                    } if account == payload.authority() => {}
+                    _ => {
+                        return Err(
+                            "authority-paid fee quote has an inconsistent admission decision"
+                                .to_owned(),
+                        );
+                    }
+                }
+                if !self.capacities.is_empty() {
+                    return Err("authority-paid fee quote must not contain capacities".to_owned());
+                }
+                Ok(())
+            }
+            Some((program_id, program_revision)) => {
+                match &self.decision {
+                    FeeQuoteDecision::Accepted {
+                        debit_source: FeeDebitSource::SponsorProgram(decision_program_id),
+                        program_revision: Some(decision_revision),
+                    } if decision_program_id == program_id
+                        && *decision_revision == program_revision => {}
+                    _ => {
+                        return Err(
+                            "sponsored fee quote has an inconsistent admission decision".to_owned()
+                        );
+                    }
+                }
+                self.validate_sponsor_capacities()
+            }
+        }
+    }
+
+    fn validate_sponsor_capacities(&self) -> Result<(), String> {
+        if self.capacities.is_empty() != self.components.is_empty() {
+            return Err(
+                "sponsored fee quote capacities must be empty exactly when components are empty"
+                    .to_owned(),
+            );
+        }
+
+        let mut aggregate_by_asset = std::collections::BTreeMap::new();
+        for component in &self.components {
+            let aggregate = aggregate_by_asset
+                .entry(component.asset_definition_id.clone())
+                .or_insert_with(Quantity::zero);
+            *aggregate = aggregate
+                .checked_add(&component.max_amount)
+                .map_err(|error| {
+                    format!(
+                        "fee quote component aggregate for {} is invalid: {error}",
+                        component.asset_definition_id
+                    )
+                })?;
+        }
+        if self.capacities.len() != aggregate_by_asset.len() {
+            return Err(
+                "sponsored fee quote must contain one capacity per component asset".to_owned(),
+            );
+        }
+
+        for (capacity, (asset_definition_id, aggregate)) in
+            self.capacities.iter().zip(&aggregate_by_asset)
+        {
+            if &capacity.asset_definition_id != asset_definition_id {
+                return Err(
+                    "sponsored fee quote capacities are duplicated, unrelated, or not in canonical asset order"
+                        .to_owned(),
+                );
+            }
+            let required_vault_balance = capacity
+                .reserve_floor
+                .checked_add(aggregate)
+                .map_err(|error| {
+                    format!(
+                        "fee quote required vault balance for {asset_definition_id} is invalid: {error}"
+                    )
+                })?;
+            if capacity.vault_balance < required_vault_balance {
+                return Err(format!(
+                    "fee quote vault capacity for {asset_definition_id} does not cover its reserve and aggregate charge"
+                ));
+            }
+            for (window, remaining) in [
+                ("block", &capacity.block_remaining),
+                ("program epoch", &capacity.program_epoch_remaining),
+                ("beneficiary epoch", &capacity.beneficiary_epoch_remaining),
+            ] {
+                if remaining < aggregate {
+                    return Err(format!(
+                        "fee quote {window} capacity for {asset_definition_id} does not cover its aggregate charge"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 /// Canonical request body for exact sponsor-program lookup.
 #[derive(
@@ -176,6 +351,9 @@ pub mod uri {
     /// URI used to fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH;
+    /// URI used to evaluate one bounded same-snapshot Hijiri validation-fee quote.
+    pub const VALIDATION_FEE_HIJIRI_QUOTE: &str =
+        crate::route_catalog::runtime_governance::VALIDATION_FEE_HIJIRI_QUOTE_PATH;
     /// URI used to read the strict public governance capability contract.
     pub const GOV_CAPABILITIES: &str =
         crate::route_catalog::runtime_governance::GOV_CAPABILITIES.path();
@@ -926,25 +1104,171 @@ impl AccountOnboardingCurrentStateResponseV1 {
 mod tests {
     use super::{
         AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
-        AccountReadResponse, ErrorDetails, ErrorEnvelope, FeeErrorDetails, FeeQuoteDecision,
-        FeeQuoteObservation, FeeQuoteResponse, FeeSponsorProgramByIdRequest,
-        MINAMOTO_CHAIN_DISCRIMINANT, NETWORK_PROFILE_MINAMOTO, NETWORK_PROFILE_TAIRA,
-        PipelineTransactionStatus, PipelineTransactionStatusResponse, QueueErrorSnapshot,
-        TAIRA_CHAIN_DISCRIMINANT, network_profile, network_profile_for_discriminant,
+        AccountReadResponse, ErrorDetails, ErrorEnvelope, FeeErrorDetails, FeeQuoteCapacity,
+        FeeQuoteComponent, FeeQuoteDecision, FeeQuoteObservation, FeeQuoteResponse,
+        FeeSponsorProgramByIdRequest, MINAMOTO_CHAIN_DISCRIMINANT, NETWORK_PROFILE_MINAMOTO,
+        NETWORK_PROFILE_TAIRA, PipelineTransactionStatus, PipelineTransactionStatusResponse,
+        QueueErrorSnapshot, TAIRA_CHAIN_DISCRIMINANT, network_profile,
+        network_profile_for_discriminant,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
         account::{AccountAlias, AccountAliasDomain, AccountId},
         alias_setup::AccountAliasName,
+        asset::AssetDefinitionId,
         block::BlockHeader,
+        domain::DomainId,
         name::Name,
         nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId},
-        transaction::FeePaymentIntent,
+        prelude::Quantity,
+        transaction::{
+            FeeChargeKind, FeeChargeLimit, FeePaymentIntent, TransactionBuilder, TransactionPayload,
+        },
     };
+    use std::num::NonZeroU64;
+
     fn checked_test_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("Torii shared test fixture key derivation should succeed")
+    }
+    fn fee_quote_test_asset(name: &str) -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("fees", "universal").expect("valid fee domain"),
+            name.parse().expect("valid fee asset name"),
+        )
+    }
+    fn fee_quote_test_payload(
+        authority: AccountId,
+        fee_payment: FeePaymentIntent,
+    ) -> TransactionPayload {
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"fee-quote-validation-network",
+            )));
+        TransactionBuilder::new(network_id, authority, fee_payment)
+            .payload()
+            .clone()
+    }
+    fn fee_quote_components(intent: &FeePaymentIntent) -> Vec<FeeQuoteComponent> {
+        intent
+            .charge_limits()
+            .iter()
+            .map(|limit| FeeQuoteComponent {
+                kind: limit.kind(),
+                asset_definition_id: limit.asset_definition_id().clone(),
+                max_amount: limit.max_amount().clone(),
+            })
+            .collect()
+    }
+    fn fee_quote_capacity(
+        asset_definition_id: AssetDefinitionId,
+        aggregate: Quantity,
+    ) -> FeeQuoteCapacity {
+        let reserve_floor = Quantity::from(2_u32);
+        let vault_balance = reserve_floor
+            .checked_add(&aggregate)
+            .expect("small fixture quantities add exactly");
+        FeeQuoteCapacity {
+            asset_definition_id,
+            vault_balance,
+            reserve_floor,
+            block_remaining: aggregate.clone(),
+            program_epoch_remaining: aggregate.clone(),
+            beneficiary_epoch_remaining: aggregate,
+        }
+    }
+    fn sponsored_fee_quote_fixture() -> (
+        TransactionPayload,
+        FeeQuoteResponse,
+        FeeSponsorProgramId,
+        [AssetDefinitionId; 2],
+    ) {
+        let authority = AccountId::new(checked_test_keypair(0x31).public_key().clone());
+        let sponsor = AccountId::new(checked_test_keypair(0x32).public_key().clone());
+        let program_id = FeeSponsorProgramId::new(
+            sponsor,
+            "retail".parse().expect("valid sponsor-program name"),
+        );
+        let mut assets = [fee_quote_test_asset("alpha"), fee_quote_test_asset("beta")];
+        assets.sort();
+        let intent = FeePaymentIntent::sponsor(
+            program_id.clone(),
+            7,
+            vec![
+                FeeChargeLimit::new(
+                    FeeChargeKind::Nexus,
+                    assets[1].clone(),
+                    Quantity::from(3_u32),
+                ),
+                FeeChargeLimit::new(
+                    FeeChargeKind::PipelineGas,
+                    assets[0].clone(),
+                    Quantity::from(5_u32),
+                ),
+            ],
+            NonZeroU64::new(50),
+        );
+        let payload = fee_quote_test_payload(authority, intent.clone());
+        let quote = FeeQuoteResponse {
+            components: fee_quote_components(&intent),
+            intent,
+            observation: FeeQuoteObservation {
+                ledger_time_ms: 42,
+                next_block_height: 7,
+                route_dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+            capacities: vec![
+                fee_quote_capacity(assets[0].clone(), Quantity::from(5_u32)),
+                fee_quote_capacity(assets[1].clone(), Quantity::from(3_u32)),
+            ],
+            decision: FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::SponsorProgram(program_id.clone()),
+                program_revision: Some(7),
+            },
+        };
+        (payload, quote, program_id, assets)
+    }
+    fn authority_fee_quote_fixture() -> (TransactionPayload, FeeQuoteResponse) {
+        let authority = AccountId::new(checked_test_keypair(0x33).public_key().clone());
+        let intent = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                fee_quote_test_asset("authority"),
+                Quantity::from(4_u32),
+            )],
+            None,
+        );
+        let payload = fee_quote_test_payload(authority.clone(), intent.clone());
+        let quote = FeeQuoteResponse {
+            components: fee_quote_components(&intent),
+            intent,
+            observation: FeeQuoteObservation {
+                ledger_time_ms: 42,
+                next_block_height: 7,
+                route_dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+            capacities: Vec::new(),
+            decision: FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::Account(authority),
+                program_revision: None,
+            },
+        };
+        (payload, quote)
+    }
+    fn assert_fee_quote_rejected_by_both(
+        quote: &FeeQuoteResponse,
+        payload: &TransactionPayload,
+        case: &str,
+    ) {
+        assert!(
+            quote.validate_for_draft(payload).is_err(),
+            "draft validator accepted {case}"
+        );
+        assert!(
+            quote.validate_for_signed_payload(payload).is_err(),
+            "signed-payload validator accepted {case}"
+        );
     }
     #[test]
     fn onboarding_current_state_contract_is_closed_and_exact() {
@@ -1115,6 +1439,462 @@ mod tests {
         let decoded_quote: FeeQuoteResponse =
             norito::json::from_slice(&quote_json).expect("decode typed fee quote");
         assert_eq!(decoded_quote, quote);
+
+        let quote_text = std::str::from_utf8(&quote_json).expect("fee quote JSON is UTF-8");
+        let duplicate_root = quote_text.replacen('{', r#"{"components":[],"#, 1);
+        let duplicate_nested = quote_text.replacen(
+            r#""next_block_height":7"#,
+            r#""next_block_height":7,"\u006eext_block_height":7"#,
+            1,
+        );
+        for (path, duplicate) in [
+            ("components", duplicate_root),
+            ("observation.next_block_height", duplicate_nested),
+        ] {
+            assert_ne!(duplicate, quote_text, "duplicate fixture for {path}");
+            let error = norito::json::from_slice::<FeeQuoteResponse>(duplicate.as_bytes())
+                .expect_err("duplicate fee quote response key must be rejected");
+            assert!(
+                error.to_string().contains("duplicate field"),
+                "unexpected duplicate-key error for {path}: {error}"
+            );
+        }
+
+        let mut missing_revision =
+            norito::json::to_value(&quote).expect("encode exact fee quote object");
+        assert_eq!(
+            missing_revision
+                .as_object()
+                .and_then(|root| root.get("decision"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|decision| decision.get("value"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|value| value.get("program_revision")),
+            Some(&norito::json::Value::Null),
+            "authority quotes must encode the mandatory nullable revision slot"
+        );
+        missing_revision
+            .as_object_mut()
+            .and_then(|root| root.get_mut("decision"))
+            .and_then(norito::json::Value::as_object_mut)
+            .and_then(|decision| decision.get_mut("value"))
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("fee quote decision value")
+            .remove("program_revision");
+        assert!(
+            norito::json::from_value::<FeeQuoteResponse>(missing_revision).is_err(),
+            "fee quotes must reject the pre-release omitted revision slot"
+        );
+
+        for path in [
+            &["retired_v0"][..],
+            &["observation", "retired_v0"][..],
+            &["decision", "retired_v0"][..],
+            &["decision", "value", "retired_v0"][..],
+        ] {
+            let mut unknown =
+                norito::json::to_value(&quote).expect("encode exact fee quote object");
+            let mut object = unknown.as_object_mut().expect("fee quote object");
+            for segment in &path[..path.len() - 1] {
+                object = object
+                    .get_mut(*segment)
+                    .and_then(norito::json::Value::as_object_mut)
+                    .expect("nested fee quote object");
+            }
+            object.insert(
+                path[path.len() - 1].to_owned(),
+                norito::json::Value::from("forbidden"),
+            );
+            assert!(
+                norito::json::from_value::<FeeQuoteResponse>(unknown).is_err(),
+                "first-release fee quote accepted unknown path {}",
+                path.join("."),
+            );
+        }
+    }
+    #[test]
+    fn fee_quote_draft_validation_rejects_payer_revision_and_gas_substitution() {
+        let (payload, quote, program_id, _) = sponsored_fee_quote_fixture();
+        quote
+            .validate_for_draft(&payload)
+            .expect("matching sponsored draft quote");
+
+        let charge_limits = payload.fee_payment_intent().charge_limits().to_vec();
+        let other_program_id = FeeSponsorProgramId::new(
+            AccountId::new(checked_test_keypair(0x34).public_key().clone()),
+            "other".parse().expect("valid sponsor-program name"),
+        );
+        let substitutions = [
+            (
+                "payer kind",
+                FeePaymentIntent::authority(charge_limits.clone(), NonZeroU64::new(50)),
+            ),
+            (
+                "sponsor program",
+                FeePaymentIntent::sponsor(
+                    other_program_id,
+                    7,
+                    charge_limits.clone(),
+                    NonZeroU64::new(50),
+                ),
+            ),
+            (
+                "sponsor revision",
+                FeePaymentIntent::sponsor(
+                    program_id.clone(),
+                    8,
+                    charge_limits.clone(),
+                    NonZeroU64::new(50),
+                ),
+            ),
+            (
+                "gas bound",
+                FeePaymentIntent::sponsor(
+                    program_id.clone(),
+                    7,
+                    charge_limits.clone(),
+                    NonZeroU64::new(51),
+                ),
+            ),
+        ];
+        for (case, fee_payment) in substitutions {
+            let substituted = fee_quote_test_payload(payload.authority().clone(), fee_payment);
+            assert!(
+                quote.validate_for_draft(&substituted).is_err(),
+                "draft validator accepted a substituted {case}"
+            );
+        }
+
+        let mut invalid_limits = charge_limits;
+        invalid_limits[0] = FeeChargeLimit::new(
+            quote.components[0].kind,
+            quote.components[0].asset_definition_id.clone(),
+            Quantity::zero(),
+        );
+        let invalid_intent =
+            FeePaymentIntent::sponsor(program_id, 7, invalid_limits, NonZeroU64::new(50));
+        let invalid_draft =
+            fee_quote_test_payload(payload.authority().clone(), invalid_intent.clone());
+        assert!(
+            quote.validate_for_draft(&invalid_draft).is_err(),
+            "draft validator accepted an invalid draft fee intent"
+        );
+
+        let mut invalid_quote = quote.clone();
+        invalid_quote.intent = invalid_intent;
+        invalid_quote.components = fee_quote_components(&invalid_quote.intent);
+        assert!(
+            invalid_quote.validate_for_draft(&payload).is_err(),
+            "draft validator accepted an invalid response intent"
+        );
+    }
+    #[test]
+    fn fee_quote_signed_validation_rejects_limit_substitution() {
+        let (payload, quote, program_id, _) = sponsored_fee_quote_fixture();
+        quote
+            .validate_for_signed_payload(&payload)
+            .expect("matching signed fee intent");
+
+        let mut substituted_limits = quote.intent.charge_limits().to_vec();
+        substituted_limits[0] = FeeChargeLimit::new(
+            quote.components[0].kind,
+            quote.components[0].asset_definition_id.clone(),
+            Quantity::from(4_u32),
+        );
+        let substituted = fee_quote_test_payload(
+            payload.authority().clone(),
+            FeePaymentIntent::sponsor(program_id, 7, substituted_limits, NonZeroU64::new(50)),
+        );
+        quote
+            .validate_for_draft(&substituted)
+            .expect("draft validation permits quote-selected charge limits");
+        assert!(
+            quote.validate_for_signed_payload(&substituted).is_err(),
+            "signed validator accepted substituted charge limits"
+        );
+    }
+    #[test]
+    fn fee_quote_validation_rejects_observation_component_and_decision_mutations() {
+        let (payload, quote, _, _) = sponsored_fee_quote_fixture();
+
+        let mut zero_height = quote.clone();
+        zero_height.observation.next_block_height = 0;
+        assert_fee_quote_rejected_by_both(&zero_height, &payload, "a zero observation height");
+
+        let mut changed_component = quote.clone();
+        changed_component.components[0].max_amount = Quantity::from(4_u32);
+        assert_fee_quote_rejected_by_both(&changed_component, &payload, "a changed component");
+        let mut reordered_components = quote.clone();
+        reordered_components.components.swap(0, 1);
+        assert_fee_quote_rejected_by_both(&reordered_components, &payload, "reordered components");
+
+        let other_program_id = FeeSponsorProgramId::new(
+            AccountId::new(checked_test_keypair(0x35).public_key().clone()),
+            "other".parse().expect("valid sponsor-program name"),
+        );
+        let sponsor_decision_mutations = [
+            FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::SponsorProgram(other_program_id),
+                program_revision: Some(7),
+            },
+            FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::SponsorProgram(
+                    quote
+                        .intent
+                        .sponsor_program()
+                        .expect("sponsored fixture")
+                        .0
+                        .clone(),
+                ),
+                program_revision: Some(8),
+            },
+            FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::SponsorProgram(
+                    quote
+                        .intent
+                        .sponsor_program()
+                        .expect("sponsored fixture")
+                        .0
+                        .clone(),
+                ),
+                program_revision: None,
+            },
+            FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::Account(payload.authority().clone()),
+                program_revision: None,
+            },
+        ];
+        for decision in sponsor_decision_mutations {
+            let mut changed_decision = quote.clone();
+            changed_decision.decision = decision;
+            assert_fee_quote_rejected_by_both(
+                &changed_decision,
+                &payload,
+                "a mismatched sponsor decision",
+            );
+        }
+
+        let (authority_payload, authority_quote) = authority_fee_quote_fixture();
+        authority_quote
+            .validate_for_draft(&authority_payload)
+            .expect("matching authority-paid draft quote");
+        authority_quote
+            .validate_for_signed_payload(&authority_payload)
+            .expect("matching authority-paid quote");
+        let wrong_account = AccountId::new(checked_test_keypair(0x36).public_key().clone());
+        let authority_decision_mutations = [
+            FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::Account(wrong_account),
+                program_revision: None,
+            },
+            FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::Account(authority_payload.authority().clone()),
+                program_revision: Some(1),
+            },
+            FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::SponsorProgram(
+                    quote
+                        .intent
+                        .sponsor_program()
+                        .expect("sponsored fixture")
+                        .0
+                        .clone(),
+                ),
+                program_revision: Some(7),
+            },
+        ];
+        for decision in authority_decision_mutations {
+            let mut changed_decision = authority_quote.clone();
+            changed_decision.decision = decision;
+            assert_fee_quote_rejected_by_both(
+                &changed_decision,
+                &authority_payload,
+                "a mismatched authority decision",
+            );
+        }
+        let mut authority_with_capacity = authority_quote;
+        authority_with_capacity.capacities.push(fee_quote_capacity(
+            fee_quote_test_asset("authority"),
+            Quantity::from(4_u32),
+        ));
+        assert_fee_quote_rejected_by_both(
+            &authority_with_capacity,
+            &authority_payload,
+            "an authority-paid capacity",
+        );
+    }
+    #[test]
+    fn fee_quote_validation_rejects_capacity_mutation_matrix() {
+        let (payload, quote, _, assets) = sponsored_fee_quote_fixture();
+        quote
+            .validate_for_signed_payload(&payload)
+            .expect("canonical sponsor capacities");
+
+        let mut mutations = Vec::new();
+        let mut empty = quote.clone();
+        empty.capacities.clear();
+        mutations.push(("empty", empty));
+
+        let mut duplicate = quote.clone();
+        duplicate.capacities[1].asset_definition_id =
+            duplicate.capacities[0].asset_definition_id.clone();
+        mutations.push(("duplicate", duplicate));
+
+        let mut unsorted = quote.clone();
+        unsorted.capacities.swap(0, 1);
+        mutations.push(("unsorted", unsorted));
+
+        let mut unrelated = quote.clone();
+        unrelated.capacities[1].asset_definition_id = fee_quote_test_asset("unrelated");
+        mutations.push(("unrelated", unrelated));
+
+        let mut insufficient_vault = quote.clone();
+        insufficient_vault.capacities[0].vault_balance = Quantity::from(6_u32);
+        mutations.push(("insufficient vault", insufficient_vault));
+
+        let mut insufficient_block = quote.clone();
+        insufficient_block.capacities[0].block_remaining = Quantity::zero();
+        mutations.push(("insufficient block budget", insufficient_block));
+
+        let mut insufficient_program_epoch = quote.clone();
+        insufficient_program_epoch.capacities[0].program_epoch_remaining = Quantity::zero();
+        mutations.push((
+            "insufficient program-epoch budget",
+            insufficient_program_epoch,
+        ));
+
+        let mut insufficient_beneficiary_epoch = quote.clone();
+        insufficient_beneficiary_epoch.capacities[0].beneficiary_epoch_remaining = Quantity::zero();
+        mutations.push((
+            "insufficient beneficiary-epoch budget",
+            insufficient_beneficiary_epoch,
+        ));
+
+        for (case, mutation) in mutations {
+            assert_fee_quote_rejected_by_both(
+                &mutation,
+                &payload,
+                &format!("{case} sponsor capacities"),
+            );
+        }
+        assert!(
+            assets[0] < assets[1],
+            "fixture assets must have strict order"
+        );
+    }
+    #[test]
+    fn fee_quote_validation_aggregates_shared_asset_components_once() {
+        let authority = AccountId::new(checked_test_keypair(0x37).public_key().clone());
+        let sponsor = AccountId::new(checked_test_keypair(0x38).public_key().clone());
+        let program_id = FeeSponsorProgramId::new(
+            sponsor,
+            "shared".parse().expect("valid sponsor-program name"),
+        );
+        let asset_definition_id = fee_quote_test_asset("shared");
+        let intent = FeePaymentIntent::sponsor(
+            program_id.clone(),
+            3,
+            vec![
+                FeeChargeLimit::new(
+                    FeeChargeKind::Nexus,
+                    asset_definition_id.clone(),
+                    Quantity::from(3_u32),
+                ),
+                FeeChargeLimit::new(
+                    FeeChargeKind::PipelineGas,
+                    asset_definition_id.clone(),
+                    Quantity::from(5_u32),
+                ),
+            ],
+            None,
+        );
+        let payload = fee_quote_test_payload(authority, intent.clone());
+        let quote = FeeQuoteResponse {
+            components: fee_quote_components(&intent),
+            intent,
+            observation: FeeQuoteObservation {
+                ledger_time_ms: 42,
+                next_block_height: 7,
+                route_dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+            capacities: vec![fee_quote_capacity(
+                asset_definition_id,
+                Quantity::from(8_u32),
+            )],
+            decision: FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::SponsorProgram(program_id),
+                program_revision: Some(3),
+            },
+        };
+        quote
+            .validate_for_draft(&payload)
+            .expect("one shared-asset draft capacity covers the aggregate");
+        quote
+            .validate_for_signed_payload(&payload)
+            .expect("one shared-asset capacity covers the aggregate");
+        assert_eq!(quote.capacities.len(), 1);
+
+        for field in ["vault", "block", "program_epoch", "beneficiary_epoch"] {
+            let mut insufficient = quote.clone();
+            match field {
+                "vault" => insufficient.capacities[0].vault_balance = Quantity::from(7_u32),
+                "block" => insufficient.capacities[0].block_remaining = Quantity::from(5_u32),
+                "program_epoch" => {
+                    insufficient.capacities[0].program_epoch_remaining = Quantity::from(5_u32);
+                }
+                "beneficiary_epoch" => {
+                    insufficient.capacities[0].beneficiary_epoch_remaining = Quantity::from(5_u32);
+                }
+                _ => unreachable!("closed field matrix"),
+            }
+            assert_fee_quote_rejected_by_both(
+                &insufficient,
+                &payload,
+                &format!("{field} capacity covering individual components but not their aggregate"),
+            );
+        }
+    }
+    #[test]
+    fn fee_quote_validation_preserves_fee_free_sponsor_quotes() {
+        let authority = AccountId::new(checked_test_keypair(0x39).public_key().clone());
+        let sponsor = AccountId::new(checked_test_keypair(0x3a).public_key().clone());
+        let program_id = FeeSponsorProgramId::new(
+            sponsor,
+            "fee_free".parse().expect("valid sponsor-program name"),
+        );
+        let intent = FeePaymentIntent::sponsor(program_id.clone(), 2, Vec::new(), None);
+        let payload = fee_quote_test_payload(authority, intent.clone());
+        let quote = FeeQuoteResponse {
+            intent,
+            observation: FeeQuoteObservation {
+                ledger_time_ms: 42,
+                next_block_height: 7,
+                route_dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+            components: Vec::new(),
+            capacities: Vec::new(),
+            decision: FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::SponsorProgram(program_id),
+                program_revision: Some(2),
+            },
+        };
+        quote
+            .validate_for_draft(&payload)
+            .expect("fee-free sponsored draft quote");
+        quote
+            .validate_for_signed_payload(&payload)
+            .expect("fee-free sponsored signed quote");
+
+        let mut unrelated_capacity = quote;
+        unrelated_capacity.capacities.push(fee_quote_capacity(
+            fee_quote_test_asset("unrelated"),
+            Quantity::zero(),
+        ));
+        assert_fee_quote_rejected_by_both(
+            &unrelated_capacity,
+            &payload,
+            "a fee-free quote with an unrelated capacity",
+        );
     }
     #[test]
     fn error_envelope_roundtrip_preserves_queue_details() {

@@ -23,13 +23,11 @@ partial shares are combined into one canonical public pulse.
   producer. Those demand slots remain optional for chain liveness so the
   governance reducer can classify objective pulse absence and start a fresh
   attempt.
-- Production emits and accepts no consensus `VrfCommit` or `VrfReveal`, creates
-  no VRF participant record, derives no VRF absence penalty, and rejects a
-  candidate carrying nonempty `vrf_epoch_seals`.
+- The first-release wire and signed-effects schemas contain no consensus
+  `VrfCommit`/`VrfReveal`, VRF participant record, or VRF absence penalty.
 
-Retained VRF wire variants and parameter names are compatibility tombstones or
-historical-test material. The `sumeragi_vrf_*` metric series are not registered
-or exported; operators must not restore them, the retired
+The `sumeragi_vrf_*` metric series are not registered or exported; operators
+must not restore them, the former
 `/v1/sumeragi/vrf/*` routes, `vrf-epoch` or `vrf-penalties` CLI commands, VRF
 alerts, or VRF dashboard panels.
 
@@ -84,7 +82,7 @@ SSE projection must identify the same canonical Sumeragi-v2 equivocation
 records. Torii, CLI, MCP, and SDK surfaces provide no evidence-injection or
 rebroadcast operation.
 
-Governed `SumeragiNposParameters.reconfig.evidence_horizon_blocks` bounds
+Governed `SumeragiNposParameters.evidence_horizon_blocks` bounds
 admission age. A penalty may consume only self-contained evidence admitted by
 a prior committed block; `slashing_delay_blocks` leaves the governed
 cancellation window. A node-local pending observation cannot authorize a
@@ -124,7 +122,7 @@ must remain anchored in authenticated context and committed pulse state.
   retry commits a new attempt with a strictly future pulse height. Do not reuse
   a late pulse or caller-supplied entropy.
 - **Legacy VRF frames or alerts appear** — Treat them as a retired sender,
-  fixture, or deployment artifact. Production ingress rejects the frames and
+  fixture, or deployment artifact. Exact ingress decoding rejects the frames and
   no VRF telemetry threshold is a recovery procedure.
 - **Evidence views diverge** — Compare authenticated peer-ingress logs,
   canonical evidence admissions, CLI count/list, and SSE output on multiple

@@ -55,8 +55,6 @@ use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::{CertPhase, NativeAmxAttestationBodyV2};
-#[cfg(test)]
-use iroha_data_model::consensus::{VrfEpochRecord, VrfParticipantRecord};
 #[cfg(feature = "bls")]
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
@@ -7992,6 +7990,35 @@ pub(crate) mod valid {
                         .map(|_| account.controller().clone())
                 },
             )?;
+            let admission_policy = world
+                .parameters()
+                .custom()
+                .get(&iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1::parameter_id())
+                .map(|custom| {
+                    iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1::from_custom_parameter(
+                        custom,
+                    )
+                    .map_err(|error| {
+                        BlockValidationError::DaPinIntentBundle(
+                            DaPinIntentValidationError::InvalidAdmissionPolicy {
+                                reason: error.to_string(),
+                            },
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        BlockValidationError::DaPinIntentBundle(
+                            DaPinIntentValidationError::InvalidAdmissionPolicy {
+                                reason: "reserved parameter changed identity".to_owned(),
+                            },
+                        )
+                    })
+                })
+                .transpose()?;
+            crate::da::validate_pin_intent_admission_policy(
+                bundle,
+                admission_policy.as_ref(),
+                |lane_id| state.lane_incarnation_at_height(lane_id, block.header().height().get()),
+            )?;
             crate::da::quota::prepare_ingest_quota_writes(
                 world.smart_contract_state(),
                 bundle,
@@ -8062,87 +8089,6 @@ pub(crate) mod valid {
                 }
             }
         }
-        #[cfg(test)]
-        fn vrf_epoch_record_extends_existing(
-            existing: &VrfEpochRecord,
-            proposed: &VrfEpochRecord,
-        ) -> bool {
-            if existing == proposed {
-                return true;
-            }
-            existing.epoch == proposed.epoch
-                && existing.seed == proposed.seed
-                && existing.epoch_length == proposed.epoch_length
-                && existing.commit_deadline_offset == proposed.commit_deadline_offset
-                && existing.reveal_deadline_offset == proposed.reveal_deadline_offset
-                && existing.roster_len == proposed.roster_len
-                && (!existing.finalized || proposed.finalized)
-                && proposed.updated_at_height >= existing.updated_at_height
-                && (!existing.penalties_applied || proposed.penalties_applied)
-                && existing
-                    .penalties_applied_at_height
-                    .is_none_or(|height| proposed.penalties_applied_at_height == Some(height))
-                && Self::vrf_participants_extend_existing(
-                    &existing.participants,
-                    &proposed.participants,
-                )
-                && Self::vrf_late_reveals_extend_existing(existing, proposed)
-                && existing
-                    .committed_no_reveal
-                    .iter()
-                    .all(|signer| proposed.committed_no_reveal.contains(signer))
-                && existing
-                    .no_participation
-                    .iter()
-                    .all(|signer| proposed.no_participation.contains(signer))
-                && existing
-                    .validator_election
-                    .as_ref()
-                    .is_none_or(|election| proposed.validator_election.as_ref() == Some(election))
-        }
-        #[cfg(test)]
-        fn vrf_participants_extend_existing(
-            existing: &[VrfParticipantRecord],
-            proposed: &[VrfParticipantRecord],
-        ) -> bool {
-            let proposed_by_signer: BTreeMap<_, _> = proposed
-                .iter()
-                .map(|participant| (participant.signer, participant))
-                .collect();
-            proposed_by_signer.len() == proposed.len()
-                && existing.iter().all(|old| {
-                    proposed_by_signer.get(&old.signer).is_some_and(|new| {
-                        old.commitment
-                            .is_none_or(|commitment| new.commitment == Some(commitment))
-                            && old.reveal.is_none_or(|reveal| new.reveal == Some(reveal))
-                            && old
-                                .commit_proof
-                                .as_ref()
-                                .is_none_or(|proof| new.commit_proof.as_ref() == Some(proof))
-                            && old
-                                .reveal_proof
-                                .as_ref()
-                                .is_none_or(|proof| new.reveal_proof.as_ref() == Some(proof))
-                            && new.last_updated_height >= old.last_updated_height
-                    })
-                })
-        }
-        #[cfg(test)]
-        fn vrf_late_reveals_extend_existing(
-            existing: &VrfEpochRecord,
-            proposed: &VrfEpochRecord,
-        ) -> bool {
-            let proposed_by_signer: BTreeMap<_, _> = proposed
-                .late_reveals
-                .iter()
-                .map(|reveal| (reveal.signer, reveal))
-                .collect();
-            proposed_by_signer.len() == proposed.late_reveals.len()
-                && existing
-                    .late_reveals
-                    .iter()
-                    .all(|reveal| proposed_by_signer.get(&reveal.signer) == Some(&reveal))
-        }
         fn validate_npos_effects_with_state(
             block: &SignedBlock,
             state: &State,
@@ -8180,8 +8126,7 @@ pub(crate) mod valid {
                     ));
                 }
                 if let Some(effects) = actual_effects
-                    && (!effects.vrf_epoch_seals.is_empty()
-                        || !effects.v2_evidence_admissions.is_empty()
+                    && (!effects.v2_evidence_admissions.is_empty()
                         || !effects.penalty_actions.is_empty())
                 {
                     return Err(Self::npos_effects_error(
@@ -8211,15 +8156,8 @@ pub(crate) mod valid {
                         "NPoS candidate differs from its authenticated height context",
                     ));
                 }
-                crate::sumeragi::v2_npos::validate_candidate_records(
-                    context,
-                    state,
-                    actual_effects,
-                )
-                .map_err(|error| {
-                    Self::npos_effects_error(format!(
-                        "invalid authenticated NPoS VRF effects: {error}"
-                    ))
+                crate::sumeragi::v2_npos::validate_candidate_context(context).map_err(|error| {
+                    Self::npos_effects_error(format!("invalid authenticated NPoS context: {error}"))
                 })?;
                 Self::validate_global_beacon_pulse_effect(
                     block,
@@ -8230,12 +8168,6 @@ pub(crate) mod valid {
                 )?;
             }
             let admission_keys = if let Some(effects) = actual_effects {
-                #[cfg(not(test))]
-                if !effects.vrf_epoch_seals.is_empty() {
-                    return Err(Self::npos_effects_error(
-                        "legacy VRF epoch effects are retired; finalized threshold-beacon pulses are authoritative",
-                    ));
-                }
                 crate::sumeragi::evidence::validate_v2_evidence_admissions(
                     state,
                     block_height,
@@ -8263,61 +8195,8 @@ pub(crate) mod valid {
                     &effects.penalty_actions,
                 )
                 .map_err(|err| Self::npos_effects_error(err.to_string()))?;
-                #[cfg(test)]
-                {
-                    let mut seen_epochs = BTreeSet::new();
-                    for record in &effects.vrf_epoch_seals {
-                        if !seen_epochs.insert(record.epoch) {
-                            return Err(Self::npos_effects_error(
-                                "duplicate VRF epoch seal in NPoS effects",
-                            ));
-                        }
-                        if record.penalties_applied_at_height.is_some() && !record.penalties_applied
-                        {
-                            return Err(Self::npos_effects_error(
-                                "VRF epoch seal has applied height without applied marker",
-                            ));
-                        }
-                        if !record.finalized
-                            && (!record.committed_no_reveal.is_empty()
-                                || !record.no_participation.is_empty())
-                        {
-                            return Err(Self::npos_effects_error(
-                                "unfinalized VRF epoch seal includes penalty offenders",
-                            ));
-                        }
-                        let mut offenders = record
-                            .committed_no_reveal
-                            .iter()
-                            .chain(record.no_participation.iter())
-                            .copied()
-                            .collect::<Vec<_>>();
-                        offenders.sort();
-                        offenders.dedup();
-                        if offenders.len()
-                            != record.committed_no_reveal.len() + record.no_participation.len()
-                        {
-                            return Err(Self::npos_effects_error(
-                                "VRF epoch seal contains duplicate offender indices",
-                            ));
-                        }
-                        if offenders.iter().any(|signer| *signer >= record.roster_len) {
-                            return Err(Self::npos_effects_error(
-                                "VRF epoch seal contains offender outside roster",
-                            ));
-                        }
-                        let world = state.world_view();
-                        if let Some(existing) = world.vrf_epochs().get(&record.epoch)
-                            && !Self::vrf_epoch_record_extends_existing(&existing, record)
-                        {
-                            return Err(Self::npos_effects_error(
-                                "VRF epoch seal conflicts with pre-block state",
-                            ));
-                        }
-                    }
-                }
             }
-            let applier = crate::sumeragi::penalties::PenaltyApplier::from_parts(
+            let applier = crate::sumeragi::penalties::PenaltyApplier::new(
                 state,
                 #[cfg(feature = "telemetry")]
                 Some(state.metrics()),
@@ -11657,15 +11536,8 @@ pub(crate) mod valid {
                 header: block.header(),
                 status: BlockStatus::Approved,
             }));
-            let mut transaction = state_block.transaction();
-            transaction
-                .execute_pipeline_triggers(deterministic_pipeline_events)
-                .map_err(|reason| {
-                    BlockValidationError::ExecutionContextInvalid(format!(
-                        "pipeline trigger execution failed: {reason}"
-                    ))
-                })?;
-            transaction.apply();
+            let _pipeline_outcomes =
+                state_block.execute_pipeline_triggers_isolated(deterministic_pipeline_events);
             Ok(())
         }
         /// Validate each transaction in the block, apply resulting state changes,
@@ -13260,6 +13132,18 @@ pub(crate) mod valid {
                         iroha_logger::warn!(
                             height,
                             "pipeline recovery sidecar rejected while Kura is actively pruning or requires prune recovery restart"
+                        );
+                    }
+                    PipelineSidecarEnqueueResult::RejectedEmergencyFast => {
+                        iroha_logger::debug!(
+                            height,
+                            "pipeline recovery sidecar disabled in read-only emergency Fast mode"
+                        );
+                    }
+                    PipelineSidecarEnqueueResult::RejectedUnauthorized => {
+                        iroha_logger::warn!(
+                            height,
+                            "pipeline recovery sidecar rejected while Kura output is unauthorized"
                         );
                     }
                 }
@@ -15977,8 +15861,7 @@ pub(crate) mod valid {
             },
             consensus::{
                 ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
-                NposConsensusEffects, NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction,
-                VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord,
+                NposConsensusEffects,
             },
             da::{
                 commitment::{
@@ -16245,6 +16128,40 @@ pub(crate) mod valid {
                     iroha_data_model::account::AccountDetails::default(),
                 ),
             );
+        }
+        fn install_test_da_admission_policy(state: &State, epoch: u64) {
+            use iroha_data_model::da::ingest::{
+                DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1,
+            };
+
+            let lane_id = LaneId::SINGLE;
+            let view = state.view();
+            let proposal_height = u64::try_from(view.height())
+                .expect("test height fits u64")
+                .checked_add(1)
+                .expect("test proposal height advances");
+            let lane_incarnation =
+                StateReadOnly::lane_incarnation_at_height(&view, lane_id, proposal_height)
+                    .expect("default test lane is active at the candidate height");
+            drop(view);
+            let policy = DaIngestAdmissionPolicyV1 {
+                version: DaIngestAdmissionPolicyV1::VERSION,
+                revision: 1,
+                expected_previous_policy_hash: None,
+                lanes: vec![DaIngestAdmissionLaneV1 {
+                    lane_id,
+                    lane_incarnation,
+                    producers: vec![AccountId::new(test_da_owner_keypair().public_key().clone())],
+                    current_epoch: epoch,
+                    grace_epoch: None,
+                }],
+            };
+            policy
+                .validate_transition(None)
+                .expect("canonical test DA admission policy");
+            let mut parameters = state.world.parameters.block();
+            parameters.set_parameter(Parameter::Custom(policy.into_custom_parameter()));
+            parameters.commit();
         }
         fn test_da_pin_intent(
             lane_id: LaneId,
@@ -18722,51 +18639,6 @@ pub(crate) mod valid {
             )
             .expect("static snapshot validation should succeed");
         }
-        fn npos_marker(epoch: u64, height: u64) -> NposPenaltyAction {
-            NposPenaltyAction::MarkVrfPenaltiesApplied(NposMarkVrfPenaltiesAppliedAction {
-                epoch,
-                height,
-            })
-        }
-        fn npos_vrf_record(
-            epoch: u64,
-            updated_at_height: u64,
-            finalized: bool,
-            participants: Vec<VrfParticipantRecord>,
-        ) -> VrfEpochRecord {
-            VrfEpochRecord {
-                epoch,
-                seed: [0x42; 32],
-                epoch_length: 10,
-                commit_deadline_offset: 3,
-                reveal_deadline_offset: 6,
-                roster_len: 2,
-                finalized,
-                updated_at_height,
-                participants,
-                late_reveals: Vec::new(),
-                committed_no_reveal: Vec::new(),
-                no_participation: Vec::new(),
-                penalties_applied: false,
-                penalties_applied_at_height: None,
-                validator_election: None,
-            }
-        }
-        fn npos_vrf_participant(
-            signer: u32,
-            commitment_byte: u8,
-            reveal_byte: Option<u8>,
-            last_updated_height: u64,
-        ) -> VrfParticipantRecord {
-            VrfParticipantRecord {
-                signer,
-                commitment: Some([commitment_byte; 32]),
-                reveal: reveal_byte.map(|byte| [byte; 32]),
-                commit_proof: None,
-                reveal_proof: None,
-                last_updated_height,
-            }
-        }
         fn npos_effects_block(
             leader_private_key: &PrivateKey,
             height: u64,
@@ -18811,33 +18683,6 @@ pub(crate) mod valid {
             .expect("permissioned validation must not derive NPoS-only penalties");
         }
         #[test]
-        fn consensus_mode_effects_permissioned_rejects_npos_attachment() {
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = npos_effects_block(
-                leader.private_key(),
-                2,
-                Some(NposConsensusEffects {
-                    finalized_global_beacon_pulse: None,
-                    vrf_epoch_seals: vec![vrf_epoch_record_for_test(0, 2)],
-                    v2_evidence_admissions: Vec::new(),
-                    penalty_actions: Vec::new(),
-                }),
-            );
-            let err = ValidBlock::validate_npos_effects_with_state(
-                &block,
-                &state,
-                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
-                None,
-            )
-            .expect_err("permissioned validation must reject NPoS-only effects");
-            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
-        }
-        #[test]
         fn consensus_mode_effects_npos_still_requires_signed_parameters() {
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let state = State::new_for_testing(
@@ -18858,363 +18703,6 @@ pub(crate) mod valid {
                 BlockValidationError::NposEffectsInvalid(message)
                     if message.contains("authenticated height context")
             ));
-        }
-        #[test]
-        fn authenticated_npos_validation_rejects_forged_first_epoch_seal() {
-            use iroha_data_model::block::consensus_v2::{
-                ConsensusMode, DataAvailabilityLayout, DualQuorum, HeightContext, PayloadEncoding,
-                SnapshotBootstrapAnchor, ValidatorPower,
-            };
-            let mut keys = core::iter::repeat_with(|| {
-                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-            })
-            .take(4)
-            .collect::<Vec<_>>();
-            keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-            let roster = keys
-                .iter()
-                .map(|key| ValidatorPower {
-                    validator: PeerId::new(key.public_key().clone()),
-                    power: 1,
-                })
-                .collect::<Vec<_>>();
-            let mut world = World::new();
-            let mut parameters = Parameters::default();
-            let mut npos = SumeragiNposParameters::default();
-            npos.epoch_length_blocks = NonZeroU64::new(10).expect("non-zero epoch");
-            npos.vrf_commit_window_blocks = 3;
-            npos.vrf_reveal_window_blocks = 3;
-            parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
-            world.parameters = Cell::new(parameters);
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let parent_hash =
-                HashOf::from_untyped_unchecked(Hash::new(b"forged-first-seal-parent"));
-            let context = HeightContext {
-                network_id: state.network_id.clone(),
-                protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-                height: 2,
-                epoch: 0,
-                epoch_end_height: 10,
-                next_epoch_snapshot: None,
-                mode: ConsensusMode::Npos,
-                parent_commit_qc: None,
-                snapshot_bootstrap: Some(SnapshotBootstrapAnchor {
-                    snapshot_height: 1,
-                    snapshot_block_hash: parent_hash,
-                    snapshot_block_creation_time_ms: 1,
-                    snapshot_state_hash: Hash::new(b"forged-first-seal-state"),
-                }),
-                quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
-                roster,
-                nexus_amx_context_hash: Hash::new(b"forged-first-seal-nexus"),
-                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-                da_layout: DataAvailabilityLayout {
-                    encoding: PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1_024,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 4_096,
-                    max_chunk_count: 8,
-                },
-                leader_seed: [0x42; 32],
-            };
-            context.validate().expect("valid NPoS fixture context");
-            let block = npos_effects_block(
-                keys[0].private_key(),
-                context.height,
-                Some(NposConsensusEffects {
-                    finalized_global_beacon_pulse: None,
-                    // This is the exact malicious shape from R-CON-25: a
-                    // first record with no authenticated commit proof.
-                    vrf_epoch_seals: vec![vrf_epoch_record_for_test(0, context.height)],
-                    v2_evidence_admissions: Vec::new(),
-                    penalty_actions: Vec::new(),
-                }),
-            );
-            let err = ValidBlock::validate_npos_effects_with_state(
-                &block,
-                &state,
-                Some(ConsensusMode::Npos),
-                Some(&context),
-            )
-            .expect_err("an unsigned first epoch seal must fail closed");
-            assert!(matches!(
-                err,
-                BlockValidationError::NposEffectsInvalid(message)
-                    if message.contains("invalid authenticated NPoS VRF effects")
-            ));
-        }
-        fn vrf_epoch_record_for_test(epoch: u64, height: u64) -> VrfEpochRecord {
-            VrfEpochRecord {
-                epoch,
-                seed: [0x42; 32],
-                epoch_length: 10,
-                commit_deadline_offset: 3,
-                reveal_deadline_offset: 6,
-                roster_len: 4,
-                finalized: false,
-                updated_at_height: height,
-                participants: vec![VrfParticipantRecord {
-                    signer: 0,
-                    commitment: Some([0x11; 32]),
-                    reveal: None,
-                    commit_proof: None,
-                    reveal_proof: None,
-                    last_updated_height: height,
-                }],
-                late_reveals: Vec::new(),
-                committed_no_reveal: Vec::new(),
-                no_participation: Vec::new(),
-                penalties_applied: false,
-                penalties_applied_at_height: None,
-                validator_election: None,
-            }
-        }
-        #[test]
-        fn validate_npos_effects_allows_vrf_record_monotonic_extension() {
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let mut world = World::new();
-            let mut parameters = Parameters::default();
-            parameters.set_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ));
-            world.parameters = Cell::new(parameters);
-            let existing = vrf_epoch_record_for_test(1, 12);
-            world.vrf_epochs.insert(existing.epoch, existing.clone());
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let mut proposed = existing;
-            proposed.updated_at_height = 14;
-            proposed.participants[0].reveal = Some([0x55; 32]);
-            proposed.participants[0].last_updated_height = 14;
-            proposed.participants.push(VrfParticipantRecord {
-                signer: 1,
-                commitment: Some([0x22; 32]),
-                reveal: Some([0x33; 32]),
-                commit_proof: None,
-                reveal_proof: None,
-                last_updated_height: 14,
-            });
-            proposed.late_reveals.push(VrfLateRevealRecord {
-                signer: 0,
-                reveal: [0x44; 32],
-                reveal_proof: None,
-                noted_at_height: 14,
-            });
-            let block = npos_effects_block(
-                leader.private_key(),
-                15,
-                Some(NposConsensusEffects {
-                    finalized_global_beacon_pulse: None,
-                    vrf_epoch_seals: vec![proposed],
-                    v2_evidence_admissions: Vec::new(),
-                    penalty_actions: Vec::new(),
-                }),
-            );
-            ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
-                .expect("monotonic VRF epoch record extension should validate");
-        }
-        #[test]
-        fn validate_npos_effects_rejects_vrf_record_rewrite() {
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let mut world = World::new();
-            let existing = vrf_epoch_record_for_test(1, 12);
-            world.vrf_epochs.insert(existing.epoch, existing.clone());
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let mut proposed = existing;
-            proposed.seed = [0x99; 32];
-            proposed.updated_at_height = 14;
-            let block = npos_effects_block(
-                leader.private_key(),
-                15,
-                Some(NposConsensusEffects {
-                    finalized_global_beacon_pulse: None,
-                    vrf_epoch_seals: vec![proposed],
-                    v2_evidence_admissions: Vec::new(),
-                    penalty_actions: Vec::new(),
-                }),
-            );
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
-                .expect_err("VRF epoch record rewrite should be rejected");
-            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
-        }
-        #[test]
-        fn validate_npos_effects_allows_vrf_epoch_record_extensions() {
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let mut world = World::new();
-            let mut parameters = Parameters::default();
-            parameters.set_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ));
-            world.parameters = Cell::new(parameters);
-            world.vrf_epochs.insert(
-                0,
-                npos_vrf_record(0, 2, false, vec![npos_vrf_participant(0, 0xAA, None, 2)]),
-            );
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = npos_effects_block(
-                leader.private_key(),
-                4,
-                Some(NposConsensusEffects {
-                    finalized_global_beacon_pulse: None,
-                    vrf_epoch_seals: vec![npos_vrf_record(
-                        0,
-                        4,
-                        false,
-                        vec![
-                            npos_vrf_participant(0, 0xAA, Some(0xBB), 4),
-                            npos_vrf_participant(1, 0xCC, None, 4),
-                        ],
-                    )],
-                    v2_evidence_admissions: Vec::new(),
-                    penalty_actions: Vec::new(),
-                }),
-            );
-            ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
-                .expect("monotonic VRF epoch record extension should validate");
-        }
-        #[test]
-        fn validate_npos_effects_rejects_vrf_epoch_record_rewrites() {
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let mut world = World::new();
-            world.vrf_epochs.insert(
-                0,
-                npos_vrf_record(0, 2, false, vec![npos_vrf_participant(0, 0xAA, None, 2)]),
-            );
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = npos_effects_block(
-                leader.private_key(),
-                4,
-                Some(NposConsensusEffects {
-                    finalized_global_beacon_pulse: None,
-                    vrf_epoch_seals: vec![npos_vrf_record(
-                        0,
-                        4,
-                        false,
-                        vec![npos_vrf_participant(0, 0xCC, None, 4)],
-                    )],
-                    v2_evidence_admissions: Vec::new(),
-                    penalty_actions: Vec::new(),
-                }),
-            );
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
-                .expect_err("VRF epoch record rewrite must be rejected");
-            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
-        }
-        #[test]
-        fn validate_npos_effects_rejects_missing_required_actions() {
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let mut world = World::new();
-            let mut parameters = Parameters::default();
-            parameters.set_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ));
-            world.parameters = Cell::new(parameters);
-            world.vrf_epochs.insert(
-                7,
-                VrfEpochRecord {
-                    epoch: 7,
-                    seed: [0x42; 32],
-                    epoch_length: 10,
-                    commit_deadline_offset: 3,
-                    reveal_deadline_offset: 6,
-                    roster_len: 1,
-                    finalized: true,
-                    updated_at_height: 1,
-                    participants: Vec::new(),
-                    late_reveals: Vec::new(),
-                    committed_no_reveal: Vec::new(),
-                    no_participation: Vec::new(),
-                    penalties_applied: false,
-                    penalties_applied_at_height: None,
-                    validator_election: None,
-                },
-            );
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = npos_effects_block(leader.private_key(), 20, None);
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
-                .expect_err("missing deterministic NPoS marker must be rejected");
-            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
-            let exact = npos_effects_block(
-                leader.private_key(),
-                20,
-                Some(NposConsensusEffects {
-                    finalized_global_beacon_pulse: None,
-                    vrf_epoch_seals: Vec::new(),
-                    v2_evidence_admissions: Vec::new(),
-                    penalty_actions: vec![npos_marker(7, 20)],
-                }),
-            );
-            ValidBlock::validate_npos_effects_with_state(&exact, &state, None, None)
-                .expect("the exact deterministic NPoS action set must validate");
-        }
-        #[test]
-        fn validate_npos_effects_rejects_extra_actions() {
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = npos_effects_block(
-                leader.private_key(),
-                2,
-                Some(NposConsensusEffects {
-                    finalized_global_beacon_pulse: None,
-                    vrf_epoch_seals: Vec::new(),
-                    v2_evidence_admissions: Vec::new(),
-                    penalty_actions: vec![npos_marker(99, 2)],
-                }),
-            );
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
-                .expect_err("extra deterministic NPoS action must be rejected");
-            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
-        }
-        #[test]
-        fn validate_npos_effects_rejects_malformed_actions() {
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let action = npos_marker(1, 2);
-            let block = npos_effects_block(
-                leader.private_key(),
-                2,
-                Some(NposConsensusEffects {
-                    finalized_global_beacon_pulse: None,
-                    vrf_epoch_seals: Vec::new(),
-                    v2_evidence_admissions: Vec::new(),
-                    penalty_actions: vec![action.clone(), action],
-                }),
-            );
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
-                .expect_err("duplicate NPoS actions must be rejected");
-            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
         #[test]
         fn validate_static_snapshot_rejects_invalid_signature() {
@@ -21774,6 +21262,7 @@ pub(crate) mod valid {
                 std::num::NonZeroU64::new(1).expect("non-zero quota fixture");
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            install_test_da_admission_policy(&state, 1);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             let bundle = DaPinIntentBundle::new(vec![
                 test_da_pin_intent(
@@ -21871,6 +21360,7 @@ pub(crate) mod valid {
             );
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            install_test_da_admission_policy(&state, 1);
             let validate_candidate = |intent: DaPinIntent,
                                       now: Duration|
              -> Box<BlockValidationError> {
@@ -29554,7 +29044,7 @@ mod tests {
         key: Name,
         filter: PipelineEventFilterBox,
     ) {
-        let action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
+        let mut action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
             vec![InstructionBox::from(SetKeyValue::account(
                 authority.clone(),
                 key,
@@ -29565,6 +29055,15 @@ mod tests {
             filter,
         )
         .expect("test pipeline-trigger action satisfies its authority invariant");
+        // This helper bypasses `Register<Trigger>`, so seed the lifecycle marker
+        // that normal registration would add. Height zero models an incarnation
+        // created before every non-genesis block exercised by these tests.
+        action.metadata.insert(
+            crate::smartcontracts::isi::triggers::TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY
+                .parse()
+                .expect("valid trigger lifecycle metadata key"),
+            Json::from(0_u64),
+        );
         let mut trigger_block = world.triggers.block();
         let mut trigger_transaction = trigger_block.transaction();
         trigger_transaction

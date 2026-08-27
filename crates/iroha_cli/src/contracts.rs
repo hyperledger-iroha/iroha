@@ -5679,7 +5679,8 @@ impl Run for SimulateArgs {
         .wrap_err("sign simulated contract transaction failed")?;
         let decoded = ivm::ivm_cache::IvmCache::decode_stream(&code[summary.code_offset..])
             .map_err(|err| eyre!("instruction decode failed: {err}"))?;
-        let decoded_bytes: u64 = decoded.iter().map(|op| u64::from(op.len)).sum::<u64>();
+        let decoded_bytes =
+            u64::try_from(code.len().saturating_sub(summary.code_offset)).unwrap_or(u64::MAX);
         let overlay =
             build_overlay_for_transaction_with_accounts(&tx, std::slice::from_ref(&authority))
                 .map_err(|err| eyre!("simulation overlay failed: {err}"))?;

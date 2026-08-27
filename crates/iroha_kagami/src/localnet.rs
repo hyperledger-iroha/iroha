@@ -3224,7 +3224,7 @@ fn render_peer_config(
         Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_MAX_EXTRA_BITS),
     );
     // Local generated networks do not have finalized public Taira VRF seed material.
-    faucet.insert("pow_vrf_seed_enabled".into(), Value::Boolean(false));
+    faucet.insert("pow_beacon_seed_enabled".into(), Value::Boolean(false));
     torii.insert("faucet".into(), Value::Table(faucet));
     // torii.transport.norito_rpc
     let mut norito_rpc = Table::new();
@@ -8704,7 +8704,7 @@ mod tests {
         );
         assert_eq!(
             faucet
-                .get("pow_vrf_seed_enabled")
+                .get("pow_beacon_seed_enabled")
                 .and_then(toml::Value::as_bool),
             Some(false)
         );

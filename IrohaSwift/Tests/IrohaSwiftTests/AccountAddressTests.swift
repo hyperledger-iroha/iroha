@@ -99,15 +99,26 @@ private struct ExpectedError: Decodable {
 }
 
 final class AccountAddressTests: XCTestCase {
+    private static let canonicalEd25519PublicKey = Data([
+        0x3B, 0x6A, 0x27, 0xBC, 0xCE, 0xB6, 0xA4, 0x2D,
+        0x62, 0xA3, 0xA8, 0xD0, 0x2A, 0x6F, 0x0D, 0x73,
+        0x65, 0x32, 0x15, 0x77, 0x1D, 0xE2, 0x43, 0xA6,
+        0x3A, 0xC0, 0x48, 0xA1, 0x8B, 0x59, 0xDA, 0x29,
+    ])
+
+    private func validEd25519PublicKey(seed: UInt8) throws -> Data {
+        try Keypair(privateKeyBytes: Data(repeating: seed, count: 32)).publicKey
+    }
+
     func testGoldenRoundTrip() throws {
-        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 1, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: Self.canonicalEd25519PublicKey)
 
         let canonical = try address.canonicalHex()
         let i105 = try address.toI105(networkPrefix: 753)
 
         XCTAssertEqual(
             canonical,
-            "0x020001200101010101010101010101010101010101010101010101010101010101010101"
+            "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
         )
         XCTAssertTrue(i105.hasPrefix("sora"))
         let payload = String(i105.dropFirst(4))
@@ -176,7 +187,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testRejectsNonV1AndControllerClassInconsistentHeaders() throws {
-        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x01, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: validEd25519PublicKey(seed: 0x01))
         let canonical = try address.canonicalBytes()
 
         var nonV1Header = canonical
@@ -199,7 +210,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testParseEncodedRejectsCanonicalHex() throws {
-        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x42, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: validEd25519PublicKey(seed: 0x42))
         let canonical = try address.canonicalHex()
         XCTAssertThrowsError(try AccountAddress.parseEncoded(canonical)) { error in
             XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat)
@@ -207,7 +218,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testCanonicalBytesRejectRetiredDomainSelectorPrefix() throws {
-        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x01, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: validEd25519PublicKey(seed: 0x01))
         let canonical = try address.canonicalBytes()
         var selectorPrefixed = Data([canonical[0], 0x01])
         selectorPrefixed.append(contentsOf: (1...12).map(UInt8.init))
@@ -217,7 +228,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testParseEncodedRejectsFullwidthSentinelI105() throws {
-        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x31, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: validEd25519PublicKey(seed: 0x31))
         let canonical = try address.toI105(networkPrefix: 753)
         var noncanonical = canonical
         if let range = noncanonical.range(of: "sora") {
@@ -234,7 +245,7 @@ final class AccountAddressTests: XCTestCase {
 
     func testAccountAddressConstructorIsDomainless() throws {
         XCTAssertNoThrow(
-            try AccountAddress.fromAccount(publicKey: Data(repeating: 0x22, count: 32))
+            try AccountAddress.fromAccount(publicKey: validEd25519PublicKey(seed: 0x22))
         )
     }
 
@@ -255,7 +266,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testI105PrefixMismatch() throws {
-        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 1, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: validEd25519PublicKey(seed: 1))
         let i105 = try address.toI105(networkPrefix: 5)
         XCTAssertThrowsError(try AccountAddress.parseEncoded(i105, expectedPrefix: 9)) { error in
             guard case let AccountAddressError.unexpectedNetworkPrefix(expected, found) = error else {
@@ -267,7 +278,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testInspectI105NetworkPrefixReportsProfileWithoutRewriting() throws {
-        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 1, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: validEd25519PublicKey(seed: 1))
         let minamoto = try address.toI105(networkPrefix: 0x02F1)
         let prefix = try AccountAddress.inspectI105NetworkPrefix(minamoto, expectedPrefix: 0x02F1)
         XCTAssertEqual(prefix.sentinel, "sora")
@@ -369,11 +380,21 @@ final class AccountAddressTests: XCTestCase {
             "   ",
             " ed25519",
             "ed25519 ",
+            "\u{00A0}ML-DSA-65\u{00A0}",
+            "\u{2003}ML-DSA-65\u{2003}",
             "future-curve",
             "ed\t25519",
+            "ed 25519",
+            "ed.25519",
+            "ed/25519",
+            "ed@25519",
+            "ed#25519",
             "ed\u{200B}25519",
             "\u{0435}d25519",
+            "secp256\u{212A}1",
             "ml\u{FF0D}dsa",
+            "ML-DSA-44",
+            "ML_DSA_87",
             "gost256\u{0430}",
         ]
 
@@ -389,8 +410,91 @@ final class AccountAddressTests: XCTestCase {
         }
     }
 
+    #if IROHASWIFT_ENABLE_MLDSA
+    func testMlDsaAccountAliasesRequireProtocolSuite65KeyMaterial() throws {
+        let publicKey = Data(repeating: 0xA5, count: 1_952)
+        for algorithm in ["mldsa", "ML-DSA-65", "ML_DSA_65", "ML_DSA-65"] {
+            let address = try AccountAddress.fromAccount(
+                publicKey: publicKey,
+                algorithm: algorithm
+            )
+            let canonical = try address.canonicalBytes()
+            XCTAssertEqual(
+                Data(canonical.prefix(5)),
+                Data([0x02, 0x02, 0x02, 0x07, 0xA0]),
+                algorithm
+            )
+            XCTAssertEqual(Data(canonical.suffix(publicKey.count)), publicKey, algorithm)
+            XCTAssertEqual(
+                try AccountAddress.fromCanonicalBytes(canonical).canonicalBytes(),
+                canonical,
+                algorithm
+            )
+            let i105 = try address.toI105(networkPrefix: 753)
+            XCTAssertEqual(
+                try AccountAddress.fromI105(i105, expectedPrefix: 753).canonicalBytes(),
+                canonical,
+                algorithm
+            )
+            let compact = try address.compactNoritoAccountControllerPayload()
+            XCTAssertTrue(
+                AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(compact),
+                algorithm
+            )
+        }
+
+        for malformedKey in [
+            Data(repeating: 0x44, count: 1_312),
+            Data(repeating: 0x65, count: 1_951),
+            Data(repeating: 0x65, count: 1_953),
+            Data(repeating: 0x87, count: 2_592),
+            Data(repeating: 0, count: 1_952),
+        ] {
+            XCTAssertThrowsError(
+                try AccountAddress.fromAccount(
+                    publicKey: malformedKey,
+                    algorithm: "ML-DSA-65"
+                )
+            ) { error in
+                guard case AccountAddressError.invalidPublicKey = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
+        }
+
+        var suite44Canonical = Data([0x02, 0x02, 0x02, 0x05, 0x20])
+        suite44Canonical.append(Data(repeating: 0x44, count: 1_312))
+        XCTAssertThrowsError(try AccountAddress.fromCanonicalBytes(suite44Canonical)) { error in
+            guard case AccountAddressError.invalidPublicKey = error else {
+                return XCTFail("unexpected wire-decoding error: \(error)")
+            }
+        }
+
+        for malformedKey in [
+            Data(repeating: 0x44, count: 1_312),
+            Data(repeating: 0x87, count: 2_592),
+            Data(repeating: 0, count: 1_952),
+        ] {
+            var algorithmAndPayload = Data([SigningAlgorithm.mlDsa.noritoDiscriminant])
+            algorithmAndPayload.append(malformedKey)
+            var compactPublicKey = CompactNoritoWriter()
+            compactPublicKey.writeUInt64LE(UInt64(algorithmAndPayload.count))
+            for byte in algorithmAndPayload {
+                compactPublicKey.writeLength(1)
+                compactPublicKey.writeUInt8(byte)
+            }
+            var controller = CompactNoritoWriter()
+            controller.writeUInt32LE(0)
+            controller.writeField(compactPublicKey.data)
+            XCTAssertFalse(
+                AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(controller.data)
+            )
+        }
+    }
+    #endif
+
     func testAccountControllerNoritoUsesAlgorithmTaggedPublicKeyBytes() throws {
-        let publicKey = Data(repeating: 0x42, count: 32)
+        let publicKey = try validEd25519PublicKey(seed: 0x42)
         let address = try AccountAddress.fromAccount(publicKey: publicKey)
         var algorithmAndPayload = Data([SigningAlgorithm.ed25519.noritoDiscriminant])
         algorithmAndPayload.append(publicKey)
@@ -460,7 +564,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testDisplayFormats() throws {
-        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0xAB, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: validEd25519PublicKey(seed: 0xAB))
         let formats = try address.displayFormats()
 
         XCTAssertEqual(formats.networkPrefix, 753)

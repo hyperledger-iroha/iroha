@@ -258,6 +258,10 @@ pub enum CapabilityError {
     RequiredKemMissing(KemId),
     #[error("snnet.pqsig required capability {0:?} not supported by relay")]
     RequiredSignatureMissing(SignatureId),
+    #[error("relay-required snnet.pqkem capability {0:?} not advertised by client")]
+    RequiredKemMissingFromClient(KemId),
+    #[error("relay-required snnet.pqsig capability {0:?} not advertised by client")]
+    RequiredSignatureMissingFromClient(SignatureId),
     #[error("no mutually supported snnet.pqkem value")]
     NoMutualKem,
     #[error("no mutually supported snnet.pqsig value")]
@@ -452,16 +456,6 @@ pub fn negotiate_capabilities(
             None => return Err(CapabilityError::TranscriptCommitMissing),
         }
     }
-    let mut selected_kem = None;
-    for server_pref in &server.kem {
-        if let Some(client_entry) = client.kem.iter().find(|entry| entry.id == server_pref.id) {
-            selected_kem = Some(KemAdvertisement {
-                id: server_pref.id,
-                required: client_entry.required,
-            });
-            break;
-        }
-    }
     for required in client.kem.iter().filter(|entry| entry.required) {
         if !server
             .kem
@@ -471,9 +465,48 @@ pub fn negotiate_capabilities(
             return Err(CapabilityError::RequiredKemMissing(required.id));
         }
     }
+    for required in server.kem.iter().filter(|entry| entry.required) {
+        if !client
+            .kem
+            .iter()
+            .any(|client_entry| client_entry.id == required.id)
+        {
+            return Err(CapabilityError::RequiredKemMissingFromClient(required.id));
+        }
+    }
+    let mut selected_kem = None;
+    for server_pref in &server.kem {
+        if let Some(client_entry) = client.kem.iter().find(|entry| entry.id == server_pref.id) {
+            selected_kem = Some(KemAdvertisement {
+                id: server_pref.id,
+                required: server_pref.required || client_entry.required,
+            });
+            break;
+        }
+    }
     let Some(kem) = selected_kem else {
         return Err(CapabilityError::NoMutualKem);
     };
+    for required in client.signatures.iter().filter(|entry| entry.required) {
+        if !server
+            .signatures
+            .iter()
+            .any(|server_entry| server_entry.id == required.id)
+        {
+            return Err(CapabilityError::RequiredSignatureMissing(required.id));
+        }
+    }
+    for required in server.signatures.iter().filter(|entry| entry.required) {
+        if !client
+            .signatures
+            .iter()
+            .any(|client_entry| client_entry.id == required.id)
+        {
+            return Err(CapabilityError::RequiredSignatureMissingFromClient(
+                required.id,
+            ));
+        }
+    }
     let mut selected_sigs = Vec::new();
     for server_pref in &server.signatures {
         if let Some(client_entry) = client
@@ -483,17 +516,8 @@ pub fn negotiate_capabilities(
         {
             selected_sigs.push(SignatureAdvertisement {
                 id: server_pref.id,
-                required: client_entry.required,
+                required: server_pref.required || client_entry.required,
             });
-        }
-    }
-    for required in client.signatures.iter().filter(|entry| entry.required) {
-        if !server
-            .signatures
-            .iter()
-            .any(|server_entry| server_entry.id == required.id)
-        {
-            return Err(CapabilityError::RequiredSignatureMissing(required.id));
         }
     }
     if selected_sigs.is_empty() {
@@ -865,14 +889,91 @@ mod tests {
         push_tlv(&mut bytes, TYPE_TRANSCRIPT_COMMIT, &[0xAA; 32]).expect("commit TLV");
         let client = parse_client_advertisement(&bytes).expect("parse client");
         let err = negotiate_capabilities(&client, &sample_server_caps()).unwrap_err();
-        matches!(err, CapabilityError::RequiredKemMissing(KemId::MlKem1024));
+        assert!(matches!(
+            err,
+            CapabilityError::RequiredKemMissing(KemId::MlKem1024)
+        ));
+    }
+    #[test]
+    fn relay_required_kem_must_be_advertised_by_client() {
+        let mut client = parse_client_advertisement(&sample_client_vector()).expect("parse");
+        client.kem = vec![KemAdvertisement {
+            id: KemId::MlKem512,
+            required: false,
+        }];
+        let server = ServerCapabilities::new(
+            vec![
+                KemAdvertisement {
+                    id: KemId::MlKem1024,
+                    required: true,
+                },
+                KemAdvertisement {
+                    id: KemId::MlKem512,
+                    required: false,
+                },
+            ],
+            sample_server_caps().signatures,
+            1024,
+            Some([0xAA; 32]),
+            0x01,
+            None,
+        );
+        let err = negotiate_capabilities(&client, &server).unwrap_err();
+        assert!(matches!(
+            err,
+            CapabilityError::RequiredKemMissingFromClient(KemId::MlKem1024)
+        ));
+    }
+    #[test]
+    fn relay_required_signature_must_be_advertised_by_client() {
+        let mut client = parse_client_advertisement(&sample_client_vector()).expect("parse");
+        client.signatures.clear();
+        let err = negotiate_capabilities(&client, &sample_server_caps()).unwrap_err();
+        assert!(matches!(
+            err,
+            CapabilityError::RequiredSignatureMissingFromClient(SignatureId::Dilithium3)
+        ));
+    }
+    #[test]
+    fn relay_required_algorithms_remain_required_in_response() {
+        let mut client = parse_client_advertisement(&sample_client_vector()).expect("parse");
+        client.kem[0].required = false;
+        client.signatures[0].required = false;
+
+        let negotiated = negotiate_capabilities(&client, &sample_server_caps()).expect("negotiate");
+        assert!(negotiated.kem.required);
+        assert!(negotiated.signatures[0].required);
+
+        let encoded = encode_relay_advertisement(&negotiated, 0x01).expect("relay caps");
+        assert!(encoded.windows(6).any(|window| {
+            window
+                == [
+                    (TYPE_PQ_KEM >> 8) as u8,
+                    TYPE_PQ_KEM as u8,
+                    0,
+                    2,
+                    KemId::MlKem768.code(),
+                    REQUIRED_FLAG,
+                ]
+        }));
+        assert!(encoded.windows(6).any(|window| {
+            window
+                == [
+                    (TYPE_PQ_SIG >> 8) as u8,
+                    TYPE_PQ_SIG as u8,
+                    0,
+                    2,
+                    SignatureId::Dilithium3.code(),
+                    REQUIRED_FLAG,
+                ]
+        }));
     }
     #[test]
     fn transcript_commit_mismatch_detected() {
         let mut client = parse_client_advertisement(&sample_client_vector()).expect("parse");
         client.transcript_commit = Some([0xBB; 32]);
         let err = negotiate_capabilities(&client, &sample_server_caps()).unwrap_err();
-        matches!(err, CapabilityError::TranscriptCommitMismatch);
+        assert!(matches!(err, CapabilityError::TranscriptCommitMismatch));
     }
     #[test]
     fn server_capabilities_clamp_padding_to_mtu_limit() {
@@ -900,7 +1001,7 @@ mod tests {
             Some(sample_constant_rate(ConstantRateMode::BestEffort)),
         );
         let err = negotiate_capabilities(&client, &server).unwrap_err();
-        matches!(err, CapabilityError::ConstantRateStrictRequired);
+        assert!(matches!(err, CapabilityError::ConstantRateStrictRequired));
     }
     #[test]
     fn constant_rate_version_mismatch_rejected() {

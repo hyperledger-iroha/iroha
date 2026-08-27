@@ -5041,13 +5041,19 @@ impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
             DaPinIntentValidationError::BundleTooLarge { .. } => {
                 PinIntentSpoolReason::BundleTooLarge
             }
-            DaPinIntentValidationError::UnknownLane { .. } => PinIntentSpoolReason::UnknownLane,
+            DaPinIntentValidationError::UnknownLane { .. }
+            | DaPinIntentValidationError::InactiveAdmissionLane { .. } => {
+                PinIntentSpoolReason::UnknownLane
+            }
             DaPinIntentValidationError::UnknownOwner { .. } => PinIntentSpoolReason::UnknownOwner,
             DaPinIntentValidationError::AuthorizationMismatch { .. }
             | DaPinIntentValidationError::WrongNetwork { .. }
             | DaPinIntentValidationError::ZeroPayloadBytes { .. }
             | DaPinIntentValidationError::InvalidAuthorizationSignatures { .. }
-            | DaPinIntentValidationError::UnauthorizedOwner { .. } => {
+            | DaPinIntentValidationError::UnauthorizedOwner { .. }
+            | DaPinIntentValidationError::MissingAdmissionPolicy
+            | DaPinIntentValidationError::InvalidAdmissionPolicy { .. }
+            | DaPinIntentValidationError::AdmissionDenied { .. } => {
                 PinIntentSpoolReason::InvalidAuthorization
             }
             DaPinIntentValidationError::QuotaExceeded { .. }
@@ -7293,7 +7299,8 @@ impl Actor {
         by.with_label_values(&["Low", "Other"])
             .set(iroha_p2p::network::post_overflow_other_low_count());
         // Network Time Service (basic gauges)
-        let nts = crate::time::now();
+        let nts_snapshot = crate::time::telemetry_snapshot();
+        let nts = nts_snapshot.status;
         self.metrics.nts_offset_ms.set(nts.offset_ms);
         self.metrics.nts_confidence_ms.set(nts.confidence_ms);
         self.metrics.nts_peers_sampled.set(nts.peer_count as u64);
@@ -7310,18 +7317,20 @@ impl Actor {
             .nts_confidence_ok
             .set(i64::from(nts.health.confidence_ok));
         // NTS RTT histogram (export counters)
-        let bounds = crate::time::rtt_bucket_bounds_ms();
-        let counts = crate::time::rtt_bucket_counts();
-        for (le, cnt) in bounds.iter().zip(counts.iter()) {
+        let rtt = nts_snapshot.rtt;
+        for (le, cnt) in rtt.bounds_ms.iter().zip(rtt.bucket_counts.iter()) {
+            let label = if *le == u64::MAX {
+                "+Inf".to_owned()
+            } else {
+                le.to_string()
+            };
             self.metrics
                 .nts_rtt_ms_bucket
-                .with_label_values(&[&le.to_string()])
+                .with_label_values(&[&label])
                 .set(*cnt);
         }
-        self.metrics.nts_rtt_ms_sum.set(crate::time::rtt_ms_sum());
-        self.metrics
-            .nts_rtt_ms_count
-            .set(crate::time::rtt_ms_count());
+        self.metrics.nts_rtt_ms_sum.set(rtt.sum_ms);
+        self.metrics.nts_rtt_ms_count.set(rtt.count);
         self.metrics
             .p2p_dns_refresh_total
             .set(iroha_p2p::network::dns_refresh_count());
@@ -8996,6 +9005,18 @@ mod tests {
         let oversized = DaPinIntentValidationError::BundleTooLarge { len: 2, max: 1 };
         let oversized_reason = PinIntentSpoolReason::from(&oversized);
         assert_eq!(oversized_reason, PinIntentSpoolReason::BundleTooLarge);
+        assert_eq!(
+            PinIntentSpoolReason::from(&DaPinIntentValidationError::MissingAdmissionPolicy),
+            PinIntentSpoolReason::InvalidAuthorization
+        );
+        assert_eq!(
+            PinIntentSpoolReason::from(&DaPinIntentValidationError::InactiveAdmissionLane {
+                lane: LaneId::SINGLE,
+                epoch: 1,
+                sequence: 1,
+            }),
+            PinIntentSpoolReason::UnknownLane
+        );
         telemetry.note_da_pin_intent_spool(PinIntentSpoolResult::Dropped, oversized_reason);
         telemetry.note_da_pin_intent_spool(PinIntentSpoolResult::Kept, PinIntentSpoolReason::Kept);
         assert_eq!(
@@ -11637,7 +11658,7 @@ mod tests {
     }
     #[tokio::test]
     async fn ivm_cache_counters_exposed() {
-        use ivm::ivm_cache::global_get_with_meta;
+        use ivm::ivm_cache::global_get;
         static CACHE_TEST_NONCE: std::sync::atomic::AtomicUsize =
             std::sync::atomic::AtomicUsize::new(0);
         // Arrange system and baseline
@@ -11652,11 +11673,9 @@ mod tests {
         for _ in 0..decoded_ops_added {
             code.extend_from_slice(&halt);
         }
-        let mut meta = ivm::ProgramMetadata::default();
-        meta.version_minor = 237_u8.wrapping_add(u8::try_from(nonce % 17).expect("nonce fits"));
         // Miss on first get, hit on second
-        let _ = global_get_with_meta(&code, &meta).expect("predecode ok");
-        let _ = global_get_with_meta(&code, &meta).expect("predecode hit");
+        let _ = global_get(&code).expect("predecode ok");
+        let _ = global_get(&code).expect("predecode hit");
         let stats1 = ivm::ivm_cache::global_stats();
         assert!(
             stats1.misses > stats0.misses,

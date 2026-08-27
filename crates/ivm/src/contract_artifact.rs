@@ -4,7 +4,7 @@ use crate::{
     ivm::{
         decode_literal_table, prepare_instruction_stream, validate_indexed_literal_instructions,
     },
-    ivm_cache::{DecodedOp, global_get_with_meta},
+    ivm_cache::{DecodedOp, global_get},
     metadata::{EmbeddedContractInterfaceV1, ParsedProgramMetadata},
     prepared::{PreparedContract, PreparedContractParts, PreparedControlFlow},
 };
@@ -54,7 +54,7 @@ impl PreparedContract {
             ))
         })?;
         ensure_shared_offsets_match(&parsed, &verified)?;
-        let decoded = decode_instruction_stream(artifact.as_ref(), &parsed, &verified.metadata)?;
+        let decoded = decode_instruction_stream(artifact.as_ref(), &parsed)?;
         let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
             ContractArtifactError::invalid("executable stream offset exceeds artifact length")
         })?;
@@ -81,7 +81,6 @@ impl PreparedContract {
         })?;
         let prepared_program = prepare_instruction_stream(
             instruction_region,
-            &verified.metadata,
             decoded.as_ref(),
             instruction_entry_pc,
             literal_table.entries(),
@@ -125,12 +124,11 @@ fn ensure_shared_offsets_match(
 fn decode_instruction_stream(
     artifact: &[u8],
     parsed: &ParsedProgramMetadata,
-    metadata: &ProgramMetadata,
 ) -> Result<Arc<[DecodedOp]>, ContractArtifactError> {
     let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
         ContractArtifactError::invalid("executable stream offset exceeds artifact length")
     })?;
-    global_get_with_meta(instruction_region, metadata).map_err(|error| {
+    global_get(instruction_region).map_err(|error| {
         ContractArtifactError::invalid(format!(
             "instruction preparation decode failed after shared admission: {error}"
         ))

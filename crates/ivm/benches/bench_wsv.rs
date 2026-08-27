@@ -169,7 +169,7 @@ fn bench_massive_wsv(c: &mut Criterion) {
                 let wsv_ref = &wsv;
                 let accounts_ref = &accounts;
                 let domain_ref = &domain_id;
-                scheduler.schedule_block_conflict_free(block, |tx: Transaction| {
+                scheduler.schedule_block(block, |tx: Transaction| {
                     let idx = u64::from_le_bytes(tx.code[..8].try_into().unwrap());
                     let asset_name =
                         Name::try_from(format!("asset{idx}")).expect("valid asset name");

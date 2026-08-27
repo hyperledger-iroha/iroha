@@ -10,7 +10,9 @@ set -euo pipefail
 
 ROOT_DIR=$(git rev-parse --show-toplevel)
 ANDROID_DIR="$ROOT_DIR/java/iroha_android"
-NORITO_DIR="$ROOT_DIR/java/norito_java/src/main/java"
+NORITO_PROJECT_DIR="$ROOT_DIR/java/norito_java"
+NORITO_DIR="$NORITO_PROJECT_DIR/src/main/java"
+NORITO_RUNTIME_CLASSPATH_FILE="$NORITO_PROJECT_DIR/build/runtime-classpath.txt"
 DEFAULT_SUMMARY_DEST="$ROOT_DIR/artifacts/android/lint/jdeps-summary.txt"
 
 if [[ ! -d "$ANDROID_DIR/src" ]]; then
@@ -28,6 +30,17 @@ if ! command -v javac >/dev/null 2>&1; then
 fi
 if ! command -v jdeps >/dev/null 2>&1; then
     echo "jdeps is required to validate Android dependencies; install JDK 21+ or set JAVA_HOME." >&2
+    exit 1
+fi
+
+"$ANDROID_DIR/gradlew" --no-daemon -q -p "$NORITO_PROJECT_DIR" writeRuntimeClasspath
+if [[ ! -s "$NORITO_RUNTIME_CLASSPATH_FILE" ]]; then
+    echo "Norito runtime classpath was not written to $NORITO_RUNTIME_CLASSPATH_FILE" >&2
+    exit 1
+fi
+NORITO_RUNTIME_CLASSPATH=$(<"$NORITO_RUNTIME_CLASSPATH_FILE")
+if [[ -z "$NORITO_RUNTIME_CLASSPATH" ]]; then
+    echo "Norito runtime classpath is empty" >&2
     exit 1
 fi
 
@@ -70,6 +83,8 @@ if javac --release 21 -version >/dev/null 2>&1; then
 fi
 
 JAVAC_FLAGS+=(
+    "-cp"
+    "$NORITO_RUNTIME_CLASSPATH"
     "-Xlint:all"
     "-Xlint:-deprecation"
     "-Xlint:-unchecked"
@@ -84,9 +99,19 @@ javac \
 
 SUMMARY_FILE="$WORK_DIR/jdeps-summary.txt"
 echo "info: analysing compiled classes for forbidden module dependencies…"
-jdeps --multi-release 21 -recursive -summary "$CLASSES_DIR" >"$SUMMARY_FILE"
+jdeps \
+    --multi-release 21 \
+    --module-path "$NORITO_RUNTIME_CLASSPATH" \
+    -recursive \
+    -summary \
+    "$CLASSES_DIR" >"$SUMMARY_FILE"
 
-ALLOWED_DEPENDENCY_MODULES=("java.base" "java.net.http" "jdk.httpserver")
+ALLOWED_DEPENDENCY_MODULES=(
+    "com.github.luben.zstd_jni"
+    "java.base"
+    "java.net.http"
+    "jdk.httpserver"
+)
 DEPENDENCY_MODULES=()
 DISALLOWED_MODULES=()
 
@@ -113,7 +138,7 @@ module_seen() {
     return 1
 }
 
-while read -r _ arrow target; do
+while read -r _ _ target; do
     [[ -z "$target" ]] && continue
     # Lines look like "<source> -> <module>"
     local_module=${target%%,*}

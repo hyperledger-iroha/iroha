@@ -834,8 +834,8 @@ def main() -> int:
     )
     restore_attempt_prefix = section(
         restore,
-        ".map_err(invalid_global_beacon_persistence)?;",
-        "    if !emergency_fast {\n        let parliament_attempts_view",
+        "world\n        .rebuild_global_beacon_pulse_slots()",
+        "fn build_state(",
         restore_path,
     )
     require_all(
@@ -1441,17 +1441,25 @@ def main() -> int:
             "SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR=%s",
             'install -m 600 -- "$model_source" "$model_input"',
             'install -m 600 -- "$config_source" "$config_input"',
-            '"schema": "iroha.sora_parliament.formal_run.v1"',
+            '"schema": "iroha.sora_parliament.formal_run.v2"',
             '"source_commit": source_commit',
+            '"successful": source_status == 0 and model_status == 0',
             '"jar_sha256": digest(jar_name)',
-            '"artifact_path": "inputs/SoraParliamentV1.tla"',
-            '"artifact_path": "inputs/SoraParliamentV1.cfg"',
+            '**evidence(model_name, "inputs/SoraParliamentV1.tla")',
+            '**evidence(config_name, "inputs/SoraParliamentV1.cfg")',
+            '"size_bytes": item.stat().st_size',
+            'source_status_evidence["exit_status"] = source_status',
+            'model_status_evidence["exit_status"] = model_status',
             '2>&1 | tee "$source_contract_log"',
             '-config "$config_input"',
             '"$model_input" 2>&1 | tee "$tlc_log"',
             'printf \'%s\\n\' "$tlc_status" > "$tlc_status_path"',
+            "Validate SORA Parliament formal evidence closure",
+            'if document.get("source_commit") != expected_commit:',
+            'if entry.get("sha256") != hashlib.sha256(payload).hexdigest():',
             "name: sora-parliament-formal-pr",
             "path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/sora_parliament",
+            "if-no-files-found: error",
         ),
     )
     for status_capture in (

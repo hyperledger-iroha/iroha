@@ -22,7 +22,7 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
         }));
     let authenticated = AuthenticatedConsensusMessage::for_test(remote_commit.clone());
     assert!(!adapter.authenticated_ingress_is_progress(&authenticated));
-    let generation = adapter.current_tag().generation();
+    let consumer_tag = adapter.current_tag();
     let serviced_before = adapter.serviced_candidate_count_for_test();
     let premature = adapter
         .receive_authenticated(authenticated)
@@ -40,7 +40,7 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
         .ingress_deliveries
         .get(&key)
         .expect("the pre-lock reducer delivery is recorded");
-    assert_eq!(delivered.generation, generation);
+    assert_eq!(delivered.consumer_tag, consumer_tag);
     assert!(!delivered.locked_commit_progress);
     assert_eq!(
         adapter.serviced_candidate_count_for_test(),
@@ -163,7 +163,7 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
             _ => None,
         })
         .expect("durable lock acknowledgement authorizes the local Commit signature");
-    assert_eq!(adapter.current_tag().generation(), generation);
+    assert_eq!(adapter.current_tag(), consumer_tag);
     assert!(
         adapter.authenticated_ingress_is_progress(&AuthenticatedConsensusMessage::for_test(
             remote_commit.clone(),
@@ -202,7 +202,7 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
         .ingress_deliveries
         .get(&key)
         .expect("the exact-lock consumer owns the re-admitted vote");
-    assert_eq!(delivered.generation, generation);
+    assert_eq!(delivered.consumer_tag, consumer_tag);
     assert!(delivered.locked_commit_progress);
     assert_eq!(
         adapter
@@ -252,7 +252,7 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
 }
 #[test]
 #[allow(clippy::too_many_lines)]
-fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
+fn tc_reset_readmits_exact_locked_commit_once_per_consumer_tag() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
@@ -311,7 +311,7 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
     adapter.reducer = reducer::Reducer::recover(
         core_context,
         Some(local_validator),
-        reducer::Generation::new(1),
+        reducer::Generation::INITIAL,
         [lock_entry],
     )
     .expect("recover the durable locked Commit intent");
@@ -355,11 +355,12 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
             .receive_authenticated(AuthenticatedConsensusMessage::for_test(locked_vote(
                 1, 0xB7,
             )))
-            .expect("suppress a same-generation duplicate")
+            .expect("suppress a same-consumer-tag duplicate")
             .disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
     let tag_before_tc = adapter.current_tag();
+    assert_eq!(tag_before_tc.generation(), reducer::Generation::INITIAL);
     let timeout = wire::TimeoutCertificate {
         round: wire_round,
         groups: vec![wire::TimeoutVoteGroup {
@@ -388,6 +389,10 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
     assert!(adapter.current_tag().strictly_advances(tag_before_tc));
     assert_eq!(
         adapter.current_tag().generation(),
+        tag_before_tc.generation()
+    );
+    assert_eq!(
+        adapter.current_tag().generation(),
         reducer::Generation::INITIAL
     );
     assert_eq!(adapter.reducer.volatile_evidence_counts().0, 0);
@@ -408,14 +413,14 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
     assert_eq!(
         adapter.deferred_progress_inputs.len(),
         1,
-        "the reset generation must own exactly one deferred remote vote"
+        "the advanced consumer tag must own exactly one deferred remote vote"
     );
     assert_eq!(
         adapter
             .receive_authenticated(AuthenticatedConsensusMessage::for_test(locked_vote(
                 1, 0xB7,
             )))
-            .expect("coalesce a duplicate behind the reset-generation owner")
+            .expect("coalesce a duplicate behind the new consumer-tag owner")
             .disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
@@ -433,7 +438,7 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
             .receive_authenticated(AuthenticatedConsensusMessage::for_test(locked_vote(
                 1, 0xB7,
             )))
-            .expect("suppress a second delivery in the reset generation")
+            .expect("suppress a second delivery under the new consumer tag")
             .disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
@@ -560,15 +565,19 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
             .disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::AlreadyDecided)
     );
-    for _ in 0..3 {
+    for generation in 1..=3 {
         // Model successive pool generations retaining the same semantic
         // delivery. Once Decision is durable, the old locked vote must be
         // height-long duplicate history rather than a per-generation retry.
-        adapter
+        let delivery = adapter
             .ingress_deliveries
             .get_mut(&decided_key)
-            .expect("terminal AlreadyDecided delivery remains recorded")
-            .generation = reducer::Generation::new(1);
+            .expect("terminal AlreadyDecided delivery remains recorded");
+        delivery.consumer_tag = reducer::EventTag::new(
+            delivery.consumer_tag.height(),
+            delivery.consumer_tag.view(),
+            reducer::Generation::new(generation),
+        );
         assert_eq!(
             adapter
                 .receive_authenticated(AuthenticatedConsensusMessage::for_test(
@@ -1961,7 +1970,7 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
                 signer,
             },
             fingerprint: IngressFingerprint::Vote(wire_round, locked_subject, locked_commitment),
-            generation: tag.generation(),
+            consumer_tag: tag,
             inserted_equivocation: false,
             locked_commit_progress: true,
             locked_reproposal_prepare_progress: false,
@@ -1996,7 +2005,7 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
                 signer,
             },
             fingerprint: IngressFingerprint::Vote(wire_round, locked_subject, locked_commitment),
-            generation: tag.generation(),
+            consumer_tag: tag,
             inserted_equivocation: false,
             locked_commit_progress: false,
             locked_reproposal_prepare_progress: true,
@@ -2355,7 +2364,7 @@ fn protected_locked_vote_uses_reserved_capacity_without_evicting_certificate_own
             locked_subject,
             locked_execution_commitment,
         ),
-        generation: tag.generation(),
+        consumer_tag: tag,
         inserted_equivocation: false,
         locked_commit_progress: true,
         locked_reproposal_prepare_progress: false,

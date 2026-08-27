@@ -1,7 +1,7 @@
 //! Reducer-preserving sequential block synchronization for Sumeragi v2.
 //!
 //! This module discovers the CommitQC for the caller's already-frozen active
-//! [`wire::HeightContext`] and lets an authenticated frozen-roster archive peer
+//! [`wire::HeightContext`] and lets a currently authenticated archive peer
 //! serve the exact canonical body after active peers have rolled forward. It never
 //! imports a block, writes Kura, forms a certificate, or changes height
 //! directly. A successfully authenticated certificate response is converted
@@ -96,23 +96,24 @@ pub(crate) struct V2BlockSyncDiscovery {
 /// Chain-scoped bounded server state for historical CommitQC discovery.
 ///
 /// Exact retransmissions reuse the signed cached response without another disk
-/// read. A differently signed request for the same logical
-/// `(context,height,requester)` is rejected while cached, preventing replay
-/// churn from multiplying Kura work. FIFO eviction is safe because these are
-/// transport responses, never consensus state; evicted clients retransmit the
-/// same exact request. A serving-key rotation invalidates an old cached
-/// response before reuse so the signed identity always matches the current
-/// authenticated outer peer. Historical body responses are bounded by both
-/// entry count and aggregate canonical wire bytes; a response larger than the
-/// cache byte ceiling is still served, but is not retained.
+/// read. Request signatures are deliberately excluded from the cache identity:
+/// ML-DSA signing is randomized, so a requester restart may produce different
+/// valid signature bytes for the same immutable request. Such a request rebinds
+/// the already-validated cached response to its new exact request hash instead
+/// of waiting forever for unrelated FIFO eviction. A request that changes any
+/// unsigned field still conflicts with the occupied logical slot. A serving-key
+/// rotation uses the same re-signing path so the response identity always
+/// matches the current authenticated outer peer. Historical body responses are
+/// bounded by both entry count and aggregate canonical wire bytes; a response
+/// larger than the cache byte ceiling is still served, but is not retained.
 pub(crate) struct V2BlockSyncServer {
     network_id: NetworkId,
     capacity: usize,
     responses: BTreeMap<HashOf<wire::CommitCertificateRequest>, wire::ConsensusMessageV2>,
-    identities: BTreeMap<CommitCertificateServerIdentity, HashOf<wire::CommitCertificateRequest>>,
+    identities: BTreeMap<CommitCertificateServerIdentity, CachedCommitCertificateRequestIdentity>,
     order: VecDeque<HashOf<wire::CommitCertificateRequest>>,
     body_responses: BTreeMap<HashOf<wire::CertifiedBodyRequest>, CachedHistoricalBodyResponse>,
-    body_identities: BTreeMap<HistoricalBodyRequestIdentity, HashOf<wire::CertifiedBodyRequest>>,
+    body_identities: BTreeMap<HistoricalBodyRequestIdentity, CachedHistoricalBodyRequestIdentity>,
     body_order: VecDeque<HashOf<wire::CertifiedBodyRequest>>,
     body_response_byte_capacity: usize,
     body_response_bytes: usize,
@@ -167,9 +168,9 @@ impl V2BlockSyncServer {
             )
         })
     }
-    /// Serve an exact historical canonical body only when this node belongs to
-    /// that height's frozen roster and its durable history contains the applied
-    /// block and matching finality artifact.
+    /// Serve an exact historical canonical body when this authenticated node's
+    /// durable history contains the applied block and matching finality
+    /// artifact.
     ///
     /// Kura's self-contained finality artifact supplies the historical context,
     /// roster proofs, and exact certified subject. The archive peer need not
@@ -212,23 +213,62 @@ impl V2BlockSyncServer {
     {
         authenticate_certified_body_request_identity(&request, authenticated_requester)?;
         let request_hash = HashOf::new(&request);
+        let unsigned_request_hash = Hash::new(&request.signature_preimage());
         let responder = PeerId::new(responder_key.public_key().clone());
+        let identity = HistoricalBodyRequestIdentity::from(&request);
         if let Some(cached) = self.body_responses.get(&request_hash) {
             if cached.responder == responder {
                 return Ok(Some(cached.message.clone()));
             }
-            self.remove_body(request_hash)?;
         }
-        let identity = HistoricalBodyRequestIdentity::from(&request);
-        if let Some(existing) = self.body_identities.get(&identity) {
-            return Err(V2BlockSyncError::ConflictingHistoricalBodyRequest {
-                existing: *existing,
-                incoming: request_hash,
-            });
+        if let Some(existing) = self.body_identities.get(&identity).copied() {
+            if existing.unsigned_request_hash != unsigned_request_hash {
+                return Err(V2BlockSyncError::ConflictingHistoricalBodyRequest {
+                    existing: existing.request_hash,
+                    incoming: request_hash,
+                });
+            }
+            let cached = self
+                .body_responses
+                .get(&existing.request_hash)
+                .ok_or(V2BlockSyncError::CorruptServerCache)?;
+            let response = rebind_cached_historical_body_response(
+                &cached.message,
+                request_hash,
+                responder.clone(),
+                responder_key,
+            )?;
+            self.remove_body(existing.request_hash)?;
+            return self.retain_historical_body_response(
+                request_hash,
+                identity,
+                unsigned_request_hash,
+                responder,
+                response,
+            );
+        }
+        if self.body_responses.contains_key(&request_hash) {
+            return Err(V2BlockSyncError::CorruptServerCache);
         }
         let Some(response) = build(&request)? else {
             return Ok(None);
         };
+        self.retain_historical_body_response(
+            request_hash,
+            identity,
+            unsigned_request_hash,
+            responder,
+            response,
+        )
+    }
+    fn retain_historical_body_response(
+        &mut self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        identity: HistoricalBodyRequestIdentity,
+        unsigned_request_hash: Hash,
+        responder: PeerId,
+        response: wire::ConsensusMessageV2,
+    ) -> Result<Option<wire::ConsensusMessageV2>, V2BlockSyncError> {
         let response_bytes = response.encoded_len();
         if response_bytes > self.body_response_byte_capacity {
             return Ok(Some(response));
@@ -256,7 +296,13 @@ impl V2BlockSyncServer {
                 retained_bytes: response_bytes,
             },
         );
-        self.body_identities.insert(identity, request_hash);
+        self.body_identities.insert(
+            identity,
+            CachedHistoricalBodyRequestIdentity {
+                request_hash,
+                unsigned_request_hash,
+            },
+        );
         self.body_order.push_back(request_hash);
         self.body_response_bytes = retained_bytes;
         Ok(Some(response))
@@ -278,7 +324,9 @@ impl V2BlockSyncServer {
             return Err(wire::ValidationError::WrongHeightContext.into());
         }
         let request_hash = HashOf::new(&request);
+        let unsigned_request_hash = Hash::new(&request.signature_preimage());
         let responder = PeerId::new(responder_key.public_key().clone());
+        let identity = CommitCertificateServerIdentity::from(&request);
         if let Some(cached) = self.responses.get(&request_hash) {
             let current_identity = matches!(
                 &cached.payload,
@@ -288,42 +336,73 @@ impl V2BlockSyncServer {
             if current_identity {
                 return Ok(Some(cached.clone()));
             }
-            self.remove(request_hash);
         }
-        let identity = CommitCertificateServerIdentity::from(&request);
-        if let Some(existing) = self.identities.get(&identity) {
-            return Err(V2BlockSyncError::ConflictingServerRequest {
-                existing: *existing,
-                incoming: request_hash,
-            });
+        if let Some(existing) = self.identities.get(&identity).copied() {
+            if existing.unsigned_request_hash != unsigned_request_hash {
+                return Err(V2BlockSyncError::ConflictingServerRequest {
+                    existing: existing.request_hash,
+                    incoming: request_hash,
+                });
+            }
+            let cached = self
+                .responses
+                .get(&existing.request_hash)
+                .ok_or(V2BlockSyncError::CorruptServerCache)?;
+            let response =
+                rebind_cached_commit_certificate_response(cached, request_hash, responder_key)?;
+            self.remove(existing.request_hash);
+            self.retain_commit_certificate_response(
+                request_hash,
+                identity,
+                unsigned_request_hash,
+                response.clone(),
+            )?;
+            return Ok(Some(response));
+        }
+        if self.responses.contains_key(&request_hash) {
+            return Err(V2BlockSyncError::CorruptServerCache);
         }
         let Some(response) = build(&request)? else {
             return Ok(None);
         };
+        self.retain_commit_certificate_response(
+            request_hash,
+            identity,
+            unsigned_request_hash,
+            response.clone(),
+        )?;
+        Ok(Some(response))
+    }
+    fn retain_commit_certificate_response(
+        &mut self,
+        request_hash: HashOf<wire::CommitCertificateRequest>,
+        identity: CommitCertificateServerIdentity,
+        unsigned_request_hash: Hash,
+        response: wire::ConsensusMessageV2,
+    ) -> Result<(), V2BlockSyncError> {
         while self.responses.len() >= self.capacity {
             let Some(oldest) = self.order.pop_front() else {
                 return Err(V2BlockSyncError::CorruptServerCache);
             };
             self.remove(oldest);
         }
-        self.responses.insert(request_hash, response.clone());
-        self.identities.insert(identity, request_hash);
+        self.responses.insert(request_hash, response);
+        self.identities.insert(
+            identity,
+            CachedCommitCertificateRequestIdentity {
+                request_hash,
+                unsigned_request_hash,
+            },
+        );
         self.order.push_back(request_hash);
-        Ok(Some(response))
+        Ok(())
     }
     fn remove(&mut self, request_hash: HashOf<wire::CommitCertificateRequest>) {
-        let Some(message) = self.responses.remove(&request_hash) else {
+        if self.responses.remove(&request_hash).is_none() {
             return;
-        };
-        let wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) = message.payload
-        else {
-            debug_assert!(false, "v2 sync cache contains a non-response payload");
-            return;
-        };
-        // The response hash identifies the request, but the logical identity
-        // lives only in the request. Locate one bounded reverse entry.
+        }
         self.identities
-            .retain(|_, hash| *hash != response.request_hash);
+            .retain(|_, cached| cached.request_hash != request_hash);
         self.order.retain(|hash| *hash != request_hash);
     }
     fn remove_body(
@@ -338,7 +417,8 @@ impl V2BlockSyncServer {
             .checked_sub(cached.retained_bytes)
             .ok_or(V2BlockSyncError::CorruptServerCache)?;
         self.body_responses.remove(&request_hash);
-        self.body_identities.retain(|_, hash| *hash != request_hash);
+        self.body_identities
+            .retain(|_, cached| cached.request_hash != request_hash);
         self.body_order.retain(|hash| *hash != request_hash);
         self.body_response_bytes = remaining_bytes;
         Ok(())
@@ -361,6 +441,59 @@ struct CachedHistoricalBodyResponse {
     responder: PeerId,
     message: wire::ConsensusMessageV2,
     retained_bytes: usize,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CachedHistoricalBodyRequestIdentity {
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    unsigned_request_hash: Hash,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CachedCommitCertificateRequestIdentity {
+    request_hash: HashOf<wire::CommitCertificateRequest>,
+    unsigned_request_hash: Hash,
+}
+fn rebind_cached_historical_body_response(
+    cached: &wire::ConsensusMessageV2,
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    responder: PeerId,
+    responder_key: &KeyPair,
+) -> Result<wire::ConsensusMessageV2, V2BlockSyncError> {
+    let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(mut response) =
+        cached.payload.clone()
+    else {
+        return Err(V2BlockSyncError::CorruptServerCache);
+    };
+    response.request_hash = request_hash;
+    response.responder = responder;
+    response.signature.clear();
+    response.signature =
+        Signature::new(responder_key.private_key(), &response.signature_preimage())
+            .payload()
+            .to_vec();
+    Ok(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+    ))
+}
+fn rebind_cached_commit_certificate_response(
+    cached: &wire::ConsensusMessageV2,
+    request_hash: HashOf<wire::CommitCertificateRequest>,
+    responder_key: &KeyPair,
+) -> Result<wire::ConsensusMessageV2, V2BlockSyncError> {
+    let wire::ConsensusMessageV2Payload::CommitCertificateResponse(mut response) =
+        cached.payload.clone()
+    else {
+        return Err(V2BlockSyncError::CorruptServerCache);
+    };
+    response.request_hash = request_hash;
+    response.responder = PeerId::new(responder_key.public_key().clone());
+    response.signature.clear();
+    response.signature =
+        Signature::new(responder_key.private_key(), &response.signature_preimage())
+            .payload()
+            .to_vec();
+    Ok(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::CommitCertificateResponse(response),
+    ))
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct HistoricalBodyRequestIdentity {
@@ -472,6 +605,11 @@ impl V2BlockSyncDiscovery {
     /// Acknowledge one response after its CommitQC entered reducer ingress.
     pub(crate) fn complete(&mut self, discovered: DiscoveredCommitCertificate) -> bool {
         self.outstanding.complete(discovered.request_hash)
+    }
+    /// Cancel one request when ordinary consensus reaches Decision before its
+    /// discovery response is needed.
+    pub(crate) fn cancel(&mut self, request_hash: HashOf<wire::CommitCertificateRequest>) -> bool {
+        self.outstanding.complete(request_hash)
     }
     /// Enqueue the ordinary CommitQC message and atomically retire discovery
     /// state only after the enqueue callback succeeds.
@@ -657,15 +795,7 @@ fn build_historical_body_response(
     if request.subject != artifact.subject {
         return Err(V2BlockSyncError::HistoricalSubjectMismatch { height });
     }
-    let responder_peer = PeerId::new(responder_key.public_key().clone());
-    let Some(responder_position) = context
-        .roster
-        .iter()
-        .position(|entry| entry.validator == responder_peer)
-    else {
-        return Ok(None);
-    };
-    let responder = u32::try_from(responder_position)?;
+    let responder = PeerId::new(responder_key.public_key().clone());
     let block_height = usize::try_from(height)?;
     let block_height = NonZeroUsize::new(block_height)
         .ok_or(V2BlockSyncError::MissingHistoricalBlock { height })?;
@@ -698,14 +828,14 @@ fn build_historical_body_response(
         request_hash: authenticated.request_hash(),
         manifest,
         body,
-        responder,
+        responder: responder.clone(),
         signature: Vec::new(),
     };
     response.signature =
         Signature::new(responder_key.private_key(), &response.signature_preimage())
             .payload()
             .to_vec();
-    response.validate_against(context, request, &responder_peer)?;
+    response.validate_against(context, request, &responder)?;
     Ok(Some(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
     )))
@@ -746,7 +876,7 @@ pub(crate) enum V2BlockSyncError {
     /// The supplied signing key is not the configured local P2P identity.
     #[error("Sumeragi v2 block-sync signing key differs from the configured local peer")]
     LocalKeyMismatch,
-    /// A differently signed request attempted to reuse one cached logical slot.
+    /// A request changed authenticated unsigned fields within one cached logical slot.
     #[error("Sumeragi v2 block-sync request {incoming} conflicts with cached request {existing}")]
     ConflictingServerRequest {
         /// Hash of the already cached exact request.
@@ -772,7 +902,7 @@ pub(crate) enum V2BlockSyncError {
     /// Canonical `SignedBlockWire` encoding failed.
     #[error("failed to encode historical canonical body: {0}")]
     CanonicalBody(String),
-    /// A differently signed body request attempted to reuse one cached logical slot.
+    /// A body request changed authenticated unsigned fields within one cached logical slot.
     #[error("Sumeragi v2 body request {incoming} conflicts with cached request {existing}")]
     ConflictingHistoricalBodyRequest {
         /// Hash of the cached exact request.
@@ -1032,7 +1162,7 @@ pub(super) mod tests {
             request_hash: HashOf::new(request),
             manifest,
             body,
-            responder: 0,
+            responder: peer(&fixture.old_validators[0]),
             signature: Vec::new(),
         };
         response.signature = Signature::new(
@@ -1452,6 +1582,7 @@ pub(super) mod tests {
         let fixture = Fixture::new();
         let mut discovery = fixture.discovery();
         let request = fixture.signed_request(&mut discovery);
+        let request_hash = HashOf::new(&request);
         let mut server =
             V2BlockSyncServer::new(fixture.context.network_id.clone(), 1).expect("server");
         let builds = Cell::new(0_u32);
@@ -1492,26 +1623,26 @@ pub(super) mod tests {
                 request,
                 &peer(&fixture.requester),
                 &new_responder,
-                |request| {
-                    builds.set(builds.get() + 1);
-                    serve_commit_certificate_from_artifact(
-                        &fixture.artifact,
-                        request.clone(),
-                        &peer(&fixture.requester),
-                        &new_responder,
-                    )
-                    .map(Some)
+                |_| -> Result<_, V2BlockSyncError> {
+                    panic!("serving-key rotation must not reload Kura")
                 },
             )
             .expect("re-sign after key rotation")
             .expect("rotated response");
-        assert_eq!(builds.get(), 2);
+        assert_eq!(builds.get(), 1);
         assert_ne!(rotated, first);
         let wire::ConsensusMessageV2Payload::CommitCertificateResponse(rotated) = rotated.payload
         else {
             panic!("response payload")
         };
         assert_eq!(rotated.responder, peer(&new_responder));
+        assert_eq!(rotated.request_hash, request_hash);
+        Signature::try_from_bytes(&rotated.signature)
+            .expect("parse key-rotated response signature")
+            .verify(new_responder.public_key(), &rotated.signature_preimage())
+            .expect("verify key-rotated response signature");
+        assert_eq!(server.identities.len(), 1);
+        assert_eq!(server.order, VecDeque::from([request_hash]));
         let second_requester = key(93);
         let mut second_discovery =
             V2BlockSyncDiscovery::new(fixture.context.clone(), peer(&second_requester), 1)
@@ -1541,6 +1672,83 @@ pub(super) mod tests {
             .expect("bounded cache evicts old response")
             .expect("second response");
         assert_eq!(server.len(), 1);
+    }
+    #[test]
+    fn server_rebinds_randomized_request_signature_without_waiting_for_eviction() {
+        let fixture = Fixture::new();
+        let requester = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::MlDsa)
+            .expect("deterministic ML-DSA requester key");
+        let requester_peer = peer(&requester);
+        let mut first_discovery =
+            V2BlockSyncDiscovery::new(fixture.context.clone(), requester_peer.clone(), 1)
+                .expect("valid discovery");
+        let first = first_discovery
+            .begin(&requester)
+            .expect("first signed request");
+        let wire::ConsensusMessageV2Payload::CommitCertificateRequest(first) = first.payload else {
+            panic!("discovery emits a certificate request")
+        };
+        let mut restarted_discovery =
+            V2BlockSyncDiscovery::new(fixture.context.clone(), requester_peer.clone(), 1)
+                .expect("valid restarted discovery");
+        let restarted = restarted_discovery
+            .begin(&requester)
+            .expect("restarted signed request");
+        let wire::ConsensusMessageV2Payload::CommitCertificateRequest(restarted) =
+            restarted.payload
+        else {
+            panic!("restarted discovery emits a certificate request")
+        };
+        assert_eq!(first.signature_preimage(), restarted.signature_preimage());
+        assert_ne!(first.signature, restarted.signature);
+        let first_hash = HashOf::new(&first);
+        let restarted_hash = HashOf::new(&restarted);
+        assert_ne!(first_hash, restarted_hash);
+
+        let responder = &fixture.rotated_responder;
+        let mut server =
+            V2BlockSyncServer::new(fixture.context.network_id.clone(), 1).expect("server");
+        server
+            .serve_with(first, &requester_peer, responder, |request| {
+                serve_commit_certificate_from_artifact(
+                    &fixture.artifact,
+                    request.clone(),
+                    &requester_peer,
+                    responder,
+                )
+                .map(Some)
+            })
+            .expect("serve first signature")
+            .expect("artifact exists");
+        let rebound = server
+            .serve_with(
+                restarted.clone(),
+                &requester_peer,
+                responder,
+                |_| -> Result<_, V2BlockSyncError> {
+                    panic!("same unsigned request must reuse cached history")
+                },
+            )
+            .expect("rebind restarted request")
+            .expect("cached response exists");
+        let wire::ConsensusMessageV2Payload::CommitCertificateResponse(rebound) = rebound.payload
+        else {
+            panic!("server emits a certificate response")
+        };
+        assert_eq!(rebound.request_hash, restarted_hash);
+        assert_eq!(rebound.certificate, fixture.artifact.commit_qc);
+        restarted_discovery
+            .authenticate_response(rebound.clone(), &peer(responder))
+            .expect("restarted requester accepts rebound response");
+        Signature::try_from_bytes(&rebound.signature)
+            .expect("parse rebound response signature")
+            .verify(responder.public_key(), &rebound.signature_preimage())
+            .expect("verify rebound response signature");
+        assert_eq!(server.len(), 1);
+        assert!(!server.responses.contains_key(&first_hash));
+        assert!(server.responses.contains_key(&restarted_hash));
+        assert_eq!(server.identities.len(), 1);
+        assert_eq!(server.order, VecDeque::from([restarted_hash]));
     }
     #[test]
     fn server_returns_none_for_missing_canonical_artifact_without_caching() {
@@ -1622,6 +1830,94 @@ pub(super) mod tests {
             ))
         ));
         assert_eq!(server.body_len(), 0);
+    }
+    #[test]
+    fn historical_body_cache_rebinds_randomized_request_signature() {
+        let fixture = Fixture::new();
+        let requester = KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::MlDsa)
+            .expect("deterministic ML-DSA requester key");
+        let requester_peer = peer(&requester);
+        let mut first = fixture.body_request(fixture.artifact.commit_qc.clone());
+        first.requester = requester_peer.clone();
+        first.signature.clear();
+        first.signature = Signature::new(requester.private_key(), &first.signature_preimage())
+            .payload()
+            .to_vec();
+        let mut restarted = first.clone();
+        restarted.signature =
+            Signature::new(requester.private_key(), &restarted.signature_preimage())
+                .payload()
+                .to_vec();
+        assert_eq!(first.signature_preimage(), restarted.signature_preimage());
+        assert_ne!(first.signature, restarted.signature);
+        let first_hash = HashOf::new(&first);
+        let restarted_hash = HashOf::new(&restarted);
+        assert_ne!(first_hash, restarted_hash);
+
+        let responder = &fixture.old_validators[0];
+        let first_response = body_cache_response(&fixture, &first);
+        let mut server =
+            V2BlockSyncServer::new(fixture.context.network_id.clone(), 1).expect("server");
+        server
+            .serve_historical_body_with(first, &requester_peer, responder, |_| {
+                Ok(Some(first_response))
+            })
+            .expect("serve first signature")
+            .expect("body exists");
+        let rebound = server
+            .serve_historical_body_with(
+                restarted.clone(),
+                &requester_peer,
+                responder,
+                |_| -> Result<_, V2BlockSyncError> {
+                    panic!("same unsigned body request must reuse cached history")
+                },
+            )
+            .expect("rebind restarted body request")
+            .expect("cached body exists");
+        let rebound_bytes = rebound.encoded_len();
+        let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(rebound) = rebound.payload
+        else {
+            panic!("server emits a body response")
+        };
+        assert_eq!(rebound.request_hash, restarted_hash);
+        Signature::try_from_bytes(&rebound.signature)
+            .expect("parse rebound body signature")
+            .verify(responder.public_key(), &rebound.signature_preimage())
+            .expect("verify rebound body signature");
+        assert_eq!(server.body_len(), 1);
+        assert_eq!(server.body_response_bytes(), rebound_bytes);
+        assert!(!server.body_responses.contains_key(&first_hash));
+        assert!(server.body_responses.contains_key(&restarted_hash));
+        assert_eq!(server.body_identities.len(), 1);
+        assert_eq!(server.body_order, VecDeque::from([restarted_hash]));
+
+        let mut changed_unsigned = restarted;
+        changed_unsigned.certificate.aggregate_signature[0] ^= 0x01;
+        changed_unsigned.signature.clear();
+        changed_unsigned.signature = Signature::new(
+            requester.private_key(),
+            &changed_unsigned.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let changed_hash = HashOf::new(&changed_unsigned);
+        assert!(matches!(
+            server.serve_historical_body_with(
+                changed_unsigned,
+                &requester_peer,
+                responder,
+                |_| -> Result<_, V2BlockSyncError> {
+                    panic!("changed unsigned request must not read history")
+                },
+            ),
+            Err(V2BlockSyncError::ConflictingHistoricalBodyRequest {
+                existing,
+                incoming,
+            }) if existing == restarted_hash && incoming == changed_hash
+        ));
+        assert_eq!(server.body_len(), 1);
+        assert_eq!(server.body_response_bytes(), rebound_bytes);
     }
     #[test]
     fn oversized_historical_body_response_is_served_without_caching() {
@@ -1787,7 +2083,7 @@ pub(super) mod tests {
         assert_eq!(response.body, canonical_body);
         assert_eq!(response.manifest.round, prepare_qc.proposal_round);
         assert_eq!(response.manifest.subject, history.artifact.subject);
-        assert_eq!(response.responder, 3);
+        assert_eq!(response.responder, peer(&history.validators[3]));
         assert_eq!(server.body_len(), 1);
         let mut mismatched_qc = prepare_qc.clone();
         mismatched_qc.subject.payload_hash = Hash::new(b"non-canonical historical payload");
@@ -1924,7 +2220,7 @@ pub(super) mod tests {
         assert!(decoded_response.is_resultless_proposal());
         assert_eq!(response.manifest.round, certificate.proposal_round);
         assert_eq!(response.manifest.subject, subject);
-        assert_eq!(response.responder, 0);
+        assert_eq!(response.responder, peer(&fixture.old_validators[0]));
         let replay = server
             .serve_historical_body_with(
                 request.clone(),
@@ -1980,7 +2276,7 @@ pub(super) mod tests {
         else {
             panic!("historical archive emits certified body response")
         };
-        assert_eq!(archive_response.responder, 3);
+        assert_eq!(archive_response.responder, peer(&fixture.old_validators[3]));
         assert_eq!(archive_response.request_hash, request_hash);
         assert_eq!(archive_response.body, canonical_wire);
         let authenticated_archive_request = authenticate_certified_body_request(
@@ -2014,8 +2310,7 @@ pub(super) mod tests {
         );
         assert_eq!(
             authenticated_archive_response.response().responder,
-            u32::try_from(fixture.old_validators.len() - 1)
-                .expect("historical fixture responder index fits u32")
+            peer(&fixture.old_validators[fixture.old_validators.len() - 1])
         );
         assert_eq!(
             authenticated_archive_response.response().body,
@@ -2025,18 +2320,41 @@ pub(super) mod tests {
         assert!(archive_outstanding.complete(request_hash));
         assert!(archive_outstanding.is_empty());
         assert_eq!(server.body_len(), 1);
-        assert!(
-            server
-                .serve_historical_body(
-                    kura.as_ref(),
-                    request.clone(),
-                    &peer(&fixture.requester),
-                    &fixture.rotated_responder,
+        let rotated_response = server
+            .serve_historical_body(
+                kura.as_ref(),
+                request.clone(),
+                &peer(&fixture.requester),
+                &fixture.rotated_responder,
+            )
+            .expect("serve with current rotated archive key")
+            .expect("rotated archive serves exact historical Kura body");
+        let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(rotated_response) =
+            rotated_response.payload
+        else {
+            panic!("rotated archive emits certified body response")
+        };
+        let rotated_peer = peer(&fixture.rotated_responder);
+        assert_eq!(rotated_response.responder, rotated_peer);
+        assert_eq!(rotated_response.request_hash, request_hash);
+        assert_eq!(rotated_response.body, canonical_wire);
+        let rotated_request = authenticate_certified_body_request(
+            &context,
+            request.clone(),
+            &peer(&fixture.requester),
+            |context, certificate| {
+                verify_historical_quorum_certificate(
+                    context,
+                    &fixture.proofs_of_possession,
+                    certificate,
                 )
-                .expect("rotated non-historical key is safely ignored")
-                .is_none()
-        );
-        assert_eq!(server.body_len(), 0);
+            },
+        )
+        .expect("authenticate rotated archive request");
+        rotated_request
+            .authenticate_response(&context, rotated_response, &rotated_peer)
+            .expect("lagging peer accepts current key for exact historical body");
+        assert_eq!(server.body_len(), 1);
         let mut forged = request;
         forged.certificate.aggregate_signature = vec![0xEE; 96];
         forged.signature = Signature::new(

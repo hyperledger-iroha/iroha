@@ -3770,6 +3770,7 @@ pub(in crate::sumeragi) struct LifecycleDecisionApplyAdapterCompletionAuthorityV
     tag: reducer::EventTag,
     subject: wire::BlockSubject,
     dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+    validate_predecessor_ordinal: u128,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
 }
@@ -3780,13 +3781,17 @@ impl LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
         tag: reducer::EventTag,
         subject: wire::BlockSubject,
         dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+        validate_predecessor_ordinal: u128,
         artifact: wire::finality::V2FinalityArtifact,
     ) -> Self {
+        assert_ne!(validate_predecessor_ordinal, 0);
+        assert!(validate_predecessor_ordinal < dispatch_key.lifecycle_ordinal());
         Self {
             tag,
             subject,
             dispatch_key: dispatch_key
                 .with_lineage_for_test(LifecycleDecisionApplyLineageV1::Recovered),
+            validate_predecessor_ordinal,
             receipt: KuraV2CommitReceipt::for_test(&artifact),
             artifact,
         }
@@ -3799,6 +3804,10 @@ impl LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
     /// Return the complete immutable worker/registry ownership key.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         self.dispatch_key
+    }
+    /// Return the exact durable Validate row which advanced into this Apply.
+    pub(in crate::sumeragi) const fn validate_predecessor_ordinal(&self) -> u128 {
+        self.validate_predecessor_ordinal
     }
     /// Return the reducer incarnation authorized by the installed carrier.
     pub(in crate::sumeragi) const fn tag(&self) -> reducer::EventTag {
@@ -4447,8 +4456,6 @@ impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
         };
         relation_is_exact.then_some(Self {
@@ -5610,6 +5617,7 @@ pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyAdapterCompletionV1
     event: reducer::Event,
     next_fence_generation: u64,
     dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+    validate_predecessor_ordinal: u128,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
     committed_status: wire::SumeragiV2Status,
@@ -5618,6 +5626,7 @@ pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyAdapterCompletionV1
 #[must_use = "lifecycle Apply finality must be installed in the exact executor"]
 pub(in crate::sumeragi) struct LifecycleDecisionApplyAdapterFinalityV1 {
     dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+    validate_predecessor_ordinal: u128,
     tag: reducer::EventTag,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
@@ -5630,6 +5639,7 @@ impl LifecycleDecisionApplyAdapterFinalityV1 {
         _permit: super::v2_effects::LifecycleDecisionApplyExecutorFinalityPermitV1,
     ) -> (
         LifecycleDecisionApplyDispatchKeyV1,
+        u128,
         reducer::EventTag,
         KuraV2CommitReceipt,
         wire::finality::V2FinalityArtifact,
@@ -5637,6 +5647,7 @@ impl LifecycleDecisionApplyAdapterFinalityV1 {
     ) {
         (
             self.dispatch_key,
+            self.validate_predecessor_ordinal,
             self.tag,
             self.receipt,
             self.artifact,
@@ -6024,6 +6035,21 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
         }
     }
 
+    /// Authenticate the exact durable Validate row which advanced into this
+    /// unchanged recovered Apply carrier.
+    pub(in crate::sumeragi) fn validate_predecessor_ordinal_in_ledger(
+        &self,
+        ledger: &LifecycleLedgerV1,
+        installed_apply_ordinal: u128,
+    ) -> Option<u128> {
+        self.exact_body_binding().then_some(())?;
+        ledger.recovered_decision_apply_validate_predecessor_ordinal(
+            &self.fetch,
+            &self.lineage,
+            installed_apply_ordinal,
+        )
+    }
+
     /// Return the attached physical digest.
     pub(in crate::sumeragi) fn installed_digest(&self) -> LifecycleDigest {
         LifecycleDigest::new(*self.apply_pending.exact_effect_identity().as_ref())
@@ -6085,6 +6111,7 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
         &self,
         permit: LifecycleDecisionApplyCompletionProjectionPermitV1,
         address: super::v2_lifecycle_coordinator::ConcreteWorkAddress,
+        validate_predecessor_ordinal: u128,
         completion: &super::v2_apply::LifecycleDecisionApplyCompletionV1,
     ) -> Option<LifecycleDecisionApplyAdapterCompletionAuthorityV1> {
         self.exact_body_binding().then_some(())?;
@@ -6093,6 +6120,7 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
             LifecycleDecisionApplyLineageV1::Recovered,
             self.context,
             address,
+            validate_predecessor_ordinal,
             self.installed_digest(),
             &self.apply_effect,
             &self.validated_receipt,
@@ -6107,6 +6135,7 @@ pub(in crate::sumeragi) fn project_live_decision_apply_completion(
     permit: LifecycleDecisionApplyCompletionProjectionPermitV1,
     context: LifecycleContext,
     address: super::v2_lifecycle_coordinator::ConcreteWorkAddress,
+    validate_predecessor_ordinal: u128,
     installed_digest: LifecycleDigest,
     effect: &AdapterEffect,
     validated_receipt: &ValidatedBodyReceipt,
@@ -6117,6 +6146,7 @@ pub(in crate::sumeragi) fn project_live_decision_apply_completion(
         LifecycleDecisionApplyLineageV1::Live,
         context,
         address,
+        validate_predecessor_ordinal,
         installed_digest,
         effect,
         validated_receipt,
@@ -6129,6 +6159,7 @@ fn project_lifecycle_decision_apply_completion(
     lineage: LifecycleDecisionApplyLineageV1,
     context: LifecycleContext,
     address: super::v2_lifecycle_coordinator::ConcreteWorkAddress,
+    validate_predecessor_ordinal: u128,
     installed_digest: LifecycleDigest,
     effect: &AdapterEffect,
     validated_receipt: &ValidatedBodyReceipt,
@@ -6146,6 +6177,8 @@ fn project_lifecycle_decision_apply_completion(
     let artifact = completion.artifact();
     let receipt = completion.receipt();
     if !key.matches_carrier(context, address, installed_digest, lineage)
+        || validate_predecessor_ordinal == 0
+        || validate_predecessor_ordinal >= key.lifecycle_ordinal()
         || completion.subject() != *subject
         || completion.certificate() != certificate
         || completion.validated_receipt() != validated_receipt
@@ -6167,6 +6200,7 @@ fn project_lifecycle_decision_apply_completion(
         tag: *tag,
         subject: *subject,
         dispatch_key: key,
+        validate_predecessor_ordinal,
         receipt: receipt.clone(),
         artifact: artifact.clone(),
     })
@@ -6187,6 +6221,7 @@ impl PreparedLifecycleDecisionApplyAdapterCompletionV1<'_> {
             event,
             next_fence_generation,
             dispatch_key,
+            validate_predecessor_ordinal,
             receipt,
             artifact,
             committed_status,
@@ -6202,6 +6237,7 @@ impl PreparedLifecycleDecisionApplyAdapterCompletionV1<'_> {
         adapter.log_body_progress(&event, reducer::StepDisposition::Applied, 0);
         LifecycleDecisionApplyAdapterFinalityV1 {
             dispatch_key,
+            validate_predecessor_ordinal,
             tag,
             receipt,
             artifact,
@@ -7617,7 +7653,7 @@ impl DeferredServiceEvidence {
                     && self.original_event.clone().retag_authenticated_ingress(to)
                         == self.effective_event
                     && self.original_admission.map(|mut admission| {
-                        admission.generation = to.generation();
+                        admission.consumer_tag = to;
                         admission
                     }) == self.effective_admission
             }
@@ -8510,7 +8546,7 @@ fn append_deferred_projection_admission(
             append_deferred_projection_field(projection, &reference.encode());
         }
     }
-    append_deferred_projection_u64(projection, admission.generation.get());
+    append_deferred_projection_tag(projection, admission.consumer_tag);
     projection.push(u8::from(admission.inserted_equivocation));
     projection.push(u8::from(admission.locked_commit_progress));
     projection.push(u8::from(admission.locked_reproposal_prepare_progress));
@@ -8928,8 +8964,6 @@ fn ingress_equivocation_identity(
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-        | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_)
         | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
     }
 }
@@ -8957,8 +8991,6 @@ impl IngressEquivocationArtifact {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
         }
     }
@@ -8991,7 +9023,7 @@ struct IngressEquivocationRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IngressDeliveryRecord {
     fingerprint: IngressFingerprint,
-    generation: reducer::Generation,
+    consumer_tag: reducer::EventTag,
     locked_commit_progress: bool,
     locked_reproposal_prepare_progress: bool,
 }
@@ -8999,7 +9031,7 @@ struct IngressDeliveryRecord {
 struct IngressAdmission {
     key: IngressSemanticKey,
     fingerprint: IngressFingerprint,
-    generation: reducer::Generation,
+    consumer_tag: reducer::EventTag,
     inserted_equivocation: bool,
     locked_commit_progress: bool,
     locked_reproposal_prepare_progress: bool,
@@ -9441,6 +9473,30 @@ fn commit_qc_status(
     })
 }
 impl SumeragiV2Adapter {
+    /// Return whether the exact live Decision WAL source still awaits its
+    /// Validate-to-Apply body-frame join. This borrows the affine seal only;
+    /// lifecycle publication remains its sole consuming path.
+    pub(crate) fn has_exact_pending_live_decision_apply(
+        &self,
+        tag: reducer::EventTag,
+        decision_round: wire::ConsensusRound,
+        proposal_round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> bool {
+        self.pending_live_decision_apply
+            .as_ref()
+            .is_some_and(|sealed| {
+                sealed.exactly_binds_pending_apply_decision(
+                    tag,
+                    decision_round,
+                    proposal_round,
+                    subject,
+                    execution_commitment,
+                )
+            })
+    }
+
     /// Open the safety WAL, replay every complete frame, and resume durable work.
     ///
     /// Network ingress is never exposed before replay has completed.  The
@@ -11304,8 +11360,6 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {}
         }
         Ok(())
@@ -11479,14 +11533,12 @@ impl SumeragiV2Adapter {
                 .execution_commitment(current_round, locked.subject())
                 .is_ok_and(|commitment| commitment == vote.execution_commitment)
     }
-    /// Return the one current-view unchanged-lock body statement which may
-    /// cross an already-due timeout boundary by immediately staging
-    /// `LockAndCommit`.
+    /// Return the one current-view unchanged-lock body statement whose exact
+    /// Prepare witnesses may cross an already-due timeout boundary.
     ///
-    /// This is only a target projection. The arriving PrepareQC must still be
-    /// converted through the ordinary wire registry and applied to a cloned
-    /// reducer by [`Self::pre_timeout_locked_prepare_qc_stages_lock_and_commit`]
-    /// before it can acquire the bounded scheduler exception.
+    /// This is only a target projection. Every arriving Prepare vote or QC
+    /// must still pass the ordinary wire/authentication checks and a cloned
+    /// reducer preview before it can acquire the bounded scheduler exception.
     pub(crate) fn pre_timeout_locked_prepare_qc_target(
         &self,
     ) -> Option<super::v2_runtime::PreTimeoutLockedPrepareQcTargetV1> {
@@ -11502,6 +11554,7 @@ impl SumeragiV2Adapter {
             || durable.timeout_intent(current_round).is_some()
             || durable.commit_intent(current_round).is_some()
             || self.reducer.local_validator().is_none()
+            || !self.reducer.local_candidate_body_is_eligible()
             || self.reducer.pending_persistence_record().is_some()
             || self.reducer.awaiting_signature().is_some()
             || self.reducer.body_state(current_round, locked.subject())
@@ -11572,6 +11625,118 @@ impl SumeragiV2Adapter {
                     && vote.subject() == core_certificate.subject()
         )
     }
+    /// Deep-preview one exact authenticated current-view Prepare witness for
+    /// the unchanged older lock.
+    ///
+    /// A successful preview proves that the ordinary reducer transition adds
+    /// exactly this previously absent signer to the target Prepare pool. The
+    /// transition may be a pre-quorum stutter at the effect boundary, or it
+    /// may form the exact PrepareQC and immediately stage `LockAndCommit`.
+    /// No live registry, admission table, vote pool, or WAL state is mutated.
+    fn pre_timeout_locked_reproposal_prepare_vote_advances(
+        &self,
+        vote: &wire::Vote,
+        target: super::v2_runtime::PreTimeoutLockedPrepareQcTargetV1,
+    ) -> bool {
+        if vote.phase != wire::GlobalPhase::Prepare
+            || vote.round != target.round
+            || vote.proposal_round != target.round
+            || vote.subject != target.subject
+            || vote.execution_commitment != target.execution_commitment
+            || !self.is_exact_locked_reproposal_prepare_vote(vote)
+            || self.pre_timeout_locked_prepare_qc_target() != Some(target)
+        {
+            return false;
+        }
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote.clone()));
+        if verify_authenticated_message(
+            &self.wire_context,
+            self.parent_verification.as_ref(),
+            &message,
+            &self.proofs_of_possession,
+        )
+        .is_err()
+        {
+            return false;
+        }
+        let mut registry = self.registry.clone();
+        let Ok(core_vote) = registry.vote_to_core(vote, &self.wire_context) else {
+            return false;
+        };
+        let vote_statement = core_vote.vote();
+        let pool_signers = |reducer: &reducer::Reducer| {
+            reducer
+                .vote_pool_snapshots()
+                .into_iter()
+                .find(|pool| {
+                    pool.round == vote_statement.round()
+                        && pool.proposal_round == vote_statement.proposal_round()
+                        && pool.phase == reducer::Phase::Prepare
+                        && pool.subject == vote_statement.subject()
+                })
+                .map_or_else(Vec::new, |pool| pool.signers)
+        };
+        let before = pool_signers(&self.reducer);
+        if before.contains(&vote_statement.signer()) {
+            return false;
+        }
+        let mut reducer = self.reducer.clone();
+        let Ok(outcome) = reducer.step(reducer::Event::VoteReceived {
+            tag: reducer.current_tag(),
+            vote: core_vote,
+        }) else {
+            return false;
+        };
+        let after = pool_signers(&reducer);
+        if outcome.disposition() != reducer::StepDisposition::Applied
+            || after.len() != before.len().saturating_add(1)
+            || !after.contains(&vote_statement.signer())
+            || !before.iter().all(|signer| after.contains(signer))
+        {
+            return false;
+        }
+        match outcome.effects() {
+            [] => true,
+            [
+                reducer::Effect::Broadcast(reducer::ConsensusMessageV2::QuorumCertificate(
+                    certificate,
+                )),
+                reducer::Effect::Persist { entry, .. },
+            ] => matches!(
+                entry.record(),
+                reducer::WalRecord::LockAndCommit { prepare, vote }
+                    if prepare == certificate
+                        && certificate.phase() == reducer::Phase::Prepare
+                        && certificate.round() == vote_statement.round()
+                        && certificate.proposal_round() == vote_statement.proposal_round()
+                        && certificate.subject() == vote_statement.subject()
+                        && vote.context_id() == certificate.reference().context_id()
+                        && vote.round() == certificate.round()
+                        && vote.proposal_round() == certificate.proposal_round()
+                        && vote.phase() == reducer::Phase::Commit
+                        && vote.subject() == certificate.subject()
+            ),
+            _ => false,
+        }
+    }
+    /// Return whether one fixed-cut carrier is productive exact locked-body
+    /// Prepare progress in the current adapter state.
+    pub(crate) fn pre_timeout_locked_prepare_progress_is_exact(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+        target: super::v2_runtime::PreTimeoutLockedPrepareQcTargetV1,
+    ) -> bool {
+        match payload {
+            wire::ConsensusMessageV2Payload::Vote(vote) => {
+                self.pre_timeout_locked_reproposal_prepare_vote_advances(vote, target)
+            }
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(certificate, target)
+            }
+            _ => false,
+        }
+    }
     fn deferred_owns_ingress(
         &self,
         key: IngressSemanticKey,
@@ -11598,7 +11763,6 @@ impl SumeragiV2Adapter {
     ) -> Result<(Option<AdapterOutcome>, Option<IngressAdmission>), AdapterError> {
         let current_tag = self.reducer.current_tag();
         let current_view = current_tag.view();
-        let generation = current_tag.generation();
         self.prune_ingress_records();
         let retained_vote_views = u64::try_from(self.wire_context.roster.len()).unwrap_or(u64::MAX);
         let oldest_retained_view = current_view.saturating_sub(retained_vote_views);
@@ -11676,8 +11840,6 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                 return Ok((None, None));
             }
@@ -11706,7 +11868,7 @@ impl SumeragiV2Adapter {
                         } else {
                             return true;
                         };
-                        exact_protected_epoch && delivered.generation == generation
+                        exact_protected_epoch && delivered.consumer_tag == current_tag
                     })
                 {
                     return Ok((
@@ -11717,7 +11879,7 @@ impl SumeragiV2Adapter {
                 let admission = IngressAdmission {
                     key,
                     fingerprint,
-                    generation,
+                    consumer_tag: current_tag,
                     inserted_equivocation: false,
                     locked_commit_progress,
                     locked_reproposal_prepare_progress,
@@ -11777,7 +11939,7 @@ impl SumeragiV2Adapter {
         let admission = IngressAdmission {
             key,
             fingerprint,
-            generation,
+            consumer_tag: current_tag,
             inserted_equivocation: true,
             locked_commit_progress,
             locked_reproposal_prepare_progress,
@@ -12000,8 +12162,6 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                 return Err(AdapterError::TransportPayload);
             }
@@ -13899,7 +14059,7 @@ impl SumeragiV2Adapter {
                     admission_key,
                     IngressDeliveryRecord {
                         fingerprint,
-                        generation: tag.generation(),
+                        consumer_tag: tag,
                         locked_commit_progress: false,
                         locked_reproposal_prepare_progress: false,
                     },
@@ -14195,11 +14355,14 @@ impl SumeragiV2Adapter {
             tag,
             subject,
             dispatch_key,
+            validate_predecessor_ordinal,
             receipt,
             artifact,
         } = authority;
         if self.current_tag() != tag
             || !dispatch_key.matches_height_context(&self.wire_context)
+            || validate_predecessor_ordinal == 0
+            || validate_predecessor_ordinal >= dispatch_key.lifecycle_ordinal()
             || artifact.height_context != self.wire_context
             || artifact.subject != subject
             || receipt.height() != self.wire_context.height
@@ -14263,6 +14426,7 @@ impl SumeragiV2Adapter {
             event,
             next_fence_generation,
             dispatch_key,
+            validate_predecessor_ordinal,
             receipt,
             artifact,
             committed_status,
@@ -16726,8 +16890,8 @@ impl SumeragiV2Adapter {
         // retransmission before conversion. A Commit ignored before its exact
         // lock is durable records an ordinary delivery; once that lock is
         // installed, `locked_commit_progress` changes the consumer epoch and
-        // admits the same authenticated vote once in the current generation.
-        // Later pool resets remain generation scoped.
+        // admits the same authenticated vote once under the current full event
+        // tag. Later pool resets remain scoped by view and generation.
         // One adapter invocation returns exactly one reducer macro-step. Busy-
         // deferred inputs remain adapter-owned and the serialized runtime
         // schedules them explicitly after this batch reaches the executor.
@@ -16778,7 +16942,7 @@ impl SumeragiV2Adapter {
             admission.key,
             IngressDeliveryRecord {
                 fingerprint: admission.fingerprint,
-                generation: admission.generation,
+                consumer_tag: admission.consumer_tag,
                 locked_commit_progress: admission.locked_commit_progress,
                 locked_reproposal_prepare_progress: admission.locked_reproposal_prepare_progress,
             },
@@ -17319,8 +17483,6 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return false,
         };
         if let Some(key) = semantic_key {
@@ -17378,8 +17540,6 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
         }
     }
@@ -17715,7 +17875,7 @@ impl SumeragiV2Adapter {
                 let current_tag = self.reducer.current_tag();
                 input.event = input.event.retag_authenticated_ingress(current_tag);
                 if let Some(admission) = &mut input.admission {
-                    admission.generation = current_tag.generation();
+                    admission.consumer_tag = current_tag;
                 }
                 DeferredRetagRelation::AuthenticatedIngress {
                     from: original_tag,

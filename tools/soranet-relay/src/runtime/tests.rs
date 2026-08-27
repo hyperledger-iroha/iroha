@@ -15,7 +15,7 @@ mod tests {
     };
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{
-        Signature,
+        SessionKey, Signature,
         soranet::{
             certificate::{
                 CapabilityToggle, RelayCapabilityFlagsV1, RelayCertificateBundleV2,
@@ -524,6 +524,7 @@ mod tests {
     #[tokio::test]
     async fn vpn_initial_prepaid_voucher_is_accepted_before_service_starts() {
         let helper_ticket = sample_helper_ticket([0xA0; 16]);
+        let overlay = Arc::new(VpnOverlay::from_config(VpnConfig::default()));
         let now_ms = unix_time_ms(SystemTime::now());
         let envelope = usage_voucher_envelope(
             &helper_ticket,
@@ -545,7 +546,7 @@ mod tests {
                 flow_label: vpn_flow_label_from_session_id(helper_ticket.session_id),
                 sequence: 0,
                 ack: 0,
-                padding_budget_ms: 0,
+                padding_budget_ms: overlay.config().padding_budget_ms,
                 payload_len: 0,
             },
             payload,
@@ -553,7 +554,6 @@ mod tests {
         let frame = cell.into_padded_frame().expect("prepaid control frame");
         let (mut peer, mut relay) = duplex(VPN_CELL_LEN * 2);
         peer.write_all(frame.as_ref()).await.expect("write voucher");
-        let overlay = Arc::new(VpnOverlay::from_config(VpnConfig::default()));
         let session = overlay.start_session(Arc::new(Metrics::new()));
         let handle = bind_sample_helper_session(&overlay, session, helper_ticket.clone());
         let adapter = VpnAdapter::new(handle.session().clone(), overlay);
@@ -624,8 +624,23 @@ mod tests {
             vpn_flow_label_from_session_id([0xA1; 16]),
         )
         .expect("cover scheduler seed");
-        let (vpn_runtime, mut vpn_peer) = duplex(VPN_CELL_LEN * 8);
-        let (mut vpn_read, mut vpn_write) = tokio::io::split(vpn_runtime);
+        let record_context =
+            RecordStreamContext::new(RecordEndpoint::Client, RecordStreamKind::Bidirectional, 7);
+        let relay_record = RecordLayer::new(SessionKey::new(vec![0xA5; 32]), RecordEndpoint::Relay)
+            .expect("relay record layer")
+            .stream(record_context)
+            .expect("relay record stream");
+        let client_record =
+            RecordLayer::new(SessionKey::new(vec![0xA5; 32]), RecordEndpoint::Client)
+                .expect("client record layer")
+                .stream(record_context)
+                .expect("client record stream");
+        let (vpn_runtime, vpn_peer) = duplex(VPN_CELL_LEN * 8);
+        let (vpn_read, vpn_write) = tokio::io::split(vpn_runtime);
+        let (vpn_peer_read, _vpn_peer_write) = tokio::io::split(vpn_peer);
+        let mut vpn_read = RecordReader::new(vpn_read, relay_record.opener);
+        let mut vpn_write = RecordWriter::new(vpn_write, relay_record.sealer);
+        let mut vpn_peer = RecordReader::new(vpn_peer_read, client_record.opener);
         let (backend_runtime, mut backend_peer) = duplex(VPN_CELL_LEN * 8);
         let (mut backend_read, mut backend_write) = tokio::io::split(backend_runtime);
         let settlement_dir = secure_test_tempdir();
@@ -661,14 +676,18 @@ mod tests {
             .write_all(&payload)
             .await
             .expect("write backend payload");
+        let parsed = timeout(
+            Duration::from_secs(1),
+            crate::vpn::read_frame(overlay.as_ref(), &mut vpn_peer),
+        )
+        .await
+        .expect("one protected VPN frame must not wait for a second backend packet")
+        .expect("vpn frame");
+        assert_eq!(payload, parsed.payload);
         backend_peer
             .shutdown()
             .await
             .expect("shutdown backend peer");
-        let parsed = crate::vpn::read_frame(overlay.as_ref(), &mut vpn_peer)
-            .await
-            .expect("vpn frame");
-        assert_eq!(payload, parsed.payload);
         bridge_task.await.expect("bridge task joined");
     }
     #[tokio::test]
@@ -1784,6 +1803,37 @@ mod tests {
         }
     }
     #[test]
+    fn relay_preflight_rejects_strict_constant_rate_without_downgrading() {
+        let (frame, capabilities) = current_client_hello_frame(HandshakeSuite::Nk2Hybrid, None);
+        let mut server_capabilities = matching_server_capabilities(&capabilities);
+        server_capabilities.constant_rate = Some(capability::ConstantRateCapability {
+            version: 1,
+            mode: ConstantRateMode::Strict,
+            cell_bytes: constant_rate::CONSTANT_RATE_CELL_BYTES as u16,
+        });
+
+        let error = match preflight_client_hello(&frame, &server_capabilities) {
+            Ok(_) => panic!("strict mode must fail before the relay handshake response"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            HandshakeError::StrictConstantRateUnavailable
+        ));
+
+        server_capabilities.constant_rate = Some(capability::ConstantRateCapability {
+            version: 1,
+            mode: ConstantRateMode::BestEffort,
+            cell_bytes: constant_rate::CONSTANT_RATE_CELL_BYTES as u16,
+        });
+        let negotiated = preflight_client_hello(&frame, &server_capabilities)
+            .expect("best-effort cover mode remains admissible")
+            .negotiated
+            .constant_rate
+            .expect("server best-effort mode must be negotiated");
+        assert_eq!(negotiated.mode, ConstantRateMode::BestEffort);
+    }
+    #[test]
     fn admission_transcript_commits_to_the_exact_client_hello() {
         let (without_resume, _) = current_client_hello_frame(HandshakeSuite::Nk2Hybrid, None);
         let (with_resume, _) =
@@ -2015,69 +2065,24 @@ mod tests {
         }
     }
     #[test]
-    fn verify_pow_ticket_rejects_wrong_relay_binding() {
-        let params = PowParameters::new(16, Duration::from_secs(180), Duration::from_secs(45));
-        let descriptor = [0xAA; 32];
-        let relay_a = [0x01; 32];
-        let relay_b = [0x02; 32];
-        let transcript = [0x03; 32];
-        let mut rng = StdRng::from_seed([0x22; 32]);
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_a, &transcript);
-        let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
-            .expect("mint pow ticket");
-        let replays = in_memory_ticket_replays(4);
-        let err = verify_pow_ticket_binding(
-            &ticket,
-            &params,
-            &descriptor,
-            &relay_b,
-            &transcript,
-            &replays,
-        )
-        .expect_err("relay mismatch must fail verification");
-        match err {
-            HandshakeError::Pow(pow::Error::InvalidSolution) => {}
-            other => panic!("unexpected pow verification error: {other:?}"),
-        }
-    }
-    #[test]
-    fn verify_pow_ticket_respects_transcript_binding() {
-        let params = PowParameters::new(16, Duration::from_secs(120), Duration::from_secs(30));
-        let descriptor = [0x0C; 32];
-        let relay_id = [0x0D; 32];
-        let transcript = [0xFE; 32];
-        let mut rng = StdRng::from_seed([0x33; 32]);
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
-        let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(40), &mut rng)
-            .expect("mint pow ticket with transcript");
-        let replays = in_memory_ticket_replays(4);
-        let mismatched = [0xAA; 32];
-        let err = verify_pow_ticket_binding(
-            &ticket,
-            &params,
-            &descriptor,
-            &relay_id,
-            &mismatched,
-            &replays,
-        )
-        .expect_err("mismatched transcript must fail verification");
-        match err {
-            HandshakeError::Pow(pow::Error::InvalidSolution) => {}
-            other => panic!("unexpected pow verification error: {other:?}"),
-        }
-    }
-    #[test]
     fn relay_ticket_replay_is_rejected_after_store_reload() {
         let dir = secure_test_tempdir();
         let path = dir.path().join("relay-ticket-replays.norito");
         let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
-        let params = PowParameters::new(0, Duration::from_secs(180), Duration::from_secs(30));
+        let params = PuzzleParameters::new(
+            NonZeroU32::new(4_096).expect("non-zero memory"),
+            NonZeroU32::new(1).expect("non-zero iterations"),
+            NonZeroU32::new(1).expect("non-zero lanes"),
+            1,
+            Duration::from_secs(180),
+            Duration::from_secs(30),
+        );
         let descriptor = [0x35; 32];
         let relay_id = [0x46; 32];
         let transcript = [0x57; 32];
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
+        let binding = PuzzleBinding::new(&descriptor, &relay_id, &transcript);
         let mut rng = StdRng::from_seed([0x68; 32]);
-        let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
+        let ticket = puzzle::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
             .expect("mint ticket");
         let persisted =
             TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("load store");
@@ -2086,7 +2091,7 @@ mod tests {
             pending: HashSet::new(),
             capacity: limits.max_entries,
         });
-        verify_pow_ticket_binding(
+        verify_puzzle_ticket_binding(
             &ticket,
             &params,
             &descriptor,
@@ -2104,7 +2109,7 @@ mod tests {
             capacity: limits.max_entries,
         });
         assert!(matches!(
-            verify_pow_ticket_binding(
+            verify_puzzle_ticket_binding(
                 &ticket,
                 &params,
                 &descriptor,
@@ -2283,19 +2288,27 @@ mod tests {
         let delay = RelayRuntime::norito_padding_delay(&channel_id, period, now);
         assert_eq!(delay.as_millis(), 0);
     }
-    fn load_config(json: &str) -> RelayConfig {
+    struct LoadedTestConfig {
+        config: RelayConfig,
+        _replay_directory: TempDir,
+    }
+    fn load_config(json: &str) -> LoadedTestConfig {
         let file = secure_test_tempfile();
         std::fs::write(file.path(), json).expect("write config");
         let mut config = RelayConfig::load(file.path()).expect("load config");
+        let replay_directory = secure_test_tempdir();
         let default_replay_path = config::PowConfig::default().revocation_store_path;
         if config.pow_config().revocation_store_path == default_replay_path {
             config
                 .pow
                 .as_mut()
                 .expect("PoW defaults applied")
-                .revocation_store_path = file.path().with_extension("ticket-replays.norito");
+                .revocation_store_path = replay_directory.path().join("ticket-replays.norito");
         }
-        config
+        LoadedTestConfig {
+            config,
+            _replay_directory: replay_directory,
+        }
     }
     fn sample_account(seed: u8) -> AccountId {
         let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -2634,7 +2647,7 @@ mod tests {
     #[test]
     fn production_transport_requires_tls_bundle_directory_and_exact_leaf_pin() {
         let missing_tls = load_config(r#"{"mode":"Entry","listen":"127.0.0.1:0"}"#);
-        let error = RelayRuntime::prepare_server_transport(&missing_tls, None, None, false)
+        let error = RelayRuntime::prepare_server_transport(&missing_tls.config, None, None, false)
             .expect_err("production transport must not synthesize a self-signed leaf");
         assert!(error.to_string().contains("tls.certificate_path"));
 
@@ -2674,7 +2687,7 @@ mod tests {
         ));
         let matching = CertificateTestFixture::with_spki(leaf_spki);
         let (_, trust) = RelayRuntime::prepare_server_transport(
-            &config,
+            &config.config,
             Some(&matching.bundle),
             Some(2_000_000_000),
             false,
@@ -2687,9 +2700,13 @@ mod tests {
             leaf_spki
         );
 
-        let missing_bundle =
-            RelayRuntime::prepare_server_transport(&config, None, Some(2_000_000_000), false)
-                .expect_err("TLS files without an authenticated relay certificate must fail");
+        let missing_bundle = RelayRuntime::prepare_server_transport(
+            &config.config,
+            None,
+            Some(2_000_000_000),
+            false,
+        )
+        .expect_err("TLS files without an authenticated relay certificate must fail");
         assert!(
             missing_bundle
                 .to_string()
@@ -2697,7 +2714,7 @@ mod tests {
         );
         let mismatched = CertificateTestFixture::new();
         let mismatch = RelayRuntime::prepare_server_transport(
-            &config,
+            &config.config,
             Some(&mismatched.bundle),
             Some(2_000_000_000),
             false,
@@ -2708,9 +2725,13 @@ mod tests {
                 .to_string()
                 .contains("selected signed relay endpoint pin")
         );
-        let missing_directory =
-            RelayRuntime::prepare_server_transport(&config, Some(&matching.bundle), None, false)
-                .expect_err("authenticated directory validity is mandatory");
+        let missing_directory = RelayRuntime::prepare_server_transport(
+            &config.config,
+            Some(&matching.bundle),
+            None,
+            false,
+        )
+        .expect_err("authenticated directory validity is mandatory");
         assert!(missing_directory.to_string().contains("directory validity"));
     }
     #[cfg(unix)]
@@ -3049,7 +3070,7 @@ mod tests {
             fixture.certificate_config_json(),
         );
         let config = load_config(&json);
-        match RelayRuntime::new_for_test(config) {
+        match RelayRuntime::new_for_test(config.config) {
             Err(RelayError::Config(ConfigError::Handshake(message))) => {
                 assert!(message.contains("handshake.descriptor_manifest_path"));
             }
@@ -3079,7 +3100,7 @@ mod tests {
             issuer_mldsa = fixture.issuer_mldsa_hex,
         );
         let config = load_config(&json);
-        let runtime = RelayRuntime::new_for_test(config).expect("runtime");
+        let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         assert_eq!(runtime.descriptor_commit(), fixture.descriptor_commit);
         let stored_bundle = runtime.certificate_bundle();
         assert_eq!(
@@ -3109,7 +3130,7 @@ mod tests {
             issuer_mldsa = fixture.issuer_mldsa_hex,
         );
         let config = load_config(&json);
-        let err = match RelayRuntime::new_for_test(config) {
+        let err = match RelayRuntime::new_for_test(config.config) {
             Ok(_) => panic!("expired certificate must fail at startup"),
             Err(err) => err,
         };
@@ -3143,7 +3164,7 @@ mod tests {
             mismatch = mismatch_hex,
         );
         let config = load_config(&json);
-        match RelayRuntime::new_for_test(config) {
+        match RelayRuntime::new_for_test(config.config) {
             Err(RelayError::Config(ConfigError::Handshake(message))) => {
                 assert!(
                     message.contains("descriptor_commit_hex"),
@@ -3311,7 +3332,7 @@ mod tests {
             fixture.handshake_config_json(fixture.manifest_file.path()),
         );
         let config = load_config(&json);
-        let runtime = RelayRuntime::new_for_test(config).expect("runtime");
+        let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         let context = runtime.circuit_context();
         let expected_private =
             PrivateKey::from_bytes(Algorithm::Ed25519, &seed).expect("configured key parse");
@@ -3349,7 +3370,7 @@ mod tests {
         );
     }
     #[test]
-    fn runtime_enables_pow_when_required() {
+    fn runtime_uses_mandatory_pow_policy() {
         let dir = secure_test_tempdir();
         let replay_path = dir.path().join("ticket-replays.norito");
         let fixture = CertificateTestFixture::new();
@@ -3359,7 +3380,6 @@ mod tests {
                 "listen": "127.0.0.1:0",
                 "handshake": {},
                 "pow": {{
-                    "required": true,
                     "difficulty": 6,
                     "max_future_skew_secs": 120,
                     "min_ticket_ttl_secs": 10,
@@ -3370,10 +3390,10 @@ mod tests {
             replay_path.display()
         );
         let config = load_config(&json);
-        let runtime = RelayRuntime::new_for_test(config).expect("runtime");
+        let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         let context = runtime.circuit_context();
-        assert!(context.dos.is_pow_required());
         assert_eq!(context.dos.current_pow_parameters().difficulty(), 6);
+        assert_eq!(context.dos.current_puzzle_parameters().difficulty(), 6);
         let replay_state = context.ticket_replays.lock().expect("ticket replay lock");
         assert_eq!(replay_state.capacity, 8_192);
     }
@@ -3394,7 +3414,6 @@ mod tests {
                 "listen": "127.0.0.1:0",
                 "handshake": {},
                 "pow": {{
-                    "required": true,
                     "difficulty": 6,
                     "max_future_skew_secs": 120,
                     "min_ticket_ttl_secs": 10,
@@ -3405,7 +3424,7 @@ mod tests {
             replay_path.display()
         );
         let config = load_config(&json);
-        match RelayRuntime::new_for_test(config) {
+        match RelayRuntime::new_for_test(config.config) {
             Err(RelayError::Config(ConfigError::TicketReplayStore(message))) => {
                 assert!(
                     message.contains("parse"),
@@ -3433,7 +3452,7 @@ mod tests {
             fixture.handshake_config_json(fixture.manifest_file.path()),
         );
         let config = load_config(&json);
-        let runtime = RelayRuntime::new_for_test(config).expect("runtime");
+        let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         let context = runtime.circuit_context();
         let expected_private =
             PrivateKey::from_bytes(Algorithm::Ed25519, &seed).expect("manifest key parse");
@@ -3469,7 +3488,7 @@ mod tests {
             fixture.handshake_config_json(fixture.manifest_file.path()),
         );
         let config = load_config(&json);
-        match RelayRuntime::new_for_test(config) {
+        match RelayRuntime::new_for_test(config.config) {
             Err(RelayError::Config(ConfigError::DescriptorManifest { message, .. })) => {
                 assert!(
                     message.contains("missing"),
@@ -3773,7 +3792,7 @@ mod tests {
         privacy_events.record_throttle(
             privacy_mode,
             event_time,
-            SoranetPrivacyThrottleScopeV1::DescriptorQuota,
+            SoranetPrivacyThrottleScopeV1::RemoteQuota,
         );
         proxy_policy_events.record_downgrade(privacy_mode, event_time);
         let listener = match StdTcpListener::bind("127.0.0.1:0") {

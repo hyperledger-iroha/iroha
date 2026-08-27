@@ -607,22 +607,30 @@ artefacts are captured for governance.
   capture API, alias lifecycle, CI/Buildkite wiring, and ownership matrix. Treat that plan as the
   source of truth when onboarding new lab technicians or updating finance/compliance artefacts.
 - **Workflow:**
-  1. Collect an attestation bundle on-device (alias, `challenge.hex`, and `chain.pem` with the
-     leaf→root order) and copy it to the workstation.
-  2. Run `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>
-     [--trust-root-dir <dir>] --require-strongbox --output <report.json>` using the appropriate
-     Google/Samsung root (directories allow you to load whole vendor bundles).
+  1. Issue a challenge from the lab authority, provision a new unique alias with
+     that challenge, and collect `chain.pem` in leaf→root order. Record the alias,
+     challenge, and leaf-SPKI SHA-256 in a separately authenticated expectations tree.
+  2. Capture the governed status with `scripts/capture_android_attestation_status.py`, passing each
+     reviewed supplemental TBS digest through its repeatable `--revoked-tbs-sha256` option. Run
+     `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>
+     --alias <trusted-alias> --challenge-file <trusted-challenge-file>
+     --expected-leaf-spki-sha256 <trusted-leaf-spki-digest>
+     --revocation-snapshot <capture>/android-sdk-revocation-snapshot-v1.txt
+     --revocation-snapshot-sha256 <separately-trusted-governance-commitment>
+     --evaluation-time-ms <ms> --require-strongbox --output <report.json>` using the appropriate
+     Google/Samsung root. Obtain every expectation and the commitment from the
+     authenticated governance record, never from the submitted bundle.
   3. Archive the JSON summary alongside raw attestation material in
      `artifacts/android/attestation/<device-tag>/`.
-- **Bundle format:** Follow `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md`
-  for the required file layout (`chain.pem`, `challenge.hex`, `alias.txt`, `result.json`).
+- **Bundle format:** Keep untrusted evidence (`chain.pem`, `result.json`, and
+  optional notes) separate from the mirrored expectations tree (`alias.txt`,
+  `challenge.hex`, and `leaf_spki_sha256.hex`).
 - **Trusted roots:** Obtain vendor-supplied PEMs from the device lab secrets store; pass multiple
   `--trust-root` arguments or point `--trust-root-dir` to the directory that holds the anchors when
   the chain terminates in a non-Google anchor.
-- **CI harness:** Use `scripts/android_strongbox_attestation_ci.sh` to batch-verify archived bundles
-  on lab machines or CI runners. The script scans `artifacts/android/attestation/**` and invokes the
-  harness for every directory containing the documented files, writing refreshed `result.json`
-  summaries in place.
+- **CI harness:** Use `scripts/android_strongbox_attestation_ci.sh --bundles-root
+  <evidence> --expectations-root <trusted-expectations> --trust-root <root>` to
+  batch-verify archived bundles. Missing or empty evidence roots fail closed.
 - **CI lane:** After syncing new bundles, run the Buildkite step defined in
   `.buildkite/android-strongbox-attestation.yml` (`buildkite-agent pipeline upload --pipeline .buildkite/android-strongbox-attestation.yml`).
   The job executes `scripts/android_strongbox_attestation_ci.sh`, generates a summary with
@@ -631,12 +639,14 @@ artefacts are captured for governance.
   link the build URL from the device matrix.
 - **Reporting:** Attach the JSON output to governance reviews and update the device matrix entry in
   `specs/sdk/android/readiness/android_strongbox_device_matrix.md` with the attestation date.
-- **Mock rehearsal:** When hardware is unavailable, run `scripts/android_generate_mock_attestation_bundles.sh`
-  (which uses `scripts/android_mock_attestation_der.py`) to mint deterministic test bundles plus a shared mock root so CI and docs can exercise the harness end-to-end.
+- **Mock rehearsal:** When hardware is unavailable, run
+  `scripts/android_generate_mock_attestation_bundles.sh` to mint test bundles,
+  a separate expectations tree, and use the mock root from the separate
+  attestation-authority directory.
 - **In-code guardrails:** `ci/run_android_tests.sh --tests
-  org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` covers empty vs challenged
-  attestation regeneration (StrongBox/TEE metadata) and emits `android.keystore.attestation.failure`
-  on challenge mismatch so cache/telemetry regressions are caught before shipping new bundles.
+  org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` covers
+  cached inspection, uncached recorded-chain verification, backend failures,
+  alias binding, and explicit challenged re-attestation rejection.
 
 ## 8. Contacts
 
@@ -738,13 +748,17 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
 
 **Diagnostics**
 
-- **Bundle verification:** Run
-  `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>`
+- **Bundle verification:** Run the harness with `--bundle-dir <bundle>`, the
+  vendor trust root, current governed snapshot digest/date/max-age and deny
+  lists, plus an explicit in-window `--evaluation-time-ms`
   on the archived attestation to confirm whether the failure is due to device
   misconfiguration or a policy change. Attach the generated `result.json`.
-- **Challenge regen:** Challenges are not cached. Each challenge request regenerates a fresh
-  attestation and caches by `(alias, challenge)`; challenge-less calls reuse the cache. Unsupported
-- **CI sweep:** Execute `scripts/android_strongbox_attestation_ci.sh` so every
+- **Challenge rotation:** Android cannot re-attest an existing alias. Provision a
+  new unique alias with `setAttestationChallenge`, verify its recorded chain,
+  and only then rotate application signing to it. Verification rereads the
+  recorded chain and fails without a non-empty expected challenge.
+- **CI sweep:** Execute `scripts/android_strongbox_attestation_ci.sh` with the
+  same governed snapshot and explicit evaluation-time arguments so every
   stored bundle is revalidated; this guards against systemic issues introduced
   by new trust anchors.
 - **Device drill:** On hardware without StrongBox (or by forcing the emulator),

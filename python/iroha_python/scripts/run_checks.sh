@@ -50,7 +50,10 @@ if [[ "${SKIP_LINT}" != "1" ]]; then
         echo "mypy is not installed. Install with 'pip install iroha-python[dev]'." >&2
         exit 1
     fi
-    run "${PYTHON_BIN}" -m mypy --config-file "${IROHA_PYTHON_RUFF_CFG}" "${IROHA_PYTHON_SRC}" "${IROHA_PYTHON_TESTS}"
+    # Type-check the shipped modules. Test doubles stay under Ruff and pytest,
+    # which exercise their actual runtime contracts without treating fixtures
+    # as part of the public SDK type surface.
+    run "${PYTHON_BIN}" -m mypy --config-file "${IROHA_PYTHON_RUFF_CFG}" "${IROHA_PYTHON_SRC}"
     run "${PYTHON_BIN}" -m mypy --config-file "${TORII_RUFF_CFG}" "${TORII_CLIENT_SRC}"
 fi
 

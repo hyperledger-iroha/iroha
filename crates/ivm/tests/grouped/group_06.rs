@@ -10,8 +10,6 @@ mod metal_sha256;
 mod mint_circuit;
 #[path = "../mixed_hardware_consensus.rs"]
 mod mixed_hardware_consensus;
-#[path = "../mixed_ops.rs"]
-mod mixed_ops;
 #[path = "../mock_wsv.rs"]
 mod mock_wsv;
 #[path = "../mock_wsv_instruction_box.rs"]

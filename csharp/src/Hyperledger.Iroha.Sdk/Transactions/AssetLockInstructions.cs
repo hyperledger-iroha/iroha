@@ -17,9 +17,13 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
 {
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
-    /// <summary>The native V1 instruction type and wire identifier.</summary>
+    /// <summary>The concrete native V1 Norito schema name.</summary>
     public const string NativeTypeName =
         "iroha_data_model::isi::escrow::CancelAssetLock";
+
+    /// <summary>The canonical native V1 instruction wire identifier.</summary>
+    public const string NativeWireId =
+        "iroha.instruction.v1::escrow::CancelAssetLock";
 
     /// <summary>Maximum accepted size of a framed native V1 instruction.</summary>
     public const int MaximumNoritoBytesV1 = 512;
@@ -333,7 +337,7 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
         }
     }
 
-    internal override string WireId => NativeTypeName;
+    internal override string WireId => NativeWireId;
 
     internal override string TypeName => NativeTypeName;
 

@@ -95,6 +95,9 @@ def _load_native_free_tx_module() -> types.ModuleType:
             pass
 
         crypto._LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 = 255
+        crypto._is_native_crypto_instance = lambda value, _type_name: isinstance(
+            value, NativePlaceholder
+        )
         for name in (
             "ContractCall",
             "Ed25519KeyPair",
@@ -739,7 +742,7 @@ def _prepared_batch_response(
     arguments = [b"first-arguments", b"second-arguments"]
     binding_items: list[dict[str, Any]] = []
     prepared_entries: list[dict[str, Any]] = []
-    for index, (call, encoded_arguments) in enumerate(zip(calls, arguments)):
+    for index, (call, encoded_arguments) in enumerate(zip(calls, arguments, strict=True)):
         address = call.expected_contract_address or call.contract_address
         code_hash = call.expected_code_hash_hex
         abi_hash = call.expected_abi_hash_hex
@@ -818,7 +821,7 @@ def test_contract_intents_prepare_ordered_batch_and_keep_signing_local(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     crypto = types.ModuleType(f"{PURE_PACKAGE}.crypto")
-    crypto._NativeInstruction = FakeInstruction
+    crypto.Instruction = FakeInstruction
     monkeypatch.setitem(sys.modules, f"{PURE_PACKAGE}.crypto", crypto)
     first = ContractCallIntent(
         "pay",

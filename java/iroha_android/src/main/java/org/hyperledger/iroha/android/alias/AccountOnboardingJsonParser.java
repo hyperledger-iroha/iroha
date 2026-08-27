@@ -20,6 +20,7 @@ import java.util.Set;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.FeePaymentJson;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Strict sponsored-onboarding response parser. */
 public final class AccountOnboardingJsonParser {
@@ -45,6 +46,12 @@ public final class AccountOnboardingJsonParser {
       return parseProofRequired(root);
     }
     throw new IllegalStateException("account onboarding prepare response.schema is unsupported");
+  }
+
+  /** Parses one exact authenticated faucet prepared transaction. */
+  public static AccountFaucetPreparedTransactionV1 parseFaucetPrepareResponse(
+      final byte[] payload) {
+    return parseFaucetPrepared(root(payload, "account faucet prepare response"));
   }
 
   /** Parses one closed atomic account-onboarding current-state response. */
@@ -220,6 +227,43 @@ public final class AccountOnboardingJsonParser {
         stringField(root, "transaction_hash_hex", path + ".transaction_hash_hex"),
         stringField(root, "signed_transaction_wire_hex", path + ".signed_transaction_wire_hex"),
         stringField(root, "signed_transaction_wire_sha256", path + ".signed_transaction_wire_sha256"),
+        FeePaymentJson.parse(root.get("fee_payment"), path + ".fee_payment"),
+        stringField(root, "server_signature", path + ".server_signature"));
+  }
+
+  private static AccountFaucetPreparedTransactionV1 parseFaucetPrepared(
+      final Map<String, Object> root) {
+    final String path = "prepared faucet transaction";
+    exactKeys(
+        root,
+        set(
+            "schema", "binding", "operation", "claim", "semantic_hash_hex", "account_id",
+            "asset_definition_id", "asset_id", "amount", "transaction_hash_hex",
+            "signed_transaction_wire_hex", "signed_transaction_wire_sha256", "fee_payment",
+            "server_signature"),
+        path);
+    final Map<String, Object> claim = objectField(root, "claim", path + ".claim");
+    exactKeys(
+        claim,
+        set("account_id", "pow_anchor_height", "pow_nonce_hex"),
+        path + ".claim");
+    return new AccountFaucetPreparedTransactionV1(
+        stringField(root, "schema", path + ".schema"),
+        parseBinding(objectField(root, "binding", path + ".binding")),
+        stringField(root, "operation", path + ".operation"),
+        new AccountFaucetClaimV1(
+            stringField(claim, "account_id", path + ".claim.account_id"),
+            positiveU64(claim.get("pow_anchor_height"), path + ".claim.pow_anchor_height"),
+            stringField(claim, "pow_nonce_hex", path + ".claim.pow_nonce_hex")),
+        stringField(root, "semantic_hash_hex", path + ".semantic_hash_hex"),
+        stringField(root, "account_id", path + ".account_id"),
+        stringField(root, "asset_definition_id", path + ".asset_definition_id"),
+        stringField(root, "asset_id", path + ".asset_id"),
+        NumericV1.QuantityValue.parseCanonical(stringField(root, "amount", path + ".amount")),
+        stringField(root, "transaction_hash_hex", path + ".transaction_hash_hex"),
+        stringField(root, "signed_transaction_wire_hex", path + ".signed_transaction_wire_hex"),
+        stringField(
+            root, "signed_transaction_wire_sha256", path + ".signed_transaction_wire_sha256"),
         FeePaymentJson.parse(root.get("fee_payment"), path + ".fee_payment"),
         stringField(root, "server_signature", path + ".server_signature"));
   }

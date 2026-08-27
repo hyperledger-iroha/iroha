@@ -95,10 +95,10 @@ execution evidence.
 Host-native evidence now uses
 `scripts/check_native_sdk_abi22_artifact.py`. For C/JNI, C#, Node, and Python it
 binds one non-linked artifact's stable byte length and SHA-256 to the exact clean
-Git commit, calls the bridge probe, requires ABI **exactly** 22, and verifies the
+Git commit, calls the bridge probe, requires ABI **exactly** 23, and verifies the
 lane's appeal-finance entrypoint inventory. Canonical evidence is reverified
 after the build and before the native-dependent suite; noncanonical manifests,
-symlinks, hardlinks, byte replacement, source drift, ABI 19/20/21/23, and missing
+symlinks, hardlinks, byte replacement, source drift, ABI 19/20/21/22, and missing
 symbols fail closed. Node staging, loading, and release-provenance collection
 also reject missing, dirty, or stale build provenance. The Python native lane is
 pinned to Python 3.12 and rejects any skipped reference-validation test.

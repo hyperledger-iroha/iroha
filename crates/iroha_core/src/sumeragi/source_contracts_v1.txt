@@ -1354,7 +1354,7 @@ region|store_completion_marker_coalescing|effects|at|pub(crate) fn complete_body
 region|coalesced_local_store_preflight|effects|at|if coalesces_published_store_terminal {\n                    // The published row is already the sole successor.|before|                } else {\n                    let validate_effect = AdapterEffect::ValidateBody {
 region|coalesced_local_store_settlement|effects|at|let projected_local_admission = if coalesces_local_store_replay {|before|        } else if let Some((store_effect, validate_effect, validate_ownership, store_terminal)) =
 region|live_store_publication|scheduler_inputs|at|fn publish_certified_fetch_store(|before|fn publish_durable_store_validate(
-region|recovered_store_projection|registry|at|pub(super) fn recovered_published_store_retry_markers(|before|/// Borrow every exact durable Validate row whose executable lifecycle
+region|recovered_store_projection|registry|at|pub(super) fn recovered_published_store_retry_markers(|before|/// Borrow every exact durable Validate row whose direct Store-successor
 region|registry_store_census|registry|at|pub(super) fn published_lifecycle_store_retry_census(|before|/// Borrow every exact durable Store row whose executable lifecycle owner
 region|recovered_store_publication|launch|at|pub(in crate::sumeragi) fn settle_recovered_decision_fetch_store(|before|/// Reserve, claim, and queue one recovered Sign
 region|recovered_store_install|launch|at|.recovered_published_store_retry_markers()|before|if !body_store
@@ -1643,7 +1643,7 @@ required|pending_kura_store_cross_census|map_err(ProductionLifecycleFinalization
 order|pending_kura_store_cross_census|3|.exactly_covers_finalization_work(&self.launched.owner.coordinator)|return Err(ProductionLifecycleFinalizationErrorV1::NotReady);|.verify_published_store_marker_finalization_census()|pending-Kura must classify incomplete lifecycle work before immutable Store mismatch
 required|recovered_store_install|.recovered_published_store_retry_markers()|startup stopped enumerating every authenticated durable Store row
 required|recovered_store_install|.install_recovered_published_lifecycle_store_retry_marker(|startup stopped reinstalling active Store markers before clocks
-required|recovered_store_install|.recovered_published_validate_retry_markers()|startup stopped enumerating every authenticated durable Validate row
+required|recovered_store_install|.recovered_published_validate_retry_markers()|startup stopped enumerating authenticated direct Store-successor Validate rows
 required|recovered_store_install|.install_recovered_published_lifecycle_validate_retry_marker(|startup stopped reinstalling Validate tombstones before clocks
 order|recovered_store_install|4|.recovered_published_store_retry_markers()|.install_recovered_published_lifecycle_store_retry_marker(|.recovered_published_validate_retry_markers()|.install_recovered_published_lifecycle_validate_retry_marker(|cold Store markers must install before cold Validate markers
 forbidden|lock_retry_marker_cleanup|self.published_lifecycle_store_retry_markers|protected-lock cleanup must not orphan an executable lifecycle Store row
@@ -1771,6 +1771,7 @@ region|output_settlement|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod t
 region|output_pending|registry|after|pub(in crate::sumeragi) struct PendingLifecycleOutputAdmissionV1 {|before|impl PreparedLifecycleOutputExecutionV1 {
 region|runtime_occurrence|runtime|after|pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {|before|/// Mint the ordinal-free lifecycle-admission binding for this exact effect.
 region|periodic_output_pending|registry|at|fn is_periodic_retransmit_broadcast(&self) -> bool {|before|/// Restore the exact bounded handoff when lifecycle ordering defers I/O.
+region|periodic_apply_edge|registry|at|pub(in crate::sumeragi) fn exactly_precedes_periodic_retransmit_apply(|before|/// Recheck an exact retry without replacing the retained move-only owner.
 region|periodic_runtime_occurrence|runtime|at|fn exactly_binds_periodic_retransmit_broadcast(|before|fn validate_exact(&self) -> bool {
 region|periodic_runtime_identity|runtime|at|const PERIODIC_RETRANSMIT_ROOT_IDENTITY: &[u8] =|before|/// Maximum base intervals assigned to one certified view.
 region|periodic_runtime_timer|runtime|at|fn freeze_due_clock_owners(&mut self, now: Instant)|before|fn minimum_active_lifecycle_ordinal(&self)
@@ -1807,9 +1808,13 @@ required|output_settlement|if !execution.is_periodic_retransmit_broadcast()|non-
 required|output_settlement|execution.execute_with(execute)|periodic terminal control retry stopped reaching exact output service
 required|output_settlement|LifecycleOutputServiceDispositionV1::SourceRetained|periodic terminal control retry stopped preserving exact backpressure ownership
 required|periodic_output_pending|fn is_periodic_retransmit_broadcast(&self)|output settlement lost its sealed periodic-reservice classifier
+required|periodic_apply_edge|exactly_binds_periodic_retransmit_broadcast(&self.effect)|post-Apply edge stopped authenticating the periodic CommitQC occurrence
+required|periodic_apply_edge|apply_ownership.exactly_follows_two_effect_batch(|post-Apply edge stopped authenticating the exact same-batch Apply successor
 required|periodic_runtime_occurrence|fn exactly_binds_periodic_retransmit_broadcast(|runtime omitted the authenticated periodic Broadcast occurrence classifier
 required|periodic_runtime_occurrence|RuntimeFreshRootKind::Retransmit|periodic Broadcast classifier stopped requiring the retransmit root family
 required|periodic_runtime_occurrence|PERIODIC_RETRANSMIT_ROOT_IDENTITY|periodic Broadcast classifier stopped sharing the timer root identity
+required|periodic_runtime_occurrence|fn exactly_follows_two_effect_batch(|runtime omitted exact same-owner two-effect batch authentication
+required|periodic_runtime_occurrence|predecessor.owner == self.owner|periodic batch edge stopped requiring one runtime lifecycle owner
 required|periodic_runtime_identity|b"periodic-retransmit"|periodic Broadcast classifier changed the serialized timer root identity
 count|periodic_runtime_timer|PERIODIC_RETRANSMIT_ROOT_IDENTITY|2|periodic timer classification and owner mint must share the one serialized root identity
 required|output_settlement|LifecycleOutputServiceDispositionV1::SourceRetained|generic output settlement stopped distinguishing transport backpressure from acceptance
@@ -1892,6 +1897,8 @@ required|fixture|project_store_validate_successor|recovered Prepare fixture omit
 required|fixture|project_exact_validate|recovered Prepare fixture omitted exact origin stage {required}
 required|fixture|DurableValidateReplayEvidenceV1::remote_proposal|recovered Prepare fixture omitted exact origin stage {required}
 required|fixture|project_installed_validate_candidate|recovered Prepare fixture omitted exact origin stage {required}
+required|fixture|RecoveredDurableValidateRetryOwnerV1::for_test(|synthetic post-completion fixture stopped carrying its exact pre-completion admission retry owner {required}
+required|fixture|RecoveredDurableValidateRetryCensusV1::from_admission_owner_for_test(|synthetic post-completion fixture stopped preserving the move-only admission retry census {required}
 forbidden|fixture|certified_pipeline_replay_evidence_for_test|recovered Prepare fixture fabricated authority through {forbidden}
 forbidden|fixture|projection::admission_request(|recovered Prepare fixture fabricated authority through {forbidden}
 forbidden|fixture|DurableValidateReplayEvidenceV1::certified|recovered Prepare fixture fabricated authority through {forbidden}
@@ -2580,12 +2587,14 @@ required|binding|durable_body.manifest_hash()|durable Fetch binding omitted {req
 required|binding|fetch_effect_matches_manifest|durable Fetch binding omitted {required}
 end
 case|cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks
+region|owner_classifier|replay_authority|after|pub(super) enum ColdValidateRetryOwnerClassV1 {|before|#[derive(Clone, Debug)]\npub(super) struct RecoveredStandaloneValidateSourceV1 {
 region|owner|registry|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryOwnerV1|before|impl RecoveredDurableValidateRetryOwnerV1
 region|owner_impl|registry|after|impl RecoveredDurableValidateRetryOwnerV1|before|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryCensusV1
 region|census|registry|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryCensusV1|before|impl RecoveredDurableValidateRetryCensusV1
 region|census_impl|registry|after|impl RecoveredDurableValidateRetryCensusV1|before|/// Closed failure while joining cold Validate retry authority at launch.
 region|projection|registry_recovery_impl|after|pub(super) fn project_recovered_durable_validate_retry_census(|before|/// Seal the complete current Ready census
 region|projection_source|registry_recovery_impl|begin|-|end|-
+region|published_validate_projection|registry|at|pub(super) fn recovered_published_validate_retry_markers(|before|/// One move-only concrete effect paired with its sealed pending authority.
 region|pending_binding|runtime|after|pub(crate) struct PendingRuntimeEffectBinding|before|/// Move-only restart successor derived from one exact recovered WAL vote.
 region|pending_source|runtime|begin|-|end|-
 region|binding|runtime|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryBindingV1|before|/// Mint the unique pending owner of one exact payload-free live-WAL continuation.
@@ -2607,6 +2616,7 @@ required|owner|effect: AdapterEffect|cold Validate owner lost the immutable Vali
 required|owner|durable_receipt: DurableBodyReceipt|cold Validate owner lost its checksummed body receipt
 required|owner|binding: RecoveredDurableValidateRetryBindingV1|cold Validate owner lost its exact runtime binding
 required|owner|lifecycle_ordinal: u128|cold Validate owner lost its exact live logical row
+required|owner|owner_class: ColdValidateRetryOwnerClassV1|cold Validate owner lost its mutually exclusive seal-or-marker classification
 forbidden|owner|Clone|cold Validate owner became cloneable
 required|owner_impl|fn key(|cold Validate owner lost its exact proposal-round and subject key
 required|owner_impl|fn lifecycle_ordinal(|cold Validate owner stopped exposing its immutable logical row only to the closed executor install
@@ -2629,6 +2639,10 @@ required|census_impl|.bind_validated_marker(key, validated)|cold Validate census
 required|census_impl|fn install_into_executor|cold Validate census lost its consuming atomic executor installation
 required|census_impl|self.owners|cold Validate census stopped consuming its complete owner map
 required|census_impl|for owner in self.owners.into_values()|cold Validate census stopped consuming every owner without exposing a reusable subset
+required|census_impl|match owner.owner_class|cold Validate census stopped selecting its authenticated retry-owner class
+required|census_impl|ColdValidateRetryOwnerClassV1::AdmissionCensus => installation.absorb(owner)?|admission-owned cold Validate stopped installing its exact recovered retry seal
+required|census_impl|ColdValidateRetryOwnerClassV1::PublishedStoreSuccessor => {|direct Store-successor Validate incorrectly lost its marker-only branch
+count|census_impl|installation.absorb(owner)|1|only admission-owned Validate carriers may install recovered executor retry seals
 forbidden|census_impl|fn iter(|cold Validate census exposed a caller-selectable subset iterator
 forbidden|census_impl|fn into_|cold Validate census exposed reusable parts or a caller-selected subset
 forbidden|census_impl|Vec<|cold Validate census reopened raw list ownership
@@ -2667,8 +2681,15 @@ required|projection|validate.matches_recovered_record(|cold census omitted compl
 required|projection|project_recovered_durable_validate_retry_binding(|cold census lost its opaque exact runtime binding
 required|projection|matching_decision|cold census failed to pass the associated Decision ceiling into retry binding
 required|projection|lifecycle_ordinal: address.ordinal|cold census stopped transferring the exact registry row into its closed owner
+required|projection|owner_class: validate.replay_evidence.cold_retry_owner_class()|cold census stopped retaining the replay-lineage owner partition
 required|projection|owners.insert(key, owner).is_some()|cold census stopped rejecting a second exact-key owner
 required|projection|RecoveredDurableValidateRetryCensusV1 {|cold census stopped sealing the complete owner map behind one opaque move-only value
+required|owner_classifier|AdmissionCensus|cold Validate owner classifier omitted the admission retry-seal class
+required|owner_classifier|PublishedStoreSuccessor|cold Validate owner classifier omitted the direct Store-successor marker class
+required|owner_classifier|Self::Certified(_) \p Self::RecoveredDecision(_)|certified and recovered-Decision Validate carriers stopped sharing the published-successor class
+required|owner_classifier|Self::RemoteProposal(_) \p Self::LocalBody(_) \p Self::RecoveredStandalone(_)|standalone admission Validate carriers stopped sharing the recovered-seal class
+required|published_validate_projection|validate.replay_evidence.cold_retry_owner_class()|cold published-marker projection stopped consulting the shared replay-lineage classifier
+required|published_validate_projection|ColdValidateRetryOwnerClassV1::PublishedStoreSuccessor|cold published-marker projection admitted a standalone retry-seal carrier
 count|projection_source|pub(super) fn project_recovered_durable_validate_retry_census(|1|cold Validate census must have one registry mint
 required|pending_binding|causal_lifecycle_key: iroha_crypto::Hash|cold Validate pending binding lost its opaque causal coordinate
 required|pending_binding|effect_kind: u8|cold Validate pending binding lost its stable effect class
@@ -2799,11 +2820,19 @@ case|lifecycle_decision_apply_scheduler_attestation_is_lineage_exact_and_io_boun
 region|declaration|registry|after|pub(super) struct ReadyLifecycleDecisionApplyAttestationV1|before|impl ReadyLifecycleDecisionApplyAttestationV1
 region|registry|registry|begin|-|end|-
 region|dispatch_key_match|registry|after|fn matches(|before|/// Move-only authority for one exact lifecycle Decision Apply worker dispatch.
+region|live_authority|registry|after|pub(in crate::sumeragi) struct LiveLifecycleDecisionApplyReconciliationAuthorityV1 {|before|struct LiveLifecycleDecisionApplyReconciliationAuthoritySealV1;
+region|live_authority_accessors|registry|after|impl LiveLifecycleDecisionApplyReconciliationAuthorityV1 {|before|/// Closed service demand authenticated for one Ready recovered Sign carrier.
+region|live_projection|registry|after|fn project_reconciliation(|before|fn project_completion(
 region|classifier|registry_recovery_impl|after|pub(super) fn attest_ready_lifecycle_decision_apply(|before|/// Project the exact Ready live Apply
 region|live_reconciliation|registry_recovery_impl|after|pub(super) fn prepare_ready_live_decision_apply_reconciliation(|before|/// Project one exact claimed lifecycle Decision Apply
 region|dispatch|registry_recovery_impl|after|pub(super) fn prepare_lifecycle_decision_apply_dispatch(|before|/// Bind one guarded Applied worker result
 region|holder|concrete_admission|after|pub(super) fn attest_ready_lifecycle_decision_apply(|before|/// Project a Ready live Apply
 region|holder_live|concrete_admission|after|pub(super) fn prepare_ready_live_decision_apply_reconciliation(|before|/// Project the exact claimed lifecycle Decision Apply
+region|successor_attestation|registry|after|pub(in crate::sumeragi) struct AttestedLifecycleDecisionApplySuccessorOutputsV1 {|before|fn terminal_direct_output_matches_record(
+region|successor_attestation|registry|at|pub(super) fn attest_lifecycle_decision_apply_successor_outputs<'a>(|before|fn owner_held_output_ordinals(
+region|successor_holder|concrete_admission|at|pub(in crate::sumeragi) fn attest_lifecycle_decision_apply_successor_outputs|before|/// Confirm the already-durable terminal frame
+region|periodic_batch|runtime|at|pub(in crate::sumeragi) fn exactly_follows_two_effect_batch(|before|fn validate_exact(&self) -> bool {
+region|executor_transition|effects|after|pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyExecutorDispatchV1|before|/// Executor-authenticated global application-mode debt
 region|full_dispatch|scheduler_inputs|after|fn dispatch_completion_with_runner_debt_and_required_ordinal(|before|pub(super) fn dispatch_ready_validate_successor(
 region|scheduler_error|scheduler_inputs|after|pub(crate) enum ProductionSchedulerInputsError {|before|/// Result of one complete lifecycle-owned recovered Sign claim and dispatch.
 region|schema|schema|after|pub(super) fn from_authenticated(|before|/// Join one later Ready row
@@ -2830,6 +2859,9 @@ required|dispatch_key_match|self.lineage == lineage|Apply dispatch key stopped b
 required|registry|pub(super) const fn demand(&self)|Apply attestation registry surface omitted its typed demand accessor
 required|registry|pub(super) const fn dispatch_key(&self)|Apply attestation registry surface omitted its exact key accessor
 required|registry|impl Drop for ReadyLifecycleDecisionApplyAttestationSealV1|Apply attestation registry surface lost its seal
+required|live_authority|validate_predecessor_ordinal: u128|live Apply cleanup authority stopped retaining its exact Validate predecessor ordinal
+required|live_authority_accessors|pub(in crate::sumeragi) const fn validate_predecessor_ordinal(&self) -> u128|live Apply cleanup authority stopped exposing its immutable predecessor ordinal
+required|live_projection|validate_predecessor_ordinal: self.parent_address.ordinal|live Apply cleanup projection stopped copying the registry-authenticated Validate parent ordinal
 forbidden|registry|ReadyRecoveredDecisionApplyAttestation|retired recovered-only Apply attestation alias remains live
 forbidden|registry|RecoveredDecisionApplyDispatchKeyV1|retired recovered-only Apply dispatch-key alias remains live
 forbidden|registry|RecoveredDecisionApplyDispatchIdentityV1|retired recovered-only Apply dispatch-identity alias remains live
@@ -2865,6 +2897,31 @@ required|holder|.attest_ready_lifecycle_decision_apply(coordinator, ordinal)|hol
 required|holder_live|.prepare_ready_live_decision_apply_reconciliation(coordinator, ordinal)|holder lost its queue-inert live cleanup delegation
 forbidden|holder|registry_mut|attestation delegation exposed mutable registry access
 forbidden|holder_live|registry_mut|live cleanup delegation exposed mutable registry access
+required|successor_attestation|pending_outputs.len() != 1|post-Apply exemption stopped requiring the sole pending output
+required|successor_attestation|dispatch_key.lineage() != LifecycleDecisionApplyLineageV1::Live|post-Apply exemption admitted recovered Apply lineage
+required|successor_attestation|coordinator.ready_index.first().copied() != Some(apply_ordinal)|post-Apply exemption stopped requiring Apply as the global Ready minimum
+required|successor_attestation|certificate != authority.certificate()|post-Apply exemption stopped comparing the full Decision CommitQC
+required|successor_attestation|certificate.phase != wire::GlobalPhase::Commit|post-Apply exemption admitted a non-Commit certificate
+required|successor_attestation|coordinator.ready_index.iter().copied().nth(1) != Some(address.ordinal)|post-Apply exemption stopped requiring the CommitQC row as the immediate Ready successor
+required|successor_attestation|record.key.phase() != LifecyclePhase::BroadcastCommitQc|post-Apply exemption admitted another Broadcast phase
+required|successor_attestation|record.stage.kind() != LifecycleStageKind::BroadcastCommitQc|post-Apply exemption admitted another Broadcast stage
+required|successor_attestation|pending_output_matches_work(effect, pending, work)|post-Apply exemption stopped joining the exact installed PendingAdapter row
+required|successor_attestation|recovered_broadcast_output_matches_work(|post-Apply exemption stopped excluding recovered Broadcast aliases
+required|successor_attestation|terminal_direct_output_matches_record(coordinator, ordinal, effect, pending)|post-Apply exemption stopped excluding terminal direct-output aliases
+required|successor_attestation|output_address: ConcreteWorkAddress|post-Apply proof stopped retaining the exact Broadcast row address
+required|successor_attestation|output_digest: LifecycleDigest|post-Apply proof stopped retaining the installed Broadcast digest
+required|successor_holder|.attest_lifecycle_decision_apply_successor_outputs(|production holder omitted the sealed singleton CommitQC attestation
+forbidden|successor_holder|registry_mut|successor-output attestation exposed mutable registry access
+required|periodic_batch|predecessor.owner == self.owner|periodic CommitQC and Apply stopped sharing one lifecycle owner
+required|periodic_batch|predecessor.binding.effect_count == 2|periodic Decision exemption stopped requiring a two-effect batch
+required|periodic_batch|predecessor.binding.effect_position == 1|periodic CommitQC stopped being the first batch effect
+required|periodic_batch|self.binding.effect_position == 2|periodic Apply stopped being the second batch effect
+required|periodic_batch|predecessor.binding.candidate_count == 1|periodic Decision batch stopped requiring exactly one candidate
+required|periodic_batch|self.binding.candidate_position == 1|periodic Apply stopped being the sole candidate
+required|executor_transition|retained_effect_batch: &'executor mut Option<RetainedEffectBatch>|prepared Apply transition stopped borrowing the exact retained suffix
+required|executor_transition|successor_outputs.installed.is_none()|worker commit stopped rechecking an empty attestation slot
+required|executor_transition|successor_outputs\n                .retained_effect_batch\n                .take()|worker commit stopped coalescing the exact retransmit Apply after queue publication
+required|executor_transition|*successor_outputs.installed = Some(successor_outputs.attestation)|worker commit stopped installing the sealed successor proof
 required|scheduler_error|InvalidLifecycleDecisionApplyCarrier|scheduler Apply carrier failure lost its lifecycle-neutral class
 forbidden|scheduler_error|InvalidRecoveredDecisionApplyCarrier|scheduler retained the recovered-only Apply carrier failure alias
 required|schema|lifecycle_decision_apply_attestation|scheduler schema lost its lifecycle-neutral Apply attestation local
@@ -2875,14 +2932,19 @@ required|schema_capacity|lifecycle_decision_apply_attestation|physical-capacity 
 forbidden|schema_capacity|recovered_apply_attestation|physical-capacity schema retained the recovered-only Apply attestation local
 required|full_dispatch|prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)|full census omitted live Apply pre-dispatch reconciliation
 required|full_dispatch|executor.exactly_owns_live_lifecycle_decision_apply(&authority)|full census omitted the exact live executor owner join
+required|full_dispatch|attest_lifecycle_decision_apply_successor_outputs(|full census omitted the singleton post-Apply CommitQC attestation
+required|full_dispatch|executor.pending_lifecycle_output_admission_census()|full census stopped authenticating the complete pending-output map
 required|full_dispatch|AuthenticatedLifecycleCompletionReadyV1::Apply(attestation)|full census omitted neutral Apply readiness
+required|full_dispatch|.lifecycle_decision_apply_dispatch_available(|Apply availability omitted its sealed successor proof
 required|full_dispatch|LifecycleCompletionCapacityProbeV1::Apply {|full census omitted the neutral Apply capacity probe
 required|full_dispatch|services.capture_lifecycle_completion_capacity_census(probes)|full census omitted the shared capacity snapshot
 required|full_dispatch|.select_apply(ordinal)|Apply selection lost its exact frozen row
 required|full_dispatch|.prepare_lifecycle_decision_apply_dispatch(&self.coordinator, &lease)|Apply selection lost its lineage-aware registry projection
 required|full_dispatch|reservation.preflight(&prepared)|Apply queue reservation lost its exact projection preflight
-required|full_dispatch|reservation.commit(prepared)|Apply dispatch lost its one-shot queue publication
-order|full_dispatch|7|prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)|executor.exactly_owns_live_lifecycle_decision_apply(&authority)|let fence = executor.lifecycle_reducer_fence_observation()|attest_ready_lifecycle_decision_apply(&self.coordinator, *ordinal)|services.capture_lifecycle_completion_capacity_census(probes)|.select_apply(ordinal)|reservation.commit(prepared)|live reconciliation, complete authentication, frozen capacity, selection, and queue publication must remain ordered
+required|full_dispatch|live_apply_successor_outputs.remove(&ordinal)|Apply selection stopped consuming the exact local successor proof
+required|full_dispatch|.prepare_lifecycle_decision_apply_executor_dispatch(|Apply selection stopped binding executor proof installation to worker publication
+required|full_dispatch|reservation.commit(prepared, executor_dispatch)|Apply dispatch lost its atomic executor and worker queue publication
+order|full_dispatch|10|prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)|executor.exactly_owns_live_lifecycle_decision_apply(&authority)|attest_lifecycle_decision_apply_successor_outputs(|let fence = executor.lifecycle_reducer_fence_observation()|attest_ready_lifecycle_decision_apply(&self.coordinator, *ordinal)|services.capture_lifecycle_completion_capacity_census(probes)|.select_apply(ordinal)|live_apply_successor_outputs.remove(&ordinal)|.prepare_lifecycle_decision_apply_executor_dispatch(|reservation.commit(prepared, executor_dispatch)|live reconciliation, successor authentication, complete Ready authentication, frozen capacity, proof transfer, preparation, and atomic queue publication must remain ordered
 forbidden|full_dispatch|AuthenticatedRecoveredCompletionReadyV1|retired recovered-only completion census alias remains live
 forbidden|full_dispatch|RecoveredCompletionCapacityProbeV1|retired recovered-only capacity probe alias remains live
 forbidden|full_dispatch|capture_recovered_completion_capacity_census|retired recovered-only capacity capture alias remains live
@@ -2895,6 +2957,9 @@ region|prepare|registry_recovery_impl|after|pub(super) fn prepare_lifecycle_deci
 region|publication|registry_recovery_impl|after|pub(super) fn publish_lifecycle_decision_apply_terminal_transition|before|/// Prepare execution of one exact Ready durable Validate completion.
 region|adapter_preview|adapter|after|pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(|before|/// Decide whether an exact internal callback still needs a serialized
 region|runtime|runtime|after|pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(|before|fn timeout_vote_recovery_candidate_from_fair(
+region|live_predecessor_owner|effects|after|fn exactly_precedes_live_apply(|before|impl LiveLifecycleDecisionApplyOwnerV1
+region|validate_retry_authority|effects|after|fn exactly_owns_validate_retry_lifecycle_ordinal(|before|/// Release only the retry authority
+region|live_reconciliation|effects|after|pub(in crate::sumeragi) fn reconcile_live_lifecycle_decision_apply|before|/// Recheck that one Ready live Apply
 region|executor_prepare|effects|after|pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion|before|/// Install post-Ledger lifecycle Apply finality with no fallible tail.
 region|executor_commit|effects|after|pub(in crate::sumeragi) fn commit_lifecycle_decision_apply_finality|before|/// Whether production may consume and register another local proposal.
 region|settlement|launch|after|fn settle_lifecycle_decision_apply_completion_owner(|before|pub(in crate::sumeragi) enum ProductionLifecycleLaunchErrorV1
@@ -2907,6 +2972,11 @@ region|pending_registry_ordinal|registry_recovery_impl|at|pub(super) fn exact_re
 region|pending_replay|pending_kura|begin|-|end|-
 region|pending_verify|effects|at|pub(in crate::sumeragi) fn verify_pending_kura_recovered_apply_replay(|before|/// Authenticate and enqueue one reducer-directed v2 network message
 region|pending_dispatch|effects|at|pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_executor_dispatch|before|/// Install the distinct preliminary retransmit exclusion
+region|apply_dispatch_gate|effects|at|pub(in crate::sumeragi) fn lifecycle_decision_apply_dispatch_available(|before|/// Bind lifecycle Decision Apply queue publication to pending-Kura stage ownership.
+region|post_apply_output|effects|at|pub(in crate::sumeragi) fn settle_apply_terminal_direct_broadcast|before|/// Settle each initially parked lifecycle output once
+region|finish_gate|effects|at|pub(crate) fn ready_to_finish(&self) -> bool {|before|/// Consume a completely drained height without separating its runtime from
+region|completion_retry|runner_height_driver|at|fn completion_selection_retries_before_runtime(|before|fn ingress_selection_retries_before_producer(
+region|runtime_apply_dispatch_gate|runtime|at|pub(in crate::sumeragi) fn lifecycle_decision_apply_dispatch_available(&self) -> bool {|before|/// Freeze the serialized shell around one registry-owned Apply completion.
 region|pending_completion_exact|adapter|at|pub(in crate::sumeragi) fn exactly_matches_pending_kura_recovery(|before|impl SumeragiV2Adapter {
 region|pending_driver|pending_lifecycle|at|pub(in crate::sumeragi) fn drive_apply_recovery_turn(|before|/// Construct and authenticate lane recovery after the local Apply completes.
 region|pending_settlement|launch|at|pub(in crate::sumeragi) fn settle_pending_kura_applied_decision_apply_completion(|before|/// Fail-stop failure while consuming the recovered lifecycle owner into I/O.
@@ -2953,17 +3023,56 @@ required|adapter_preview|!next_reducer.ready_to_finish()|adapter preview omitted
 required|adapter_preview|core::mem::swap(&mut self.reducer, &mut next_reducer)|adapter preview omitted temporary exact-state installation
 required|adapter_preview|self.last_progress = prior_last_progress|adapter preview failed to restore progress before returning
 forbidden|adapter_preview|self.step(|adapter preview reopened direct reducer stepping
-required|runtime|self.ingress.len() != 0|runtime no longer requires an empty serialized ingress cut before Apply completion
+required|apply_dispatch_gate|self.runtime.queued_commands() == 0|live Apply dispatch no longer waits for the finite admitted runtime FIFO
+required|apply_dispatch_gate|attestation.pending_count() == self.pending_lifecycle_output_admissions.len()|post-Apply dispatch stopped matching the complete singleton pending census
+required|apply_dispatch_gate|attestation.exactly_matches_pending_keys(|post-Apply dispatch stopped matching the exact pending key
+required|apply_dispatch_gate|attestation.exactly_matches_retransmit_apply(&owned.effect)|post-Apply dispatch stopped matching the live Decision semantics
+required|apply_dispatch_gate|exactly_precedes_periodic_retransmit_apply(|post-Apply dispatch stopped joining the CommitQC and Apply batch occurrence
+required|apply_dispatch_gate|self.pending_work() == self.pending_lifecycle_output_admissions.len()|post-Apply dispatch admitted unrelated service debt
+required|apply_dispatch_gate|self.parked_effect_batch.is_none()|post-Apply dispatch admitted a parked executor batch
+required|pending_dispatch|attestation.dispatch_key() != prepared.dispatch_key()|prepared successor proof stopped matching its selected Apply key
+required|pending_dispatch|retained_effect_batch: &mut self.retained_effect_batch|prepared successor proof stopped borrowing the retained retransmit Apply
+forbidden|pending_dispatch|self.lifecycle_decision_apply_successor_outputs = successor_outputs|successor proof became visible before worker queue publication
+required|runtime_apply_dispatch_gate|self.ingress.len() == 0|runtime Apply dispatch gate no longer requires an empty serialized ingress cut
+required|runtime|self.ingress.len() != 0|runtime completion no longer requires a universally drained ingress cut
+required|live_predecessor_owner|self.dispatch_key.lifecycle_ordinal() == validate_predecessor_ordinal|preliminary Validate owner stopped matching the registry-authenticated predecessor ordinal
+required|live_predecessor_owner|validate_predecessor_ordinal < authority.dispatch_key().lifecycle_ordinal()|preliminary Validate owner stopped preceding its exact Apply child
+required|validate_retry_authority|(Some(seal), None) => seal.lifecycle_ordinal() == Some(lifecycle_ordinal)|live Apply retry preflight stopped matching the exact durable Validate seal ordinal
+required|validate_retry_authority|(None, Some(marker)) => marker.lifecycle_ordinal == Some(lifecycle_ordinal)|live Apply retry preflight stopped matching the exact published Validate marker ordinal
+required|validate_retry_authority|(Some(_), Some(_))|live Apply retry preflight stopped rejecting duplicate retry authorities
+required|validate_retry_authority|(None, None) => false|live Apply retry preflight stopped distinguishing an absent retry authority
+required|live_reconciliation|let validate_predecessor_ordinal = authority.validate_predecessor_ordinal()|live Apply reconciliation stopped retaining the authenticated Validate predecessor ordinal
+required|live_reconciliation|owner.exactly_precedes_live_apply(&authority)|live Apply reconciliation stopped authenticating its preliminary Validate predecessor
+required|live_reconciliation|validate_predecessor_ordinal >= dispatch_key.lifecycle_ordinal()|live Apply reconciliation stopped rejecting a predecessor outside the exact parent-before-child order
+required|live_reconciliation|.exactly_owns_validate_retry_lifecycle_ordinal(|live Apply reconciliation stopped preflighting the exact Validate retry authority
+required|live_reconciliation|live_apply_owner_already_exact|repeat live Apply reconciliation stopped authenticating its already-installed full owner
+required|live_reconciliation|validate_retry_authority_is_absent|repeat live Apply reconciliation stopped distinguishing absent retry authority from a mismatch
+required|live_reconciliation|self.release_live_lifecycle_validate_successor(validate_predecessor_ordinal)|queued live Apply reconciliation stopped releasing its exact preliminary Validate predecessor
+required|live_reconciliation|.release_validate_retry_lifecycle_ordinal(body_key, validate_predecessor_ordinal)|synchronous live Apply reconciliation stopped releasing its exact registry-authenticated Validate predecessor
+required|live_reconciliation|Ok(false) if live_apply_owner_already_exact => {}|repeat live Apply reconciliation stopped preserving exact post-release idempotence
+order|live_reconciliation|4|.exactly_owns_validate_retry_lifecycle_ordinal(|self.reconcile_decision_work(decision, true, services)|.release_validate_retry_lifecycle_ordinal(|self.live_lifecycle_decision_apply = Some(|exact retry preflight, Decision cleanup, synchronous predecessor release, and full Apply owner installation must remain ordered
+forbidden|live_reconciliation|release_live_lifecycle_validate_successor(dispatch_key.lifecycle_ordinal())|live Apply reconciliation confused the Apply child ordinal with its Validate predecessor
+forbidden|live_reconciliation|release_validate_retry_lifecycle_ordinal(body_key, dispatch_key.lifecycle_ordinal())|synchronous live Apply reconciliation confused the Apply child ordinal with its Validate predecessor
 required|executor_prepare|LifecycleDecisionApplyLineageV1::Live|executor preparation omitted the exact live owner branch
 required|executor_prepare|LifecycleDecisionApplyLineageV1::Recovered|executor preparation omitted the recovered no-live-owner branch
 required|executor_prepare|let lineage_owner_is_exact = match authority.lineage()|executor preparation stopped classifying the authority against its concrete lineage owner
 required|executor_prepare|owner.exactly_matches_completion(|live executor preparation stopped joining the complete retained Apply owner
 required|executor_prepare|self.live_lifecycle_decision_apply.is_none()|recovered executor preparation admitted substitution for a live owner
-required|executor_prepare|self.runtime.queued_commands() != 0|executor no longer keeps every lifecycle Apply completion ingress cut empty
+required|executor_prepare|self.runtime.queued_commands() != 0|executor completion no longer requires a universally drained runtime cut
 required|executor_prepare|!lineage_owner_is_exact|executor preparation stopped failing closed on authority-only lineage substitution
+required|executor_prepare|attestation.dispatch_key() == authority.dispatch_key()|executor completion stopped matching the stored successor proof to live Apply
+required|executor_prepare|attestation.exactly_matches_pending_keys(|executor completion stopped preserving the exact successor pending key
+required|executor_prepare|self.pending_work() != self.pending_lifecycle_output_admissions.len()|executor completion admitted unrelated service debt beside the sealed successor
 required|executor_commit|LifecycleDecisionApplyLineageV1::Live|finality commit omitted exact live owner consumption
 required|executor_commit|LifecycleDecisionApplyLineageV1::Recovered|finality commit omitted recovered non-substitution
 required|executor_commit|FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key)|finality commit lost its neutral lineage-aware owner
+required|executor_commit|attestation.dispatch_key() == dispatch_key|finality commit stopped matching the stored successor proof to Apply
+required|executor_commit|attestation.exactly_matches_pending_keys(|finality commit stopped preserving the exact successor pending key
+required|post_apply_output|!attestation.exactly_matches_terminal_preparation(&prepared)|post-Apply output service stopped rejoining the exact sealed Broadcast row and pending key
+required|post_apply_output|self.lifecycle_decision_apply_successor_outputs = None|post-Apply proof stopped retiring only after completed output service
+required|finish_gate|self.pending_lifecycle_output_admissions.is_empty()|height finish omitted pending post-Apply output debt
+required|finish_gate|self.lifecycle_decision_apply_successor_outputs.is_none()|height finish omitted the sealed post-Apply proof debt
+required|completion_retry|ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied|Applied completion stopped re-entering the post-Apply output corridor before Runtime
 order|completion_dispatch|3|self.services.take_next_lifecycle_completion()|LifecycleCompletionTakeV1::Apply(completion)|settle_lifecycle_decision_apply_completion_owner(completion, lane_work)|unified completion classification must transfer neutral Apply ownership directly to settlement
 required|settlement|LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference }|settlement omitted typed deferred Apply ownership
 required|settlement|completion.authorizes_sidecar_owner(services, lane_work)|settlement omitted exact sidecar owner validation
@@ -3531,7 +3640,7 @@ required|selector|.filter(\pnext\p *next != u64::MAX)|selector lost maximum-gene
 required|body_store|Arc::ptr_eq(&self.0, &other.0)|body-store identity lost pointer equality
 forbidden|worker|fn lifecycle_capacity_queue_depth|worker must not expose raw lifecycle capacity depth
 order|ingress_plan|6|preflight_selected_target_work_absent()|prepare_certified_fetch_body_persistence(prepared)|preflight_certified_fetch_body_persistence(&task)|coordinator.plan_turn(inputs)|settle_turn(lease, super::TurnOutcome::Blocked(post_submit_wait))|commit_certified_fetch_body_persistence(task)|ingress transaction omitted {required}
-order|ingress_plan|11|ProductionIngressSchedulerInputsError::CoordinatorFaulted|ProductionIngressSchedulerInputsError::UnsettledLease|ProductionIngressSchedulerInputsError::ForeignModeObservation|ProductionIngressSchedulerInputsError::StaleModeObservation|services.matches_lifecycle_body_store(body_store_identity)|services.matches_lifecycle_executor_output_guard(executor)|ProductionIngressSchedulerInputsError::CompetingReadyWork|.prepare_selected_certified_fetch_admission(executor, &self.verified)|.capture_lifecycle_capacity_rank(selector)|self.settle_certified_fetch_admission(admission)|.attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry)|certified Fetch must cross every no-mutation gate and reserve capacity before durable admission
+order|ingress_plan|11|ProductionIngressSchedulerInputsError::CoordinatorFaulted|ProductionIngressSchedulerInputsError::UnsettledLease|ProductionIngressSchedulerInputsError::ForeignModeObservation|ProductionIngressSchedulerInputsError::StaleModeObservation|services.matches_lifecycle_body_store(body_store_identity)|services.matches_lifecycle_executor_output_guard(executor)|ProductionIngressSchedulerInputsError::CompetingReadyWork|.prepare_selected_certified_fetch_admission(executor, &self.verified)|.capture_lifecycle_capacity_rank(selector)|self.settle_certified_fetch_admission(admission)|.attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry)|certified Fetch admission crossed a no-mutation gate or lost exact pre-Phase-A order
 forbidden|registry|SchedulerReadyInputs::from_authenticated(|registry must not mint ready scheduler inputs
 forbidden|concrete|SchedulerReadyInputs::from_authenticated(|concrete admission must not mint ready scheduler inputs
 forbidden|selector|SchedulerReadyInputs::from_authenticated(|selector must not mint ready scheduler inputs
@@ -3602,9 +3711,11 @@ case|certified_fetch_completion_source_keeps_the_durable_cut_ordered
 region|preledger_restart|selector|at|pub(crate) struct CertifiedFetchBodyPersistencePreLedgerRestartError {|before|/// Closed structural rejection for a selected productive carrier before LedgerV1.
 region|preledger_error|selector|at|pub(crate) enum CertifiedFetchPreLedgerProductiveIngressErrorV1 {|before|/// Closed structural rejection for the sole post-dequeue Runtime handoff.
 region|postdequeue_error|selector|at|pub(crate) enum CertifiedFetchPostDequeueRuntimeHandoffErrorV1 {|before|impl CertifiedFetchPostDequeueRuntimeHandoffErrorV1 {
-region|ownership_exact|selector|at|fn certified_fetch_ingress_ownership_is_exact(|before|/// Validate the exact queued productive stage without mutating ingress or its gate.
+region|ownership_exact|selector|at|fn certified_fetch_ingress_ownership_is_exact(|before|/// Sealed pre-ledger ownership mode for one exact certified-Fetch response.
+region|ingress_mode|selector|at|fn certified_fetch_preledger_ingress_mode(|before|/// Validate the exact queued productive stage without mutating ingress or its gate.
 region|preledger_validator|selector|at|pub(crate) fn certified_fetch_preledger_productive_ingress_token(|before|/// Validate and clone the sole Runtime receipt installed by exact dequeue.
-region|postdequeue_validator|selector|at|pub(crate) fn certified_fetch_postdequeue_runtime_receipt(|before|/// Exact fresh queue witness retained after LedgerV1 may have advanced.
+region|postdequeue_validator|selector|at|pub(crate) fn certified_fetch_postdequeue_runtime_receipt(|before|/// Validate the post-dequeue ownership installed for the selected pre-ledger mode.
+region|postdequeue_handoff|selector|at|fn certified_fetch_postdequeue_ingress_handoff(|before|/// Exact fresh queue witness retained after LedgerV1 may have advanced.
 region|schema|selector|after|pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {|before|/// Typed reason an authenticated selected response could not wake its exact
 region|transaction|selector|after|pub(crate) fn complete_certified_fetch_body_persistence(|before|fn publish_certified_fetch_ready_authority(
 region|completion|turn_driver|after|fn settle_parked_certified_fetch_body_persistence(|before|/// Classify parked and physical lifecycle owners before any fresh Ready dispatch.
@@ -3633,17 +3744,19 @@ required|postdequeue_error|InvalidOwnership|post-dequeue validator lost invalid-
 required|postdequeue_error|MissingRuntimeReceipt|post-dequeue validator lost missing-receipt classification
 required|postdequeue_error|MismatchedRuntimeReceipt|post-dequeue validator lost foreign-receipt classification
 order|ownership_exact|4|ownership.validate_exact()|ownership.matches_message(inbound.message())|ownership.matches_semantic_origin(inbound.sender())|ownership.matches_reply_routes(inbound.reply_routes())|certified Fetch ownership predicate stopped binding exact bytes, message, sender, or routes
-order|preledger_validator|9|.ingress_ownership()|CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership|certified_fetch_ingress_ownership_is_exact(inbound, ownership)|CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership|.leader_wire_token()|CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken|ownership.leader_wire_runtime_receipt().is_some()|CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound|Ok(token)|pre-Ledger validator stopped proving exact ownership, token, and no prior Runtime handoff
+order|ingress_mode|12|.ingress_ownership()|CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership|certified_fetch_ingress_ownership_is_exact(inbound, ownership)|CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership|ownership.leader_wire_runtime_receipt().is_some()|CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound|ownership.leader_wire_token().cloned()|!ownership.request_bound_non_roster_completion()|CertifiedFetchPreLedgerIngressModeV1::DurableLeaderWire(token)|ownership.request_bound_non_roster_completion()|CertifiedFetchPreLedgerIngressModeV1::RequestBoundArchive|CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken|pre-Ledger mode stopped distinguishing durable roster ownership from the sealed exact-request archive path
+order|preledger_validator|5|certified_fetch_preledger_ingress_mode(inbound)?|CertifiedFetchPreLedgerIngressModeV1::DurableLeaderWire(token)|Ok(token)|CertifiedFetchPreLedgerIngressModeV1::RequestBoundArchive|CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken|legacy token projection stopped rejecting the tokenless archive mode
 order|postdequeue_validator|11|.ingress_ownership()|CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MissingOwnership|certified_fetch_ingress_ownership_is_exact(inbound, ownership)|CertifiedFetchPostDequeueRuntimeHandoffErrorV1::InvalidOwnership|.leader_wire_runtime_receipt()|CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MissingRuntimeReceipt|receipt.token() != expected_token|receipt.owner().causal_lifecycle_key() != expected_token.identity_hash()|receipt.owner().admission_ordinal() != expected_token.scheduler_ordinal()|CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MismatchedRuntimeReceipt|Ok(receipt.clone())|post-dequeue validator stopped proving the exact token, causal key, and scheduler ordinal
+order|postdequeue_handoff|10|match expected|CertifiedFetchPreLedgerIngressModeV1::DurableLeaderWire(token)|certified_fetch_postdequeue_runtime_receipt(inbound, token).map(Some)|CertifiedFetchPreLedgerIngressModeV1::RequestBoundArchive|.ingress_ownership()|certified_fetch_ingress_ownership_is_exact(inbound, ownership)|!ownership.request_bound_non_roster_completion()|ownership.leader_wire_token().is_some()|ownership.leader_wire_runtime_receipt().is_some()|Ok(None)|post-dequeue handoff stopped preserving durable roster receipts or exact tokenless archive ownership
 required|schema|Retry(CertifiedFetchBodyPersistenceRetryError)|Phase-B schema lost retryable pre-Ledger ownership
 required|schema|RestartRequiredBeforeLedger(CertifiedFetchBodyPersistencePreLedgerRestartError)|Phase-B schema lost non-retryable invalid queued ownership
 required|schema|RestartRequired(CertifiedFetchBodyPersistenceRestartError)|Phase-B schema lost post-Ledger exact-dequeue failure ownership
 required|schema|RestartRequiredAfterDequeue(String)|Phase-B schema lost irreversible exact-dequeue Runtime-handoff failure
 required|schema|RestartRequiredAfterCommit(String)|Phase-B schema lost durable-terminal failure after the volatile commit tail
-order|transaction|33|prepare_lifecycle_ingress_selector(|certified_fetch_current_location(|prepare_selected_certified_fetch_completion(|bind_durable_body_receipt(receipt)|prepare_certified_fetch_ready_projection(|prepare_lifecycle_certified_fetch_completion(|let output_guard = services.lifecycle_output_guard()|output_guard.close_admission_for_restart()|CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(|failure: $failure|prepare_certified_body_fetch_owner_removal(|let (selected_response_matches, selected_leader_wire_token)|certified_fetch_preledger_productive_ingress_token(family.inbound.as_ref())|Err(error)|durable_registry.abort_before_dequeue()|restart_invalid_leader_wire!(error, receipt)|matches_selected_response(|into_exact_certified_fetch_dequeue(|begin_fail_stop_operation()|persist_exact_staged_successor()|exact_dequeue.commit(ingress)|certified_fetch_postdequeue_runtime_receipt(|dequeued.inbound()|&selected_leader_wire_token|CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(|commit_after_exact_dequeue(dequeued)|ready.commit()|commit_lifecycle_certified_fetch_completion|service_prepared.commit(operation.permit())|work_ack.commit()|mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)|CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(error)|operation.complete()|completion transaction omitted {required}
-count|transaction|certified_fetch_preledger_productive_ingress_token(family.inbound.as_ref())|1|Phase-B has one exact queued-owner validation
+order|transaction|34|prepare_lifecycle_ingress_selector(|certified_fetch_current_location(|prepare_selected_certified_fetch_completion(|bind_durable_body_receipt(receipt)|prepare_certified_fetch_ready_projection(|prepare_lifecycle_certified_fetch_completion(|let output_guard = services.lifecycle_output_guard()|output_guard.close_admission_for_restart()|CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(|failure: $failure|prepare_certified_body_fetch_owner_removal(|let (selected_response_matches, selected_ingress_mode)|certified_fetch_preledger_ingress_mode(family.inbound.as_ref())|Err(error)|durable_registry.abort_before_dequeue()|restart_invalid_leader_wire!(error, receipt)|matches_selected_response(|into_exact_certified_fetch_dequeue(|begin_fail_stop_operation()|persist_exact_staged_successor()|exact_dequeue.commit(ingress)|certified_fetch_postdequeue_ingress_handoff(|dequeued.inbound()|&selected_ingress_mode|CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(|commit_after_exact_dequeue(dequeued)|ready.commit()|commit_lifecycle_certified_fetch_completion|service_prepared.commit(operation.permit())|work_ack.commit()|if let Some(runtime_receipt) = runtime_receipt|mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)|CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(|operation.complete()|completion transaction omitted {required}
+count|transaction|certified_fetch_preledger_ingress_mode(family.inbound.as_ref())|1|Phase-B has one exact queued-owner mode validation
 count|transaction|restart_invalid_leader_wire!(error, receipt)|1|invalid productive ownership enters one non-retryable pre-Ledger fail-stop
-count|transaction|certified_fetch_postdequeue_runtime_receipt(|1|Phase-B extracts one receipt from the returned exact-dequeue carrier
+count|transaction|certified_fetch_postdequeue_ingress_handoff(|1|Phase-B validates one durable-roster or tokenless-archive handoff from the returned exact-dequeue carrier
 count|transaction|CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(|1|post-dequeue receipt mismatch has one distinct fail-stop result
 count|transaction|CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(|1|only the durable-terminal failure uses the post-commit result
 forbidden|transaction|install_leader_wire_runtime_receipt|Phase-B must not fabricate a Runtime receipt before exact dequeue

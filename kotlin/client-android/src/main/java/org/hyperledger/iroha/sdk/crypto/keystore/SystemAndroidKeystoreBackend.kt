@@ -133,13 +133,14 @@ internal class SystemAndroidKeystoreBackend private constructor(
 
     override fun name(): String = _metadata.name
 
+    @Throws(KeyManagementException::class)
     override fun attestation(alias: String): KeyAttestation? {
         return try {
             loadAttestationBundle(alias)
-        } catch (_: GeneralSecurityException) {
-            null
-        } catch (_: IOException) {
-            null
+        } catch (ex: GeneralSecurityException) {
+            throw KeyManagementException("Failed to read Android Keystore attestation", ex)
+        } catch (ex: IOException) {
+            throw KeyManagementException("Failed to read Android Keystore attestation", ex)
         }
     }
 
@@ -151,10 +152,9 @@ internal class SystemAndroidKeystoreBackend private constructor(
             val keyStore = loadKeyStore()
             if (!keyStore.containsAlias(alias)) return null
             if (challengeCopy.isNotEmpty()) {
-                val fresh = generateAttestationWithChallenge(keyStore, alias, challengeCopy)
-                if (fresh != null) return fresh
                 throw KeyManagementException(
-                    "Android Keystore attestation challenge unsupported on this device/API level"
+                    "Android Keystore cannot re-attest an existing alias; provision a new alias " +
+                        "with KeyGenParameters.setAttestationChallenge"
                 )
             }
             return loadAttestationBundle(alias, keyStore)
@@ -173,19 +173,6 @@ internal class SystemAndroidKeystoreBackend private constructor(
     private fun loadAttestationBundle(alias: String, keyStore: KeyStore): KeyAttestation? {
         val chain: Array<Certificate>? = keyStore.getCertificateChain(alias)
         return buildAttestation(alias, chain)
-    }
-
-    private fun generateAttestationWithChallenge(
-        keyStore: KeyStore,
-        alias: String,
-        challenge: ByteArray,
-    ): KeyAttestation? {
-        return try {
-            val chain = keyStore.getCertificateChain(alias)
-            buildAttestation(alias, chain)
-        } catch (_: GeneralSecurityException) {
-            null
-        }
     }
 
     private fun buildAttestation(alias: String, chain: Array<Certificate>?): KeyAttestation? {

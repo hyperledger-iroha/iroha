@@ -449,7 +449,8 @@ height-context state are not migrated in place.
   separately carried highest PrepareQC, and signature. The conservative bound
   sizes a 128-validator proposal at 232,541 bare bytes, beyond the production
   cap of 31 validators, and the recommended maximum transport completion is
-  16,811,581 bare bytes. `CertifiedBodyRequest`
+  16,828,108 bare bytes, including a current responder `PeerId` at the
+  protocol-wide maximum public-key payload. `CertifiedBodyRequest`
   carries a maximal PrepareQC, `CommitCertificateRequest` carries the actual
   frozen chain id, and `CommitCertificateResponse` carries a maximal CommitQC.
   Control takes the maximum of proposal and Commit-certificate response.
@@ -1256,10 +1257,12 @@ no production `MaxHeight` input; `MaxHeight` remains only a finite-horizon
 projection. The startup-failure production seam distinguishes a valid checked
 Running failure, which mutates the local snapshot, from an invalid projection,
 which preserves local state while the independently prelatched process output
-guard remains authoritative in public status. Historical body serving is
-authorized by frozen-roster membership rather than historical QC
-participation; the QC authenticates the subject and the archive signs the
-response. Those booleans are
+guard remains authoritative in public status. Post-Apply historical body
+serving is authorized by an authenticated current archive identity and a
+matching durable Kura finality artifact; it does not require membership in the
+historical frozen roster or old QC. The QC authenticates the subject and the
+archive signs the response. Before Apply, live certified-body serving remains
+restricted to signers in the frozen QC. Those booleans are
 unassigned: source-order checks, adversarial Rust tests, stale-token mutations,
 and source-manifest binding constrain the corresponding traces but do not
 prove refinement. The theorem has no deductive proof body; its

@@ -4,12 +4,6 @@
 mod shifts_prop;
 #[path = "../simd_tail_misalignment.rs"]
 mod simd_tail_misalignment;
-#[path = "../simple_decode.rs"]
-mod simple_decode;
-#[path = "../simple_execute.rs"]
-mod simple_execute;
-#[path = "../simple_run.rs"]
-mod simple_run;
 #[path = "../sm_syscalls.rs"]
 mod sm_syscalls;
 #[path = "../stack_policy_v1.rs"]
@@ -44,8 +38,6 @@ mod system_circuit;
 mod tlv_examples;
 #[path = "../trace_mode.rs"]
 mod trace_mode;
-#[path = "../tx_parallel.rs"]
-mod tx_parallel;
 #[path = "../vadd.rs"]
 mod vadd;
 #[path = "../vector_circuit.rs"]

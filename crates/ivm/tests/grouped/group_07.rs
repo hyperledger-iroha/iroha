@@ -48,12 +48,8 @@ mod register_trace;
 mod registers_compact_helper;
 #[path = "../registers_merkle.rs"]
 mod registers_merkle;
-#[path = "../registers_merkle_incremental.rs"]
-mod registers_merkle_incremental;
 #[path = "../schema_registry_roundtrip.rs"]
 mod schema_registry_roundtrip;
-#[path = "../segmented_memory.rs"]
-mod segmented_memory;
 #[path = "../sha256_circuit.rs"]
 mod sha256_circuit;
 #[path = "../sha256_parity.rs"]

@@ -13,19 +13,23 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, eyre};
 use iroha::{
     client::{
-        AccountFaucetPreparedTransactionV1, AccountOnboardingPlanReceiptV1,
-        AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
-        TairaPublicResetMutationBindingV1, verify_account_faucet_prepared_transaction_v1,
+        AccountFaucetPolicyV1, AccountFaucetPreparedTransactionV1,
+        AccountOnboardingPlanReceiptV1, AccountOnboardingPreparedTransactionV1,
+        AccountOnboardingProofRequiredPrepareResponseV1, TairaPublicResetMutationBindingV1,
+        verify_account_faucet_prepared_transaction_v1,
         verify_account_onboarding_prepared_transaction_v1,
         verify_account_onboarding_proof_required_result_v1,
     },
     config::{Config as ClientConfig, LoadPath},
     data_model::{
         NetworkId,
-        account::AccountId,
+        account::{AccountId, address::ChainDiscriminantGuard},
         alias_setup::AccountAliasName,
+        asset::AssetDefinitionId,
         block::{BlockHeader, consensus_v2::SumeragiV2Status},
+        nexus::FeeSponsorProgramId,
         prelude::{Name, SignedTransaction},
+        transaction::FeePaymentIntent,
     },
 };
 use iroha_crypto::{Hash, HashOf};
@@ -266,6 +270,7 @@ struct HostProgressV1 {
     authorization_sha256: String,
     authorization_nonce: String,
     next_forward_ordinal: u16,
+    #[norito(required)]
     prepared_action: Option<HostActionKeyV1>,
     touched_hosts: Vec<String>,
     sealed: bool,
@@ -320,6 +325,12 @@ struct PreparedMutationV1 {
     prepared_base64: String,
     prepared_sha256: String,
     transaction_hash: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreparedMutationLifetimeCheck {
+    Structural,
+    LiveForward,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -547,7 +558,7 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
             "read-only host recovery is supported only for a submitted restart or prepared mutation"
         ));
     }
-    let admitted = admit_host_request(request, action)?;
+    let (admitted, _chain_guard) = admit_host_request(request, action)?;
     if action != HostAction::Upload {
         require_stream_eof(body)?;
     }
@@ -962,6 +973,7 @@ fn require_prepared_mutation_predecessor(root: &Path, admitted: &HostAdmission) 
         kind,
         &admitted.request.mutation_phase,
         &key,
+        PreparedMutationLifetimeCheck::Structural,
     )?;
     if prepared_mutation_state(root, &identity, &prepared)? != "applied" {
         return Err(eyre!(
@@ -989,7 +1001,14 @@ fn require_current_proof_required_onboarding(root: &Path, admitted: &HostAdmissi
     let (prepared, _) =
         read_private_json::<PreparedMutationV1>(&path, "proof-required onboarding predecessor")
             .wrap_err("proof-required onboarding predecessor is absent")?;
-    validate_loaded_prepared_mutation_for_identity(admitted, &prepared, kind, phase, &key)?;
+    validate_loaded_prepared_mutation_for_identity(
+        admitted,
+        &prepared,
+        kind,
+        phase,
+        &key,
+        PreparedMutationLifetimeCheck::Structural,
+    )?;
     if prepared_mutation_state(root, &identity, &prepared)? != "applied" {
         return Err(eyre!(
             "proof-required onboarding predecessor is not durably Applied"
@@ -1014,8 +1033,11 @@ fn prepared_mutation_from_request(admitted: &HostAdmission) -> Result<PreparedMu
     let bytes = BASE64
         .decode(&admitted.request.mutation_prepared_base64)
         .wrap_err("prepared mutation envelope base64 is invalid")?;
-    let (prepared_sha256, transaction_hash, operation) =
-        validate_prepared_mutation_envelope(admitted, &bytes)?;
+    let (prepared_sha256, transaction_hash, operation) = validate_prepared_mutation_envelope(
+        admitted,
+        &bytes,
+        PreparedMutationLifetimeCheck::LiveForward,
+    )?;
     if admitted.request.mutation_prepared_sha256 != prepared_sha256
         || admitted.request.mutation_transaction_hash != transaction_hash
     {
@@ -1041,6 +1063,7 @@ fn prepared_mutation_from_request(admitted: &HostAdmission) -> Result<PreparedMu
 fn validate_prepared_mutation_envelope(
     admitted: &HostAdmission,
     bytes: &[u8],
+    lifetime_check: PreparedMutationLifetimeCheck,
 ) -> Result<(String, String, String)> {
     if bytes.is_empty() || bytes.len() > MAX_PREPARED_ENVELOPE_BYTES || bytes.last() != Some(&b'\n')
     {
@@ -1344,6 +1367,8 @@ fn validate_prepared_mutation_envelope(
     } else {
         None
     };
+    let expected_fee_payment = inventory_fee_payment_intent(&admitted.inventory)?;
+    let expected_faucet_policy = inventory_faucet_policy(&admitted.inventory)?;
     match admitted.request.mutation_kind.as_str() {
         "onboarding" => {
             let prepared: AccountOnboardingPreparedTransactionV1 =
@@ -1364,13 +1389,14 @@ fn validate_prepared_mutation_envelope(
                 "prepared onboarding semantic hash",
             )?;
             verify_account_onboarding_prepared_transaction_v1(
-                network_id.clone(),
+                network_id,
                 &admitted.inventory.canary_onboarding_request,
                 &prepared,
                 &prepared.receipt,
                 exact_write_binding
                     .as_ref()
                     .expect("prepared onboarding uses a write binding"),
+                &expected_fee_payment,
             )
             .wrap_err("prepared onboarding transaction authentication failed")?;
         }
@@ -1395,12 +1421,14 @@ fn validate_prepared_mutation_envelope(
                 ));
             }
             verify_account_faucet_prepared_transaction_v1(
-                network_id.clone(),
+                network_id,
                 &prepared,
                 &prepared.claim,
                 exact_write_binding
                     .as_ref()
                     .expect("prepared faucet uses a write binding"),
+                &expected_fee_payment,
+                &expected_faucet_policy,
             )
             .wrap_err("prepared faucet transaction authentication failed")?;
         }
@@ -1532,18 +1560,27 @@ fn validate_prepared_mutation_envelope(
             .as_millis(),
     )
     .wrap_err("prepared mutation transaction TTL exceeds u64")?;
-    if creation_ms
-        .checked_add(ttl_ms)
-        .is_none_or(|expires| expires > execution_expiry)
-    {
-        return Err(eyre!(
-            "prepared mutation transaction lifetime exceeds the signed execution lease"
-        ));
-    }
+    let now_ms = match lifetime_check {
+        PreparedMutationLifetimeCheck::Structural => 0,
+        PreparedMutationLifetimeCheck::LiveForward => now_unix_ms()?,
+    };
+    validate_prepared_transaction_time_window(
+        creation_ms,
+        ttl_ms,
+        now_ms,
+        admitted.authorization.claims.not_before_unix_ms,
+        execution_expiry,
+        lifetime_check,
+    )?;
     transaction
         .fee_payment_intent()
         .validate()
         .wrap_err("prepared mutation fee payment is invalid")?;
+    if !expected_fee_payment.has_same_payer_and_gas_bound(transaction.fee_payment_intent()) {
+        return Err(eyre!(
+            "prepared mutation fee payer or sponsor revision differs from the signed reset inventory"
+        ));
+    }
     let signed_sponsor = transaction
         .fee_payment_intent()
         .sponsor_program()
@@ -1593,12 +1630,13 @@ fn validate_prepared_mutation_envelope(
         let fee_quote: FeeQuoteResponse =
             json::from_value(norito::json::Value::Object(fee_quote_value.clone()))
                 .wrap_err("prepared transaction fee quote is not exact typed V1 JSON")?;
-        if json::to_value(&fee_quote)? != norito::json::Value::Object(fee_quote_value.clone())
-            || json::to_value(&fee_quote.intent)? != *fee_payment
-        {
-            return Err(eyre!(
-                "prepared transaction fee quote differs from its signed payment"
-            ));
+        fee_quote
+            .validate_for_signed_payload(transaction.payload())
+            .map_err(|error| {
+                eyre!("prepared transaction fee quote is semantically invalid: {error}")
+            })?;
+        if json::to_value(&fee_quote)? != norito::json::Value::Object(fee_quote_value.clone()) {
+            return Err(eyre!("prepared transaction fee quote is not canonical V1 JSON"));
         }
     }
     if is_inrou {
@@ -1713,6 +1751,79 @@ fn validate_prepared_mutation_envelope(
     ))
 }
 
+fn inventory_fee_payment_intent(inventory: &InventoryV1) -> Result<FeePaymentIntent> {
+    let intent = match inventory.fee_intent.payer.as_str() {
+        "authority" => FeePaymentIntent::authority(Vec::new(), None),
+        "sponsor" => {
+            let program = inventory
+                .fee_intent
+                .sponsor_program
+                .as_deref()
+                .ok_or_else(|| eyre!("signed reset inventory omits its sponsor program"))?
+                .parse::<FeeSponsorProgramId>()
+                .wrap_err("signed reset inventory sponsor program is invalid")?;
+            let revision = inventory
+                .fee_intent
+                .sponsor_program_revision
+                .filter(|revision| *revision > 0)
+                .ok_or_else(|| eyre!("signed reset inventory omits its sponsor revision"))?;
+            FeePaymentIntent::sponsor(program, revision, Vec::new(), None)
+        }
+        _ => return Err(eyre!("signed reset inventory has an unsupported fee payer")),
+    };
+    intent
+        .validate()
+        .map_err(|error| eyre!("signed reset inventory fee intent is invalid: {error}"))?;
+    Ok(intent)
+}
+
+fn inventory_faucet_policy(inventory: &InventoryV1) -> Result<AccountFaucetPolicyV1> {
+    let authority = AccountId::parse_encoded(&inventory.faucet_policy.authority)
+        .wrap_err("signed inventory faucet authority is invalid")?;
+    let asset_definition_id = AssetDefinitionId::from_str(
+        &inventory.faucet_policy.asset_definition_id,
+    )
+    .wrap_err("signed inventory faucet asset definition is invalid")?;
+    AccountFaucetPolicyV1::try_new(
+        authority,
+        asset_definition_id,
+        inventory.faucet_policy.amount.clone(),
+    )
+    .wrap_err("signed inventory faucet policy is invalid")
+}
+
+fn validate_prepared_transaction_time_window(
+    creation_ms: u64,
+    ttl_ms: u64,
+    now_ms: u64,
+    authorization_not_before_ms: u64,
+    execution_expiry_ms: u64,
+    lifetime_check: PreparedMutationLifetimeCheck,
+) -> Result<()> {
+    let expiry_ms = creation_ms
+        .checked_add(ttl_ms)
+        .ok_or_else(|| eyre!("prepared mutation transaction lifetime overflows u64"))?;
+    if ttl_ms == 0
+        || creation_ms.saturating_add(super::MAX_CLOCK_SKEW_MS) < authorization_not_before_ms
+        || expiry_ms > execution_expiry_ms
+    {
+        return Err(eyre!(
+            "prepared mutation transaction lifetime is outside the signed execution window"
+        ));
+    }
+    if lifetime_check == PreparedMutationLifetimeCheck::LiveForward {
+        if creation_ms > now_ms.saturating_add(super::MAX_CLOCK_SKEW_MS) {
+            return Err(eyre!(
+                "prepared mutation transaction lifetime is outside the signed execution window"
+            ));
+        }
+        if now_ms >= expiry_ms {
+            return Err(eyre!("prepared mutation transaction is already expired"));
+        }
+    }
+    Ok(())
+}
+
 fn prepared_operation_identity(kind: &str) -> Result<(&'static str, &'static str)> {
     Ok(match kind {
         "onboarding" => ("onboarding_prepared", "onboarding"),
@@ -1729,12 +1840,22 @@ fn validate_loaded_prepared_mutation(
     admitted: &HostAdmission,
     prepared: &PreparedMutationV1,
 ) -> Result<()> {
+    let lifetime_check = match admitted.request.mutation_operation.as_str() {
+        "prepare" | "submitted" => PreparedMutationLifetimeCheck::LiveForward,
+        "fetch" | "applied" => PreparedMutationLifetimeCheck::Structural,
+        _ => {
+            return Err(eyre!(
+                "prepared mutation operation is outside the V1 protocol"
+            ));
+        }
+    };
     validate_loaded_prepared_mutation_for_identity(
         admitted,
         prepared,
         &admitted.request.mutation_kind,
         &admitted.request.mutation_phase,
         &admitted.request.mutation_idempotency_key,
+        lifetime_check,
     )
 }
 
@@ -1744,6 +1865,7 @@ fn validate_loaded_prepared_mutation_for_identity(
     kind: &str,
     phase: &str,
     idempotency_key: &str,
+    lifetime_check: PreparedMutationLifetimeCheck,
 ) -> Result<()> {
     if prepared.schema != PREPARED_MUTATION_SCHEMA_V1
         || prepared.inventory_sha256 != admitted.inventory_sha256
@@ -1774,6 +1896,7 @@ fn validate_loaded_prepared_mutation_for_identity(
         kind,
         phase,
         idempotency_key,
+        lifetime_check,
     )?;
     if digest != prepared.prepared_sha256
         || transaction_hash != prepared.transaction_hash
@@ -2136,6 +2259,7 @@ fn validate_prepared_mutation_envelope_for_identity(
     kind: &str,
     phase: &str,
     idempotency_key: &str,
+    lifetime_check: PreparedMutationLifetimeCheck,
 ) -> Result<(String, String, String)> {
     let mut request = admitted.request.clone();
     request.mutation_kind = kind.to_owned();
@@ -2153,7 +2277,7 @@ fn validate_prepared_mutation_envelope_for_identity(
         action_deadline: admitted.action_deadline,
         execution_expired: admitted.execution_expired,
     };
-    validate_prepared_mutation_envelope(&borrowed, bytes)
+    validate_prepared_mutation_envelope(&borrowed, bytes, lifetime_check)
 }
 
 fn publish_prepared_mutation_state(
@@ -2650,7 +2774,10 @@ fn host_monotonic_ms() -> Result<u64> {
     ))
 }
 
-fn admit_host_request(request: HostRequestV1, action: HostAction) -> Result<HostAdmission> {
+fn admit_host_request(
+    request: HostRequestV1,
+    action: HostAction,
+) -> Result<(HostAdmission, ChainDiscriminantGuard)> {
     if request.schema != HOST_REQUEST_SCHEMA_V1 {
         return Err(eyre!("host request schema is not exact V1"));
     }
@@ -2686,6 +2813,7 @@ fn admit_host_request(request: HostRequestV1, action: HostAction) -> Result<Host
         json::from_slice(&authorization_bytes).wrap_err("host request authorization is invalid")?;
     let trusted_key: TrustedKeyV1 =
         json::from_slice(&trusted_key_bytes).wrap_err("host request trusted key is invalid")?;
+    let chain_guard = super::enter_inventory_chain_discriminant(&inventory)?;
     validate_inventory(&inventory)?;
     validate_first_release_physical_host(&inventory)?;
     let inventory_sha256 = sha256_hex(&inventory_bytes);
@@ -2773,7 +2901,7 @@ fn admit_host_request(request: HostRequestV1, action: HostAction) -> Result<Host
                 .ok_or_else(|| eyre!("host action deadline elapsed during admission"))?,
         ))
         .ok_or_else(|| eyre!("host monotonic action deadline overflow"))?;
-    Ok(HostAdmission {
+    Ok((HostAdmission {
         request,
         request_sha256,
         inventory,
@@ -2784,7 +2912,7 @@ fn admit_host_request(request: HostRequestV1, action: HostAction) -> Result<Host
         guard,
         action_deadline,
         execution_expired,
-    })
+    }, chain_guard))
 }
 
 fn upload_parent(service_root: &str) -> String {
@@ -10107,7 +10235,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             OsString::from("write-canary"),
             OsString::from("--public-root"),
             OsString::from(&self.admitted.inventory.inrou_canary.public_root),
-            OsString::from("--use-config-signer"),
             OsString::from("--operation"),
             OsString::from(match kind {
                 "onboarding" => "onboarding",
@@ -10132,6 +10259,22 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     .to_string(),
             ),
         ]);
+        if kind == "faucet" {
+            args.extend([
+                OsString::from("--faucet-authority"),
+                OsString::from(&self.admitted.inventory.faucet_policy.authority),
+                OsString::from("--faucet-asset-id"),
+                OsString::from(
+                    &self
+                        .admitted
+                        .inventory
+                        .faucet_policy
+                        .asset_definition_id,
+                ),
+                OsString::from("--faucet-amount"),
+                OsString::from(self.admitted.inventory.faucet_policy.amount.to_string()),
+            ]);
+        }
         if kind == "onboarding" && include_submission_secret {
             let (token_path, token_file) = inherited_input_path(
                 self.runtime
@@ -13052,6 +13195,134 @@ mod tests {
     }
 
     #[test]
+    fn prepared_transaction_time_window_is_structurally_authorization_bound() {
+        validate_prepared_transaction_time_window(
+            1_000,
+            200,
+            1_100,
+            990,
+            1_300,
+            PreparedMutationLifetimeCheck::Structural,
+        )
+        .expect("prepared transaction inside authorization window");
+        for (creation, ttl, now, not_before, execution_expiry) in [
+            (1_000, 0, 1_000, 990, 1_300),
+            (
+                1_000,
+                200,
+                1_100,
+                1_000 + super::super::MAX_CLOCK_SKEW_MS + 1,
+                1_300,
+            ),
+            (1_000, 301, 1_100, 990, 1_300),
+            (u64::MAX, 1, u64::MAX, 990, u64::MAX),
+        ] {
+            validate_prepared_transaction_time_window(
+                creation,
+                ttl,
+                now,
+                not_before,
+                execution_expiry,
+                PreparedMutationLifetimeCheck::Structural,
+            )
+            .expect_err("invalid prepared transaction time window must fail closed");
+        }
+    }
+
+    #[test]
+    fn prepared_transaction_lifetime_only_requires_freshness_for_live_forwarding() {
+        validate_prepared_transaction_time_window(
+            1_000,
+            200,
+            1_200,
+            990,
+            1_300,
+            PreparedMutationLifetimeCheck::Structural,
+        )
+        .expect("durable identity recovery accepts an expired signed transaction");
+        validate_prepared_transaction_time_window(
+            1_000,
+            200,
+            1_200,
+            990,
+            1_300,
+            PreparedMutationLifetimeCheck::LiveForward,
+        )
+        .expect_err("live forwarding rejects an expired signed transaction");
+
+        let future_creation = 1_000 + super::super::MAX_CLOCK_SKEW_MS + 1;
+        validate_prepared_transaction_time_window(
+            future_creation,
+            200,
+            1_000,
+            990,
+            u64::MAX,
+            PreparedMutationLifetimeCheck::Structural,
+        )
+        .expect("durable identity recovery does not depend on the current wall clock");
+        validate_prepared_transaction_time_window(
+            future_creation,
+            200,
+            1_000,
+            990,
+            u64::MAX,
+            PreparedMutationLifetimeCheck::LiveForward,
+        )
+        .expect_err("live forwarding rejects a transaction created too far in the future");
+    }
+
+    #[test]
+    fn signed_inventory_derives_the_only_accepted_fee_selection() {
+        let mut inventory = progress_admission().inventory;
+        let authority = inventory_fee_payment_intent(&inventory).expect("authority fee intent");
+        assert!(authority.sponsor_program().is_none());
+        assert_eq!(authority.gas_limit(), None);
+        assert!(authority.charge_limits().is_empty());
+
+        let _chain_guard =
+            ChainDiscriminantGuard::enter(inventory.chain_discriminant);
+        let sponsor_owner = AccountId::parse_encoded(
+            &inventory.canary_onboarding_request.account_id,
+        )
+        .expect("canonical inventory canary account");
+        let sponsor = FeeSponsorProgramId::new(
+            sponsor_owner,
+            Name::from_str("public_reset").expect("program name"),
+        );
+        inventory.fee_intent.payer = "sponsor".to_owned();
+        inventory.fee_intent.sponsor_program = Some(sponsor.to_string());
+        inventory.fee_intent.sponsor_program_revision = Some(7);
+        let selected =
+            inventory_fee_payment_intent(&inventory).expect("sponsor fee intent");
+        assert_eq!(selected.sponsor_program(), Some((&sponsor, 7)));
+        assert_eq!(selected.gas_limit(), None);
+        assert!(selected.charge_limits().is_empty());
+
+        inventory.fee_intent.sponsor_program_revision = Some(0);
+        inventory_fee_payment_intent(&inventory)
+            .expect_err("zero sponsor revision must fail closed");
+    }
+
+    #[test]
+    fn signed_inventory_derives_the_only_accepted_faucet_policy() {
+        let mut inventory = progress_admission().inventory;
+        let policy = inventory_faucet_policy(&inventory).expect("canonical faucet policy");
+        assert_eq!(
+            policy.faucet_authority().to_string(),
+            inventory.faucet_policy.authority
+        );
+        assert_eq!(
+            policy.asset_definition_id().to_string(),
+            inventory.faucet_policy.asset_definition_id
+        );
+        assert_eq!(policy.amount(), &inventory.faucet_policy.amount);
+
+        inventory.faucet_policy.authority = "not-an-account".to_owned();
+        inventory_faucet_policy(&inventory)
+            .expect_err("an invalid signed faucet authority must fail closed");
+    }
+
+    #[test]
     fn retained_liveness_receipt_never_suppresses_a_fresh_failure() {
         #[derive(Default)]
         struct Probe {
@@ -13532,6 +13803,7 @@ mod tests {
             onboarding_token_sha256: inventory.onboarding_token_sha256.clone(),
             validator_client_configs_sha256: inventory.validator_client_configs_sha256.clone(),
             inrou_stage_tree_sha256: inventory.inrou_stage_tree_sha256.clone(),
+            faucet_policy: inventory.faucet_policy.clone(),
             fee_intent: inventory.fee_intent.clone(),
             authorization_nonce: inventory.authorization_nonce.clone(),
             issued_at_unix_ms: 1,
@@ -13616,6 +13888,32 @@ mod tests {
         let shared = progress_admission();
         validate_first_release_physical_host(&shared.inventory)
             .expect("one physical host identity is canonical");
+    }
+
+    #[test]
+    fn host_progress_requires_explicit_nullable_prepared_action_slot() {
+        let admitted = progress_admission();
+        let progress = initial_host_progress(&admitted);
+        let canonical = json::to_value(&progress).expect("host-progress JSON value");
+        assert!(
+            canonical
+                .as_object()
+                .and_then(|object| object.get("prepared_action"))
+                .is_some_and(norito::json::Value::is_null),
+            "empty host progress must serialize an explicit prepared_action null slot"
+        );
+        json::from_value::<HostProgressV1>(canonical.clone())
+            .expect("explicit nullable host-progress slot");
+
+        let mut missing = canonical;
+        missing
+            .as_object_mut()
+            .expect("host-progress object")
+            .remove("prepared_action");
+        assert!(
+            json::from_value::<HostProgressV1>(missing).is_err(),
+            "the exact V1 host progress must reject an omitted prepared_action slot"
+        );
     }
 
     #[test]
@@ -14499,9 +14797,12 @@ mod tests {
             .expect("canonical proof-required envelope")
             .into_bytes();
         bytes.push(b'\n');
-        let (digest, transaction_hash, operation) =
-            validate_prepared_mutation_envelope(&admitted, &bytes)
-                .expect("authenticated fixture proof-required envelope");
+        let (digest, transaction_hash, operation) = validate_prepared_mutation_envelope(
+            &admitted,
+            &bytes,
+            PreparedMutationLifetimeCheck::LiveForward,
+        )
+        .expect("authenticated fixture proof-required envelope");
         let prepared = PreparedMutationV1 {
             schema: PREPARED_MUTATION_SCHEMA_V1.to_owned(),
             inventory_sha256: admitted.inventory_sha256.clone(),
@@ -14734,8 +15035,12 @@ mod tests {
                 .expect("canonical omitted-field envelope")
                 .into_bytes();
             missing.push(b'\n');
-            let error = validate_prepared_mutation_envelope(&admitted, &missing)
-                .expect_err("an omitted V1 onboarding receipt field must fail closed");
+            let error = validate_prepared_mutation_envelope(
+                &admitted,
+                &missing,
+                PreparedMutationLifetimeCheck::LiveForward,
+            )
+            .expect_err("an omitted V1 onboarding receipt field must fail closed");
             assert!(
                 format!("{error:#}").contains("receipt is not exact typed V1 JSON"),
                 "unexpected rejection for {}: {error:#}",
@@ -14780,8 +15085,12 @@ mod tests {
             .expect("canonical forged envelope")
             .into_bytes();
         forged.push(b'\n');
-        let error = validate_prepared_mutation_envelope(&admitted, &forged)
-            .expect_err("forged proof-required signature must fail");
+        let error = validate_prepared_mutation_envelope(
+            &admitted,
+            &forged,
+            PreparedMutationLifetimeCheck::LiveForward,
+        )
+        .expect_err("forged proof-required signature must fail");
         assert!(
             error.to_string().contains("authentication failed"),
             "unexpected rejection: {error:?}"
@@ -14798,8 +15107,12 @@ mod tests {
         wrong_network.authorization_sha256 = admitted.authorization_sha256.clone();
         wrong_network.authorization = admitted.authorization.clone();
         wrong_network.request = admitted.request.clone();
-        let _ = validate_prepared_mutation_envelope(&wrong_network, &bytes)
-            .expect_err("another genesis identity must fail closed");
+        let _ = validate_prepared_mutation_envelope(
+            &wrong_network,
+            &bytes,
+            PreparedMutationLifetimeCheck::LiveForward,
+        )
+        .expect_err("another genesis identity must fail closed");
 
         let mut wrong_request = admitted;
         wrong_request
@@ -14807,8 +15120,12 @@ mod tests {
             .canary_onboarding_request
             .permissions
             .push("CanReadAccounts".to_owned());
-        let _ = validate_prepared_mutation_envelope(&wrong_request, &bytes)
-            .expect_err("another complete original request must fail closed");
+        let _ = validate_prepared_mutation_envelope(
+            &wrong_request,
+            &bytes,
+            PreparedMutationLifetimeCheck::LiveForward,
+        )
+        .expect_err("another complete original request must fail closed");
     }
 
     fn exact_atomic_state_fixture() -> (AccountOnboardingCurrentStateResponseV1, String, String) {

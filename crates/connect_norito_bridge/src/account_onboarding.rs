@@ -26,7 +26,7 @@ pub(crate) struct ConnectAccountOnboardingPlanBodyV1 {
     pub(crate) acquisition: iroha_data_model::alias_setup::AliasLeaseAcquisitionV1,
     pub(crate) quote_guard: iroha_data_model::alias_setup::AliasQuoteGuardV1,
     pub(crate) instructions: Vec<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
-    #[norito(default)]
+    #[norito(required)]
     pub(crate) owner_auto_renew_instruction:
         Option<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
     pub(crate) valid_until_ms: u64,

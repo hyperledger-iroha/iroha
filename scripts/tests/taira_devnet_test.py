@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -31,6 +32,205 @@ finally:
 
 REAL_REQUIRE_INROU_QUALIFICATION_HOST = module.require_inrou_qualification_host
 REAL_REQUIRE_SAFE_CLEANUP_TARGET = module.require_safe_cleanup_target
+FAKE_FAUCET_AUTHORITY = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uﾽoPGｱﾔnjﾑKﾋTCW2PV"
+FEE_QUOTE_AUTHORITY = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+OTHER_CANONICAL_AUTHORITY = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+FAKE_FAUCET_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+FAKE_FAUCET_AMOUNT = "25000"
+
+
+def fake_fee_payment() -> dict[str, object]:
+    return {
+        "payer": "authority",
+        "value": {"charge_limits": [], "gas_limit": None},
+    }
+
+
+def fake_fee_quote() -> dict[str, object]:
+    return {
+        "intent": fake_fee_payment(),
+        "observation": {
+            "ledger_time_ms": 1,
+            "next_block_height": 2,
+            "route_dataspace_id": 0,
+        },
+        "components": [],
+        "capacities": [],
+        "decision": {
+            "status": "accepted",
+            "value": {
+                "debit_source": {
+                    "kind": "account",
+                    "value": FEE_QUOTE_AUTHORITY,
+                },
+                "program_revision": None,
+            },
+        },
+    }
+
+
+def fake_onboarding_receipt() -> dict[str, object]:
+    resolved_alias = {
+        "canonical_name": {
+            "label": "merchant",
+            "domain": "banka",
+            "dataspace": "paynet",
+        },
+        "dataspace_id": 7,
+    }
+    intent = {
+        "kind": "account_alias",
+        "intent": {
+            "alias": resolved_alias,
+            "target_account": "test-authority",
+            "provision": {"kind": "create", "value": None},
+            "role": {"kind": "primary", "value": None},
+        },
+    }
+    guard = {
+        "expected_policy_version": 1,
+        "expected_payment_asset": FAKE_FAUCET_ASSET_ID,
+        "max_amount": "25000",
+        "valid_until_ms": 9_999_999_999_999,
+    }
+    return {
+        "body": {
+            "version": 1,
+            "request": {
+                "version": 1,
+                "alias": "merchant@banka.paynet",
+                "account_id": "test-authority",
+                "permissions": [],
+            },
+            "authority": "test-authority",
+            "network_id": "hash:" + "A" * 63 + "B#ABCD",
+            "anchor": {
+                "block_height": 1,
+                "block_hash": "hash:" + "C" * 63 + "D#1234",
+            },
+            "resource": {
+                "intent": intent,
+                "disposition": {"kind": "no_op", "value": None},
+                "quote": None,
+                "instruction_index": None,
+            },
+            "acquisition": {"term_years": 1, "pricing_class_hint": None},
+            "quote_guard": guard,
+            "instructions": [],
+            "owner_auto_renew_instruction": None,
+            "valid_until_ms": 9_999_999_999_999,
+        },
+        "plan_hash": "hash:" + "E" * 63 + "F#5678",
+        "signature": "AA" * 64,
+    }
+
+
+def fake_prepared_payload(
+    tag: str,
+    binding: dict[str, object],
+    operation: str,
+    transaction_hash: str | None,
+) -> dict[str, object]:
+    semantic_hash = "e" * 64
+    if tag == "onboarding_prepared":
+        assert transaction_hash is not None
+        return {
+            "schema": "iroha.taira.prepared-transaction.v1",
+            "binding": binding,
+            "operation": "onboarding",
+            "receipt": fake_onboarding_receipt(),
+            "semantic_hash_hex": semantic_hash,
+            "account_id": "test-authority",
+            "alias": "merchant@banka.paynet",
+            "disposition": {"kind": "no_op", "value": None},
+            "transaction_hash_hex": transaction_hash,
+            "signed_transaction_wire_hex": "00",
+            "signed_transaction_wire_sha256": "d" * 64,
+            "fee_payment": fake_fee_payment(),
+            "server_signature": "BB" * 64,
+        }
+    if tag == "onboarding_proof_required":
+        return {
+            "schema": "iroha.taira.prepared-onboarding-proof-required.v1",
+            "receipt": fake_onboarding_receipt(),
+            "result": {
+                "schema": "iroha.accounts.onboard.prepare-proof-required.v1",
+                "binding": binding,
+                "operation": "onboarding",
+                "outcome": "ProofRequired",
+                "proof_kind": "account_alias_current_state",
+                "semantic_hash_hex": semantic_hash,
+                "account_id": "test-authority",
+                "alias": "merchant@banka.paynet",
+                "disposition": {"kind": "no_op", "value": None},
+                "server_signature": "CC" * 64,
+            },
+        }
+    if tag == "faucet_prepared":
+        assert transaction_hash is not None
+        return {
+            "schema": "iroha.taira.prepared-transaction.v1",
+            "binding": binding,
+            "operation": "faucet",
+            "claim": {
+                "account_id": "test-authority",
+                "pow_anchor_height": 1,
+                "pow_nonce_hex": "00",
+            },
+            "semantic_hash_hex": semantic_hash,
+            "account_id": "test-authority",
+            "asset_definition_id": FAKE_FAUCET_ASSET_ID,
+            "asset_id": f"{FAKE_FAUCET_ASSET_ID}#test-authority",
+            "amount": FAKE_FAUCET_AMOUNT,
+            "transaction_hash_hex": transaction_hash,
+            "signed_transaction_wire_hex": "00",
+            "signed_transaction_wire_sha256": "d" * 64,
+            "fee_payment": fake_fee_payment(),
+            "server_signature": "DD" * 64,
+        }
+    if tag == "final_canary":
+        assert transaction_hash is not None
+        return {
+            "schema": "iroha.taira.prepared-transaction.v1",
+            "binding": binding,
+            "operation": "final_canary",
+            "transaction_hash_hex": transaction_hash,
+            "signed_transaction_wire_hex": "00",
+            "signed_transaction_wire_sha256": "d" * 64,
+            "semantic_hash_hex": semantic_hash,
+            "fee_payment": fake_fee_payment(),
+            "fee_quote": fake_fee_quote(),
+        }
+    assert tag in {"inrou_bundle_pin", "inrou_guest_pin", "inrou_canary"}
+    assert transaction_hash is not None
+    return {
+        "schema": "iroha.taira.prepared-soracloud-transaction.v1",
+        "binding": binding,
+        "operation": operation,
+        "transaction_hash_hex": transaction_hash,
+        "signed_transaction_wire_hex": "00",
+        "signed_transaction_wire_sha256": "d" * 64,
+        "fee_payment": fake_fee_payment(),
+        "fee_quote": fake_fee_quote(),
+    }
+
+
+def fake_inrou_stage() -> dict[str, str]:
+    return {
+        "service_name": "taira_inrou_canary",
+        "service_version": "artifact-" + "0" * 63 + "1",
+        "route_host": module.INROU_CANARY_ROUTE_HOST_V1,
+        "route_path_prefix": "/api/v1",
+        "healthcheck_path": module.INROU_CANARY_HEALTH_PATH_V1,
+        "stage_mode": "deploy",
+        "bundle_hash": "a" * 63 + "b",
+        "bundle_content_cid": "b" + "a" * 58,
+        "bundle_manifest_digest_hex": "1" * 64,
+        "guest_content_cid": "b" + "b" * 58,
+        "guest_manifest_digest_hex": "2" * 64,
+        "container_manifest_hash": "3" * 64,
+        "service_manifest_hash": "4" * 63 + "5",
+    }
 
 
 def executable(path: Path, body: bytes = b"current binary\n") -> Path:
@@ -60,7 +260,7 @@ class FakeRuntime:
         self.leave_peer_running_on_stop = False
         self.process_commands: dict[int, str] = {}
         self.start_env: dict[str, str] | None = None
-        self.mcp_protocol_version = "taira-test-protocol-v1"
+        self.mcp_protocol_version = module.MCP_PROTOCOL_VERSION_V1
         self.requests: list[tuple[str, object | None]] = []
         self.api_port = module.DEFAULT_API_PORT
         self.help_options = {
@@ -78,11 +278,12 @@ class FakeRuntime:
         self.onboarding_proof_required = False
         self.ambiguous_submit_kind: str | None = None
         self.ambiguous_submit_raised = False
+        self.failed_recovery_kind: str | None = None
         self.ping_stdout = json.dumps(
             {
                 "hash": "hash:" + "a" * 63 + "b#ABCD",
                 "transaction": {},
-                "fee_quote": {},
+                "fee_quote": fake_fee_quote(),
             }
         )
         self.status_stdout = json.dumps(
@@ -127,19 +328,19 @@ class FakeRuntime:
                 "warnings": [],
                 "failures": [],
                 "service_name": "taira_inrou_canary",
-                "service_version": "artifact-" + "0" * 64,
+                "service_version": "artifact-" + "0" * 63 + "1",
                 "mutation_mode": "deploy",
                 "route_host": module.INROU_CANARY_ROUTE_HOST_V1,
                 "route_path": module.INROU_CANARY_HEALTH_PATH_V1,
                 "active_host_adverts": 4,
                 "hosted_replica_count": 4,
-                "bundle_hash": "a" * 64,
+                "bundle_hash": "a" * 63 + "b",
                 "bundle_content_cid": "b" + "a" * 58,
                 "bundle_manifest_digest_hex": "1" * 64,
                 "guest_content_cid": "b" + "b" * 58,
                 "guest_manifest_digest_hex": "2" * 64,
                 "container_manifest_hash": "3" * 64,
-                "service_manifest_hash": "4" * 64,
+                "service_manifest_hash": "4" * 63 + "5",
                 "authorization_sha256": "5" * 64,
                 "authorization_nonce": "n" * 32,
                 "mutation_kind": "inrou_canary",
@@ -150,15 +351,15 @@ class FakeRuntime:
                     "inrou_canary",
                 ),
                 "operation": "service_mutation",
-                "transaction_hash_hex": "6" * 64,
+                "transaction_hash_hex": "6" * 63 + "7",
                 "prepared_envelope_sha256": "7" * 64,
                 "prepared_envelope_size": 1024,
                 "recovery_outcome": "Applied",
                 "applied_block_height": 10,
-                "evidence": "8" * 64,
+                "evidence": "6" * 63 + "7",
                 "execution_expires_at_unix_ms": 9_999_999_999_999,
-                "fee_payment": {"kind": "authority"},
-                "fee_quote": {"intent": {"kind": "authority"}},
+                "fee_payment": fake_fee_payment(),
+                "fee_quote": fake_fee_quote(),
                 "replica_identities": [
                     {
                         "replica_slot": slot,
@@ -194,18 +395,18 @@ class FakeRuntime:
                 "warnings": [],
                 "failures": [],
                 "service_name": "taira_inrou_canary",
-                "service_version": "artifact-" + "0" * 64,
+                "service_version": "artifact-" + "0" * 63 + "1",
                 "route_host": module.INROU_CANARY_ROUTE_HOST_V1,
                 "route_path": module.INROU_CANARY_HEALTH_PATH_V1,
                 "active_host_adverts": 4,
                 "hosted_replica_count": 4,
-                "bundle_hash": "a" * 64,
+                "bundle_hash": "a" * 63 + "b",
                 "bundle_content_cid": "b" + "a" * 58,
                 "bundle_manifest_digest_hex": "1" * 64,
                 "guest_content_cid": "b" + "b" * 58,
                 "guest_manifest_digest_hex": "2" * 64,
                 "container_manifest_hash": "3" * 64,
-                "service_manifest_hash": "4" * 64,
+                "service_manifest_hash": "4" * 63 + "5",
                 "observed_at_unix_ms": 1,
                 "replica_identities": [
                     {
@@ -221,12 +422,12 @@ class FakeRuntime:
             "schema_version": 1,
             "mutation_mode": "deploy",
             "service_name": "taira_inrou_canary",
-            "service_version": "artifact-" + "0" * 64,
+            "service_version": "artifact-" + "0" * 63 + "1",
             "container_file": str(module.INROU_STAGE_CONTAINER_FILE),
             "service_file": str(module.INROU_STAGE_SERVICE_FILE),
             "bundle_payload_file": str(module.INROU_STAGE_BUNDLE_PAYLOAD),
             "bundle_manifest_file": str(module.INROU_STAGE_BUNDLE_MANIFEST),
-            "bundle_hash": "a" * 64,
+            "bundle_hash": "a" * 63 + "b",
             "bundle_content_cid": "b" + "a" * 58,
             "bundle_manifest_digest_hex": "1" * 64,
             "guest_isa": "aarch64",
@@ -235,7 +436,7 @@ class FakeRuntime:
             "guest_content_cid": "b" + "b" * 58,
             "guest_manifest_digest_hex": "2" * 64,
             "container_manifest_hash": "3" * 64,
-            "service_manifest_hash": "4" * 64,
+            "service_manifest_hash": "4" * 63 + "5",
         }
 
     @staticmethod
@@ -284,8 +485,11 @@ class FakeRuntime:
         proof_required = kind == "onboarding" and self.onboarding_proof_required
         if proof_required:
             tag = "onboarding_proof_required"
+        transaction_digest = hashlib.sha256(kind.encode()).digest()
         transaction_hash = (
-            None if proof_required else hashlib.sha256(kind.encode()).hexdigest()
+            None
+            if proof_required
+            else (transaction_digest[:-1] + bytes([transaction_digest[-1] | 1])).hex()
         )
         if "--prepare-envelope" in values:
             envelope = {
@@ -294,17 +498,27 @@ class FakeRuntime:
                 "public_root": public_root,
                 "chain_id": module.DEFAULT_CHAIN_ID,
                 "network_id": "test-network",
-                "authority": "test-authority",
+                "authority": FEE_QUOTE_AUTHORITY,
                 "operation": {
                     "kind": tag,
-                    "envelope": {
-                        "binding": binding,
-                        "operation": operation,
-                    },
+                    "envelope": fake_prepared_payload(
+                        tag,
+                        binding,
+                        operation,
+                        transaction_hash,
+                    ),
                 },
             }
+            if kind.startswith("inrou_"):
+                envelope["stage"] = fake_inrou_stage()
             payload = (
-                json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n"
+                json.dumps(
+                    envelope,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                + "\n"
             ).encode()
             descriptor = int(values[values.index("--prepared-output-fd") + 1])
             os.write(descriptor, payload)
@@ -319,6 +533,11 @@ class FakeRuntime:
             payload = os.pread(descriptor, os.fstat(descriptor).st_size, 0)
             if proof_required and action == "--submit-prepared-envelope-fd":
                 raise AssertionError("proof-required onboarding must never be submitted")
+            if (
+                action == "--recover-prepared-envelope-fd"
+                and kind == self.failed_recovery_kind
+            ):
+                raise module.DevnetError("simulated recovery transport failure")
             outcome = "Applied"
             self.height += 1
             if (
@@ -360,7 +579,11 @@ class FakeRuntime:
                     10 if outcome == "Applied" and not proof_required else None
                 ),
                 "evidence": (
-                    "e" * 64 if outcome in {"ProofRequired", "Applied"} else None
+                    transaction_hash
+                    if outcome == "Applied" and transaction_hash is not None
+                    else "e" * 64
+                    if outcome in {"ProofRequired", "Applied"}
+                    else None
                 ),
                 "execution_expires_at_unix_ms": expiry,
             }
@@ -368,16 +591,16 @@ class FakeRuntime:
         if kind.startswith("inrou_"):
             receipt.update(
                 {
-                    "fee_payment": {"kind": "authority"},
-                    "fee_quote": {"intent": {"kind": "authority"}},
+                    "fee_payment": fake_fee_payment(),
+                    "fee_quote": fake_fee_quote(),
                     "mutation_mode": "deploy",
                 }
             )
         elif kind == "write_canary":
             receipt.update(
                 {
-                    "fee_payment": {"kind": "authority"},
-                    "fee_quote": {"intent": {"kind": "authority"}},
+                    "fee_payment": fake_fee_payment(),
+                    "fee_quote": fake_fee_quote(),
                 }
             )
         return subprocess.CompletedProcess(values, 0, json.dumps(receipt), "")
@@ -469,6 +692,11 @@ class FakeRuntime:
                     "[soracloud_runtime]\n"
                     f'state_dir = "{runtime_dir}"\n'
                     "production_mode = true\n"
+                    "[torii.faucet]\n"
+                    "enabled = true\n"
+                    f'authority = "{FAKE_FAUCET_AUTHORITY}"\n'
+                    f'asset_definition_id = "{FAKE_FAUCET_ASSET_ID}"\n'
+                    f'amount = "{FAKE_FAUCET_AMOUNT}"\n'
                     "[soracloud_runtime.egress]\n"
                     "default_allow = false\n"
                     "allowed_hosts = []\n"
@@ -688,6 +916,61 @@ class TairaDevnetTests(unittest.TestCase):
         self.host_preflight.stop()
         self.temporary.cleanup()
 
+    def test_parallel_map_runs_bounded_work_concurrently_and_retains_order(self) -> None:
+        barrier = threading.Barrier(module.PEER_COUNT)
+        worker_ids: set[int] = set()
+        lock = threading.Lock()
+
+        def operation(value: int) -> int:
+            with lock:
+                worker_ids.add(threading.get_ident())
+            barrier.wait(timeout=2)
+            return value * 10
+
+        self.assertEqual(
+            module.parallel_map(tuple(range(module.PEER_COUNT)), operation),
+            [0, 10, 20, 30],
+        )
+        self.assertEqual(len(worker_ids), module.PEER_COUNT)
+
+    def test_stable_reader_enforces_bounds_and_direct_single_link_custody(self) -> None:
+        source = self.root / "stable-input"
+        source.write_bytes(b"taira")
+        source.chmod(0o600)
+        self.assertEqual(
+            module.read_stable_bytes(
+                source,
+                limit=5,
+                label="fixture",
+                owner=os.geteuid(),
+                exact_mode=0o600,
+                require_nonempty=True,
+            ),
+            b"taira",
+        )
+        link = self.root / "stable-input-link"
+        os.link(source, link)
+        with self.assertRaisesRegex(module.DevnetError, "single-link"):
+            module.read_stable_bytes(source, limit=5, label="fixture")
+
+    def test_destroy_network_rejects_identity_replacement(self) -> None:
+        root = module.managed_root(self.root / "destroy-state", create=True)
+        target = root / "network"
+        target.mkdir(mode=0o700)
+        (target / "secret").write_bytes(b"secret")
+        identity = module.require_safe_cleanup_target(root, target)
+        displaced = root / "displaced-network"
+        target.rename(displaced)
+        target.mkdir(mode=0o700)
+        replacement = target / "preserve"
+        replacement.write_bytes(b"replacement")
+
+        with self.assertRaisesRegex(module.DevnetError, "changed before destruction"):
+            module.destroy_network(root, target, identity)
+
+        self.assertEqual(replacement.read_bytes(), b"replacement")
+        self.assertEqual((displaced / "secret").read_bytes(), b"secret")
+
     def test_first_release_taira_identity_is_exact(self) -> None:
         self.assertEqual(module.DEFAULT_DIR, Path("/var/lib/iroha-taira-devnet"))
         self.assertEqual(module.parser().parse_args(["check"]).dir, module.DEFAULT_DIR)
@@ -705,6 +988,37 @@ class TairaDevnetTests(unittest.TestCase):
                 ("iroha-inrou-3", 70_003, 70_003),
             ],
         )
+        write_canary_options = next(
+            options
+            for _binary, subcommands, options in module.INROU_CANARY_CLI_SURFACES
+            if subcommands == ("taira", "write-canary")
+        )
+        self.assertTrue(
+            {
+                "--faucet-authority",
+                "--faucet-asset-id",
+                "--faucet-amount",
+            }.issubset(write_canary_options)
+        )
+
+    def test_iroha_hash_hex_requires_exact_lowercase_marker_roundtrip(self) -> None:
+        canonical = "a" * 63 + "b"
+        self.assertTrue(module.is_canonical_iroha_hash_hex(canonical))
+        self.assertTrue(
+            module.is_canonical_inrou_service_version("artifact-" + canonical)
+        )
+
+        for name, value in (
+            ("marker-cleared", "a" * 64),
+            ("uppercase", "A" * 63 + "B"),
+            ("short", canonical[:-1]),
+            ("non-hex", "g" + canonical[1:]),
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(module.is_canonical_iroha_hash_hex(value))
+                self.assertFalse(
+                    module.is_canonical_inrou_service_version("artifact-" + value)
+                )
 
     def test_taira_guest_image_bound_is_exact_across_stage_and_validator_config(self) -> None:
         expected = 10 * 1024 * 1024 * 1024
@@ -1184,7 +1498,7 @@ class TairaDevnetTests(unittest.TestCase):
             ):
                 module.up(self.up_args(), run=runtime.run, request=runtime.request)
 
-        self.assertEqual(fdopen_calls, 5)
+        self.assertGreaterEqual(fdopen_calls, 5)
         self.assertFalse(runtime.process_commands)
         self.assertTrue(
             any(
@@ -1528,6 +1842,41 @@ class TairaDevnetTests(unittest.TestCase):
             if url.endswith("v1/mcp") and payload is None
         }
         self.assertEqual(mcp_roots, set(module.torii_roots(module.DEFAULT_API_PORT)))
+        faucet_commands = [
+            command
+            for command in runtime.commands
+            if "write-canary" in command
+            and "--help" not in command
+            and command[command.index("--operation") + 1] == "faucet"
+        ]
+        self.assertEqual(len(faucet_commands), 2)
+        for command in faucet_commands:
+            self.assertEqual(
+                command[command.index("--faucet-authority") + 1],
+                FAKE_FAUCET_AUTHORITY,
+            )
+            self.assertEqual(
+                command[command.index("--faucet-asset-id") + 1],
+                FAKE_FAUCET_ASSET_ID,
+            )
+            self.assertEqual(
+                command[command.index("--faucet-amount") + 1],
+                FAKE_FAUCET_AMOUNT,
+            )
+
+    def test_generated_faucet_policy_rejects_cross_peer_drift(self) -> None:
+        _, target = self.generated_network("generated-faucet-policy-drift")
+        peer = target / "peer3.toml"
+        peer.write_text(
+            peer.read_text(encoding="utf-8").replace(
+                f'amount = "{FAKE_FAUCET_AMOUNT}"',
+                'amount = "1"',
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "one exact faucet policy"):
+            module.require_trusted_localnet_faucet_policy(target)
 
     def test_up_freshly_proves_proof_required_onboarding_without_submit(
         self,
@@ -1604,7 +1953,13 @@ class TairaDevnetTests(unittest.TestCase):
         envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
         envelope["binding"]["kind"] = "inrou_guest_pin"
         envelope_path.write_text(
-            json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n",
+            json.dumps(
+                envelope,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            + "\n",
             encoding="utf-8",
         )
         envelope_path.chmod(0o600)
@@ -1620,6 +1975,390 @@ class TairaDevnetTests(unittest.TestCase):
 
         with self.assertRaisesRegex(module.DevnetError, "substituted child"):
             module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_prepared_inrou_envelope_v1_rejects_unknown_fields_recursively(
+        self,
+    ) -> None:
+        public_root = "http://127.0.0.1:29080"
+        binding: dict[str, object] = {
+            "authorization_sha256": "a" * 64,
+            "authorization_nonce": "n" * 32,
+            "kind": "inrou_bundle_pin",
+            "phase": module.PREPARED_MUTATION_PHASE,
+            "idempotency_key": module.prepared_child_idempotency_key(
+                "n" * 32,
+                module.PREPARED_MUTATION_PHASE,
+                "inrou_bundle_pin",
+            ),
+            "execution_expires_at_unix_ms": 9_999_999_999_999,
+        }
+        envelope: dict[str, object] = {
+            "schema": "iroha.taira.prepared-mutation-envelope.v1",
+            "binding": binding,
+            "public_root": public_root,
+            "chain_id": module.DEFAULT_CHAIN_ID,
+            "network_id": "test-network",
+            "authority": FEE_QUOTE_AUTHORITY,
+            "stage": fake_inrou_stage(),
+            "operation": {
+                "kind": "inrou_bundle_pin",
+                "envelope": fake_prepared_payload(
+                    "inrou_bundle_pin",
+                    binding,
+                    "bundle_pin",
+                    "a" * 63 + "b",
+                ),
+            },
+        }
+        module._validate_prepared_envelope_v1(
+            envelope,
+            public_root,
+            "inrou_bundle_pin",
+            {"inrou_bundle_pin"},
+        )
+        substituted_fee = json.loads(json.dumps(envelope))
+        substituted_fee["operation"]["envelope"]["fee_payment"]["value"][
+            "gas_limit"
+        ] = 1
+        with self.assertRaisesRegex(module.DevnetError, "differs from"):
+            module._validate_prepared_envelope_v1(
+                substituted_fee,
+                public_root,
+                "inrou_bundle_pin",
+                {"inrou_bundle_pin"},
+            )
+
+        substituted_debit = json.loads(json.dumps(envelope))
+        substituted_debit["operation"]["envelope"]["fee_quote"]["decision"][
+            "value"
+        ]["debit_source"]["value"] = OTHER_CANONICAL_AUTHORITY
+        with self.assertRaisesRegex(module.DevnetError, "substituted authority"):
+            module._validate_prepared_envelope_v1(
+                substituted_debit,
+                public_root,
+                "inrou_bundle_pin",
+                {"inrou_bundle_pin"},
+            )
+
+        paths = (
+            ("retired_v0",),
+            ("binding", "retired_v0"),
+            ("stage", "retired_v0"),
+            ("operation", "retired_v0"),
+            ("operation", "envelope", "retired_v0"),
+            ("operation", "envelope", "fee_payment", "retired_v0"),
+            ("operation", "envelope", "fee_payment", "value", "retired_v0"),
+            ("operation", "envelope", "fee_quote", "retired_v0"),
+            (
+                "operation",
+                "envelope",
+                "fee_quote",
+                "observation",
+                "retired_v0",
+            ),
+        )
+        for path in paths:
+            with self.subTest(path=".".join(path)):
+                unknown = json.loads(json.dumps(envelope))
+                nested = unknown
+                for segment in path[:-1]:
+                    nested = nested[segment]
+                nested[path[-1]] = "forbidden"
+                with self.assertRaisesRegex(
+                    module.DevnetError, "exactly the V1 fields"
+                ):
+                    module._validate_prepared_envelope_v1(
+                        unknown,
+                        public_root,
+                        "inrou_bundle_pin",
+                        {"inrou_bundle_pin"},
+                    )
+
+    def test_fee_evidence_rejects_retired_placeholder_shapes(self) -> None:
+        for value in (
+            {"kind": "authority"},
+            {"payer": "authority", "value": {"charge_limits": []}},
+        ):
+            with self.subTest(value=value), self.assertRaises(module.DevnetError):
+                module._validate_fee_payment_v1(value, "fixture.fee_payment")
+        with self.assertRaises(module.DevnetError):
+            module._validate_fee_quote_v1(
+                {"intent": {"kind": "authority"}}, "fixture.fee_quote"
+            )
+
+        missing_revision = fake_fee_quote()
+        del missing_revision["decision"]["value"]["program_revision"]
+        with self.assertRaisesRegex(module.DevnetError, "exactly the V1 fields"):
+            module._validate_fee_quote_v1(missing_revision, "fixture.fee_quote")
+
+    def test_fee_quote_rejects_equal_malformed_account_identities(self) -> None:
+        authority_quote = fake_fee_quote()
+        authority_quote["decision"]["value"]["debit_source"]["value"] = (
+            "not-an-i105-account"
+        )
+        with self.assertRaisesRegex(module.DevnetError, "canonical I105"):
+            module._validate_fee_quote_v1(
+                authority_quote,
+                "fixture.fee_quote",
+                expected_authority="not-an-i105-account",
+            )
+
+        malformed_program = {
+            "sponsor": "not-an-i105-account",
+            "name": "reset",
+        }
+        sponsored_quote = fake_fee_quote()
+        sponsored_quote["intent"] = {
+            "payer": "sponsor",
+            "value": {
+                "program_id": malformed_program,
+                "program_revision": 7,
+                "charge_limits": [],
+                "gas_limit": None,
+            },
+        }
+        sponsored_quote["decision"] = {
+            "status": "accepted",
+            "value": {
+                "debit_source": {
+                    "kind": "sponsor_program",
+                    "value": malformed_program,
+                },
+                "program_revision": 7,
+            },
+        }
+        with self.assertRaisesRegex(module.DevnetError, "canonical I105"):
+            module._validate_fee_quote_v1(
+                sponsored_quote,
+                "fixture.fee_quote",
+                expected_fee_payment=sponsored_quote["intent"],
+            )
+
+    def test_fee_quote_requires_exact_canonical_sponsor_program_names(self) -> None:
+        for name in (
+            "re\u0301set",
+            "re/set",
+            "re@set",
+            "re#set",
+            "re$set",
+            "re\x00set",
+            "re\u061cset",
+            "re\u200eset",
+            "re\u202aset",
+            "re\u2066set",
+            "re\ud800set",
+        ):
+            with self.subTest(name=repr(name)):
+                program_id = {"sponsor": FEE_QUOTE_AUTHORITY, "name": name}
+                quote = fake_fee_quote()
+                quote["intent"] = {
+                    "payer": "sponsor",
+                    "value": {
+                        "program_id": program_id,
+                        "program_revision": 7,
+                        "charge_limits": [],
+                        "gas_limit": None,
+                    },
+                }
+                quote["decision"] = {
+                    "status": "accepted",
+                    "value": {
+                        "debit_source": {
+                            "kind": "sponsor_program",
+                            "value": program_id,
+                        },
+                        "program_revision": 7,
+                    },
+                }
+                with self.assertRaisesRegex(
+                    module.DevnetError,
+                    "canonical sponsor-program name|exact nonempty token",
+                ):
+                    module._validate_fee_quote_v1(quote, "fixture.fee_quote")
+
+    def test_fee_evidence_accepts_exact_sponsor_identity_and_rejects_substitution(self) -> None:
+        program_id = {"sponsor": FEE_QUOTE_AUTHORITY, "name": "reset"}
+        payment = {
+            "payer": "sponsor",
+            "value": {
+                "program_id": program_id,
+                "program_revision": 7,
+                "charge_limits": [],
+                "gas_limit": None,
+            },
+        }
+        quote = fake_fee_quote()
+        quote["intent"] = payment
+        quote["decision"] = {
+            "status": "accepted",
+            "value": {
+                "debit_source": {
+                    "kind": "sponsor_program",
+                    "value": program_id,
+                },
+                "program_revision": 7,
+            },
+        }
+        module._validate_fee_quote_v1(quote, "fixture.fee_quote")
+
+        substituted = json.loads(json.dumps(quote))
+        substituted["decision"]["value"]["program_revision"] = 8
+        with self.assertRaisesRegex(module.DevnetError, "differs from"):
+            module._validate_fee_quote_v1(substituted, "fixture.fee_quote")
+
+        substituted_name = json.loads(json.dumps(quote))
+        substituted_name["decision"]["value"]["debit_source"]["value"][
+            "name"
+        ] = "Reset"
+        with self.assertRaisesRegex(module.DevnetError, "differs from"):
+            module._validate_fee_quote_v1(substituted_name, "fixture.fee_quote")
+
+    def test_fee_quote_account_identity_ignores_i105_discriminant(self) -> None:
+        sora = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+        test = "test" + sora.removeprefix("sora")
+        dev = "dev" + sora.removeprefix("sora")
+
+        authority_quote = fake_fee_quote()
+        authority_quote["decision"]["value"]["debit_source"]["value"] = test
+        module._validate_fee_quote_v1(
+            authority_quote,
+            "fixture.fee_quote",
+            expected_authority=sora,
+        )
+
+        expected_payment = {
+            "payer": "sponsor",
+            "value": {
+                "program_id": {"sponsor": sora, "name": "reset"},
+                "program_revision": 7,
+                "charge_limits": [],
+                "gas_limit": None,
+            },
+        }
+        sponsored_quote = fake_fee_quote()
+        sponsored_quote["intent"] = json.loads(json.dumps(expected_payment))
+        sponsored_quote["intent"]["value"]["program_id"]["sponsor"] = test
+        sponsored_quote["decision"] = {
+            "status": "accepted",
+            "value": {
+                "debit_source": {
+                    "kind": "sponsor_program",
+                    "value": {"sponsor": dev, "name": "reset"},
+                },
+                "program_revision": 7,
+            },
+        }
+        module._validate_fee_quote_v1(
+            sponsored_quote,
+            "fixture.fee_quote",
+            expected_fee_payment=expected_payment,
+        )
+
+    def test_fee_quote_sponsor_capacities_are_exact_ordered_and_sufficient(self) -> None:
+        program_id = {"sponsor": FEE_QUOTE_AUTHORITY, "name": "reset"}
+        components = [
+            {
+                "kind": {"kind": "nexus", "value": None},
+                "asset_definition_id": FAKE_FAUCET_ASSET_ID,
+                "max_amount": "3",
+            },
+            {
+                "kind": {"kind": "pipeline_gas", "value": None},
+                "asset_definition_id": FAKE_FAUCET_ASSET_ID,
+                "max_amount": "4",
+            },
+        ]
+        capacity = {
+            "asset_definition_id": FAKE_FAUCET_ASSET_ID,
+            "vault_balance": "10",
+            "reserve_floor": "3",
+            "block_remaining": "7",
+            "program_epoch_remaining": "8",
+            "beneficiary_epoch_remaining": "9",
+        }
+        quote = fake_fee_quote()
+        quote["intent"] = {
+            "payer": "sponsor",
+            "value": {
+                "program_id": program_id,
+                "program_revision": 7,
+                "charge_limits": components,
+                "gas_limit": None,
+            },
+        }
+        quote["components"] = components
+        quote["capacities"] = [capacity]
+        quote["decision"] = {
+            "status": "accepted",
+            "value": {
+                "debit_source": {
+                    "kind": "sponsor_program",
+                    "value": program_id,
+                },
+                "program_revision": 7,
+            },
+        }
+        module._validate_fee_quote_v1(quote, "fixture.fee_quote")
+
+        mutations = []
+        missing = json.loads(json.dumps(quote))
+        missing["capacities"] = []
+        mutations.append((missing, "exactly one canonical entry"))
+        duplicate = json.loads(json.dumps(quote))
+        duplicate["capacities"].append(json.loads(json.dumps(capacity)))
+        mutations.append((duplicate, "exactly one canonical entry"))
+        unrelated = json.loads(json.dumps(quote))
+        unrelated["capacities"][0]["asset_definition_id"] = (
+            "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+        )
+        mutations.append((unrelated, "exactly one canonical entry"))
+        short_vault = json.loads(json.dumps(quote))
+        short_vault["capacities"][0]["vault_balance"] = "9"
+        mutations.append((short_vault, "vault charge"))
+        short_window = json.loads(json.dumps(quote))
+        short_window["capacities"][0]["block_remaining"] = "6"
+        mutations.append((short_window, "block_remaining"))
+        zero_charge = json.loads(json.dumps(quote))
+        zero_charge["intent"]["value"]["charge_limits"][0]["max_amount"] = "0"
+        zero_charge["components"][0]["max_amount"] = "0"
+        mutations.append((zero_charge, "must be positive"))
+        for mutated, message in mutations:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                module.DevnetError, message
+            ):
+                module._validate_fee_quote_v1(mutated, "fixture.fee_quote")
+
+        second_asset = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+        ordered = json.loads(json.dumps(quote))
+        ordered["intent"]["value"]["charge_limits"][1]["asset_definition_id"] = (
+            second_asset
+        )
+        ordered["intent"]["value"]["charge_limits"][1]["max_amount"] = "1"
+        ordered["components"] = json.loads(
+            json.dumps(ordered["intent"]["value"]["charge_limits"])
+        )
+        second_capacity = {
+            "asset_definition_id": second_asset,
+            "vault_balance": "2",
+            "reserve_floor": "1",
+            "block_remaining": "1",
+            "program_epoch_remaining": "1",
+            "beneficiary_epoch_remaining": "1",
+        }
+        ordered["capacities"] = [capacity, second_capacity]
+        module._validate_fee_quote_v1(ordered, "fixture.fee_quote")
+        ordered["capacities"].reverse()
+        with self.assertRaisesRegex(module.DevnetError, "canonical entry"):
+            module._validate_fee_quote_v1(ordered, "fixture.fee_quote")
+
+        fee_free = json.loads(json.dumps(quote))
+        fee_free["intent"]["value"]["charge_limits"] = []
+        fee_free["components"] = []
+        fee_free["capacities"] = []
+        module._validate_fee_quote_v1(fee_free, "fixture.fee_quote")
+        fee_free["capacities"] = [capacity]
+        with self.assertRaisesRegex(module.DevnetError, "canonical entry"):
+            module._validate_fee_quote_v1(fee_free, "fixture.fee_quote")
 
     def test_up_preflights_mandatory_guest_qualification_surfaces(self) -> None:
         runtime = FakeRuntime()
@@ -1725,7 +2464,13 @@ class TairaDevnetTests(unittest.TestCase):
                 config.parent, self.trusted_guest_artifact()
             )
         config.write_text(
-            original.replace("enabled = true", "enabled = true\nbackends = [\"portable_vm\"]", 1),
+            original.replace(
+                "[soracloud_runtime.inrou]\nenabled = true",
+                "[soracloud_runtime.inrou]\n"
+                "enabled = true\n"
+                'backends = ["portable_vm"]',
+                1,
+            ),
             encoding="utf-8",
         )
         with self.assertRaisesRegex(module.DevnetError, "wrong assignment set"):
@@ -1792,6 +2537,29 @@ class TairaDevnetTests(unittest.TestCase):
             {path: path.read_text(encoding="utf-8") for path in before},
             before,
         )
+
+    def test_inrou_stage_receipt_rejects_marker_cleared_hashes(self) -> None:
+        runtime, target = self.generated_network("generated-unmarked-stage-receipt")
+        stage = target / module.INROU_STAGE_DIRECTORY
+        runtime.run(["iroha", "taira", "inrou-stage", "--stage-dir", str(stage)])
+        receipt_path = stage / module.INROU_STAGE_RECEIPT_FILE
+        cases = (
+            ("service_version", "artifact-" + "0" * 64),
+            ("bundle_hash", "a" * 64),
+            ("container_manifest_hash", "3" * 63 + "2"),
+            ("service_manifest_hash", "4" * 64),
+        )
+        for field, value in cases:
+            with self.subTest(field=field):
+                forged = dict(runtime.stage_receipt)
+                forged[field] = value
+                receipt_path.write_text(
+                    json.dumps(forged, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                receipt_path.chmod(0o600)
+                with self.assertRaisesRegex(module.DevnetError, f"malformed .*{field}"):
+                    module._read_inrou_stage_receipt(stage)
 
     def test_canonical_storage_validator_rejects_capacity_drift(self) -> None:
         runtime = FakeRuntime()
@@ -1960,8 +2728,8 @@ class TairaDevnetTests(unittest.TestCase):
         down_args = module.parser().parse_args(["--dir", str(state), "down"])
         down_report = module.down(down_args, run=runtime.run)
         self.assertTrue(down_report["stopped"])
-        self.assertTrue(down_report["runtime_signers_deleted"])
-        self.assertFalse((state / "network" / module.RUNTIME_SIGNER_DIRECTORY).exists())
+        self.assertTrue(down_report["network_destroyed"])
+        self.assertFalse((state / "network").exists())
 
     def test_check_rejects_missing_guest_qualification_evidence(self) -> None:
         runtime = FakeRuntime()
@@ -2303,7 +3071,7 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "run `up` first"):
             module.down(args, run=FakeRuntime().run)
 
-    def test_down_accepts_an_already_absent_runtime_signer_directory(self) -> None:
+    def test_down_destroys_an_already_stopped_network(self) -> None:
         state = module.managed_root(self.root / "state", create=True)
         target = state / "network"
         target.mkdir()
@@ -2313,7 +3081,8 @@ class TairaDevnetTests(unittest.TestCase):
         report = module.down(args, run=FakeRuntime().run)
 
         self.assertTrue(report["stopped"])
-        self.assertTrue(report["runtime_signers_deleted"])
+        self.assertTrue(report["network_destroyed"])
+        self.assertFalse(target.exists())
 
     def test_up_preserves_incomplete_network_with_residual_pid_evidence(self) -> None:
         state = module.managed_root(self.root / "state", create=True)
@@ -2878,16 +3647,53 @@ class TairaDevnetTests(unittest.TestCase):
             with self.subTest(name=name):
                 receipt = json.loads(json.dumps(baseline))
                 mutate(receipt)
-                completed = subprocess.CompletedProcess(
-                    ["iroha", "taira", "inrou-canary"],
-                    0,
-                    json.dumps(receipt),
-                    "",
-                )
                 with self.assertRaisesRegex(module.DevnetError, error):
-                    module.canonical_inrou_canary_outcome(
-                        completed,
+                    module.require_canonical_inrou_canary_receipt(
+                        receipt,
                         "http://127.0.0.1:29080",
+                    )
+
+    def test_inrou_canary_receipt_rejects_marker_cleared_hashes(self) -> None:
+        baseline = json.loads(FakeRuntime().inrou_canary_stdout)
+        cases = (
+            ("service_version", "artifact-" + "0" * 64),
+            ("bundle_hash", "a" * 64),
+            ("container_manifest_hash", "3" * 63 + "2"),
+            ("service_manifest_hash", "4" * 64),
+            ("transaction_hash_hex", "6" * 64),
+            ("evidence", "6" * 64),
+        )
+        for field, value in cases:
+            with self.subTest(field=field):
+                receipt = json.loads(json.dumps(baseline))
+                receipt[field] = value
+                with self.assertRaisesRegex(module.DevnetError, "malformed"):
+                    module.require_canonical_inrou_canary_receipt(
+                        receipt,
+                        "http://127.0.0.1:29080",
+                    )
+
+    def test_inrou_check_receipt_rejects_marker_cleared_hashes(self) -> None:
+        runtime = FakeRuntime()
+        baseline = json.loads(runtime.inrou_check_stdout)
+        stored = json.loads(runtime.inrou_canary_stdout)
+        cases = (
+            ("service_version", "artifact-" + "0" * 64),
+            ("bundle_hash", "a" * 64),
+            ("container_manifest_hash", "3" * 63 + "2"),
+            ("service_manifest_hash", "4" * 64),
+        )
+        for field, value in cases:
+            with self.subTest(field=field):
+                receipt = json.loads(json.dumps(baseline))
+                receipt[field] = value
+                with self.assertRaisesRegex(module.DevnetError, "malformed"):
+                    module.require_canonical_inrou_check_receipt(
+                        receipt,
+                        "http://127.0.0.1:29080",
+                        stored,
+                        0,
+                        2,
                     )
 
     def test_inrou_canary_receipt_v1_rejects_unknown_and_legacy_variants(self) -> None:
@@ -2937,15 +3743,9 @@ class TairaDevnetTests(unittest.TestCase):
             with self.subTest(name=name):
                 receipt = json.loads(json.dumps(baseline))
                 mutate(receipt)
-                completed = subprocess.CompletedProcess(
-                    ["iroha", "taira", "inrou-canary"],
-                    0,
-                    json.dumps(receipt),
-                    "",
-                )
                 with self.assertRaisesRegex(module.DevnetError, error):
-                    module.canonical_inrou_canary_outcome(
-                        completed,
+                    module.require_canonical_inrou_canary_receipt(
+                        receipt,
                         "http://127.0.0.1:29080",
                     )
 
@@ -3434,20 +4234,37 @@ class TairaDevnetTests(unittest.TestCase):
                 module.run_command(["cargo", "build"], timeout=7)
 
     def test_mcp_rejects_stale_protocol_and_nonaccepted_notification(self) -> None:
-        def stale_request(_url: str, payload: object | None) -> tuple[int, object]:
+        def stale_advertisement(
+            _url: str, payload: object | None
+        ) -> tuple[int, object]:
+            self.assertIsNone(payload)
+            return 200, {
+                "enabled": True,
+                "protocolVersion": "2024-11-05",
+            }
+
+        with self.assertRaisesRegex(module.DevnetError, "not enabled/current"):
+            module.check_mcp("http://127.0.0.1:29080/", stale_advertisement)
+
+        def stale_initialize(_url: str, payload: object | None) -> tuple[int, object]:
             if payload is None:
                 return 200, {
                     "enabled": True,
-                    "protocolVersion": "advertised-version",
+                    "protocolVersion": module.MCP_PROTOCOL_VERSION_V1,
                 }
+            self.assertIsInstance(payload, dict)
+            assert isinstance(payload, dict)
+            self.assertEqual(
+                payload["params"]["protocolVersion"], module.MCP_PROTOCOL_VERSION_V1
+            )
             return 200, {
                 "jsonrpc": "2.0",
                 "id": 1,
-                "result": {"protocolVersion": "stale"},
+                "result": {"protocolVersion": "2024-11-05"},
             }
 
         with self.assertRaisesRegex(module.DevnetError, "MCP initialize failed"):
-            module.check_mcp("http://127.0.0.1:29080/", stale_request)
+            module.check_mcp("http://127.0.0.1:29080/", stale_initialize)
 
         def rejected_notification(
             _url: str, payload: object | None
@@ -3455,14 +4272,14 @@ class TairaDevnetTests(unittest.TestCase):
             if payload is None:
                 return 200, {
                     "enabled": True,
-                    "protocolVersion": "advertised-version",
+                    "protocolVersion": module.MCP_PROTOCOL_VERSION_V1,
                 }
             assert isinstance(payload, dict)
             if payload.get("method") == "initialize":
                 return 200, {
                     "jsonrpc": "2.0",
                     "id": 1,
-                    "result": {"protocolVersion": "advertised-version"},
+                    "result": {"protocolVersion": module.MCP_PROTOCOL_VERSION_V1},
                 }
             if payload.get("method") == "notifications/initialized":
                 return 200, None

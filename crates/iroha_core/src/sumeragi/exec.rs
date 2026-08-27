@@ -690,22 +690,34 @@ fn execution_commitment_from_projection(
             executed_block_wire_hash,
         )
         .map_err(|_| "Kagemusha V2 execution commitment is not canonical"),
-        None => wire::ExecutionCommitment::new_with_manifests(
-            parent_state_root,
-            compute_consensus_post_state_root(&reads, &writes)?,
-            compute_post_state_root(&[], &writes),
-            None,
-            0,
-            wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            native_amx_manifest.root(),
-            native_amx_manifest.count(),
-            lane_finality_manifest.commitment(),
-            merge_carrier,
-            executed_block_wire_len,
-            executed_block_wire_hash,
-        )
-        .map_err(|_| "Sumeragi V2 execution commitment is not canonical"),
+        None => {
+            let (post_state_root, ordinary_writes_root) = ordinary_execution_roots(&reads, &writes);
+            wire::ExecutionCommitment::new_with_manifests(
+                parent_state_root,
+                post_state_root,
+                ordinary_writes_root,
+                None,
+                0,
+                wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                native_amx_manifest.root(),
+                native_amx_manifest.count(),
+                lane_finality_manifest.commitment(),
+                merge_carrier,
+                executed_block_wire_len,
+                executed_block_wire_hash,
+            )
+            .map_err(|_| "Sumeragi V2 execution commitment is not canonical")
+        }
     }
+}
+fn ordinary_execution_roots(reads: &[KvPair], writes: &[KvPair]) -> (Hash, Hash) {
+    let post_state_root = compute_post_state_root(reads, writes);
+    let ordinary_writes_root = if writes.is_empty() {
+        compute_post_state_root(&[], &[])
+    } else {
+        post_state_root
+    };
+    (post_state_root, ordinary_writes_root)
 }
 /// Compute the `parent_state_root` using only the witnessed reads (pre-values).
 /// When a block writes state, only pre-values for written keys are included.
@@ -1247,6 +1259,18 @@ mod tests {
             post_state_from_witness(&writes_with_incidental_reads),
             post_state_from_witness(&pure_reads)
         );
+    }
+    #[test]
+    fn ordinary_execution_roots_reuse_the_write_projection() {
+        let reads = [KvPair::new(b"account", b"old")];
+        let writes = [KvPair::new(b"account", b"new")];
+        let (post_state_root, ordinary_writes_root) = ordinary_execution_roots(&reads, &writes);
+        assert_eq!(post_state_root, ordinary_writes_root);
+
+        let (read_only_root, empty_writes_root) = ordinary_execution_roots(&reads, &[]);
+        assert_eq!(read_only_root, compute_post_state_root(&reads, &[]));
+        assert_eq!(empty_writes_root, compute_post_state_root(&[], &[]));
+        assert_ne!(read_only_root, empty_writes_root);
     }
     #[test]
     fn parent_root_projection_matches_formal_empty_read_only_and_write_filter_cases() {

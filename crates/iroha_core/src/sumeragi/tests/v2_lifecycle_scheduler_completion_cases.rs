@@ -1929,13 +1929,6 @@ impl ProductionLifecycleOwnerV1 {
         >,
         crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture,
     ) {
-        let body_store = self
-            .body_store
-            .take()
-            .expect("the startup owner transfers its body store exactly once");
-        let identity = body_store.instance_identity();
-        let context = self.verified.context().clone();
-        let requester = context.roster[0].validator.clone();
         let replayed_decision = runtime
             .replayed_decision_key()
             .expect("read the clean recovered runtime Decision");
@@ -1943,7 +1936,43 @@ impl ProductionLifecycleOwnerV1 {
             .registry
             .project_recovered_durable_validate_retry_census(&self.coordinator, replayed_decision)
             .expect("project the clean recovered Validate retry census");
-        let (executor, body_store) =
+        self.bind_body_store_to_lifecycle_completion_io_with_validate_retry_census_for_test(
+            services,
+            runtime,
+            output_guard,
+            local_validator,
+            class_capacity,
+            recovered_validate_retry_census,
+        )
+    }
+
+    /// Open a focused executor with the exact pre-completion Validate census.
+    ///
+    /// Production keeps one executor alive across Validate completion. Tests
+    /// which manufacture a fresh executor after that volatile replacement
+    /// must carry the already-authenticated pre-publication census explicitly.
+    pub(in crate::sumeragi) fn bind_body_store_to_lifecycle_completion_io_with_validate_retry_census_for_test(
+        &mut self,
+        services: &mut ProductionV2Services,
+        runtime: crate::sumeragi::v2_runtime::SerializedV2Runtime,
+        output_guard: std::sync::Arc<crate::sumeragi::output_guard::ConsensusOutputGuard>,
+        local_validator: iroha_data_model::block::consensus_v2::ValidatorIndex,
+        class_capacity: usize,
+        recovered_validate_retry_census: crate::sumeragi::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1,
+    ) -> (
+        crate::sumeragi::v2_effects::V2EffectExecutor<
+            crate::sumeragi::v2_runtime::SerializedV2Runtime,
+        >,
+        crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture,
+    ) {
+        let body_store = self
+            .body_store
+            .take()
+            .expect("the startup owner transfers its body store exactly once");
+        let identity = body_store.instance_identity();
+        let context = self.verified.context().clone();
+        let requester = context.roster[0].validator.clone();
+        let (mut executor, body_store) =
             crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
                 runtime,
                 body_store,
@@ -1956,6 +1985,33 @@ impl ProductionLifecycleOwnerV1 {
                 crate::sumeragi::v2_effects::EffectQueueConfig::default(),
             )
             .expect("open the clean lifecycle Completion executor");
+        for (effect, pending, durable_receipt) in self
+            .registry
+            .registry()
+            .recovered_published_store_retry_markers()
+        {
+            executor
+                .install_recovered_published_lifecycle_store_retry_marker(
+                    effect,
+                    pending,
+                    durable_receipt,
+                )
+                .expect("restore the exact cold lifecycle Store retry marker");
+        }
+        for (effect, pending, durable_receipt, lifecycle_ordinal) in self
+            .registry
+            .registry()
+            .recovered_published_validate_retry_markers()
+        {
+            executor
+                .install_recovered_published_lifecycle_validate_retry_marker(
+                    effect,
+                    pending,
+                    durable_receipt,
+                    lifecycle_ordinal,
+                )
+                .expect("restore the exact cold lifecycle Validate retry marker");
+        }
         let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_local_validator_for_test(
                 services,
                 context,
@@ -1975,6 +2031,7 @@ impl ProductionLifecycleOwnerV1 {
         &mut self,
         services: &mut ProductionV2Services,
         output_guard: std::sync::Arc<crate::sumeragi::output_guard::ConsensusOutputGuard>,
+        recovered_validate_retry_census: crate::sumeragi::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1,
         class_capacity: usize,
     ) -> (
         crate::sumeragi::v2_effects::V2EffectExecutor<
@@ -1991,12 +2048,13 @@ impl ProductionLifecycleOwnerV1 {
                 self.coordinator.high_water(),
             );
         let runtime = startup.into_lifecycle_apply_runtime_for_lineage_test(lifecycle_ordinals);
-        self.bind_body_store_to_lifecycle_completion_io_for_test(
+        self.bind_body_store_to_lifecycle_completion_io_with_validate_retry_census_for_test(
             services,
             runtime,
             output_guard,
             0,
             class_capacity,
+            recovered_validate_retry_census,
         )
     }
 
@@ -2011,6 +2069,19 @@ impl ProductionLifecycleOwnerV1 {
         runner_debt: u64,
     ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
         self.dispatch_completion_with_runner_debt(services, executor, runner_debt)
+    }
+
+    /// Exercise the production synchronous Ready-Validate-successor corridor.
+    pub(in crate::sumeragi) fn dispatch_ready_validate_successor_for_test(
+        &mut self,
+        services: &mut ProductionV2Services,
+        executor: &mut crate::sumeragi::v2_effects::V2EffectExecutor<
+            crate::sumeragi::v2_runtime::SerializedV2Runtime,
+        >,
+        successor: super::ReadyValidateSuccessorV1,
+        runner_debt: u64,
+    ) -> Result<super::ReadyValidateSuccessorDispatchV1, ProductionCompletionDispatchErrorV1> {
+        self.dispatch_ready_validate_successor(services, executor, successor, runner_debt)
     }
 
     /// Recheck the exact finalization-only registry census without exposing it.

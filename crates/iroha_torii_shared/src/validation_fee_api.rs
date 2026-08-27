@@ -3,22 +3,30 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
+    asset::AssetDefinitionId,
     block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
     bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     governance::types::{
         GovernanceCertificateV1, ProposalKind, ValidationFeePayoutLifecycleProposal,
         ValidationFeePolicyProposal,
     },
+    hijiri::{
+        HIJIRI_PARAMETERS_VERSION_V1, HijiriAccountRiskV1, HijiriParametersV1, Q16,
+        hijiri_fee_quote_hash_from_digests_v1,
+    },
     validation_fee::{
-        VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, ValidationFeeChargingMode,
-        ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
-        ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotStatusV1, ValidationFeePolicyV1,
+        VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
+        ValidationFeeChargingMode, ValidationFeeParliamentAuthorizationV1,
+        ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
+        ValidationFeePolicySnapshotStatusV1, ValidationFeePolicyV1,
         ValidationFeePolicyWitnessProofV1, ValidationFeeTreasuryPayoutBindingV1,
     },
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Current validation-fee proof request/response layout.
 pub const VALIDATION_FEE_POLICY_PROOF_VERSION_V1: u16 = 1;
+/// Current Hijiri validation-fee quote request/response layout.
+pub const VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1: u16 = 1;
 /// Stable public Norito schema name for the proof request.
 pub const VALIDATION_FEE_POLICY_PROOF_REQUEST_SCHEMA_NAME: &str =
     "iroha.torii.v1.validation_fee.current_policy_proof.request";
@@ -28,6 +36,23 @@ pub const VALIDATION_FEE_POLICY_PROOF_RESPONSE_SCHEMA_NAME: &str =
 /// Stable public JSON schema name for a locally verified policy projection.
 pub const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA_NAME: &str =
     "iroha.validation_fee.verified_policy_projection.v1";
+/// Stable public JSON schema name for an evaluated Hijiri fee quote.
+pub const VALIDATION_FEE_HIJIRI_QUOTE_PROJECTION_SCHEMA_NAME: &str =
+    "iroha.torii.v1.validation_fee.hijiri_quote.response";
+/// Stable public Norito schema name for a Hijiri fee-quote request.
+pub const VALIDATION_FEE_HIJIRI_QUOTE_REQUEST_SCHEMA_NAME: &str =
+    "iroha.torii.v1.validation_fee.hijiri_quote.request";
+/// Honest assurance label for a complete quote without an independent state witness.
+pub const VALIDATION_FEE_HIJIRI_QUOTE_EVALUATED_ASSURANCE_V1: &str =
+    "EVALUATED_PROJECTION_NOT_INDEPENDENTLY_WITNESS_VERIFIED";
+/// Maximum qualifying transfers accepted by one V1 quote request.
+pub const VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1: u32 = 100_000;
+/// Maximum canonical request bytes accepted by the live V1 quote route.
+pub const VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1: usize = 4 * 1024;
+/// Maximum response bytes a V1 client should accept from the live quote route.
+pub const VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1: usize = 64 * 1024;
+/// Protected V1 validation fee expressed in fee-asset minor units.
+pub const VALIDATION_FEE_BASE_MINOR_UNITS_V1: u64 = 10;
 /// Current validation-fee proposal read/draft layout.
 pub const VALIDATION_FEE_PROPOSAL_API_VERSION_V1: u16 = 1;
 /// Default number of validation-fee proposals returned by one list request.
@@ -73,6 +98,58 @@ pub struct ValidationFeeCurrentPolicyProofRequestV1 {
     pub version: u16,
     /// Height of the externally trusted checkpoint which must begin the returned chain.
     pub trusted_checkpoint_height: u64,
+}
+/// Request an evaluated current-state validation-fee quote for one account.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeHijiriQuoteRequestV1 {
+    /// Request layout version.
+    pub version: u16,
+    /// Canonical universal account whose effective Hijiri risk is priced.
+    #[norito(rename = "accountId")]
+    pub account_id: AccountId,
+    /// Number of qualifying transfers priced as one aggregate before a single ceiling operation.
+    #[norito(rename = "qualifyingTransferCount")]
+    pub qualifying_transfer_count: u32,
+}
+impl ValidationFeeHijiriQuoteRequestV1 {
+    /// Validate the request version and bounded nonzero transfer count.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable explanation for an unsupported version, zero count, or count above the V1
+    /// quote bound.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.version != VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1 {
+            return Err("unsupported Hijiri validation-fee quote version".to_owned());
+        }
+        validate_hijiri_quote_transfer_count(self.qualifying_transfer_count)
+    }
+}
+fn validate_hijiri_quote_transfer_count(qualifying_transfer_count: u32) -> Result<(), String> {
+    if qualifying_transfer_count == 0
+        || qualifying_transfer_count > VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1
+    {
+        return Err(format!(
+            "qualifying_transfer_count must be between 1 and {}",
+            VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1
+        ));
+    }
+    Ok(())
+}
+/// Return the checked 1-based execution height immediately after a committed state tip.
+///
+/// # Errors
+///
+/// Returns an error when the committed state height cannot be incremented.
+pub fn validation_fee_hijiri_quote_execution_height(
+    evaluated_state_height: u64,
+) -> Result<u64, String> {
+    evaluated_state_height.checked_add(1).ok_or_else(|| {
+        "committed state height cannot advance to a Hijiri quote execution height".to_owned()
+    })
 }
 /// A complete registry snapshot authenticated by a block execution commitment and finality chain.
 #[derive(
@@ -171,6 +248,573 @@ pub struct ValidationFeeVerifiedCurrentPolicyV1 {
     pub parliament: ValidationFeeVerifiedParliamentV1,
     /// Complete immutable payout binding.
     pub payout: ValidationFeeVerifiedPayoutV1,
+}
+/// Exact fee quote evaluated from one same-snapshot base policy and Hijiri state.
+///
+/// The live route does not carry a witness for either state input, and the historical
+/// validation-fee witness does not commit custom Hijiri parameters. Consequently this DTO's
+/// assurance label covers the complete projection. A client using
+/// [`ValidationFeeVerifiedPolicyProjectionV1`] can independently verify the base-policy portion,
+/// but must still authenticate the Hijiri records through a separate state/query trust path.
+/// Later inclusion or intervening state changes can make a live quote stale; policy/Hijiri hash
+/// admission binding rejects that transaction so the client can refresh and retry.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeHijiriQuoteProjectionV1 {
+    /// Stable projection schema name.
+    pub schema: String,
+    /// Projection layout version.
+    pub version: u16,
+    /// Explicitly states that this complete quote was evaluated, not independently witness-verified.
+    pub assurance: String,
+    /// Committed state height from which the live route read its same-snapshot inputs.
+    #[norito(rename = "evaluatedStateHeight")]
+    pub evaluated_state_height: String,
+    /// Execution height at which the selected validation-fee policy is scheduled to apply.
+    #[norito(rename = "quotedExecutionHeight")]
+    pub quoted_execution_height: String,
+    /// Canonical universal account being quoted.
+    #[norito(rename = "accountId")]
+    pub account_id: AccountId,
+    /// Evaluated active validation-fee policy version.
+    #[norito(rename = "activePolicyVersion")]
+    pub active_policy_version: String,
+    /// Evaluated active validation-fee policy hash.
+    #[norito(rename = "activePolicyHash")]
+    pub active_policy_hash: String,
+    /// Fee asset charged by the active base policy.
+    #[norito(rename = "feeAssetDefinitionId")]
+    pub fee_asset_definition_id: String,
+    /// Canonical treasury account that must receive the validation fee.
+    #[norito(rename = "treasuryAccountId")]
+    pub treasury_account_id: String,
+    /// Fee-asset decimal scale.
+    #[norito(rename = "feeScale")]
+    pub fee_scale: u8,
+    /// Active global Hijiri schema version.
+    #[norito(rename = "hijiriParametersVersion")]
+    pub hijiri_parameters_version: u16,
+    /// Active global Hijiri revision as an exact decimal string.
+    #[norito(rename = "hijiriParametersRevision")]
+    pub hijiri_parameters_revision: String,
+    /// Domain-separated digest of the complete active global Hijiri parameter.
+    #[norito(rename = "hijiriParametersDigest")]
+    pub hijiri_parameters_digest: String,
+    /// Default account risk as the exact raw Q16.16 integer.
+    #[norito(rename = "defaultAccountRiskQ16")]
+    pub default_account_risk_q16: u32,
+    /// Effective account risk as the exact raw Q16.16 integer.
+    #[norito(rename = "effectiveAccountRiskQ16")]
+    pub effective_account_risk_q16: u32,
+    /// Explicit account-risk revision, or `None` when the global default was used.
+    #[norito(rename = "accountRiskRevision")]
+    pub account_risk_revision: Option<String>,
+    /// Explicit account-risk digest, or `None` when the global default was used.
+    #[norito(rename = "accountRiskDigest")]
+    pub account_risk_digest: Option<String>,
+    /// Applied multiplier as the exact raw Q16.16 integer.
+    #[norito(rename = "feeMultiplierQ16")]
+    pub fee_multiplier_q16: u32,
+    /// Composite hash binding global policy, account identity, and explicit risk presence/value.
+    #[norito(rename = "hijiriFeeQuoteHash")]
+    pub hijiri_fee_quote_hash: String,
+    /// Exact base fee for one qualifying transfer instruction, in minor units.
+    #[norito(rename = "basePerTransferFeeMinorUnits")]
+    pub base_per_transfer_fee_minor_units: String,
+    /// Exact adjusted fee for one qualifying transfer instruction, in minor units.
+    ///
+    /// For multiple qualifying transfers, apply `feeMultiplierQ16` once to their aggregate base;
+    /// multiplying this already-rounded one-transfer value can overcharge by rounding repeatedly.
+    #[norito(rename = "adjustedPerTransferFeeMinorUnits")]
+    pub adjusted_per_transfer_fee_minor_units: String,
+    /// Echoed number of qualifying transfers priced by this quote.
+    #[norito(rename = "qualifyingTransferCount")]
+    pub qualifying_transfer_count: u32,
+    /// Exact aggregate base before applying the Hijiri multiplier.
+    #[norito(rename = "aggregateBaseFeeMinorUnits")]
+    pub aggregate_base_fee_minor_units: String,
+    /// Exact aggregate fee after one multiplier and ceiling operation.
+    #[norito(rename = "aggregateAdjustedFeeMinorUnits")]
+    pub aggregate_adjusted_fee_minor_units: String,
+}
+impl ValidationFeeHijiriQuoteProjectionV1 {
+    /// Validate the self-contained shape and arithmetic of this quote projection.
+    ///
+    /// This general validator accepts both historical proof-derived projections, whose quoted
+    /// execution height equals their evaluated height, and live projections evaluated for the
+    /// checked successor height. Use [`Self::validate_for_request`] for a live route response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a schema marker, canonical decimal/hash, height relationship,
+    /// optional account-risk pair, protected base-fee invariant, or Q16 fee calculation is
+    /// incoherent.
+    pub fn validate_coherence(&self) -> Result<(), String> {
+        if self.schema != VALIDATION_FEE_HIJIRI_QUOTE_PROJECTION_SCHEMA_NAME
+            || self.version != VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1
+            || self.assurance != VALIDATION_FEE_HIJIRI_QUOTE_EVALUATED_ASSURANCE_V1
+        {
+            return Err("Hijiri quote schema, version, or assurance is invalid".to_owned());
+        }
+
+        let evaluated_state_height = exact_decimal_u64(
+            "Hijiri quote evaluated state height",
+            &self.evaluated_state_height,
+        )?;
+        let quoted_execution_height = exact_decimal_u64(
+            "Hijiri quote execution height",
+            &self.quoted_execution_height,
+        )?;
+        if evaluated_state_height == 0
+            || quoted_execution_height == 0
+            || (quoted_execution_height != evaluated_state_height
+                && evaluated_state_height.checked_add(1) != Some(quoted_execution_height))
+        {
+            return Err(
+                "Hijiri quote execution height must equal its nonzero state height or checked successor"
+                    .to_owned(),
+            );
+        }
+
+        let active_policy_version = exact_decimal_u64(
+            "Hijiri quote active policy version",
+            &self.active_policy_version,
+        )?;
+        if active_policy_version == 0 {
+            return Err("Hijiri quote active policy version must be positive".to_owned());
+        }
+        let active_policy_hash =
+            exact_lower_hex_32("Hijiri quote active policy hash", &self.active_policy_hash)?;
+        require_canonical_iroha_hash("Hijiri quote active policy hash", &active_policy_hash)?;
+        let fee_asset_definition_id = self
+            .fee_asset_definition_id
+            .parse::<AssetDefinitionId>()
+            .map_err(|_| "Hijiri quote fee asset definition id is not canonical".to_owned())?;
+        if fee_asset_definition_id.to_string() != self.fee_asset_definition_id {
+            return Err("Hijiri quote fee asset definition id is not canonical".to_owned());
+        }
+        let treasury_account_id = AccountId::parse_encoded(&self.treasury_account_id)
+            .map_err(|_| "Hijiri quote treasury account id is not canonical".to_owned())?;
+        if treasury_account_id.to_string() != self.treasury_account_id {
+            return Err("Hijiri quote treasury account id is not canonical".to_owned());
+        }
+        if self.fee_scale != VALIDATION_FEE_DS_SCALE {
+            return Err("Hijiri quote fee scale differs from the protected V1 scale".to_owned());
+        }
+
+        if self.hijiri_parameters_version != HIJIRI_PARAMETERS_VERSION_V1 {
+            return Err("Hijiri quote global parameter version is unsupported".to_owned());
+        }
+        let hijiri_revision = exact_decimal_u64(
+            "Hijiri quote global parameter revision",
+            &self.hijiri_parameters_revision,
+        )?;
+        if hijiri_revision == 0 {
+            return Err("Hijiri quote global parameter revision must be positive".to_owned());
+        }
+        let parameters_digest = exact_lower_hex_32(
+            "Hijiri quote global parameter digest",
+            &self.hijiri_parameters_digest,
+        )?;
+        require_canonical_iroha_hash("Hijiri quote global parameter digest", &parameters_digest)?;
+        if self.default_account_risk_q16 > Q16::ONE.raw()
+            || self.effective_account_risk_q16 > Q16::ONE.raw()
+        {
+            return Err("Hijiri quote account risk exceeds Q16 one".to_owned());
+        }
+        let account_risk_digest = match (
+            self.account_risk_revision.as_deref(),
+            self.account_risk_digest.as_deref(),
+        ) {
+            (None, None) => {
+                if self.effective_account_risk_q16 != self.default_account_risk_q16 {
+                    return Err(
+                        "Hijiri quote without an explicit account risk must use the global default"
+                            .to_owned(),
+                    );
+                }
+                None
+            }
+            (Some(revision), Some(digest)) => {
+                let revision = exact_decimal_u64("Hijiri quote account-risk revision", revision)?;
+                if revision == 0 {
+                    return Err("Hijiri quote account-risk revision must be positive".to_owned());
+                }
+                let digest = exact_lower_hex_32("Hijiri quote account-risk digest", digest)?;
+                require_canonical_iroha_hash("Hijiri quote account-risk digest", &digest)?;
+                Some(digest)
+            }
+            _ => {
+                return Err(
+                    "Hijiri quote account-risk revision and digest must be both present or both absent"
+                        .to_owned(),
+                );
+            }
+        };
+        let observed_fee_quote_hash = exact_lower_hex_32(
+            "Hijiri quote composite fee hash",
+            &self.hijiri_fee_quote_hash,
+        )?;
+        require_canonical_iroha_hash("Hijiri quote composite fee hash", &observed_fee_quote_hash)?;
+        let expected_fee_quote_hash = hijiri_fee_quote_hash_from_digests_v1(
+            parameters_digest,
+            &self.account_id,
+            account_risk_digest,
+        )
+        .map_err(|error| format!("Hijiri quote composite fee hash failed: {error}"))?;
+        if observed_fee_quote_hash != expected_fee_quote_hash {
+            return Err(
+                "Hijiri quote composite fee hash does not bind its advertised inputs".to_owned(),
+            );
+        }
+
+        validate_hijiri_quote_transfer_count(self.qualifying_transfer_count)?;
+        let base_per_transfer = exact_decimal_u64(
+            "Hijiri quote base per-transfer fee",
+            &self.base_per_transfer_fee_minor_units,
+        )?;
+        if base_per_transfer != VALIDATION_FEE_BASE_MINOR_UNITS_V1 {
+            return Err("Hijiri quote base differs from the protected V1 fee invariant".to_owned());
+        }
+        let aggregate_base = exact_decimal_u64(
+            "Hijiri quote aggregate base fee",
+            &self.aggregate_base_fee_minor_units,
+        )?;
+        let expected_aggregate_base = base_per_transfer
+            .checked_mul(u64::from(self.qualifying_transfer_count))
+            .ok_or_else(|| "Hijiri quote aggregate base fee overflows u64".to_owned())?;
+        if aggregate_base != expected_aggregate_base {
+            return Err("Hijiri quote aggregate base fee is incoherent".to_owned());
+        }
+        if self.fee_multiplier_q16 < Q16::ONE.raw() {
+            return Err("Hijiri quote fee multiplier must be at least Q16 one".to_owned());
+        }
+        let multiplier = Q16::from_raw(self.fee_multiplier_q16);
+        let expected_per_transfer = multiplier
+            .checked_mul_u64_ceil(base_per_transfer)
+            .ok_or_else(|| "Hijiri quote adjusted per-transfer fee overflows u64".to_owned())?;
+        let adjusted_per_transfer = exact_decimal_u64(
+            "Hijiri quote adjusted per-transfer fee",
+            &self.adjusted_per_transfer_fee_minor_units,
+        )?;
+        if adjusted_per_transfer != expected_per_transfer {
+            return Err("Hijiri quote adjusted per-transfer fee is incoherent".to_owned());
+        }
+        let expected_aggregate_adjusted = multiplier
+            .checked_mul_u64_ceil(aggregate_base)
+            .ok_or_else(|| "Hijiri quote adjusted aggregate fee overflows u64".to_owned())?;
+        let aggregate_adjusted = exact_decimal_u64(
+            "Hijiri quote adjusted aggregate fee",
+            &self.aggregate_adjusted_fee_minor_units,
+        )?;
+        if aggregate_adjusted != expected_aggregate_adjusted {
+            return Err("Hijiri quote adjusted aggregate fee is incoherent".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Validate this projection as the exact live response to `request`.
+    ///
+    /// In addition to [`Self::validate_coherence`], this binds the echoed account and transfer
+    /// count and requires the quoted execution height to be the checked successor of the
+    /// evaluated committed-state height.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request is invalid, the response is incoherent, an echoed input
+    /// differs, or the response uses a historical equal-height projection rather than live
+    /// next-height semantics.
+    pub fn validate_for_request(
+        &self,
+        request: &ValidationFeeHijiriQuoteRequestV1,
+    ) -> Result<(), String> {
+        request.validate()?;
+        self.validate_coherence()?;
+        if self.account_id != request.account_id
+            || self.qualifying_transfer_count != request.qualifying_transfer_count
+        {
+            return Err(
+                "Hijiri quote response does not echo the requested account and count".to_owned(),
+            );
+        }
+        let evaluated_state_height = exact_decimal_u64(
+            "Hijiri quote evaluated state height",
+            &self.evaluated_state_height,
+        )?;
+        let quoted_execution_height = exact_decimal_u64(
+            "Hijiri quote execution height",
+            &self.quoted_execution_height,
+        )?;
+        if validation_fee_hijiri_quote_execution_height(evaluated_state_height)?
+            != quoted_execution_height
+        {
+            return Err(
+                "live Hijiri quote execution height must be the checked state successor".to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+/// Response returned by the live Hijiri validation-fee quote route.
+pub type ValidationFeeHijiriQuoteResponseV1 = ValidationFeeHijiriQuoteProjectionV1;
+/// Validated active base-policy facts used to evaluate a Hijiri quote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationFeeHijiriQuoteBaseV1 {
+    evaluated_state_height: u64,
+    quoted_execution_height: u64,
+    active_policy_version: u64,
+    active_policy_hash: [u8; 32],
+    fee_asset_definition_id: String,
+    treasury_account_id: String,
+    fee_scale: u8,
+    base_fee_minor_units: u64,
+}
+impl ValidationFeeHijiriQuoteBaseV1 {
+    /// Construct bounded V1 base-policy facts for an evaluated quote.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for zero/non-adjacent heights, zero versions, non-canonical hashes or fee
+    /// coordinates, or a base amount/scale outside the protected V1 policy invariant.
+    pub fn try_new(
+        evaluated_state_height: u64,
+        quoted_execution_height: u64,
+        active_policy_version: u64,
+        active_policy_hash: [u8; 32],
+        fee_asset_definition_id: String,
+        treasury_account_id: String,
+        fee_scale: u8,
+        base_fee_minor_units: u64,
+    ) -> Result<Self, String> {
+        if evaluated_state_height == 0
+            || quoted_execution_height == 0
+            || active_policy_version == 0
+            || quoted_execution_height < evaluated_state_height
+            || quoted_execution_height > evaluated_state_height.saturating_add(1)
+        {
+            return Err(
+                "Hijiri quote execution height must equal its state height or checked successor, and policy version must be positive"
+                    .to_owned(),
+            );
+        }
+        require_canonical_iroha_hash("active validation-fee policy hash", &active_policy_hash)?;
+        let parsed_fee_asset_definition_id =
+            fee_asset_definition_id
+                .parse::<AssetDefinitionId>()
+                .map_err(|_| "Hijiri quote fee asset definition id is not canonical".to_owned())?;
+        if parsed_fee_asset_definition_id.to_string() != fee_asset_definition_id {
+            return Err("Hijiri quote fee asset definition id is not canonical".to_owned());
+        }
+        let parsed_treasury_account_id = AccountId::parse_encoded(&treasury_account_id)
+            .map_err(|_| "Hijiri quote treasury account id is not canonical".to_owned())?;
+        if parsed_treasury_account_id.to_string() != treasury_account_id {
+            return Err("Hijiri quote treasury account id is not canonical".to_owned());
+        }
+        if fee_scale != VALIDATION_FEE_DS_SCALE
+            || base_fee_minor_units != VALIDATION_FEE_BASE_MINOR_UNITS_V1
+        {
+            return Err("Hijiri quote base differs from the protected V1 fee invariant".to_owned());
+        }
+        Ok(Self {
+            evaluated_state_height,
+            quoted_execution_height,
+            active_policy_version,
+            active_policy_hash,
+            fee_asset_definition_id,
+            treasury_account_id,
+            fee_scale,
+            base_fee_minor_units,
+        })
+    }
+}
+impl ValidationFeeVerifiedPolicyProjectionV1 {
+    /// Evaluate the active validation fee for `account_id` using separately obtained Hijiri
+    /// records.
+    ///
+    /// This method preserves the proof-verified base-policy facts in this projection, but it does
+    /// not elevate the caller-supplied Hijiri records to witness-proven state. The returned
+    /// [`ValidationFeeHijiriQuoteProjectionV1::assurance`] field states that limitation explicitly.
+    /// `Ok(None)` means the verified projection has no enabled policy at the evaluated height.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the verified-policy shape is non-canonical, the supplied Hijiri
+    /// records are invalid or belong to another account, or adjusted minor-unit arithmetic
+    /// overflows.
+    pub fn evaluate_hijiri_quote(
+        &self,
+        account_id: &AccountId,
+        parameters: &HijiriParametersV1,
+        account_risk: Option<&HijiriAccountRiskV1>,
+    ) -> Result<Option<ValidationFeeHijiriQuoteProjectionV1>, String> {
+        self.evaluate_hijiri_quote_for_transfer_count(account_id, parameters, account_risk, 1)
+    }
+
+    /// Evaluate an exact aggregate quote using a single ceiling operation after the base fees are
+    /// summed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::evaluate_hijiri_quote`], and rejects a zero or excessive
+    /// qualifying-transfer count.
+    pub fn evaluate_hijiri_quote_for_transfer_count(
+        &self,
+        account_id: &AccountId,
+        parameters: &HijiriParametersV1,
+        account_risk: Option<&HijiriAccountRiskV1>,
+        qualifying_transfer_count: u32,
+    ) -> Result<Option<ValidationFeeHijiriQuoteProjectionV1>, String> {
+        let Some(current_policy) = self.current_policy.as_ref() else {
+            return Ok(None);
+        };
+        let base = validated_validation_fee_quote_base(self, current_policy)?;
+        evaluate_hijiri_quote_v1(
+            base,
+            account_id,
+            parameters,
+            account_risk,
+            qualifying_transfer_count,
+        )
+        .map(Some)
+    }
+}
+fn validated_validation_fee_quote_base(
+    projection: &ValidationFeeVerifiedPolicyProjectionV1,
+    current_policy: &ValidationFeeVerifiedCurrentPolicyV1,
+) -> Result<ValidationFeeHijiriQuoteBaseV1, String> {
+    if projection.schema != VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA_NAME
+        || projection.version != VALIDATION_FEE_POLICY_PROOF_VERSION_V1
+        || projection.evaluated_block_height == 0
+    {
+        return Err("verified validation-fee projection shape is invalid".to_owned());
+    }
+    let active_policy_version = exact_decimal_u64(
+        "active validation-fee policy version",
+        &current_policy.active_policy_version,
+    )?;
+    if active_policy_version == 0 {
+        return Err("active validation-fee policy version must be positive".to_owned());
+    }
+    let active_policy_hash = exact_lower_hex_32(
+        "active validation-fee policy hash",
+        &current_policy.active_policy_hash,
+    )?;
+    require_canonical_iroha_hash("active validation-fee policy hash", &active_policy_hash)?;
+    if current_policy.fee_asset_definition_id.is_empty()
+        || current_policy.fee_scale != VALIDATION_FEE_DS_SCALE
+        || current_policy.charging_mode != "PER_QUALIFYING_TRANSFER_INSTRUCTION"
+    {
+        return Err("active validation-fee quote base is invalid".to_owned());
+    }
+    let base_fee_minor_units = exact_decimal_u64(
+        "base validation fee minor units",
+        &current_policy.fee_minor_units,
+    )?;
+    if base_fee_minor_units != VALIDATION_FEE_BASE_MINOR_UNITS_V1 {
+        return Err("active V1 validation fee must be exactly 10 minor units".to_owned());
+    }
+    let effective_from_height = exact_decimal_u64(
+        "validation-fee effective height",
+        &current_policy.effective_from_height,
+    )?;
+    let expires_after_height = current_policy
+        .expires_after_height
+        .as_deref()
+        .map(|height| exact_decimal_u64("validation-fee expiry height", height))
+        .transpose()?;
+    if projection.evaluated_block_height < effective_from_height
+        || expires_after_height.is_some_and(|height| projection.evaluated_block_height >= height)
+    {
+        return Err("validation-fee policy is not active at the evaluated height".to_owned());
+    }
+    ValidationFeeHijiriQuoteBaseV1::try_new(
+        projection.evaluated_block_height,
+        projection.evaluated_block_height,
+        active_policy_version,
+        active_policy_hash,
+        current_policy.fee_asset_definition_id.clone(),
+        current_policy.payout.treasury_account_id.clone(),
+        current_policy.fee_scale,
+        base_fee_minor_units,
+    )
+}
+/// Evaluate one self-contained Hijiri validation-fee quote from validated base-policy facts.
+///
+/// The result is intentionally evaluated-only: this pure helper does not claim that either the
+/// base or Hijiri inputs carry a finality witness. A Torii handler can preserve a same-snapshot
+/// evaluation by constructing `base`, `parameters`, and `account_risk` from one state view.
+///
+/// # Errors
+///
+/// Returns an error for a zero or excessive transfer count, invalid/mismatched Hijiri records, or
+/// overflowing aggregate/adjusted minor-unit arithmetic.
+pub fn evaluate_hijiri_quote_v1(
+    base: ValidationFeeHijiriQuoteBaseV1,
+    account_id: &AccountId,
+    parameters: &HijiriParametersV1,
+    account_risk: Option<&HijiriAccountRiskV1>,
+    qualifying_transfer_count: u32,
+) -> Result<ValidationFeeHijiriQuoteProjectionV1, String> {
+    validate_hijiri_quote_transfer_count(qualifying_transfer_count)?;
+    let parameters_digest = parameters
+        .digest()
+        .map_err(|error| format!("global Hijiri parameter is invalid: {error}"))?;
+    let account_risk_digest = account_risk
+        .map(HijiriAccountRiskV1::digest)
+        .transpose()
+        .map_err(|error| format!("Hijiri account-risk parameter is invalid: {error}"))?;
+    let effective_account_risk = parameters
+        .effective_risk(account_id, account_risk)
+        .map_err(|error| format!("Hijiri fee quote cannot select account risk: {error}"))?;
+    let fee_multiplier = parameters
+        .multiplier_for(account_id, account_risk)
+        .map_err(|error| format!("Hijiri fee quote cannot select a multiplier: {error}"))?;
+    let adjusted_fee_minor_units = parameters
+        .apply_fee_minor_units(account_id, account_risk, base.base_fee_minor_units)
+        .map_err(|error| format!("Hijiri fee quote cannot adjust the base fee: {error}"))?
+        .ok_or_else(|| "Hijiri adjusted validation fee overflows u64 minor units".to_owned())?;
+    let aggregate_base_fee_minor_units = base
+        .base_fee_minor_units
+        .checked_mul(u64::from(qualifying_transfer_count))
+        .ok_or_else(|| {
+            "Hijiri aggregate validation-fee base overflows u64 minor units".to_owned()
+        })?;
+    let aggregate_adjusted_fee_minor_units = parameters
+        .apply_fee_minor_units(account_id, account_risk, aggregate_base_fee_minor_units)
+        .map_err(|error| format!("Hijiri fee quote cannot adjust the aggregate base: {error}"))?
+        .ok_or_else(|| "Hijiri adjusted aggregate fee overflows u64 minor units".to_owned())?;
+    let hijiri_fee_quote_hash = parameters
+        .fee_quote_hash(account_id, account_risk)
+        .map_err(|error| format!("Hijiri fee quote hash cannot be derived: {error}"))?;
+    Ok(ValidationFeeHijiriQuoteProjectionV1 {
+        schema: VALIDATION_FEE_HIJIRI_QUOTE_PROJECTION_SCHEMA_NAME.to_owned(),
+        version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+        assurance: VALIDATION_FEE_HIJIRI_QUOTE_EVALUATED_ASSURANCE_V1.to_owned(),
+        evaluated_state_height: base.evaluated_state_height.to_string(),
+        quoted_execution_height: base.quoted_execution_height.to_string(),
+        account_id: account_id.clone(),
+        active_policy_version: base.active_policy_version.to_string(),
+        active_policy_hash: hex::encode(base.active_policy_hash),
+        fee_asset_definition_id: base.fee_asset_definition_id,
+        treasury_account_id: base.treasury_account_id,
+        fee_scale: base.fee_scale,
+        hijiri_parameters_version: parameters.version,
+        hijiri_parameters_revision: parameters.revision.to_string(),
+        hijiri_parameters_digest: hex::encode(parameters_digest),
+        default_account_risk_q16: parameters.default_account_risk.raw(),
+        effective_account_risk_q16: effective_account_risk.raw(),
+        account_risk_revision: account_risk.map(|risk| risk.revision.to_string()),
+        account_risk_digest: account_risk_digest.map(hex::encode),
+        fee_multiplier_q16: fee_multiplier.raw(),
+        hijiri_fee_quote_hash: hex::encode(hijiri_fee_quote_hash),
+        base_per_transfer_fee_minor_units: base.base_fee_minor_units.to_string(),
+        adjusted_per_transfer_fee_minor_units: adjusted_fee_minor_units.to_string(),
+        qualifying_transfer_count,
+        aggregate_base_fee_minor_units: aggregate_base_fee_minor_units.to_string(),
+        aggregate_adjusted_fee_minor_units: aggregate_adjusted_fee_minor_units.to_string(),
+    })
 }
 /// Complete policy and payout-lifecycle Parliament evidence.
 #[derive(
@@ -917,6 +1561,17 @@ pub struct ValidationFeeProposalDraftResponseV1 {
     /// Exactly one canonical native proposal instruction.
     pub tx_instructions: Vec<ValidationFeeProposalInstructionDraftV1>,
 }
+fn exact_decimal_u64(label: &str, value: &str) -> Result<u64, String> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| format!("{label} must be a canonical unsigned decimal integer"))?;
+    if parsed.to_string() != value {
+        return Err(format!(
+            "{label} must be a canonical unsigned decimal integer"
+        ));
+    }
+    Ok(parsed)
+}
 fn exact_lower_hex_32(label: &str, value: &str) -> Result<[u8; 32], String> {
     if value.len() != 64
         || !value
@@ -943,19 +1598,43 @@ fn require_canonical_iroha_hash(label: &str, value: &[u8; 32]) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::governance::types::{
-        BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
-        GovernanceAttemptId, GovernanceCertificateId, GovernanceExpectedHeadPresentV1,
-        GovernanceExpectedHeadV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
-        ParliamentBallotCertificateBindingV1, ParliamentBody, ParliamentBodyCertificateBindingV1,
-        ProposalContentId, RiskTierV1, SortitionRequestV1, TleKeySessionId, TleSessionId,
-        parliament_ballot_result_root_v1,
+    use iroha_data_model::{
+        governance::types::{
+            BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
+            GovernanceAttemptId, GovernanceCertificateId, GovernanceExpectedHeadPresentV1,
+            GovernanceExpectedHeadV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
+            ParliamentBallotCertificateBindingV1, ParliamentBody,
+            ParliamentBodyCertificateBindingV1, ProposalContentId, RiskTierV1, SortitionRequestV1,
+            TleKeySessionId, TleSessionId, parliament_ballot_result_root_v1,
+        },
+        hijiri::{FeeMultiplierBand, HijiriFeePolicy, Q16},
     };
     fn fixture_account(seed: u8) -> AccountId {
         let key_pair =
             iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
                 .expect("derive deterministic validation-fee fixture account");
         AccountId::new(key_pair.public_key().clone())
+    }
+    fn fixture_asset_definition() -> AssetDefinitionId {
+        AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("valid deterministic validation-fee fixture asset")
+    }
+    fn hijiri_parameters(default_account_risk: Q16) -> HijiriParametersV1 {
+        let fee_policy = HijiriFeePolicy::new(
+            vec![
+                FeeMultiplierBand::new(Q16::from_parts(0, 0x8000), Q16::ONE)
+                    .expect("low-risk Hijiri fee band"),
+                FeeMultiplierBand::new(Q16::ONE, Q16::from_parts(1, 0x4000))
+                    .expect("high-risk Hijiri fee band"),
+            ],
+            Q16::from_parts(2, 0),
+        )
+        .expect("valid Hijiri fee policy");
+        HijiriParametersV1::try_new(1, None, fee_policy, default_account_risk)
+            .expect("valid global Hijiri parameter")
     }
     fn parliament_authorization(
         proposal_fingerprint: [u8; 32],
@@ -1224,6 +1903,365 @@ mod tests {
         let roundtrip: ValidationFeeVerifiedCurrentPolicyV1 =
             norito::json::from_str(&json).expect("roundtrip current policy");
         assert_eq!(roundtrip, current);
+        let verified = ValidationFeeVerifiedPolicyProjectionV1 {
+            schema: VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA_NAME.to_owned(),
+            version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+            network_id: "network".to_owned(),
+            policy_chain_genesis_hash: "03".repeat(32),
+            registry_hash: "03".repeat(32),
+            head_policy_version: 1,
+            head_policy_hash: "03".repeat(32),
+            current_policy: Some(current),
+            trusted_checkpoint_height: 120_960,
+            trusted_checkpoint_context_id: "03".repeat(32),
+            evaluated_block_height: 120_961,
+            evaluated_context_id: "03".repeat(32),
+            evaluated_block_hash: "03".repeat(32),
+            observed_ledger_tip_height: 120_961,
+            more_available: false,
+        };
+        let account_id = fixture_account(30);
+        let parameters = hijiri_parameters(Q16::from_parts(0, 0xC000));
+        let quote = verified
+            .evaluate_hijiri_quote(&account_id, &parameters, None)
+            .expect("evaluate separately supplied Hijiri state")
+            .expect("enabled policy has a quote");
+        assert_eq!(
+            quote.assurance,
+            VALIDATION_FEE_HIJIRI_QUOTE_EVALUATED_ASSURANCE_V1
+        );
+        assert_eq!(quote.account_id, account_id);
+        assert_eq!(
+            quote.default_account_risk_q16,
+            Q16::from_parts(0, 0xC000).raw()
+        );
+        assert_eq!(
+            quote.effective_account_risk_q16,
+            Q16::from_parts(0, 0xC000).raw()
+        );
+        assert_eq!(quote.fee_multiplier_q16, Q16::from_parts(1, 0x4000).raw());
+        assert_eq!(quote.treasury_account_id, "treasury");
+        assert_eq!(quote.evaluated_state_height, "120961");
+        assert_eq!(quote.quoted_execution_height, "120961");
+        assert_eq!(quote.base_per_transfer_fee_minor_units, "10");
+        assert_eq!(quote.adjusted_per_transfer_fee_minor_units, "13");
+        assert_eq!(quote.qualifying_transfer_count, 1);
+        assert_eq!(quote.aggregate_base_fee_minor_units, "10");
+        assert_eq!(quote.aggregate_adjusted_fee_minor_units, "13");
+        assert!(quote.account_risk_revision.is_none());
+        assert!(quote.account_risk_digest.is_none());
+        let quote_json = norito::json::to_string(&quote).expect("serialize Hijiri quote");
+        for key in [
+            "evaluatedStateHeight",
+            "quotedExecutionHeight",
+            "accountId",
+            "treasuryAccountId",
+            "hijiriParametersRevision",
+            "hijiriParametersDigest",
+            "defaultAccountRiskQ16",
+            "effectiveAccountRiskQ16",
+            "accountRiskRevision",
+            "accountRiskDigest",
+            "feeMultiplierQ16",
+            "hijiriFeeQuoteHash",
+            "basePerTransferFeeMinorUnits",
+            "adjustedPerTransferFeeMinorUnits",
+            "qualifyingTransferCount",
+            "aggregateBaseFeeMinorUnits",
+            "aggregateAdjustedFeeMinorUnits",
+        ] {
+            assert!(
+                quote_json.contains(&format!(r#""{key}":"#)),
+                "missing {key}"
+            );
+        }
+        assert!(quote_json.contains(VALIDATION_FEE_HIJIRI_QUOTE_EVALUATED_ASSURANCE_V1));
+        let quote_roundtrip: ValidationFeeHijiriQuoteProjectionV1 =
+            norito::json::from_str(&quote_json).expect("roundtrip Hijiri quote");
+        assert_eq!(quote_roundtrip, quote);
+    }
+    #[test]
+    fn hijiri_quote_binds_explicit_risk_presence_even_when_value_matches_default() {
+        let account_id = fixture_account(31);
+        let risk = Q16::from_parts(0, 0x4000);
+        let parameters = hijiri_parameters(risk);
+        let base = ValidationFeeHijiriQuoteBaseV1::try_new(
+            42,
+            43,
+            3,
+            [0x03; 32],
+            fixture_asset_definition().to_string(),
+            fixture_account(41).to_string(),
+            VALIDATION_FEE_DS_SCALE,
+            VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+        )
+        .expect("valid quote base");
+        let default_quote =
+            evaluate_hijiri_quote_v1(base.clone(), &account_id, &parameters, None, 1)
+                .expect("evaluate default-risk quote");
+        let explicit_risk = HijiriAccountRiskV1::try_new(account_id.clone(), 1, None, risk)
+            .expect("valid explicit account risk");
+        let explicit_quote =
+            evaluate_hijiri_quote_v1(base, &account_id, &parameters, Some(&explicit_risk), 1)
+                .expect("evaluate explicit-risk quote");
+        assert_eq!(
+            default_quote.effective_account_risk_q16,
+            explicit_quote.effective_account_risk_q16
+        );
+        assert_eq!(
+            default_quote.adjusted_per_transfer_fee_minor_units,
+            explicit_quote.adjusted_per_transfer_fee_minor_units
+        );
+        assert_ne!(
+            default_quote.hijiri_fee_quote_hash, explicit_quote.hijiri_fee_quote_hash,
+            "None and Some(record) are distinct committed quote inputs"
+        );
+        assert_eq!(explicit_quote.account_risk_revision.as_deref(), Some("1"));
+        assert_eq!(
+            explicit_quote.account_risk_digest,
+            Some(hex::encode(
+                explicit_risk
+                    .digest()
+                    .expect("digest explicit account risk")
+            ))
+        );
+    }
+    #[test]
+    fn hijiri_quote_rounds_one_aggregate_instead_of_each_transfer() {
+        let account_id = fixture_account(34);
+        let treasury_account_id = fixture_account(38);
+        let parameters = hijiri_parameters(Q16::from_parts(0, 0xC000));
+        let quote = evaluate_hijiri_quote_v1(
+            ValidationFeeHijiriQuoteBaseV1::try_new(
+                42,
+                43,
+                1,
+                [0x03; 32],
+                fixture_asset_definition().to_string(),
+                treasury_account_id.to_string(),
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            )
+            .expect("valid quote base"),
+            &account_id,
+            &parameters,
+            None,
+            3,
+        )
+        .expect("evaluate aggregate quote");
+        assert_eq!(quote.adjusted_per_transfer_fee_minor_units, "13");
+        assert_eq!(quote.qualifying_transfer_count, 3);
+        assert_eq!(quote.aggregate_base_fee_minor_units, "30");
+        assert_eq!(quote.aggregate_adjusted_fee_minor_units, "38");
+        assert_ne!(
+            quote.aggregate_adjusted_fee_minor_units,
+            (3_u64 * 13).to_string(),
+            "already-rounded per-transfer quotes must not be multiplied"
+        );
+        quote
+            .validate_coherence()
+            .expect("generated aggregate quote is self-consistent");
+    }
+    #[test]
+    fn hijiri_quote_coherence_validator_rejects_malformed_response() {
+        let account_id = fixture_account(36);
+        let treasury_account_id = fixture_account(39);
+        let parameters = hijiri_parameters(Q16::from_parts(0, 0xC000));
+        let quote = evaluate_hijiri_quote_v1(
+            ValidationFeeHijiriQuoteBaseV1::try_new(
+                42,
+                43,
+                1,
+                [0x03; 32],
+                fixture_asset_definition().to_string(),
+                treasury_account_id.to_string(),
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            )
+            .expect("valid quote base"),
+            &account_id,
+            &parameters,
+            None,
+            3,
+        )
+        .expect("evaluate coherent quote");
+        quote
+            .validate_coherence()
+            .expect("generated quote is coherent");
+
+        let mut malformed = quote.clone();
+        malformed.aggregate_base_fee_minor_units = "31".to_owned();
+        assert!(malformed.validate_coherence().is_err());
+
+        let mut malformed = quote.clone();
+        malformed.aggregate_adjusted_fee_minor_units = "39".to_owned();
+        assert!(malformed.validate_coherence().is_err());
+
+        let mut malformed = quote.clone();
+        malformed.hijiri_parameters_digest = "AA".repeat(32);
+        assert!(malformed.validate_coherence().is_err());
+
+        let mut malformed = quote.clone();
+        malformed.hijiri_parameters_digest = "01".repeat(32);
+        assert!(
+            malformed.validate_coherence().is_err(),
+            "a canonical-looking digest must still match the composite binding"
+        );
+
+        let mut malformed = quote.clone();
+        malformed.fee_asset_definition_id = "asset".to_owned();
+        assert!(malformed.validate_coherence().is_err());
+
+        let mut malformed = quote.clone();
+        malformed.treasury_account_id = "treasury".to_owned();
+        assert!(malformed.validate_coherence().is_err());
+
+        let mut malformed = quote.clone();
+        malformed.effective_account_risk_q16 = Q16::ZERO.raw();
+        assert!(malformed.validate_coherence().is_err());
+
+        let mut malformed = quote;
+        malformed.account_risk_revision = Some("1".to_owned());
+        assert!(malformed.validate_coherence().is_err());
+    }
+    #[test]
+    fn hijiri_live_quote_validator_binds_request_and_successor_height() {
+        let account_id = fixture_account(37);
+        let treasury_account_id = fixture_account(40);
+        let parameters = hijiri_parameters(Q16::ZERO);
+        let quote = evaluate_hijiri_quote_v1(
+            ValidationFeeHijiriQuoteBaseV1::try_new(
+                42,
+                43,
+                1,
+                [0x03; 32],
+                fixture_asset_definition().to_string(),
+                treasury_account_id.to_string(),
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            )
+            .expect("valid live quote base"),
+            &account_id,
+            &parameters,
+            None,
+            2,
+        )
+        .expect("evaluate live quote");
+        let request = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: account_id.clone(),
+            qualifying_transfer_count: 2,
+        };
+        quote
+            .validate_for_request(&request)
+            .expect("live quote binds the request and next height");
+
+        let mut wrong_count = request.clone();
+        wrong_count.qualifying_transfer_count = 1;
+        assert!(quote.validate_for_request(&wrong_count).is_err());
+
+        let mut historical = quote;
+        historical.quoted_execution_height = historical.evaluated_state_height.clone();
+        historical
+            .validate_coherence()
+            .expect("general validator admits a proof-derived equal-height projection");
+        assert!(historical.validate_for_request(&request).is_err());
+    }
+    #[test]
+    fn hijiri_quote_rejects_an_account_risk_record_for_another_account() {
+        let account_id = fixture_account(32);
+        let parameters = hijiri_parameters(Q16::ZERO);
+        let other_risk =
+            HijiriAccountRiskV1::try_new(fixture_account(33), 1, None, Q16::from_parts(0, 0xC000))
+                .expect("valid risk for another account");
+        let error = evaluate_hijiri_quote_v1(
+            ValidationFeeHijiriQuoteBaseV1::try_new(
+                42,
+                43,
+                1,
+                [0x03; 32],
+                fixture_asset_definition().to_string(),
+                fixture_account(42).to_string(),
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            )
+            .expect("valid quote base"),
+            &account_id,
+            &parameters,
+            Some(&other_risk),
+            1,
+        )
+        .expect_err("a risk record cannot be replayed for another account");
+        assert!(
+            error.contains("does not match its account-risk record"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn hijiri_quote_base_rejects_noncanonical_fee_coordinates() {
+        let asset = fixture_asset_definition().to_string();
+        let treasury = fixture_account(43).to_string();
+        let build = |asset, treasury| {
+            ValidationFeeHijiriQuoteBaseV1::try_new(
+                42,
+                43,
+                1,
+                [0x03; 32],
+                asset,
+                treasury,
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            )
+        };
+        assert!(build("asset".to_owned(), treasury.clone()).is_err());
+        assert!(build(asset, "treasury".to_owned()).is_err());
+    }
+    #[test]
+    fn exact_decimal_u64_rejects_noncanonical_spellings() {
+        assert_eq!(exact_decimal_u64("height", "42"), Ok(42));
+        assert!(exact_decimal_u64("height", "042").is_err());
+        assert!(exact_decimal_u64("height", "+42").is_err());
+        assert!(exact_decimal_u64("height", "-1").is_err());
+    }
+    #[test]
+    fn hijiri_quote_request_enforces_version_and_transfer_bound() {
+        let request = |version, qualifying_transfer_count| ValidationFeeHijiriQuoteRequestV1 {
+            version,
+            account_id: fixture_account(35),
+            qualifying_transfer_count,
+        };
+        let valid = request(VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1, 1);
+        assert!(valid.validate().is_ok());
+        let json = norito::json::to_string(&valid).expect("serialize Hijiri quote request");
+        assert!(json.contains(r#""accountId":"#));
+        assert!(json.contains(r#""qualifyingTransferCount":1"#));
+        assert_eq!(
+            norito::json::from_str::<ValidationFeeHijiriQuoteRequestV1>(&json)
+                .expect("roundtrip Hijiri quote request"),
+            valid
+        );
+        assert!(
+            request(
+                VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+                VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1,
+            )
+            .validate()
+            .is_ok()
+        );
+        assert!(request(0, 1).validate().is_err());
+        assert!(
+            request(VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1, 0)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            request(
+                VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+                VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1 + 1,
+            )
+            .validate()
+            .is_err()
+        );
     }
     #[test]
     fn checkpoint_promotion_pages_reach_a_distant_tip_without_gaps() {

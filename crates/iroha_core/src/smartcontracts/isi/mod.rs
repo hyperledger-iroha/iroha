@@ -149,6 +149,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::kaigi::RecordKaigiUsage>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::SetKaigiRelayManifest>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::RegisterKaigiRelay>,
+    dispatch_instruction::<iroha_data_model::isi::kaigi::UnregisterKaigiRelay>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::ReportKaigiRelayHealth>,
     dispatch_instruction::<runtime_upgrade::ProposeRuntimeUpgrade>,
     dispatch_instruction::<runtime_upgrade::ActivateRuntimeUpgrade>,

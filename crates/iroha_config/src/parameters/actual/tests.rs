@@ -844,6 +844,24 @@ mod tests {
         );
     }
     #[test]
+    fn sumeragi_body_store_budget_is_local_and_not_fingerprinted() {
+        let base = default_v2_sumeragi();
+        assert_eq!(
+            base.storage.body_store_max_bytes_per_height.get(),
+            defaults::sumeragi::BODY_STORE_MAX_BYTES_PER_HEIGHT.get(),
+        );
+        let permissioned = consensus_v2::ConsensusMode::Permissioned;
+        let baseline = v2_fingerprint(&base, permissioned);
+        let mut changed = base;
+        changed.storage.body_store_max_bytes_per_height =
+            Bytes(defaults::sumeragi::BODY_STORE_MAX_BYTES_PER_HEIGHT.get() + 1024 * 1024);
+        assert_eq!(
+            baseline,
+            v2_fingerprint(&changed, permissioned),
+            "a local fail-stop storage budget must not alter the shared protocol fingerprint",
+        );
+    }
+    #[test]
     fn sumeragi_v2_shared_fingerprint_binds_every_runtime_category() {
         let base = default_v2_sumeragi();
         let permissioned = consensus_v2::ConsensusMode::Permissioned;

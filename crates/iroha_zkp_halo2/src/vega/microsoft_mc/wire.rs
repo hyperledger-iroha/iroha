@@ -4,6 +4,8 @@ use super::super::{
     VegaT256ScalarV1 as Scalar, commitment::Commitment,
 };
 use thiserror::Error;
+
+const LENGTH_BYTES: usize = 8;
 const POINT_BYTES: usize = 33;
 const SCALAR_BYTES: usize = 32;
 /// Failure while decoding or encoding the fixed Microsoft proof representation.
@@ -15,6 +17,17 @@ pub(in crate::vega) enum McCodecError {
     /// A proof point is not a canonical non-identity T256 point.
     #[error(transparent)]
     Curve(#[from] VegaCurveError),
+    /// A bounded canonical owner could not reserve its exact storage.
+    #[error("Microsoft Vega-MC codec resource exhausted")]
+    ResourceExhausted,
+}
+
+pub(super) fn try_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, McCodecError> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| McCodecError::ResourceExhausted)?;
+    Ok(values)
 }
 /// One row-vector Hyrax commitment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,7 +111,7 @@ impl McProofWire {
         bytes: &[u8],
         dimensions: &VegaMdlProofDimensionsV1,
     ) -> Result<Self, McCodecError> {
-        if bytes.len() > MAX_VEGA_PROOF_BYTES_V1 {
+        if bytes.len() > MAX_VEGA_PROOF_BYTES_V1 || proof_encoded_len(dimensions)? != bytes.len() {
             return Err(McCodecError::InvalidEncoding);
         }
         let mut reader = Reader::new(bytes);
@@ -107,7 +120,7 @@ impl McProofWire {
                 .then_some(dimensions.shared_commitment_points),
         )?;
         reader.expect_len(dimensions.num_steps)?;
-        let mut step_instances = Vec::with_capacity(dimensions.num_steps);
+        let mut step_instances = try_vec_with_capacity(dimensions.num_steps)?;
         for _ in 0..dimensions.num_steps {
             step_instances.push(read_split_instance(
                 &mut reader,
@@ -132,14 +145,15 @@ impl McProofWire {
             beta_response: reader.scalar()?,
         };
         reader.expect_len(dimensions.verifier_round_commitment_points.len())?;
-        let mut commitments = Vec::with_capacity(dimensions.verifier_round_commitment_points.len());
+        let mut commitments =
+            try_vec_with_capacity(dimensions.verifier_round_commitment_points.len())?;
         for points in &dimensions.verifier_round_commitment_points {
             commitments.push(reader.commitment(*points)?);
         }
         let public_values = reader.scalar_vec(dimensions.verifier_public_values)?;
         reader.expect_len(dimensions.verifier_challenges_per_round.len())?;
         let mut challenges_per_round =
-            Vec::with_capacity(dimensions.verifier_challenges_per_round.len());
+            try_vec_with_capacity(dimensions.verifier_challenges_per_round.len())?;
         for challenges in &dimensions.verifier_challenges_per_round {
             challenges_per_round.push(reader.scalar_vec(*challenges)?);
         }
@@ -184,7 +198,11 @@ impl McProofWire {
     }
     /// Encode the exact fixed-little-endian compatibility representation.
     pub(super) fn encode(&self) -> Result<Vec<u8>, McCodecError> {
-        let mut output = Vec::new();
+        let encoded_len = self.encoded_len()?;
+        if encoded_len > MAX_VEGA_PROOF_BYTES_V1 {
+            return Err(McCodecError::InvalidEncoding);
+        }
+        let mut output = try_vec_with_capacity(encoded_len)?;
         write_option_commitment(&mut output, self.shared_commitment.as_ref())?;
         write_len(&mut output, self.step_instances.len())?;
         for instance in &self.step_instances {
@@ -222,11 +240,217 @@ impl McProofWire {
         write_scalar(&mut output, self.relaxed_spartan.witness_blinding);
         write_scalars(&mut output, &self.relaxed_spartan.error_opening)?;
         write_scalar(&mut output, self.relaxed_spartan.error_blinding);
-        if output.len() > MAX_VEGA_PROOF_BYTES_V1 {
+        if output.len() != encoded_len {
             return Err(McCodecError::InvalidEncoding);
         }
         Ok(output)
     }
+
+    fn encoded_len(&self) -> Result<usize, McCodecError> {
+        let step_instances = self
+            .step_instances
+            .iter()
+            .try_fold(LENGTH_BYTES, |length, instance| {
+                checked_add(length, split_instance_encoded_len(instance)?)
+            })?;
+        let verifier_commitments = self.verifier_instance.commitments.iter().try_fold(
+            LENGTH_BYTES,
+            |length, commitment| {
+                checked_add(length, commitment_encoded_len(commitment.points.len())?)
+            },
+        )?;
+        let verifier_challenges = self
+            .verifier_instance
+            .challenges_per_round
+            .iter()
+            .try_fold(LENGTH_BYTES, |length, challenges| {
+                checked_add(length, scalar_vec_encoded_len(challenges.len())?)
+            })?;
+        checked_sum(&[
+            option_commitment_encoded_len(
+                self.shared_commitment
+                    .as_ref()
+                    .map(|commitment| commitment.points.len()),
+            )?,
+            step_instances,
+            split_instance_encoded_len(&self.core_instance)?,
+            POINT_BYTES,
+            POINT_BYTES,
+            scalar_vec_encoded_len(self.evaluation_argument.responses.len())?,
+            SCALAR_BYTES,
+            SCALAR_BYTES,
+            verifier_commitments,
+            scalar_vec_encoded_len(self.verifier_instance.public_values.len())?,
+            verifier_challenges,
+            commitment_encoded_len(self.nova_cross_term.points.len())?,
+            commitment_encoded_len(self.random_instance.witness_commitment.points.len())?,
+            commitment_encoded_len(self.random_instance.error_commitment.points.len())?,
+            scalar_vec_encoded_len(self.random_instance.public_values.len())?,
+            SCALAR_BYTES,
+            sumcheck_encoded_len(&self.relaxed_spartan.outer_sumcheck)?,
+            3 * SCALAR_BYTES,
+            sumcheck_encoded_len(&self.relaxed_spartan.inner_sumcheck)?,
+            scalar_vec_encoded_len(self.relaxed_spartan.witness_opening.len())?,
+            SCALAR_BYTES,
+            scalar_vec_encoded_len(self.relaxed_spartan.error_opening.len())?,
+            SCALAR_BYTES,
+        ])
+    }
+}
+
+fn proof_encoded_len(dimensions: &VegaMdlProofDimensionsV1) -> Result<usize, McCodecError> {
+    let step_instance = split_instance_dimensions_encoded_len(
+        dimensions.step_precommitted_points,
+        dimensions.step_rest_points,
+        dimensions.step_public_values,
+        dimensions.step_challenges,
+    )?;
+    let step_instances = checked_add(
+        LENGTH_BYTES,
+        checked_mul(dimensions.num_steps, step_instance)?,
+    )?;
+    let verifier_commitments = dimensions
+        .verifier_round_commitment_points
+        .iter()
+        .try_fold(LENGTH_BYTES, |length, points| {
+            checked_add(length, commitment_encoded_len(*points)?)
+        })?;
+    let verifier_challenges = dimensions
+        .verifier_challenges_per_round
+        .iter()
+        .try_fold(LENGTH_BYTES, |length, challenges| {
+            checked_add(length, scalar_vec_encoded_len(*challenges)?)
+        })?;
+    let outer_sumcheck = sumcheck_dimensions_encoded_len(
+        dimensions.relaxed_outer_rounds,
+        dimensions.relaxed_outer_coefficients,
+    )?;
+    let inner_sumcheck = sumcheck_dimensions_encoded_len(
+        dimensions.relaxed_inner_rounds,
+        dimensions.relaxed_inner_coefficients,
+    )?;
+    let encoded_len = checked_sum(&[
+        option_commitment_encoded_len(
+            (dimensions.shared_commitment_points != 0)
+                .then_some(dimensions.shared_commitment_points),
+        )?,
+        step_instances,
+        split_instance_dimensions_encoded_len(
+            dimensions.core_precommitted_points,
+            dimensions.core_rest_points,
+            dimensions.core_public_values,
+            dimensions.core_challenges,
+        )?,
+        POINT_BYTES,
+        POINT_BYTES,
+        scalar_vec_encoded_len(dimensions.evaluation_response_scalars)?,
+        SCALAR_BYTES,
+        SCALAR_BYTES,
+        verifier_commitments,
+        scalar_vec_encoded_len(dimensions.verifier_public_values)?,
+        verifier_challenges,
+        commitment_encoded_len(dimensions.nova_cross_term_points)?,
+        commitment_encoded_len(dimensions.random_witness_commitment_points)?,
+        commitment_encoded_len(dimensions.random_error_commitment_points)?,
+        scalar_vec_encoded_len(dimensions.random_public_values)?,
+        SCALAR_BYTES,
+        outer_sumcheck,
+        3 * SCALAR_BYTES,
+        inner_sumcheck,
+        scalar_vec_encoded_len(dimensions.relaxed_opening_scalars)?,
+        SCALAR_BYTES,
+        scalar_vec_encoded_len(dimensions.relaxed_opening_scalars)?,
+        SCALAR_BYTES,
+    ])?;
+    if encoded_len > MAX_VEGA_PROOF_BYTES_V1 {
+        return Err(McCodecError::InvalidEncoding);
+    }
+    Ok(encoded_len)
+}
+
+fn split_instance_dimensions_encoded_len(
+    precommitted_points: usize,
+    rest_points: usize,
+    public_values: usize,
+    challenges: usize,
+) -> Result<usize, McCodecError> {
+    checked_sum(&[
+        1,
+        option_commitment_encoded_len((precommitted_points != 0).then_some(precommitted_points))?,
+        commitment_encoded_len(rest_points)?,
+        scalar_vec_encoded_len(public_values)?,
+        scalar_vec_encoded_len(challenges)?,
+    ])
+}
+
+fn split_instance_encoded_len(instance: &SplitInstanceWire) -> Result<usize, McCodecError> {
+    checked_sum(&[
+        option_commitment_encoded_len(
+            instance
+                .shared
+                .as_ref()
+                .map(|commitment| commitment.points.len()),
+        )?,
+        option_commitment_encoded_len(
+            instance
+                .precommitted
+                .as_ref()
+                .map(|commitment| commitment.points.len()),
+        )?,
+        commitment_encoded_len(instance.rest.points.len())?,
+        scalar_vec_encoded_len(instance.public_values.len())?,
+        scalar_vec_encoded_len(instance.challenges.len())?,
+    ])
+}
+
+fn option_commitment_encoded_len(points: Option<usize>) -> Result<usize, McCodecError> {
+    points.map_or(Ok(1), |points| {
+        checked_add(1, commitment_encoded_len(points)?)
+    })
+}
+
+fn commitment_encoded_len(points: usize) -> Result<usize, McCodecError> {
+    checked_add(LENGTH_BYTES, checked_mul(points, POINT_BYTES)?)
+}
+
+fn scalar_vec_encoded_len(scalars: usize) -> Result<usize, McCodecError> {
+    checked_add(LENGTH_BYTES, checked_mul(scalars, SCALAR_BYTES)?)
+}
+
+fn sumcheck_dimensions_encoded_len(
+    rounds: usize,
+    coefficients: usize,
+) -> Result<usize, McCodecError> {
+    checked_add(
+        LENGTH_BYTES,
+        checked_mul(rounds, scalar_vec_encoded_len(coefficients)?)?,
+    )
+}
+
+fn sumcheck_encoded_len(sumcheck: &SumcheckWire) -> Result<usize, McCodecError> {
+    sumcheck
+        .rounds
+        .iter()
+        .try_fold(LENGTH_BYTES, |length, round| {
+            checked_add(
+                length,
+                scalar_vec_encoded_len(round.coefficients_except_linear.len())?,
+            )
+        })
+}
+
+fn checked_sum(lengths: &[usize]) -> Result<usize, McCodecError> {
+    lengths
+        .iter()
+        .try_fold(0_usize, |total, length| checked_add(total, *length))
+}
+
+fn checked_add(left: usize, right: usize) -> Result<usize, McCodecError> {
+    left.checked_add(right).ok_or(McCodecError::InvalidEncoding)
+}
+
+fn checked_mul(left: usize, right: usize) -> Result<usize, McCodecError> {
+    left.checked_mul(right).ok_or(McCodecError::InvalidEncoding)
 }
 fn read_split_instance(
     reader: &mut Reader<'_>,
@@ -272,6 +496,19 @@ impl<'a> Reader<'a> {
     pub(super) fn remaining(&self) -> usize {
         self.bytes.len() - self.offset
     }
+    pub(super) fn require_remaining_elements(
+        &self,
+        count: usize,
+        element_bytes: usize,
+    ) -> Result<(), McCodecError> {
+        if count
+            .checked_mul(element_bytes)
+            .is_none_or(|bytes| bytes > self.remaining())
+        {
+            return Err(McCodecError::InvalidEncoding);
+        }
+        Ok(())
+    }
     pub(super) fn take(&mut self, count: usize) -> Result<&'a [u8], McCodecError> {
         let end = self
             .offset
@@ -309,13 +546,8 @@ impl<'a> Reader<'a> {
     }
     fn commitment(&mut self, points: usize) -> Result<McCommitment, McCodecError> {
         self.expect_len(points)?;
-        let bytes = points
-            .checked_mul(POINT_BYTES)
-            .ok_or(McCodecError::InvalidEncoding)?;
-        if bytes > self.bytes.len().saturating_sub(self.offset) {
-            return Err(McCodecError::InvalidEncoding);
-        }
-        let mut decoded = Vec::with_capacity(points);
+        self.require_remaining_elements(points, POINT_BYTES)?;
+        let mut decoded = try_vec_with_capacity(points)?;
         for _ in 0..points {
             decoded.push(self.point()?);
         }
@@ -333,13 +565,8 @@ impl<'a> Reader<'a> {
     }
     fn scalar_vec(&mut self, scalars: usize) -> Result<Vec<Scalar>, McCodecError> {
         self.expect_len(scalars)?;
-        let bytes = scalars
-            .checked_mul(SCALAR_BYTES)
-            .ok_or(McCodecError::InvalidEncoding)?;
-        if bytes > self.bytes.len().saturating_sub(self.offset) {
-            return Err(McCodecError::InvalidEncoding);
-        }
-        let mut decoded = Vec::with_capacity(scalars);
+        self.require_remaining_elements(scalars, SCALAR_BYTES)?;
+        let mut decoded = try_vec_with_capacity(scalars)?;
         for _ in 0..scalars {
             decoded.push(self.scalar()?);
         }
@@ -351,7 +578,9 @@ impl<'a> Reader<'a> {
         coefficients: usize,
     ) -> Result<SumcheckWire, McCodecError> {
         self.expect_len(rounds)?;
-        let mut decoded = Vec::with_capacity(rounds);
+        let round_bytes = scalar_vec_encoded_len(coefficients)?;
+        self.require_remaining_elements(rounds, round_bytes)?;
+        let mut decoded = try_vec_with_capacity(rounds)?;
         for _ in 0..rounds {
             decoded.push(CompressedPolynomialWire {
                 coefficients_except_linear: self.scalar_vec(coefficients)?,
@@ -457,6 +686,28 @@ mod tests {
         assert_eq!(
             McProofWire::decode(&proof, &dimensions()),
             Err(McCodecError::InvalidEncoding)
+        );
+    }
+
+    #[test]
+    fn exact_length_preflight_rejects_overflowing_dimensions() {
+        let mut dimensions = dimensions();
+        dimensions.num_steps = usize::MAX;
+        assert_eq!(
+            proof_encoded_len(&dimensions),
+            Err(McCodecError::InvalidEncoding)
+        );
+        assert_eq!(
+            McProofWire::decode(&[], &dimensions),
+            Err(McCodecError::InvalidEncoding)
+        );
+    }
+
+    #[test]
+    fn fallible_vector_reservation_reports_resource_exhaustion() {
+        assert_eq!(
+            try_vec_with_capacity::<u8>(usize::MAX),
+            Err(McCodecError::ResourceExhausted)
         );
     }
 }

@@ -2002,10 +2002,10 @@ def test_inflight_layout_contract_rejects_execution_provider_releasing_pending_a
     ("old", "new", "symbol", "required"),
     (
         (
-            "super::v2_npos::validate_candidate_records(",
-            "super::v2_npos::validate_candidate_records_unchecked(",
+            "super::v2_npos::validate_candidate_context(",
+            "super::v2_npos::validate_candidate_context_unchecked(",
             "candidate_attachments",
-            "validate_candidate_records(",
+            "validate_candidate_context(",
         ),
         (
             "!selection.allows_execution() && entry.execution_batch.is_some()",

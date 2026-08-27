@@ -217,7 +217,6 @@ pub(crate) fn validate_v2_admission_penalty_separation(
         let evidence_key = match action {
             NposPenaltyAction::ConsensusSlash(action) => Some(&action.evidence_key),
             NposPenaltyAction::MarkConsensusEvidenceApplied(action) => Some(&action.evidence_key),
-            NposPenaltyAction::VrfJail(_) | NposPenaltyAction::MarkVrfPenaltiesApplied(_) => None,
         };
         evidence_key.is_some_and(|key| admission_keys.binary_search(key).is_ok())
     });
@@ -1198,7 +1197,6 @@ mod tests {
         let mut state_block = state.block(header);
         let effects = iroha_data_model::consensus::NposConsensusEffects {
             finalized_global_beacon_pulse: None,
-            vrf_epoch_seals: Vec::new(),
             v2_evidence_admissions: admissions,
             penalty_actions: Vec::new(),
         };
@@ -1637,25 +1635,23 @@ mod tests {
         assert!(pending_v2_evidence_admissions(&follower, 2).is_empty());
         validate_v2_evidence_admissions(&follower, 2, &admissions)
             .expect("unaware follower revalidates the attached exact proof");
-        let proposer_precommit = super::super::penalties::PenaltyApplier::from_committed_state(
+        let proposer_precommit = super::super::penalties::PenaltyApplier::new(
             &proposer,
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2, Vec::new())
+        .derive_npos_consensus_effects(2)
         .expect("derive proposer pre-admission effects");
-        let follower_precommit = super::super::penalties::PenaltyApplier::from_committed_state(
+        let follower_precommit = super::super::penalties::PenaltyApplier::new(
             &follower,
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2, Vec::new())
+        .derive_npos_consensus_effects(2)
         .expect("derive follower pre-admission effects");
         assert_eq!(proposer_precommit.v2_evidence_admissions, admissions);
         assert!(follower_precommit.v2_evidence_admissions.is_empty());
@@ -1686,36 +1682,33 @@ mod tests {
         assert_eq!(proposer_record.recorded_at_height, 2);
         assert_eq!(proposer_record.recorded_at_view, 3);
         assert_eq!(proposer_record.recorded_at_ms, 77);
-        let proposer_same_block = super::super::penalties::PenaltyApplier::from_committed_state(
+        let proposer_same_block = super::super::penalties::PenaltyApplier::new(
             &proposer,
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2, Vec::new())
+        .derive_npos_consensus_effects(2)
         .expect("derive proposer same-height effects");
         assert!(proposer_same_block.penalty_actions.is_empty());
-        let proposer_effects = super::super::penalties::PenaltyApplier::from_committed_state(
+        let proposer_effects = super::super::penalties::PenaltyApplier::new(
             &proposer,
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(3, Vec::new())
+        .derive_npos_consensus_effects(3)
         .expect("derive proposer post-admission effects");
-        let follower_effects = super::super::penalties::PenaltyApplier::from_committed_state(
+        let follower_effects = super::super::penalties::PenaltyApplier::new(
             &follower,
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(3, Vec::new())
+        .derive_npos_consensus_effects(3)
         .expect("derive follower post-admission effects");
         assert_eq!(proposer_effects, follower_effects);
         assert!(

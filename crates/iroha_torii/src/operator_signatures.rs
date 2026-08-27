@@ -32,7 +32,10 @@ use crate::{
 use axum::{
     body::Body,
     extract::{Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header::WWW_AUTHENTICATE},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{CACHE_CONTROL, WWW_AUTHENTICATE},
+    },
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -883,7 +886,7 @@ pub async fn enforce_operator_access(
     next: Next,
 ) -> Response {
     let max_body_bytes = app.operator_signatures.max_body_bytes;
-    enforce_operator_access_inner(app, req, next, max_body_bytes).await
+    private_operator_response(enforce_operator_access_inner(app, req, next, max_body_bytes).await)
 }
 /// Enforce operator authentication while buffering no more than the route-specific body limit.
 pub(crate) async fn enforce_bounded_operator_access(
@@ -894,7 +897,15 @@ pub(crate) async fn enforce_bounded_operator_access(
     let max_body_bytes = state
         .max_body_bytes
         .min(state.app.operator_signatures.max_body_bytes);
-    enforce_operator_access_inner(state.app, req, next, max_body_bytes).await
+    private_operator_response(
+        enforce_operator_access_inner(state.app, req, next, max_body_bytes).await,
+    )
+}
+fn private_operator_response(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    response
 }
 async fn enforce_operator_access_inner(
     app: SharedAppState,
@@ -2342,6 +2353,41 @@ mod tests {
         assert!(error.message.contains("backend rejected message"));
     }
     #[tokio::test]
+    async fn operator_middleware_marks_successful_responses_private_and_no_store() {
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        assert!(app.operator_signatures.is_enabled());
+        assert!(!app.operator_auth.is_enabled());
+        let uri: crate::Uri = "/status".parse().expect("operator test URI");
+        let headers = signed_request_headers(
+            &app.da_receipt_signer,
+            app.state.network_id_ref(),
+            &crate::Method::GET,
+            &uri,
+            &[],
+        )
+        .expect("valid operator signature headers");
+        let operator_layer = axum::middleware::from_fn_with_state::<
+            _,
+            _,
+            (axum::extract::State<SharedAppState>, axum::extract::Request),
+        >(app.clone(), enforce_operator_access);
+        let router = axum::Router::new()
+            .route("/status", get(|| async { "ok" }))
+            .route_layer(operator_layer);
+        let mut request = axum::http::Request::builder()
+            .uri(uri)
+            .body(Body::empty())
+            .expect("request");
+        request.headers_mut().extend(headers);
+
+        let response = router.oneshot(request).await.expect("router response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store")),
+        );
+    }
+    #[tokio::test]
     async fn operator_middleware_requires_signature_even_when_legacy_token_is_valid() {
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         assert!(app.operator_signatures.is_enabled());
@@ -2391,5 +2437,9 @@ mod tests {
         request.headers_mut().extend(headers);
         let response = router.oneshot(request).await.expect("router response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers().get(CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store")),
+        );
     }
 }

@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -16,8 +17,10 @@ import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -606,7 +609,7 @@ public final class AliasSetupModelsTests {
   }
 
   @Test
-  public void sponsoredOnboardingReceiptAndPrepareRequestAreTypedAndSecretFree()
+  public void onboardingAndFaucetPrepareRequestsAreTypedAndSecretFree()
       throws Exception {
     final AliasSetupModels.AccountAliasIntent intent = accountIntent();
     final AccountOnboardingPlanRequestV1 request =
@@ -643,12 +646,82 @@ public final class AliasSetupModelsTests {
             "onboarding",
             "22".repeat(32),
             50_000);
+    final FeePaymentIntent feePayment = FeePaymentIntent.authority(Collections.emptyList());
     final String prepare =
-        JsonEncoder.encode(new AccountOnboardingPrepareRequestV1(binding, receipt).toJsonMap());
+        JsonEncoder.encode(
+            new AccountOnboardingPrepareRequestV1(binding, receipt, feePayment).toJsonMap());
     assert prepare.contains(AccountOnboardingPrepareRequestV1.SCHEMA);
     assert prepare.contains(TairaPublicResetMutationBindingV1.SCHEMA);
+    assert prepare.contains("\"fee_payment\"");
     assert !prepare.contains("token");
     assert !prepare.contains("private_key");
+
+    final TairaPublicResetMutationBindingV1 faucetBinding =
+        new TairaPublicResetMutationBindingV1(
+            "33".repeat(32),
+            "faucet-fixture-nonce-00000000001",
+            TairaPublicResetMutationBindingV1.FAUCET,
+            "faucet",
+            "44".repeat(32),
+            50_000);
+    final String faucetAccount = account(0x22);
+    final String faucetAuthority = account(0x11);
+    final AccountFaucetClaimV1 faucetClaim =
+        new AccountFaucetClaimV1(
+            faucetAccount, BigInteger.valueOf(42), "0001020304050607");
+    final Map<String, Object> faucetPrepare =
+        new AccountFaucetPrepareRequestV1(faucetBinding, faucetClaim, feePayment).toJsonMap();
+    assert AccountFaucetPrepareRequestV1.SCHEMA.equals(faucetPrepare.get("schema"));
+    assert faucetClaim.toJsonMap().equals(faucetPrepare.get("claim"));
+    assert feePayment.toJsonMap().equals(faucetPrepare.get("fee_payment"));
+    assert !faucetPrepare.containsKey("policy");
+    assert faucetClaim.semanticHashHex().length() == 64;
+    final AccountFaucetPolicyV1 faucetPolicy =
+        new AccountFaucetPolicyV1(
+            faucetAuthority, asset(), NumericV1.QuantityValue.parseCanonical("5"));
+    assert faucetAuthority.equals(faucetPolicy.faucetAuthority());
+    assert asset().equals(faucetPolicy.assetDefinitionId());
+    assert "5".equals(faucetPolicy.amount().toString());
+    expectIllegalArgument(
+        () -> new AccountFaucetPrepareRequestV1(binding, faucetClaim, feePayment));
+    expectIllegalArgument(
+        () -> new AccountFaucetClaimV1(faucetAccount, BigInteger.valueOf(42), "AA"));
+    expectIllegalArgument(
+        () -> new AccountFaucetClaimV1(faucetAccount, BigInteger.ZERO, "00"));
+    expectIllegalArgument(
+        () -> new AccountFaucetClaimV1(faucetAccount, BigInteger.ONE, ""));
+    expectIllegalArgument(
+        () ->
+            new AccountFaucetClaimV1(
+                faucetAccount,
+                BigInteger.ONE,
+                String.join("", java.util.Collections.nCopies(33, "00"))));
+    expectIllegalArgument(
+        () -> new AccountFaucetClaimV1(faucetAccount, null, "00"));
+    expectIllegalArgument(
+        () -> new AccountFaucetClaimV1(faucetAccount, BigInteger.ONE, null));
+    expectIllegalArgument(
+        () ->
+            new AccountFaucetPolicyV1(
+                faucetAuthority, asset(), NumericV1.QuantityValue.parseCanonical("0")));
+    expectIllegalArgument(
+        () ->
+            new AccountFaucetPolicyV1(
+                faucetAuthority,
+                "not-an-asset",
+                NumericV1.QuantityValue.parseCanonical("5")));
+
+    final FeeSponsorProgramId sponsorProgram =
+        new FeeSponsorProgramId(account(0x11), "public-reset");
+    final FeePaymentIntent sponsorRevisionOne =
+        FeePaymentIntent.sponsor(sponsorProgram, 1L, Collections.emptyList());
+    assert sponsorRevisionOne.hasSamePayerAndGasBound(
+        FeePaymentIntent.sponsor(sponsorProgram, 1L, Collections.emptyList()));
+    assert !sponsorRevisionOne.hasSamePayerAndGasBound(
+        FeePaymentIntent.sponsor(sponsorProgram, 2L, Collections.emptyList()));
+    assert !sponsorRevisionOne.hasSamePayerAndGasBound(feePayment);
+    assert !sponsorRevisionOne.hasSamePayerAndGasBound(
+        FeePaymentIntent.sponsor(sponsorProgram, 1L, Collections.emptyList(), 1L));
 
     final AliasSetupModels.AliasSetupReportV1 readiness =
         AccountOnboardingJsonParser.parseReadiness(
@@ -656,6 +729,64 @@ public final class AliasSetupModelsTests {
                 .getBytes(StandardCharsets.UTF_8));
     assert readiness.status() == AliasSetupModels.AliasSetupStatusV1.READY;
     assert readiness.diagnostics().isEmpty();
+  }
+
+  @Test
+  public void feeSponsorProgramIdentityIgnoresI105Discriminant() throws Exception {
+    final String sponsor = account(0x11);
+    final String alternateSponsor =
+        AccountAddress.parseEncodedIgnoringCurveSupport(sponsor, null).toI105(42);
+    final FeeSponsorProgramId program =
+        new FeeSponsorProgramId(sponsor, "public-reset");
+    final FeeSponsorProgramId alternateProgram =
+        new FeeSponsorProgramId(alternateSponsor, "public-reset");
+
+    assert program.equals(alternateProgram);
+    assert program.hashCode() == alternateProgram.hashCode();
+    assert FeePaymentIntent.sponsor(program, 1L, Collections.emptyList())
+        .hasSamePayerAndGasBound(
+            FeePaymentIntent.sponsor(alternateProgram, 1L, Collections.emptyList()));
+    assert !program.equals(new FeeSponsorProgramId(account(0x12), "public-reset"));
+    assert !program.equals(new FeeSponsorProgramId(alternateSponsor, "other"));
+  }
+
+  @Test
+  public void feeSponsorProgramNameMatchesRustCanonicality() {
+    final String sponsor = account(0x11);
+    new FeeSponsorProgramId(sponsor, String.join("", Collections.nCopies(255, "a")));
+    new FeeSponsorProgramId(
+        sponsor, String.join("", Collections.nCopies(127, "é")) + "a");
+    new FeeSponsorProgramId(sponsor, "emoji😀");
+
+    final List<String> invalid =
+        new ArrayList<>(
+            Arrays.asList(
+                String.join("", Collections.nCopies(256, "a")),
+                String.join("", Collections.nCopies(128, "é")),
+                "nul\u0000suffix",
+                "c1\u0080control",
+                "white space",
+                "no\u00A0break",
+                "narrow\u202Fspace",
+                "reserved@name",
+                "reserved#name",
+                "reserved$name",
+                "slash/name",
+                "e\u0301",
+                new String(new char[] {'\uD800'})));
+    final int[] bidiControls = {
+      0x061C, 0x200E, 0x200F,
+      0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+      0x2066, 0x2067, 0x2068, 0x2069
+    };
+    for (final int codePoint : bidiControls) {
+      invalid.add("prefix" + new String(Character.toChars(codePoint)) + "suffix");
+    }
+    for (final String name : invalid) {
+      expectIllegalArgument(() -> new FeeSponsorProgramId(sponsor, name));
+    }
+    expectIllegalArgument(() -> new FeeSponsorProgramId(sponsor + "/extra", "name"));
+    expectIllegalArgument(() -> FeeSponsorProgramId.parse(sponsor + "/name/extra"));
   }
 
   @Test

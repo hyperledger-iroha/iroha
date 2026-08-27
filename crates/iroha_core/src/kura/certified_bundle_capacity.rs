@@ -6,8 +6,7 @@ impl Kura {
     ) -> Result<()> {
         self.write_certified_lane_block_artifact_with_authority(artifact, None, None)
     }
-    // The inflight source contract audits this authority-bearing publication boundary directly.
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn write_certified_lane_block_artifact_with_authority(
         &self,
         artifact: &CertifiedLaneBlockArtifact,
@@ -159,6 +158,7 @@ impl Kura {
                 )
             })?;
         let namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
+        let recover_build = recover_build && !self.emergency_fast_startup_enabled();
         if recover_build {
             self.recover_latest_certified_lane_block_frontier_build_locked(
                 entry,

@@ -12,7 +12,8 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
     }
     let source = include_str!("../v2_runner/lifecycle_run_inner.rs");
     let anchors = [
-        "V2BodyStore::open_with_policy(",
+        "V2BodyStoreCapacity::new(",
+        "V2BodyStore::open_with_policy_and_capacity(",
         ".into_quarantined_recovered_startup()",
         "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry(",
         ".authenticate_final_wal_startup_authority()",
@@ -157,9 +158,15 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
         "terminal sweep must use one bounded input inventory and one exact deferred-set readback",
     );
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(deferred_terminal_completion_requires_two_exact_stage_proofs_and_ordered_pending_coverage);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(planner_covered_pending_attempts_are_exposed_for_pairing_but_skipped_for_recovery);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    deferred_terminal_completion_requires_two_exact_stage_proofs_and_ordered_pending_coverage
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    planner_covered_pending_attempts_are_exposed_for_pairing_but_skipped_for_recovery
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed
+);
 #[test]
 fn local_producer_queue_custody_is_preflighted_before_cursor_mutation() {
     let source = include_str!("../v2_lifecycle_recovery.rs");

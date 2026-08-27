@@ -1708,14 +1708,6 @@ fn interface_modifiers(transcript: &mut Vec<u8>, modifiers: &crate::ast::Functio
         FunctionKind::View => 4,
     });
     interface_optional_field(transcript, modifiers.permission.as_deref());
-    for values in [&modifiers.access_reads, &modifiers.access_writes] {
-        let mut values = values.iter().map(String::as_str).collect::<Vec<_>>();
-        values.sort_unstable();
-        interface_count(transcript, values.len());
-        for value in values {
-            interface_field(transcript, value.as_bytes());
-        }
-    }
     transcript.push(u8::from(modifiers.is_test));
     interface_optional_field(transcript, modifiers.test_fixture.as_deref());
 }

@@ -177,7 +177,9 @@ use iroha_data_model::{
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
 use iroha_executor_data_model::permission::{
-    nft::CanModifyNftMetadata, sorafs::CanOperateSorafsRepair, trigger::CanExecuteTrigger,
+    nft::CanModifyNftMetadata,
+    sorafs::CanOperateSorafsRepair,
+    trigger::{CanExecuteTrigger, CanRegisterTrigger},
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_logger::prelude::*;
@@ -431,7 +433,13 @@ use crate::{
     role::RoleIdWithOwner,
     settlement::SettlementEngine,
     smartcontracts::{
-        isi::{triggers::trigger_is_enabled, world::isi::apply_policy_if_due},
+        isi::{
+            triggers::{
+                TRIGGER_ENABLED_METADATA_KEY, trigger_is_enabled,
+                trigger_was_registered_before_block,
+            },
+            world::isi::apply_policy_if_due,
+        },
         ivm::cache::{
             CacheStats, IvmCache, PreparedContractCache, PreparedContractCacheStats, ProgramSummary,
         },
@@ -439,7 +447,8 @@ use crate::{
             set::{
                 ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
                 SetReadOnly as TriggerSetReadOnly, SetTransaction as TriggerSetTransaction,
-                SetView as TriggerSetView,
+                SetView as TriggerSetView, data_trigger_action_matches,
+                pipeline_trigger_action_matches, time_trigger_action_is_due,
             },
             specialized::{LoadedAction, LoadedActionTrait, TimeTriggerRetryState},
         },
@@ -891,6 +900,7 @@ macro_rules! with_world_overlay_fields {
             domain_endorsements_by_domain,
             domains,
             domains_by_owner,
+            kaigi_relay_registry,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -1124,7 +1134,6 @@ macro_rules! with_world_overlay_fields {
             global_beacon_latest_pulse,
             global_beacon_pulses,
             global_beacon_pulse_slots,
-            vrf_epochs,
             merge_hint_roots,
             merge_global_state_root,
             ]
@@ -1513,53 +1522,18 @@ struct AccountPermissionSummary {
     reg_trigger_authorities: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
     exec_trigger_ids: std::collections::BTreeSet<iroha_data_model::trigger::TriggerId>,
 }
-pub(crate) fn parse_permission_account_field(
-    world: &impl WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    payload: &iroha_primitives::json::Json,
-    field: &str,
-    now_ms: u64,
-) -> Result<Option<iroha_data_model::account::AccountId>, crate::sns::SnsError> {
-    let Ok(value) = norito::json::parse_value(payload.get()) else {
-        return Ok(None);
-    };
-    let map = match value {
-        norito::json::Value::Object(map) => map,
-        _ => return Ok(None),
-    };
-    let Some(entry) = map.get(field) else {
-        return Ok(None);
-    };
-    let literal = match entry {
-        norito::json::Value::String(value) => value.as_str(),
-        _ => return Ok(None),
-    };
-    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
-}
 impl AccountPermissionSummary {
     fn clear(&mut self) {
         self.hydrated = false;
         self.reg_trigger_authorities.clear();
         self.exec_trigger_ids.clear();
     }
-    fn apply_grant(
-        &mut self,
-        world: &impl WorldReadOnly,
-        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-        _permission_owner: &AccountId,
-        permission: &Permission,
-        now_ms: u64,
-    ) {
+    fn apply_grant(&mut self, permission: &Permission) {
         match permission.name() {
             "CanRegisterTrigger" => {
-                if let Ok(Some(authority)) = parse_permission_account_field(
-                    world,
-                    dataspace_catalog,
-                    permission.payload(),
-                    "authority",
-                    now_ms,
-                ) {
-                    self.reg_trigger_authorities.insert(authority);
+                if let Ok(decoded) = CanRegisterTrigger::try_from(permission) {
+                    self.reg_trigger_authorities
+                        .insert(decoded.authority.clone());
                 }
             }
             "CanExecuteTrigger" => {
@@ -3945,6 +3919,9 @@ pub struct World {
     /// Read-side index from domain owner account to owned domain ids.
     #[norito(skip)]
     pub(crate) domains_by_owner: Storage<AccountId, BTreeSet<DomainId>>,
+    /// Derived index from Kaigi relay account ids to authoritative metadata domains.
+    #[norito(skip)]
+    pub(crate) kaigi_relay_registry: Storage<AccountId, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: Storage<AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -4571,8 +4548,6 @@ pub struct World {
     /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
     #[norito(skip)]
     pub(crate) global_beacon_pulse_slots: Storage<(iroha_data_model::NetworkId, u64), [u8; 32]>,
-    /// Retained legacy VRF epoch records keyed by epoch index.
-    pub(crate) vrf_epochs: Storage<u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Placeholder buffer of events pending publication to external subscribers.
     /// Included for formal correctness, although used only below the block level.
     external_event_buf: Cell<Vec<EventBox>>,
@@ -4607,6 +4582,9 @@ pub struct WorldBlock<'world> {
     /// Read-side index from domain owner account to owned domain ids.
     #[norito(skip)]
     pub(crate) domains_by_owner: StorageBlock<'world, AccountId, BTreeSet<DomainId>>,
+    /// Derived index from Kaigi relay account ids to authoritative metadata domains.
+    #[norito(skip)]
+    pub(crate) kaigi_relay_registry: StorageBlock<'world, AccountId, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -5298,8 +5276,6 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) global_beacon_pulse_slots:
         StorageBlock<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
-    /// Retained legacy VRF epoch records keyed by epoch index.
-    pub(crate) vrf_epochs: StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Latest lane merge-hint roots observed via the merge ledger during this block.
     pub(crate) merge_hint_roots: CellBlock<'world, Vec<Hash>>,
     /// Latest reduced global state root observed via the merge ledger during this block.
@@ -5308,16 +5284,6 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     external_event_buf: Vec<EventBox>,
 }
-#[cfg(test)]
-impl<'world> WorldBlock<'world> {
-    /// Mutable access to retained legacy VRF epoch records in tests.
-    pub fn vrf_epochs_mut(
-        &mut self,
-    ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
-        &mut self.vrf_epochs
-    }
-}
-
 impl WorldBlock<'_> {
     #[cfg(test)]
     fn put_governance_locks(&mut self, referendum_id: String, locks: GovernanceLocksForReferendum) {
@@ -5619,6 +5585,7 @@ impl WorldBlock<'_> {
             domain_endorsements_by_domain,
             domains,
             domains_by_owner,
+            kaigi_relay_registry,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -5828,7 +5795,6 @@ impl WorldBlock<'_> {
             global_beacon_latest_pulse,
             global_beacon_pulses,
             global_beacon_pulse_slots,
-            vrf_epochs,
         );
         out
     }
@@ -5862,6 +5828,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) domains: StorageTransaction<'block, 'world, DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
     pub(crate) domains_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<DomainId>>,
+    /// Derived index from Kaigi relay account ids to authoritative metadata domains.
+    pub(crate) kaigi_relay_registry: StorageTransaction<'block, 'world, AccountId, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -6616,8 +6584,6 @@ pub struct WorldTransaction<'block, 'world> {
     >,
     pub(crate) global_beacon_pulse_slots:
         StorageTransaction<'block, 'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
-    pub(crate) vrf_epochs:
-        StorageTransaction<'block, 'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Buffer of events pending publication to external subscribers.
     pub(crate) merge_hint_roots: CellTransaction<'block, 'world, Vec<Hash>>,
     /// Latest reduced global state root observed in this transaction scope.
@@ -8076,6 +8042,8 @@ pub struct WorldView<'world> {
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
     pub(crate) domains_by_owner: StorageView<'world, AccountId, BTreeSet<DomainId>>,
+    /// Derived index from Kaigi relay account ids to authoritative metadata domains.
+    pub(crate) kaigi_relay_registry: StorageView<'world, AccountId, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -8674,8 +8642,6 @@ pub struct WorldView<'world> {
     /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
     pub(crate) global_beacon_pulse_slots:
         StorageView<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
-    /// Retained legacy VRF epoch records keyed by epoch index.
-    pub(crate) vrf_epochs: StorageView<'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
 }
 /// Verifying-key binding enforced for a ZK asset operation.
 #[derive(
@@ -10867,7 +10833,7 @@ pub(crate) struct SccpVerifierWorkV1 {
     pub(crate) proofs: u64,
     /// Canonical closed SCCP proof bytes.
     pub(crate) proof_bytes: u64,
-    /// BSC/TRON native-finality continuation headers.
+    /// BSC/TRON native-finality continuation headers and TON masterchain blocks.
     pub(crate) native_headers: u64,
     /// Ethereum native light-client updates.
     pub(crate) ethereum_light_client_updates: u64,
@@ -10879,8 +10845,14 @@ pub(crate) struct SccpVerifierWorkV1 {
     pub(crate) bls_aggregate_checks: u64,
     /// BLS public-key validation or aggregate-contribution work items.
     pub(crate) bls_signer_contributions: u64,
+    /// TON Ed25519 signature verification calls.
+    pub(crate) ed25519_signature_checks: u64,
+    /// TON Ed25519 validator-key validation work items.
+    pub(crate) ed25519_validator_key_checks: u64,
     /// BN254 Groth16 pairing-product verification calls.
     pub(crate) bn254_pairing_checks: u64,
+    /// BLS12-381 Groth16 pairing-product verification calls.
+    pub(crate) bls12_381_pairing_checks: u64,
 }
 impl SccpVerifierWorkV1 {
     fn checked_add(self, other: Self) -> Option<Self> {
@@ -10903,9 +10875,18 @@ impl SccpVerifierWorkV1 {
             bls_signer_contributions: self
                 .bls_signer_contributions
                 .checked_add(other.bls_signer_contributions)?,
+            ed25519_signature_checks: self
+                .ed25519_signature_checks
+                .checked_add(other.ed25519_signature_checks)?,
+            ed25519_validator_key_checks: self
+                .ed25519_validator_key_checks
+                .checked_add(other.ed25519_validator_key_checks)?,
             bn254_pairing_checks: self
                 .bn254_pairing_checks
                 .checked_add(other.bn254_pairing_checks)?,
+            bls12_381_pairing_checks: self
+                .bls12_381_pairing_checks
+                .checked_add(other.bls12_381_pairing_checks)?,
         })
     }
     #[cfg(test)]
@@ -11913,51 +11894,6 @@ impl<'state> StateBlock<'state> {
             self.world.public_lane_validators.insert(key, record);
         }
     }
-    fn clear_expired_vrf_public_lane_jails(&mut self, current_epoch: u64) {
-        let block_height = self._curr_block.height().get();
-        let to_restore: Vec<_> = self
-            .world
-            .public_lane_validators
-            .iter()
-            .filter_map(|(key, record)| {
-                if !public_lane_validator_record_matches_key(key, record) {
-                    return None;
-                }
-                let PublicLaneValidatorStatus::Jailed(reason) = &record.status else {
-                    return None;
-                };
-                let penalty_epoch = vrf_penalty_jail_epoch(reason)?;
-                (penalty_epoch < current_epoch).then(|| (key.clone(), record.status.clone()))
-            })
-            .collect();
-        for (key, previous_status) in to_restore {
-            if nexus_staking_authority_lane_at_height(key.0, &self.nexus, block_height)
-                != Some(key.0)
-            {
-                iroha_logger::error!(
-                    lane_id = %key.0,
-                    validator = %key.1,
-                    current_epoch,
-                    block_height,
-                    "jailed validator belongs to a non-owner staking lane; skipping restoration"
-                );
-                continue;
-            }
-            let Some(mut record) = self.world.public_lane_validators.get(&key).cloned() else {
-                continue;
-            };
-            record.status = PublicLaneValidatorStatus::Active;
-            #[cfg(feature = "telemetry")]
-            self.telemetry.record_public_lane_validator_status(
-                key.0,
-                Some(&previous_status),
-                &record.status,
-            );
-            #[cfg(not(feature = "telemetry"))]
-            let _ = previous_status;
-            self.world.public_lane_validators.insert(key, record);
-        }
-    }
     fn record_replayed_axt_envelope(&mut self, envelope: &AxtEnvelopeRecord, current_slot: u64) {
         // The permanent per-dataspace ratchet is independent of the replaceable
         // policy projection. Exact replay keys make both the counter advance
@@ -12353,6 +12289,8 @@ pub struct StateTransaction<'block, 'state> {
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
+    /// Transaction-local operator-status updates, published only by [`Self::apply`].
+    public_lane_staking_status_overlay: crate::sumeragi::status::PublicLaneStakingStatusOverlay,
     pub(crate) _curr_block: BlockHeader,
     #[cfg(feature = "zk-preverify")]
     pub(crate) zk_dedup: &'block mut crate::zk::DedupCache,
@@ -12919,25 +12857,19 @@ impl<'state> StateView<'state> {
         let interval = TimeInterval::new(since, length);
         let event = TimeEvent { interval };
         let current_block_height = block_header.height().get();
-        let key_height = "__registered_block_height".parse::<Name>().ok();
+        let current_block_time_ms =
+            u64::try_from(block_header.creation_time().as_millis()).unwrap_or(u64::MAX);
         self.world
             .triggers()
             .time_triggers()
             .iter()
-            .filter(|(_, action)| trigger_is_enabled(action.metadata()))
             .any(|(_, action)| {
-                let mut count = action.filter.count_matches(&event);
-                if let Repeats::Exactly(repeats) = action.repeats {
-                    count = std::cmp::min(repeats, count);
-                }
-                if count == 0 {
-                    return false;
-                }
-                let registered_height = key_height
-                    .as_ref()
-                    .and_then(|key| action.metadata().get(key))
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                registered_height.is_some_and(|height| height != current_block_height)
+                time_trigger_action_is_due(
+                    action,
+                    &event,
+                    current_block_height,
+                    current_block_time_ms,
+                )
             })
     }
     /// Previous committed block hash (if any) for this snapshot.
@@ -13038,11 +12970,6 @@ pub(crate) fn public_lane_validator_record_matches_key(
     record: &PublicLaneValidatorRecord,
 ) -> bool {
     key.0 == record.lane_id && key.1 == record.validator
-}
-fn vrf_penalty_jail_epoch(reason: &str) -> Option<u64> {
-    reason
-        .strip_prefix("vrf_penalty_epoch_")
-        .and_then(|epoch| epoch.parse().ok())
 }
 pub(crate) fn public_lane_stake_share_matches_key(
     key: &(LaneId, AccountId, AccountId),
@@ -13456,17 +13383,6 @@ fn bounded_global_committee_size(
     iroha_data_model::block::consensus_v2::is_valid_committee_size(committee_size)
         .then_some(committee_size)
 }
-#[cfg(test)]
-fn npos_epoch_selection_seed(world: &impl WorldReadOnly, epoch: u64) -> [u8; 32] {
-    world.vrf_epochs().get(&epoch).map_or_else(
-        || {
-            world
-                .sumeragi_npos_parameters()
-                .map_or([0; 32], |params| params.epoch_seed)
-        },
-        |record| record.seed,
-    )
-}
 fn npos_peer_prf_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
     let epoch_bytes = epoch.to_le_bytes();
     let peer_bytes = peer.encode();
@@ -13511,7 +13427,9 @@ pub(crate) fn epoch_validator_peer_ids_from_world<I>(
 where
     I: IntoIterator<Item = PeerId>,
 {
-    let selection_seed = npos_epoch_selection_seed(world, epoch);
+    let selection_seed = world
+        .sumeragi_npos_parameters()
+        .map_or([0; 32], |params| params.epoch_seed);
     epoch_validator_peer_ids_from_world_with_seed(
         world,
         commit_topology,
@@ -14326,118 +14244,6 @@ mod stake_snapshot_tests {
         assert_eq!(mismatched.activation_height, None);
     }
     include!("state/restored_staking_owner_tests.rs");
-    #[test]
-    fn state_block_clears_only_expired_vrf_public_lane_jails() {
-        let world = World::default();
-        let expired_kp = crate::state::checked_keypair();
-        let current_kp = crate::state::checked_keypair();
-        let generic_kp = crate::state::checked_keypair();
-        let mismatched_kp = crate::state::checked_keypair();
-        let expired_validator = DMAccountId::of(expired_kp.public_key().clone());
-        let current_validator = DMAccountId::of(current_kp.public_key().clone());
-        let generic_validator = DMAccountId::of(generic_kp.public_key().clone());
-        let mismatched_validator = DMAccountId::of(mismatched_kp.public_key().clone());
-        let record =
-            |lane_id, validator: DMAccountId, peer_key, status| PublicLaneValidatorRecord {
-                lane_id,
-                validator: validator.clone(),
-                peer_id: PeerId::from(peer_key),
-                stake_account: validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                metadata: Metadata::default(),
-                status,
-                activation_epoch: Some(1),
-                activation_height: Some(1),
-                last_reward_epoch: None,
-            };
-        {
-            let mut block = world.public_lane_validators.block();
-            block.insert(
-                (LaneId::new(21), expired_validator.clone()),
-                record(
-                    LaneId::new(21),
-                    expired_validator.clone(),
-                    expired_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_2".to_string()),
-                ),
-            );
-            block.insert(
-                (LaneId::new(22), current_validator.clone()),
-                record(
-                    LaneId::new(22),
-                    current_validator.clone(),
-                    current_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_3".to_string()),
-                ),
-            );
-            block.insert(
-                (LaneId::new(23), generic_validator.clone()),
-                record(
-                    LaneId::new(23),
-                    generic_validator.clone(),
-                    generic_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("downtime".to_string()),
-                ),
-            );
-            block.insert(
-                (LaneId::new(24), mismatched_validator.clone()),
-                record(
-                    LaneId::new(25),
-                    mismatched_validator.clone(),
-                    mismatched_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_2".to_string()),
-                ),
-            );
-            block.commit();
-        }
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, std::sync::Arc::clone(&kura), query);
-        let header = BlockHeader::new(
-            core::num::NonZeroU64::new(13).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut state_block = state.block(header);
-        state_block.clear_expired_vrf_public_lane_jails(3);
-        let expired = state_block
-            .world
-            .public_lane_validators
-            .get(&(LaneId::new(21), expired_validator))
-            .expect("expired VRF-jailed validator remains present");
-        assert!(matches!(expired.status, PublicLaneValidatorStatus::Active));
-        let current = state_block
-            .world
-            .public_lane_validators
-            .get(&(LaneId::new(22), current_validator))
-            .expect("current VRF-jailed validator remains present");
-        assert!(matches!(
-            current.status,
-            PublicLaneValidatorStatus::Jailed(ref reason) if reason == "vrf_penalty_epoch_3"
-        ));
-        let generic = state_block
-            .world
-            .public_lane_validators
-            .get(&(LaneId::new(23), generic_validator))
-            .expect("generic-jailed validator remains present");
-        assert!(matches!(
-            generic.status,
-            PublicLaneValidatorStatus::Jailed(ref reason) if reason == "downtime"
-        ));
-        let mismatched = state_block
-            .world
-            .public_lane_validators
-            .get(&(LaneId::new(24), mismatched_validator))
-            .expect("mismatched VRF-jailed validator remains present");
-        assert!(matches!(
-            mismatched.status,
-            PublicLaneValidatorStatus::Jailed(ref reason) if reason == "vrf_penalty_epoch_2"
-        ));
-    }
     #[test]
     fn public_lane_snapshot_ignores_stale_geometry_for_removed_catalog_lane() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -16205,8 +16011,6 @@ mod custom_parameter_tests {
             .as_object_mut()
             .expect("npos parameters should serialize as object");
         for key in [
-            "vrf_commit_window_blocks",
-            "vrf_reveal_window_blocks",
             "max_validators",
             "max_nominator_concentration_pct",
             "seat_band_pct",
@@ -16312,7 +16116,7 @@ mod custom_parameter_tests {
         params.set_parameter(Parameter::Custom(custom));
         assert!(
             sumeragi_npos_parameters_from_parameters(&params).is_none(),
-            "retired collector fields and an all-zero seed must fail closed"
+            "retired NPoS fields and an all-zero seed must fail closed"
         );
     }
 }
@@ -17145,6 +16949,7 @@ impl World {
         let mut world = Self {
             domains,
             domains_by_owner: Storage::default(),
+            kaigi_relay_registry: Storage::default(),
             accounts,
             uaid_accounts: Storage::default(),
             account_rekey_records,
@@ -17235,6 +17040,8 @@ impl World {
         world
             .rebuild_account_rekey_records()
             .expect("invalid account rekey state in world constructor");
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut world)
+            .expect("invalid Kaigi relay registry in world constructor");
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("duplicate asset definition alias in world constructor");
@@ -18487,6 +18294,8 @@ macro_rules! world_ro_accessors {
             storage domains: DomainId => Domain;
             /// Domain owner index (read-only).
             storage domains_by_owner: AccountId => BTreeSet<DomainId>;
+            /// Kaigi relay account to authoritative metadata domain index (read-only).
+            storage kaigi_relay_registry: AccountId => DomainId;
             /// Endorsement committees (read-only).
             storage domain_committees: String => DomainCommittee;
             /// Per-domain endorsement policies (read-only).
@@ -19045,8 +18854,6 @@ macro_rules! world_ro_accessors {
             /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
             storage global_beacon_pulse_slots:
                 (iroha_data_model::NetworkId, u64) => [u8; 32];
-            /// Retained legacy VRF epoch records (read-only) keyed by epoch index.
-            storage vrf_epochs: u64 => iroha_data_model::consensus::VrfEpochRecord;
         );
     };
 }
@@ -20127,6 +19934,65 @@ mod bootle_lantern_policy_world_read_tests {
     }
 }
 impl<'world> WorldBlock<'world> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Install one fully verified global-beacon fixture for dependent-crate tests.
+    pub fn install_global_beacon_fixture_for_testing(
+        &mut self,
+        key_record: crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        pulse: iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+    ) -> Result<(), crate::beacon::GlobalThresholdBeaconError> {
+        key_record.validate()?;
+        if key_record.session.session_id != pulse.session_id
+            || !key_record.is_active_at(pulse.height)
+            || key_record.retired_at_height.is_some()
+            || pulse.finalized_chain_anchor.height.checked_add(1) != Some(pulse.height)
+            || self.global_beacon_key_sessions.iter().next().is_some()
+            || self.global_beacon_active_session.iter().next().is_some()
+            || self.global_beacon_pulses.iter().next().is_some()
+            || self.global_beacon_latest_pulse.iter().next().is_some()
+        {
+            return Err(crate::beacon::GlobalThresholdBeaconError::PersistenceConflict);
+        }
+        let binding = crate::beacon::GlobalThresholdBeaconSessionBindingV1 {
+            network_id: pulse.network_id,
+            session_id: pulse.session_id,
+            roster_hash: pulse.roster_hash,
+            transcript_hash: pulse.transcript_hash,
+        };
+        let session = crate::beacon::validate_global_threshold_beacon_session_v1(
+            key_record.session.clone(),
+            &binding,
+        )?;
+        let link = crate::beacon::verify_finalized_global_threshold_beacon_pulse_v1(
+            &session,
+            &pulse,
+            pulse.finalized_chain_anchor,
+        )?;
+        if crate::beacon::validate_persisted_global_threshold_beacon_pulse_v1(&pulse)? != link {
+            return Err(crate::beacon::GlobalThresholdBeaconError::InvalidPulseHistory);
+        }
+        self.global_beacon_key_sessions
+            .insert(pulse.session_id, key_record);
+        self.global_beacon_active_session
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
+        self.global_beacon_pulses.insert(pulse.pulse_id, pulse);
+        self.global_beacon_latest_pulse
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Mutable finalized global threshold-beacon pulse storage for tests.
+    pub fn global_beacon_pulses_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<
+        'world,
+        [u8; 32],
+        iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+    > {
+        &mut self.global_beacon_pulses
+    }
+
     #[cfg(any(test, feature = "app_api"))]
     /// Mutable peer storage accessor used exclusively by tests and API scaffolding.
     pub fn peers_mut_for_testing(&mut self) -> &mut CellBlock<'world, Peers> {
@@ -20136,13 +20002,6 @@ impl<'world> WorldBlock<'world> {
     /// Mutable asset storage accessor used exclusively by tests and API scaffolding.
     pub fn assets_mut_for_testing(&mut self) -> &mut StorageBlock<'world, AssetId, AssetValue> {
         &mut self.assets
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Mutable VRF epoch storage accessor used only by historical fixtures.
-    pub fn vrf_epochs_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
-        &mut self.vrf_epochs
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Mutable pin-manifest registry accessor used by tests that need committed SoraFS state.
@@ -20248,6 +20107,7 @@ impl<'world> WorldBlock<'world> {
             domain_endorsements_by_domain,
             domains,
             domains_by_owner,
+            kaigi_relay_registry,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -20479,7 +20339,6 @@ impl<'world> WorldBlock<'world> {
             global_beacon_latest_pulse,
             global_beacon_pulses,
             global_beacon_pulse_slots,
-            vrf_epochs,
             merge_hint_roots,
             merge_global_state_root,
             // Always drop at the block level.
@@ -20641,7 +20500,6 @@ impl<'world> WorldBlock<'world> {
         global_beacon_pulse_slots.commit();
         merge_global_state_root.commit();
         merge_hint_roots.commit();
-        vrf_epochs.commit();
         oracle_provider_stats.commit();
         oracle_disputes.commit();
         oracle_changes.commit();
@@ -20726,6 +20584,7 @@ impl<'world> WorldBlock<'world> {
         opaque_uaids.commit();
         domains.commit();
         domains_by_owner.commit();
+        kaigi_relay_registry.commit();
         peers.commit();
         parameters.commit();
     }
@@ -22299,6 +22158,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domain_endorsements_by_domain,
             domains,
             domains_by_owner,
+            kaigi_relay_registry,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -22529,7 +22389,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             global_beacon_latest_pulse,
             global_beacon_pulses,
             global_beacon_pulse_slots,
-            vrf_epochs,
             consensus_evidence,
             external_event_sink,
             mut external_event_buf,
@@ -22739,7 +22598,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         global_beacon_latest_pulse.apply();
         global_beacon_pulses.apply();
         global_beacon_pulse_slots.apply();
-        vrf_epochs.apply();
         tx_sequences.apply();
         oracle_disputes.apply();
         oracle_changes.apply();
@@ -22824,6 +22682,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         opaque_uaids.apply();
         domains.apply();
         domains_by_owner.apply();
+        kaigi_relay_registry.apply();
         peers.apply();
         parameters.apply();
         #[cfg(feature = "telemetry")]
@@ -23297,6 +23156,21 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 .map(EventBox::Data),
         );
         self.internal_event_buf.extend(shared_events);
+    }
+    /// Publish data events to native trigger processing without exposing them
+    /// through the externally retained event buffer.
+    ///
+    /// This deliberately reuses [`Self::emit_events`] so directory indexes and
+    /// telemetry observe exactly the same event stream. The newly appended
+    /// external projection is then discarded while the shared internal events
+    /// remain available to trigger matching.
+    pub(crate) fn emit_internal_events<I: IntoIterator<Item = T>, T: Into<DataEvent>>(
+        &mut self,
+        world_events: I,
+    ) {
+        let external_len = self.external_event_buf.len();
+        self.emit_events(world_events);
+        self.external_event_buf.truncate(external_len);
     }
     /// Emit an asset event with authoritative persisted domain routing context.
     pub(crate) fn emit_asset_event(&mut self, event: AssetEvent) {
@@ -25120,6 +24994,13 @@ impl State {
         &self.telemetry
     }
     pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut self.world)
+            .map_err(|error| format!("failed to rebuild Kaigi relay registry: {error}"))?;
+        let nexus = self.nexus_snapshot();
+        let world = self.world_view_with_nexus(&nexus);
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
+            .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
+        drop(world);
         self.world
             .rebuild_asset_definition_alias_indexes()
             .map_err(|error| {
@@ -26676,7 +26557,6 @@ impl State {
             .max(1);
         let current_epoch = sb._curr_block.height().get().saturating_sub(1) / epoch_length;
         sb.activate_due_public_lane_validators(current_epoch);
-        sb.clear_expired_vrf_public_lane_jails(current_epoch);
         // Height-trigger: open/close referenda at scheduled heights
         let now_h = sb._curr_block.height().get();
         let mut due_parliament_certificates = Vec::new();
@@ -27861,27 +27741,12 @@ impl State {
         let interval = TimeInterval::new(since, length);
         let event = TimeEvent { interval };
         let current_block_height = block_header.height().get();
-        let key_height = "__registered_block_height".parse::<Name>().ok();
+        let current_block_time_ms =
+            u64::try_from(block_header.creation_time().as_millis()).unwrap_or(u64::MAX);
         let world = self.world_view();
-        world
-            .triggers()
-            .time_triggers()
-            .iter()
-            .filter(|(_, action)| trigger_is_enabled(action.metadata()))
-            .any(|(_, action)| {
-                let mut count = action.filter.count_matches(&event);
-                if let Repeats::Exactly(repeats) = action.repeats {
-                    count = std::cmp::min(repeats, count);
-                }
-                if count == 0 {
-                    return false;
-                }
-                let registered_height = key_height
-                    .as_ref()
-                    .and_then(|key| action.metadata().get(key))
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                registered_height.is_some_and(|height| height != current_block_height)
-            })
+        world.triggers().time_triggers().iter().any(|(_, action)| {
+            time_trigger_action_is_due(action, &event, current_block_height, current_block_time_ms)
+        })
     }
     /// Latest committed block hash derived from the block hash journal.
     ///
@@ -29522,11 +29387,28 @@ impl State {
         lane_id: LaneId,
         block_height: u64,
     ) -> Result<[u8; 32], crate::beacon::GlobalThresholdBeaconError> {
-        let pulse = crate::beacon::verified_latest_global_threshold_beacon_pulse_v1(
+        let pulse = match crate::beacon::verified_latest_global_threshold_beacon_pulse_v1(
             world,
             network_id,
             block_height.saturating_sub(1),
-        )?;
+        ) {
+            Ok(pulse) => pulse,
+            #[cfg(test)]
+            Err(_)
+                if world.global_beacon_key_sessions().iter().next().is_none()
+                    && world.global_beacon_active_session().iter().next().is_none()
+                    && world.global_beacon_pulses().iter().next().is_none()
+                    && world.global_beacon_latest_pulse().iter().next().is_none() =>
+            {
+                return Ok(Self::lane_relay_committee_seed_for_fixture(
+                    network_id,
+                    dataspace_id,
+                    lane_id,
+                    block_height,
+                ));
+            }
+            Err(error) => return Err(error),
+        };
         Ok(crate::beacon::global_threshold_beacon_lane_relay_seed_v1(
             &pulse,
             block_height,
@@ -38933,6 +38815,24 @@ impl State {
                 .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))
         }
     }
+    fn ensure_emergency_fast_restored_catalogs_match(
+        restored: &iroha_config::parameters::actual::Nexus,
+        requested: &iroha_config::parameters::actual::Nexus,
+    ) -> Result<(), LaneLifecycleError> {
+        if requested.lane_catalog != restored.lane_catalog {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
+                "emergency Fast configuration differs from the restored runtime lane catalog"
+                    .to_owned(),
+            ));
+        }
+        if requested.dataspace_catalog != restored.dataspace_catalog {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
+                "emergency Fast configuration differs from the restored runtime dataspace catalog"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
     /// Install Nexus configuration sourced from this process's validated startup configuration.
     ///
     /// Unlike [`Self::set_nexus`], this is the single boundary allowed to establish the immutable
@@ -38948,13 +38848,7 @@ impl State {
         mut nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
         if self.kura.emergency_fast_startup_enabled() && self.nexus_runtime_restored_from_snapshot {
-            let restored_catalog = self.nexus.get_mut().lane_catalog.clone();
-            if nexus.lane_catalog != restored_catalog {
-                return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
-                    "emergency Fast configuration differs from the restored runtime lane catalog"
-                        .to_owned(),
-                ));
-            }
+            Self::ensure_emergency_fast_restored_catalogs_match(self.nexus.get_mut(), &nexus)?;
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             *self.nexus.get_mut() = nexus;
@@ -39589,6 +39483,16 @@ impl State {
                 }
             };
         let is_stale_dataspace_permission = |permission: &Permission| {
+            if let Ok(permission) =
+                iroha_executor_data_model::permission::query::CanReadRestrictedDataspace::try_from(
+                    permission,
+                )
+            {
+                return !dataspace_ids.contains(&permission.dataspace);
+            }
+            if let Ok(permission) = iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit::try_from(permission) {
+                return !dataspace_ids.contains(&permission.account_dataspace);
+            }
             if let Ok(permission) =
                 iroha_executor_data_model::permission::account::CanResolveAccountAlias::try_from(
                     permission,
@@ -44835,18 +44739,29 @@ impl ValidatedSccpRegistryV1 {
         wire.validate()
             .map_err(|error| format!("invalid SCCP registry: {error}"))?;
         for route in wire.lanes.iter().flat_map(|lane| &lane.routes) {
-            let verifying_key = match route.destination {
+            let verifying_key_is_well_formed = match route.destination {
                 iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(deployment) => {
-                    deployment.verifying_key
+                    iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                        &deployment.verifying_key,
+                    )
                 }
                 iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(deployment) => {
-                    deployment.verifying_key
+                    iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                        &deployment.verifying_key,
+                    )
                 }
                 iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(deployment) => {
-                    deployment.verifying_key
+                    iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                        &deployment.verifying_key,
+                    )
+                }
+                iroha_data_model::bridge::SccpDestinationDeploymentV1::Ton(deployment) => {
+                    iroha_sccp::sccp_groth16_bls12381_verifying_key_is_well_formed_v1(
+                        &deployment.verifying_key,
+                    )
                 }
             };
-            if !iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(&verifying_key) {
+            if !verifying_key_is_well_formed {
                 return Err(format!(
                     "invalid SCCP registry: route revision {} contains a non-curve, infinity, or non-subgroup Groth16 key point",
                     route.revision
@@ -45457,6 +45372,26 @@ pub fn compute_zk_consensus_policy_hash(
     );
     zk_policy_put_u32(
         &mut h,
+        "sccp.max_ed25519_signature_checks_per_transaction",
+        sccp.max_ed25519_signature_checks_per_transaction.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "sccp.max_ed25519_signature_checks_per_block",
+        sccp.max_ed25519_signature_checks_per_block.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "sccp.max_ed25519_validator_key_checks_per_transaction",
+        sccp.max_ed25519_validator_key_checks_per_transaction.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "sccp.max_ed25519_validator_key_checks_per_block",
+        sccp.max_ed25519_validator_key_checks_per_block.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
         "sccp.max_bn254_pairing_checks_per_transaction",
         sccp.max_bn254_pairing_checks_per_transaction.get(),
     );
@@ -45464,6 +45399,16 @@ pub fn compute_zk_consensus_policy_hash(
         &mut h,
         "sccp.max_bn254_pairing_checks_per_block",
         sccp.max_bn254_pairing_checks_per_block.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "sccp.max_bls12_381_pairing_checks_per_transaction",
+        sccp.max_bls12_381_pairing_checks_per_transaction.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "sccp.max_bls12_381_pairing_checks_per_block",
+        sccp.max_bls12_381_pairing_checks_per_block.get(),
     );
     zk_policy_put_usize(&mut h, "ballot_history_cap", zk_config.ballot_history_cap);
     zk_policy_put_usize(&mut h, "preverify_max_bytes", zk_config.preverify_max_bytes);
@@ -46592,6 +46537,8 @@ impl<'state> StateBlock<'state> {
             query_ledger_time_ms: self.query_ledger_time_ms,
             #[cfg(feature = "telemetry")]
             telemetry: self.telemetry,
+            public_lane_staking_status_overlay:
+                crate::sumeragi::status::begin_public_lane_staking_status_overlay(),
             _curr_block: self._curr_block,
             #[cfg(feature = "zk-preverify")]
             zk_dedup: &mut self.zk_dedup,
@@ -48944,12 +48891,7 @@ impl<'state> StateBlock<'state> {
                     "committed v2 authority differs from the exact context at height {height}"
                 )));
             }
-            crate::sumeragi::v2_npos::validate_candidate_records(
-                &context,
-                self.state_ref,
-                block.as_ref().npos_consensus_effects(),
-            )
-            .map_err(|error| {
+            crate::sumeragi::v2_npos::validate_candidate_context(&context).map_err(|error| {
                 MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                     "committed v2 block carries invalid NPoS consensus effects: {error}"
                 ))
@@ -50580,8 +50522,21 @@ impl<'state> StateBlock<'state> {
                     return acc;
                 }
                 let Some(action) = self.world.triggers.time_triggers().get(trg_id).cloned() else {
+                    suppress_remaining.insert(trg_id.clone());
                     return acc;
                 };
+                // `matched` contains IDs, not stable action references. Revalidate
+                // after every preceding callback because one may disable, deplete,
+                // or replace a later ID before its turn.
+                if !time_trigger_action_is_due(
+                    &action,
+                    &time_event,
+                    current_block_height,
+                    current_block_time_ms,
+                ) {
+                    suppress_remaining.insert(trg_id.clone());
+                    return acc;
+                }
                 let (entrypoint, result) =
                     self.execute_time_trigger(trg_id, &action, &time_event, invocation_index);
                 let entrypoint_hash = entrypoint.hash_as_entrypoint();
@@ -50612,12 +50567,156 @@ impl<'state> StateBlock<'state> {
                         );
                     }
                 }
+                if !self
+                    .world
+                    .triggers
+                    .time_triggers()
+                    .get(trg_id)
+                    .is_some_and(|current| {
+                        trigger_was_registered_before_block(
+                            current.metadata(),
+                            current_block_height,
+                        )
+                    })
+                {
+                    suppress_remaining.insert(trg_id.clone());
+                }
                 acc.0.push(entrypoint);
                 acc.1.push(entrypoint_hash);
                 acc.2.push(result);
                 acc
             },
         )
+    }
+    /// Execute deterministic pipeline callbacks in independent rollback boundaries.
+    ///
+    /// A user callback failure must not invalidate the consensus block that produced
+    /// the event. Failed callbacks are disabled in a fresh transaction after their
+    /// partial effects are discarded, while healthy callbacks remain applied.
+    pub(crate) fn execute_pipeline_triggers_isolated(
+        &mut self,
+        events: impl IntoIterator<Item = PipelineEventBox>,
+    ) -> Vec<(TriggerId, TransactionResultInner)> {
+        let mut next_step_index = 0_u32;
+        let mut outcomes = Vec::new();
+
+        for pipeline_event in events {
+            let matched: Vec<_> = self
+                .world
+                .triggers
+                .match_pipeline_event(&pipeline_event, self._curr_block.height().get())
+                .collect();
+            for trg_id in matched {
+                if self.gas_limit_per_block != 0
+                    && self.gas_used_in_block >= self.gas_limit_per_block
+                {
+                    warn!(
+                        gas_used = self.gas_used_in_block,
+                        gas_limit = self.gas_limit_per_block,
+                        "pipeline trigger gas budget exhausted for block"
+                    );
+                    return outcomes;
+                }
+                let Some(action) = self
+                    .world
+                    .triggers
+                    .pipeline_triggers()
+                    .get(&trg_id)
+                    .cloned()
+                else {
+                    continue;
+                };
+                // `matched` is an ID snapshot. A preceding callback can replace,
+                // disable, deplete, or remove a later ID; skip that stale match
+                // before opening any rollback side channel or state transaction.
+                if !pipeline_trigger_action_matches(
+                    &action,
+                    &pipeline_event,
+                    self._curr_block.height().get(),
+                ) {
+                    continue;
+                }
+                let authority = action.authority().clone();
+                #[cfg(feature = "zk-preverify")]
+                let zk_dedup_checkpoint = self.zk_dedup.clone();
+                let witness_overlay = crate::sumeragi::witness::begin_exec_witness_overlay();
+                let mut transaction = self.transaction();
+                let result =
+                    transaction.execute_pipeline_trigger(&trg_id, &pipeline_event, next_step_index);
+                let gas_used = transaction.last_tx_gas_used;
+                match result {
+                    Ok(steps) if steps.is_empty() => {
+                        // A use-time revalidation miss is a skip, not an executed
+                        // callback. Never publish an empty fragment or witness if
+                        // a future caller reaches this defensive inner guard.
+                        drop(transaction);
+                        drop(witness_overlay);
+                        #[cfg(feature = "zk-preverify")]
+                        {
+                            self.zk_dedup = zk_dedup_checkpoint;
+                        }
+                    }
+                    Ok(steps) => {
+                        let advance = u32::try_from(steps.len().max(1)).unwrap_or(u32::MAX);
+                        next_step_index = next_step_index.saturating_add(advance);
+                        transaction.apply();
+                        witness_overlay.commit();
+                        self.gas_used_in_block = self.gas_used_in_block.saturating_add(gas_used);
+                        outcomes.push((trg_id, Ok(steps)));
+                    }
+                    Err(reason) => {
+                        // Roll back the WSV overlay and every callback-local side channel before
+                        // applying the deterministic quarantine record.
+                        drop(transaction);
+                        drop(witness_overlay);
+                        #[cfg(feature = "zk-preverify")]
+                        {
+                            self.zk_dedup = zk_dedup_checkpoint;
+                        }
+                        self.gas_used_in_block = self.gas_used_in_block.saturating_add(gas_used);
+                        let entrypoint_hash = TimeTriggerEntrypoint {
+                            id: trg_id.clone(),
+                            instructions: ConstVec::new_empty().into(),
+                            authority,
+                        }
+                        .hash_as_entrypoint();
+                        let failure_event = TriggerCompletedEvent::new(
+                            trg_id.clone(),
+                            entrypoint_hash,
+                            next_step_index,
+                            TriggerCompletedOutcome::Failure(reason.to_string()),
+                        );
+                        let mut quarantine = self.transaction();
+                        let enabled_key = TRIGGER_ENABLED_METADATA_KEY
+                            .parse::<Name>()
+                            .expect("trigger enabled metadata key must be valid");
+                        let disabled = quarantine
+                            .world
+                            .triggers
+                            .inspect_by_id_mut(&trg_id, |action| {
+                                action
+                                    .metadata_mut()
+                                    .insert(enabled_key.clone(), Json::from(false));
+                            })
+                            .is_some();
+                        quarantine
+                            .world
+                            .external_event_buf
+                            .push(failure_event.into());
+                        quarantine.apply();
+                        warn!(
+                            trigger_id = %trg_id,
+                            disabled,
+                            reason = ?reason,
+                            "pipeline trigger failed; partial effects rolled back and trigger disabled"
+                        );
+                        next_step_index = next_step_index.saturating_add(1);
+                        outcomes.push((trg_id, Err(reason)));
+                    }
+                }
+            }
+        }
+        outcomes
     }
     fn time_trigger_nft_seq_base(block_height: u64, invocation_index: usize) -> u64 {
         let height_part = u32::try_from(block_height).unwrap_or(u32::MAX) as u128;
@@ -50639,8 +50738,8 @@ impl<'state> StateBlock<'state> {
     ) -> (TimeTriggerEntrypoint, TransactionResultInner) {
         let nft_seq_base =
             Self::time_trigger_nft_seq_base(self._curr_block.height().get(), invocation_index);
-        let current_block_height = self._curr_block.height().get();
         let mut transaction = self.transaction();
+        let action_generation = transaction.world.triggers.registration_generation(trg_id);
         transaction.seed_time_trigger_invocation_call_hash(
             trg_id,
             action.authority(),
@@ -50678,27 +50777,11 @@ impl<'state> StateBlock<'state> {
             .world
             .triggers
             .set_time_trigger_retry_state(trg_id, None);
-        let registered_in_current_block = transaction
-            .world
-            .triggers
-            .time_triggers()
-            .get(trg_id)
-            .and_then(|action| {
-                let key = "__registered_block_height".parse::<Name>().ok()?;
-                action
-                    .metadata()
-                    .get(&key)
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok())
-            })
-            .is_some_and(|height| height == current_block_height);
         // A trigger body may unregister and re-register the same id, for example
         // subscription billing scheduling its next charge. The fresh action has
         // its own repeat budget and must not be consumed by this invocation.
-        if !registered_in_current_block {
-            transaction
-                .world
-                .triggers
-                .decrease_repeats([trg_id].into_iter());
+        if transaction.world.triggers.registration_generation(trg_id) == action_generation {
+            transaction.decrease_trigger_repeats_and_cleanup(trg_id);
         }
         transaction.apply();
         (entrypoint, Ok(trigger_sequence))
@@ -56398,10 +56481,28 @@ impl StateTransaction<'_, '_> {
             "BLS signer contributions"
         );
         enforce_limit!(
+            ed25519_signature_checks,
+            limits.max_ed25519_signature_checks_per_transaction,
+            limits.max_ed25519_signature_checks_per_block,
+            "Ed25519 signature checks"
+        );
+        enforce_limit!(
+            ed25519_validator_key_checks,
+            limits.max_ed25519_validator_key_checks_per_transaction,
+            limits.max_ed25519_validator_key_checks_per_block,
+            "Ed25519 validator-key checks"
+        );
+        enforce_limit!(
             bn254_pairing_checks,
             limits.max_bn254_pairing_checks_per_transaction,
             limits.max_bn254_pairing_checks_per_block,
             "BN254 pairing checks"
+        );
+        enforce_limit!(
+            bls12_381_pairing_checks,
+            limits.max_bls12_381_pairing_checks_per_transaction,
+            limits.max_bls12_381_pairing_checks_per_block,
+            "BLS12-381 pairing checks"
         );
         self.sccp_verifier_work_in_tx = transaction_after;
         self.sccp_verifier_work_after_block = block_after;
@@ -57003,6 +57104,7 @@ impl StateTransaction<'_, '_> {
             current_lane_id,
             #[cfg(feature = "telemetry")]
             telemetry,
+            public_lane_staking_status_overlay,
             ..
         } = self;
         if let Some(pending) = pending_lane_lifecycle {
@@ -57112,6 +57214,7 @@ impl StateTransaction<'_, '_> {
         committed_topology.apply();
         block_hashes.apply();
         world.apply();
+        public_lane_staking_status_overlay.commit();
     }
     /// Get and cache the `NumericSpec` for an asset definition within this transaction.
     /// Fetch the numeric specification for a given asset definition.
@@ -57192,6 +57295,19 @@ impl StateTransaction<'_, '_> {
         self.last_logo_present = Some((def_id.clone(), present));
         Ok(present)
     }
+    /// Consume one finite trigger repetition and revoke every capability tied to
+    /// the trigger id when that consumption removes the trigger.
+    fn decrease_trigger_repeats_and_cleanup(&mut self, id: &TriggerId) -> bool {
+        let removed = self.world.triggers.decrease_repeats([id].into_iter());
+        if !removed.is_empty() {
+            let removed_ids = removed.iter().cloned().collect();
+            crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions_for_ids(
+                self,
+                &removed_ids,
+            );
+        }
+        removed.contains(id)
+    }
     /// Execute a called trigger, staging its state changes.
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
@@ -57203,15 +57319,24 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         event: &ExecuteTriggerEvent,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        if id != event.trigger_id() {
+            return Err(ValidationFail::NotPermitted(
+                "execute-trigger event ID does not match the requested trigger".to_owned(),
+            )
+            .into());
+        }
         if self.tx_call_hash.is_none() {
             self.seed_trigger_call_hash(event);
         }
+        let permission_granted =
+            self.can_execute_trigger_for(event.authority(), event.trigger_id());
+        let action_generation = self.world.triggers.registration_generation(id);
         let (executable, action_authority) = {
             let action = self
                 .world
                 .triggers
                 .by_call_triggers()
-                .get(event.trigger_id())
+                .get(id)
                 .ok_or_else(|| FindError::Trigger(id.clone()))
                 .map_err(Error::from)
                 .map_err(ValidationFail::from)?;
@@ -57234,6 +57359,22 @@ impl StateTransaction<'_, '_> {
                     ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
                 );
             }
+            let mut filter_event = event.clone();
+            if permission_granted {
+                filter_event.authority = action.authority().clone();
+            }
+            if !action.filter.matches(&filter_event) {
+                return Err(ValidationFail::NotPermitted(
+                    "trigger cannot be executed manually: filter mismatch".to_owned(),
+                )
+                .into());
+            }
+            if action.authority() != event.authority() && !permission_granted {
+                return Err(ValidationFail::NotPermitted(
+                    "trigger cannot be executed manually: not permitted".to_owned(),
+                )
+                .into());
+            }
             (action.executable().clone(), action.authority().clone())
         };
         // Execute the trigger entrypoint and collect its step.
@@ -57253,8 +57394,11 @@ impl StateTransaction<'_, '_> {
         // have succeeded. A denied callback must leave no observable event in a retained
         // transaction overlay.
         self.world.external_event_buf.push(event.clone().into());
-        // Decrease repeats and prune depleted triggers.
-        self.world.triggers.decrease_repeats([id].into_iter());
+        // Decrease only the incarnation that was invoked. Its body or a chained
+        // callback may have replaced the same ID with a fresh trigger.
+        if self.world.triggers.registration_generation(id) == action_generation {
+            self.decrease_trigger_repeats_and_cleanup(id);
+        }
         Ok(step)
     }
     /// Execute deterministic pipeline triggers, staging their state changes.
@@ -57267,43 +57411,61 @@ impl StateTransaction<'_, '_> {
             let matched: Vec<_> = self
                 .world
                 .triggers
-                .match_pipeline_event(&pipeline_event)
-                .map(|(id, _)| id)
+                .match_pipeline_event(&pipeline_event, self._curr_block.height().get())
                 .collect();
             for trg_id in matched {
-                let Some(action) = self
-                    .world
-                    .triggers
-                    .pipeline_triggers()
-                    .get(&trg_id)
-                    .cloned()
-                else {
-                    continue;
-                };
-                if !trigger_is_enabled(action.metadata()) || action.repeats.is_depleted() {
-                    continue;
-                }
                 let step_index = u32::try_from(steps.len()).unwrap_or(u32::MAX);
-                let step = self.execute_trigger(
+                steps.extend(self.execute_pipeline_trigger(
                     &trg_id,
-                    action.authority(),
-                    action.executable(),
-                    EventBox::Pipeline(pipeline_event.clone()),
+                    &pipeline_event,
                     step_index,
-                    None,
-                )?;
-                self.world.triggers.decrease_repeats([&trg_id].into_iter());
-                let chained = self.execute_data_triggers_dfs_from(
-                    action.authority(),
-                    step_index.saturating_add(1),
-                )?;
-                steps.push(DataTriggerStep {
-                    id: trg_id,
-                    instructions: step,
-                });
-                steps.extend(chained);
+                )?);
             }
         }
+        Ok(steps)
+    }
+    /// Execute one pipeline trigger inside the caller's transaction boundary.
+    fn execute_pipeline_trigger(
+        &mut self,
+        trg_id: &TriggerId,
+        pipeline_event: &PipelineEventBox,
+        step_index: u32,
+    ) -> TransactionResultInner {
+        let action_generation = self.world.triggers.registration_generation(trg_id);
+        let Some(action) = self.world.triggers.pipeline_triggers().get(trg_id).cloned() else {
+            return Ok(Vec::new());
+        };
+        // Matching takes an ID snapshot before callbacks run. A preceding callback
+        // may replace a later ID, so revalidate the freshly loaded action and never
+        // execute an incarnation registered by this block.
+        if !pipeline_trigger_action_matches(
+            &action,
+            pipeline_event,
+            self._curr_block.height().get(),
+        ) {
+            return Ok(Vec::new());
+        }
+        let step = self.execute_trigger(
+            trg_id,
+            action.authority(),
+            action.executable(),
+            EventBox::Pipeline(pipeline_event.clone()),
+            step_index,
+            None,
+        )?;
+        // The body may replace its own id. Do not debit the freshly registered
+        // incarnation for an invocation of the prior action.
+        if self.world.triggers.registration_generation(trg_id) == action_generation {
+            self.decrease_trigger_repeats_and_cleanup(trg_id);
+        }
+        let chained =
+            self.execute_data_triggers_dfs_from(action.authority(), step_index.saturating_add(1))?;
+        let mut steps = Vec::with_capacity(chained.len().saturating_add(1));
+        steps.push(DataTriggerStep {
+            id: trg_id.clone(),
+            instructions: step,
+        });
+        steps.extend(chained);
         Ok(steps)
     }
     /// Perform a depth-first traversal of the trigger execution path, staging state changes.
@@ -57336,18 +57498,27 @@ impl StateTransaction<'_, '_> {
         // Keeping the counter wider than the on-chain limit makes the boundary
         // deterministic in debug and release builds instead of relying on
         // wrapping or saturating arithmetic.
-        let mut stack: Vec<(EventBox, TriggerId, u16)> = self
+        let mut stack: Vec<(EventBox, TriggerId, u64, u16)> = self
             .capture_data_events()
             .into_iter()
             // Preserve the order of the matched triggers
             .rev()
-            .map(|(e, t)| (e, t, 1))
+            .map(|(e, t, generation)| (e, t, generation, 1))
             .collect();
         let mut steps = Vec::new();
-        while let Some((event, trg_id, depth)) = stack.pop() {
+        while let Some((event, trg_id, matched_generation, depth)) = stack.pop() {
             let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());
             if max_depth < depth {
                 return Err(TriggerExecutionFail::MaxDepthExceeded.into());
+            }
+            let current_generation = self.world.triggers.registration_generation(&trg_id);
+            if current_generation != matched_generation {
+                // A prior callback replaced this ID after the event was matched.
+                // Do not resolve, remove, execute, or debit the replacement.
+                stack.retain(|(_, pending_id, pending_generation, _)| {
+                    pending_id != &trg_id || *pending_generation != matched_generation
+                });
+                continue;
             }
             let (executable, trigger_authority) = {
                 let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
@@ -57377,6 +57548,19 @@ impl StateTransaction<'_, '_> {
                 if !trigger_is_enabled(action.metadata()) {
                     continue;
                 }
+                let event_still_matches = match &event {
+                    EventBox::Data(data_event) => {
+                        data_trigger_action_matches(action, data_event.as_ref())
+                    }
+                    _ => false,
+                };
+                if !event_still_matches {
+                    // The current action no longer accepts the captured event.
+                    stack.retain(|(_, pending_id, pending_generation, _)| {
+                        pending_id != &trg_id || *pending_generation != matched_generation
+                    });
+                    continue;
+                }
                 (action.executable().clone(), action.authority().clone())
             };
             let step_index =
@@ -57389,8 +57573,14 @@ impl StateTransaction<'_, '_> {
                 step_index,
                 None,
             )?;
-            let depleted = self.world.triggers.decrease_repeats([&trg_id].into_iter());
-            stack.retain(|(_, trg_id, _)| !depleted.contains(trg_id));
+            let same_incarnation =
+                self.world.triggers.registration_generation(&trg_id) == matched_generation;
+            let depleted = same_incarnation && self.decrease_trigger_repeats_and_cleanup(&trg_id);
+            if depleted || !same_incarnation {
+                stack.retain(|(_, pending_id, pending_generation, _)| {
+                    pending_id != &trg_id || *pending_generation != matched_generation
+                });
+            }
             let step = DataTriggerStep {
                 id: trg_id,
                 instructions: step,
@@ -57403,7 +57593,7 @@ impl StateTransaction<'_, '_> {
                 .capture_data_events()
                 .into_iter()
                 .rev()
-                .map(|(e, t)| (e, t, next_depth));
+                .map(|(e, t, generation)| (e, t, generation, next_depth));
             stack.extend(next_items);
         }
         Ok(steps)
@@ -57412,19 +57602,17 @@ impl StateTransaction<'_, '_> {
     ///
     /// Events are returned as [`EventBox`] values so downstream consumers observe the full
     /// trigger union (not just data-event representatives).
-    fn capture_data_events(&mut self) -> Vec<(EventBox, TriggerId)> {
+    fn capture_data_events(&mut self) -> Vec<(EventBox, TriggerId, u64)> {
         let drained = core::mem::take(&mut self.world.internal_event_buf);
         let mut matches = Vec::new();
         for event in &drained {
             for (trg_id, action) in self.world.triggers.data_triggers().iter() {
-                if !trigger_is_enabled(action.metadata()) {
-                    continue;
-                }
-                if action.filter.matches(event) {
+                if data_trigger_action_matches(action, event.as_ref()) {
                     // Preserve emission order so every matching event in a batch
                     // produces its own trigger execution.
                     let shared = SharedDataEvent::from_arc(Arc::clone(event));
-                    matches.push((EventBox::Data(shared), trg_id.clone()));
+                    let generation = self.world.triggers.registration_generation(trg_id);
+                    matches.push((EventBox::Data(shared), trg_id.clone(), generation));
                 }
             }
         }
@@ -58585,11 +58773,9 @@ impl StateTransaction<'_, '_> {
     }
     fn build_permission_summary(&mut self, account: &AccountId) -> AccountPermissionSummary {
         let world = &self.world;
-        let dataspace_catalog = &self.nexus.dataspace_catalog;
-        let now_ms = self.block_unix_timestamp_ms();
         let mut summary = AccountPermissionSummary::default();
         let mut merge_permission = |permission: &Permission| {
-            summary.apply_grant(world, dataspace_catalog, account, permission, now_ms);
+            summary.apply_grant(permission);
         };
         if let Some(perms) = world.account_permissions.get(account) {
             for permission in perms {
@@ -58624,9 +58810,7 @@ impl StateTransaction<'_, '_> {
     }
     /// Fast check: does `caller` have `CanRegisterTrigger{authority}` for `owner`?
     pub fn can_register_trigger_for(&mut self, caller: &AccountId, owner: &AccountId) -> bool {
-        let set = self.cached_reg_trigger_authorities(caller);
-        set.iter()
-            .any(|authority| authority.subject_id() == owner.subject_id())
+        self.cached_reg_trigger_authorities(caller).contains(owner)
     }
     /// Fast check: does `caller` have `CanExecuteTrigger{trigger_id}` for `id`?
     pub fn can_execute_trigger_for(&mut self, caller: &AccountId, id: &TriggerId) -> bool {

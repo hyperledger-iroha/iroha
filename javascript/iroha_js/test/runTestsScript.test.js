@@ -71,10 +71,10 @@ test("package test scripts use deterministic explicit discovery", () => {
 
   assert.equal(
     packageJson.scripts.test,
-    "npm run build:native && node ./scripts/run-tests.mjs",
+    "npm run build:native && node ./scripts/run-test-profile.mjs unit",
   );
   assert.equal(
     packageJson.scripts["test:dist"],
-    "npm run build:dist && node ./scripts/run-tests.mjs",
+    "npm run build:dist && node ./scripts/run-test-profile.mjs unit",
   );
 });

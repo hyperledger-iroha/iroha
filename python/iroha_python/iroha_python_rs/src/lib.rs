@@ -138,7 +138,8 @@ use iroha_data_model::{
     },
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
-        TransactionBuilder as ModelTransactionBuilder, TransactionEntrypoint, TransactionPayload,
+        TransactionAdmissionIntent, TransactionBuilder as ModelTransactionBuilder,
+        TransactionEntrypoint, TransactionPayload,
         error::TransactionRejectionReason,
         executable::{
             ContractArgumentRecord, ContractInvocation, MAX_CONTRACT_ARGUMENT_RECORD_BYTES,
@@ -286,8 +287,8 @@ fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
         ));
     }
     if !algorithm
-        .chars()
-        .all(|ch| ch.is_ascii() && !ch.is_ascii_control())
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(PyValueError::new_err(format!(
             "unsupported crypto algorithm `{algorithm}`"
@@ -300,7 +301,7 @@ fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
     let compact = normalized
         .chars()
         .map(|ch| match ch {
-            '_' | ' ' | '.' => '-',
+            '_' => '-',
             _ => ch,
         })
         .collect::<String>();
@@ -8213,23 +8214,30 @@ mod tests {
         );
     }
     #[test]
-    fn transaction_builder_keeps_legacy_instruction_encoding_unless_batch_is_selected() {
+    fn transaction_builder_uses_queue_plan_admission_and_instruction_carrier_by_default() {
         ensure_python();
         let authority = canonical_i105_from_seed(0x42);
-        let mut legacy = TransactionBuilder::new(
+        let mut instruction_builder = TransactionBuilder::new(
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
         )
-        .expect("legacy builder constructs");
-        legacy
-            .add_instruction(&batch_test_instruction("legacy"))
+        .expect("instruction builder constructs");
+        instruction_builder
+            .add_instruction(&batch_test_instruction("instruction"))
             .expect("instruction");
-        let legacy_model = legacy.to_model_builder();
-        let legacy_executable = &legacy_model.payload().instructions;
-        assert!(matches!(legacy_executable, Executable::Instructions(_)));
+        let instruction_model = instruction_builder.to_model_builder();
         assert_eq!(
-            &norito::codec::Encode::encode(legacy_executable)[..4],
+            instruction_model.payload().admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced
+        );
+        let instruction_executable = &instruction_model.payload().instructions;
+        assert!(matches!(
+            instruction_executable,
+            Executable::Instructions(_)
+        ));
+        assert_eq!(
+            &norito::codec::Encode::encode(instruction_executable)[..4],
             &0_u32.to_le_bytes()
         );
         let mut explicit = TransactionBuilder::new(
@@ -10956,7 +10964,8 @@ impl TransactionBuilder {
             self.network_id,
             self.authority.clone(),
             self.fee_payment.clone(),
-        );
+        )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
         if let Some(creation_time) = self.creation_time {
             builder.set_creation_time(creation_time);
         }
@@ -13191,10 +13200,8 @@ struct PythonPreparedOnboardingContextV1 {
 #[norito(deny_unknown_fields)]
 struct PythonAccountFaucetClaimV1 {
     account_id: String,
-    #[norito(default)]
-    pow_anchor_height: Option<u64>,
-    #[norito(default)]
-    pow_nonce_hex: Option<String>,
+    pow_anchor_height: u64,
+    pow_nonce_hex: String,
 }
 
 #[derive(Clone, Debug, JsonDeserialize)]
@@ -13287,15 +13294,21 @@ fn verify_python_prepared_faucet_context_v1(
     }
     let account_id =
         parse_exact_i105_account_id(&context.account_id, "prepared faucet account_id")?;
-    if let Some(nonce) = context.claim.pow_nonce_hex.as_deref()
-        && (nonce.is_empty()
-            || nonce.len() % 2 != 0
-            || !nonce
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    if context.claim.pow_anchor_height == 0 {
+        return Err(PyValueError::new_err(
+            "prepared faucet proof anchor height must be a positive u64",
+        ));
+    }
+    let nonce = context.claim.pow_nonce_hex.as_str();
+    if nonce.is_empty()
+        || nonce.len() > 64
+        || nonce.len() % 2 != 0
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(PyValueError::new_err(
-            "prepared faucet proof nonce is not canonical lowercase hexadecimal",
+            "prepared faucet proof nonce must be 1..32 bytes of canonical lowercase hexadecimal",
         ));
     }
     use norito::codec::Encode as _;

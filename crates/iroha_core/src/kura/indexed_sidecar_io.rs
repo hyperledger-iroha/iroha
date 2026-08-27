@@ -10,6 +10,12 @@ impl Kura {
         &self,
         sidecar: PipelineRecoverySidecar,
     ) -> PipelineSidecarEnqueueResult {
+        if self.emergency_fast_startup_enabled() {
+            return PipelineSidecarEnqueueResult::RejectedEmergencyFast;
+        }
+        if self.durable_mutation_authorized().is_err() {
+            return PipelineSidecarEnqueueResult::RejectedUnauthorized;
+        }
         if self.prune_blocks_sidecar_enqueue() {
             return PipelineSidecarEnqueueResult::RejectedPruneRecovery;
         }
@@ -35,6 +41,13 @@ impl Kura {
         PipelineSidecarEnqueueResult::Enqueued { queue_depth }
     }
     fn flush_pipeline_sidecars(&self) -> usize {
+        if let Err(error) = self.durable_mutation_authorized() {
+            iroha_logger::warn!(
+                ?error,
+                "refusing queued pipeline sidecar mutation while Kura output is unauthorized"
+            );
+            return 0;
+        }
         let sidecars = {
             let mut queue = self.pipeline_sidecar_queue.lock();
             if queue.is_empty() {
@@ -69,6 +82,12 @@ impl Kura {
         snapshot: FastpqProofSnapshot,
         mut cancelled: impl FnMut() -> bool,
     ) -> FastpqProofEnqueueResult {
+        if self.emergency_fast_startup_enabled() {
+            return FastpqProofEnqueueResult::RejectedEmergencyFast;
+        }
+        if self.durable_mutation_authorized().is_err() {
+            return FastpqProofEnqueueResult::RejectedUnauthorized;
+        }
         if self.prune_blocks_sidecar_enqueue() {
             return FastpqProofEnqueueResult::RejectedPruneRecovery;
         }
@@ -143,6 +162,14 @@ impl Kura {
     }
     fn flush_fastpq_proof_snapshots(&self) -> usize {
         let telemetry = FastpqProofSidecarTelemetry;
+        if let Err(error) = self.durable_mutation_authorized() {
+            iroha_logger::warn!(
+                ?error,
+                "refusing queued FASTPQ sidecar mutation while Kura output is unauthorized"
+            );
+            telemetry.set_queue_depth(self.fastpq_proof_queue.lock().len());
+            return 0;
+        }
         let snapshots = {
             let mut queue = self.fastpq_proof_queue.lock();
             if queue.is_empty() {
@@ -266,12 +293,7 @@ impl Kura {
             }
             let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
             let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-            let json_sidecar_path = dir.join(format!("block_{}.json", sidecar.height));
-            let before_bytes = match Self::sidecar_tracked_bytes(
-                &data_path,
-                &index_path,
-                Some(&json_sidecar_path),
-            ) {
+            let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                 Ok(bytes) => Some(bytes),
                 Err(err) => {
                     iroha_logger::warn!(
@@ -284,40 +306,29 @@ impl Kura {
             };
             let fsync_mode = self.sidecar_fsync_mode();
             let accounting_mutation = self.begin_total_disk_usage_mutation();
-            let wrote_norito = match sidecar.encode_framed() {
-                Ok(buf) => Self::append_indexed_sidecar(
-                    &data_path,
-                    &index_path,
-                    sidecar.height,
-                    &buf,
-                    "pipeline sidecar",
-                    fsync_mode,
-                    None,
-                ),
+            match sidecar.encode_framed() {
+                Ok(buf) => {
+                    Self::append_indexed_sidecar(
+                        &data_path,
+                        &index_path,
+                        sidecar.height,
+                        &buf,
+                        "pipeline sidecar",
+                        fsync_mode,
+                        None,
+                    );
+                }
                 Err(err) => {
                     iroha_logger::warn!(
                         ?err,
                         height = sidecar.height,
                         "failed to encode pipeline metadata"
                     );
-                    false
-                }
-            };
-            if wrote_norito {
-                if json_sidecar_path.exists()
-                    && let Err(e) = std::fs::remove_file(&json_sidecar_path)
-                {
-                    iroha_logger::debug!(
-                        ?e,
-                        ?json_sidecar_path,
-                        "failed to remove JSON pipeline sidecar"
-                    );
                 }
             }
             let mut accounting_complete = before_bytes.is_some();
             if let Some(before_bytes) = before_bytes {
-                match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path))
-                {
+                match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                     Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                     Err(err) => {
                         accounting_complete = false;
@@ -371,7 +382,6 @@ impl Kura {
         }
         let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-        let json_sidecar_path = dir.join(format!("block_{height}.json"));
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let Some(mut sidecar) = self.read_pipeline_sidecar(
             height,
@@ -420,18 +430,17 @@ impl Kura {
         if added == 0 {
             return FastpqProofWriteResult::Written;
         }
-        let before_bytes =
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path)) {
-                Ok(bytes) => Some(bytes),
-                Err(err) => {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?dir,
-                        "failed to measure pipeline sidecar bytes before FASTPQ proof write"
-                    );
-                    None
-                }
-            };
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    ?dir,
+                    "failed to measure pipeline sidecar bytes before FASTPQ proof write"
+                );
+                None
+            }
+        };
         let payload = match sidecar.encode_framed() {
             Ok(payload) => payload,
             Err(err) => {
@@ -449,19 +458,9 @@ impl Kura {
             None,
         );
         if wrote {
-            if json_sidecar_path.exists()
-                && let Err(err) = std::fs::remove_file(&json_sidecar_path)
-            {
-                iroha_logger::debug!(
-                    ?err,
-                    ?json_sidecar_path,
-                    "failed to remove JSON pipeline sidecar after FASTPQ proof update"
-                );
-            }
             let mut accounting_complete = before_bytes.is_some();
             if let Some(before_bytes) = before_bytes {
-                match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path))
-                {
+                match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                     Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                     Err(err) => {
                         accounting_complete = false;
@@ -3941,13 +3940,14 @@ impl Kura {
         let index_path = dir.join(index_file);
         let entry_byte_limit =
             u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES).unwrap_or(u64::MAX);
+        let recover = !self.emergency_fast_startup_enabled();
         Self::read_indexed_sidecar_from_paths_with_recovery_and_limit(
             height,
             &data_path,
             &index_path,
             decoder,
             kind,
-            true,
+            recover,
             entry_byte_limit,
         )
     }

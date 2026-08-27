@@ -30,7 +30,7 @@ public interface AndroidKeystoreBackend extends KeystoreBackend {
   String name();
 
   @Override
-  Optional<KeyAttestation> attestation(String alias);
+  Optional<KeyAttestation> attestation(String alias) throws KeyManagementException;
 
   /**
    * Factory that resolves to the platform implementation when running on Android, or returns an empty

@@ -85,7 +85,6 @@ handshake counters and quota-aware telemetry:
 - `soranet_handshake_throttled_total`
 - `soranet_handshake_capacity_reject_total`
 - `soranet_handshake_throttled_remote_quota_total`
-- `soranet_handshake_throttled_descriptor_quota_total`
 - `soranet_handshake_throttled_cooldown_total`
 - `soranet_handshake_pow_difficulty`
 - `soranet_abuse_remote_cooldowns`
@@ -106,10 +105,11 @@ The report prints the observed counters and suggests whether to increase
 `max_circuits_per_client` (within the configured `max_active_circuits` global
 corridor) or lower the cooldown based on the ratios it observes. Global circuit
 capacity failures remain fail-closed rather than allocating another remote
-tracker or circuit-registry entry. The quota-specific
-metrics expose how many throttles were caused by per-remote and per-descriptor
-limits, while the `soranet_abuse_*` gauges surface the number of active
-cooldowns in effect. Combine these with the compliance spool, where each
+tracker or circuit-registry entry. The quota-specific metrics expose throttles
+caused by per-remote limits, while the corresponding `soranet_abuse_*` gauge
+surfaces the number of active cooldowns in effect. The retired per-descriptor
+counter and gauge remain at zero for telemetry compatibility because the
+descriptor is relay-static. Combine these with the compliance spool, where each
 `handshake_rejected` entry now includes an optional `throttle` object describing
 the enforced scope, cooldown, burst limit, and observation window for downstream
 analytics.

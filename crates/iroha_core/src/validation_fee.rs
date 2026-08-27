@@ -16,6 +16,7 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     governance::types::ProposalKind,
+    hijiri::{HijiriAccountRiskV1, HijiriParametersV1, Q16},
     isi::{
         InstructionBox, TransferAssetBatch, TransferBox,
         governance::{
@@ -33,6 +34,7 @@ use iroha_data_model::{
     prelude::*,
     transaction::{Executable, ExecutableBatchItem, SignedTransaction},
     validation_fee::{
+        VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
         VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
         VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
         VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeChargingMode,
@@ -418,6 +420,8 @@ fn quantity_from_policy_minor_units(
 enum ValidationFeeAdmissionError {
     MalformedPolicyRegistryParameter,
     InvalidPolicyRegistry(String),
+    MalformedHijiriParameters,
+    InvalidHijiriParameters(String),
     InvalidPolicyInvariant(&'static str),
     WrongPolicyNetwork {
         expected: String,
@@ -559,6 +563,10 @@ enum ValidationFeeAdmissionError {
         expected_hash_hex: String,
         observed_hash_hex: String,
     },
+    WrongMultisigFeeMarkerHijiriFeeQuoteHash {
+        expected_hash_hex: Option<String>,
+        observed_hash_hex: Option<String>,
+    },
     ConflictingMultisigFeeCoordinate {
         context_index: usize,
     },
@@ -589,6 +597,13 @@ enum ValidationFeeAdmissionError {
         expected_hash_hex: String,
         observed_hash_hex: String,
     },
+    MissingHijiriFeeQuoteHashMetadata,
+    UnexpectedHijiriFeeQuoteHashMetadata,
+    MalformedHijiriFeeQuoteHashMetadata,
+    WrongHijiriFeeQuoteHashMetadata {
+        expected_hash_hex: String,
+        observed_hash_hex: String,
+    },
 }
 impl fmt::Display for ValidationFeeAdmissionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -598,6 +613,12 @@ impl fmt::Display for ValidationFeeAdmissionError {
             }
             Self::InvalidPolicyRegistry(reason) => {
                 write!(f, "validation-fee policy registry is invalid: {reason}")
+            }
+            Self::MalformedHijiriParameters => {
+                write!(f, "Hijiri parameter is malformed")
+            }
+            Self::InvalidHijiriParameters(reason) => {
+                write!(f, "Hijiri parameter is invalid: {reason}")
             }
             Self::InvalidPolicyInvariant(reason) => {
                 write!(f, "validation-fee policy is invalid: {reason}")
@@ -860,6 +881,15 @@ impl fmt::Display for ValidationFeeAdmissionError {
                 f,
                 "wrong multisig validation-fee marker policy hash: expected {expected_hash_hex}, observed {observed_hash_hex}"
             ),
+            Self::WrongMultisigFeeMarkerHijiriFeeQuoteHash {
+                expected_hash_hex,
+                observed_hash_hex,
+            } => write!(
+                f,
+                "wrong multisig validation-fee marker Hijiri quote hash: expected {}, observed {}",
+                expected_hash_hex.as_deref().unwrap_or("-"),
+                observed_hash_hex.as_deref().unwrap_or("-")
+            ),
             Self::ConflictingMultisigFeeCoordinate { context_index } => write!(
                 f,
                 "transaction metadata and signed multisig validation-fee marker disagree in context {context_index}"
@@ -921,6 +951,27 @@ impl fmt::Display for ValidationFeeAdmissionError {
             } => write!(
                 f,
                 "wrong signed validation-fee policy hash: expected {expected_hash_hex}, observed {observed_hash_hex}"
+            ),
+            Self::MissingHijiriFeeQuoteHashMetadata => {
+                write!(
+                    f,
+                    "missing signed validation-fee Hijiri quote hash metadata"
+                )
+            }
+            Self::UnexpectedHijiriFeeQuoteHashMetadata => write!(
+                f,
+                "signed validation-fee Hijiri quote hash metadata is present while Hijiri pricing is inactive"
+            ),
+            Self::MalformedHijiriFeeQuoteHashMetadata => write!(
+                f,
+                "signed validation-fee Hijiri quote hash metadata is malformed"
+            ),
+            Self::WrongHijiriFeeQuoteHashMetadata {
+                expected_hash_hex,
+                observed_hash_hex,
+            } => write!(
+                f,
+                "wrong signed validation-fee Hijiri quote hash: expected {expected_hash_hex}, observed {observed_hash_hex}"
             ),
         }
     }
@@ -1002,11 +1053,16 @@ pub(crate) fn enforce_validation_fee_admission(
     let Some(policy) = active_policy(state_transaction)? else {
         return Ok(None);
     };
-    let credited_minor_units = enforce_policy_with_credit(tx, &policy).map_err(|err| {
-        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-            "validation-fee admission rejected transaction: {err}"
-        )))
-    })?;
+    let hijiri = active_hijiri_parameters(state_transaction)?;
+    let resolve_account_risk =
+        |account_id: &AccountId| active_hijiri_account_risk(state_transaction, account_id);
+    let credited_minor_units =
+        enforce_policy_with_credit_and_hijiri(tx, &policy, hijiri.as_ref(), &resolve_account_risk)
+            .map_err(|err| {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                    "validation-fee admission rejected transaction: {err}"
+                )))
+            })?;
     let fee_asset_definition_id =
         policy_fee_asset_definition_id(&policy).map_err(admission_rejection)?;
     let collection =
@@ -1120,9 +1176,17 @@ pub(crate) fn enforce_deferred_instruction_list(
     let Some(policy) = active_policy(state_transaction)? else {
         return Ok(());
     };
-    let credited_minor_units =
-        enforce_deferred_policy_with_credit(authority, instructions, &policy)
-            .map_err(admission_rejection)?;
+    let hijiri = active_hijiri_parameters(state_transaction)?;
+    let resolve_account_risk =
+        |account_id: &AccountId| active_hijiri_account_risk(state_transaction, account_id);
+    let credited_minor_units = enforce_deferred_policy_with_credit_and_hijiri(
+        authority,
+        instructions,
+        &policy,
+        hijiri.as_ref(),
+        &resolve_account_risk,
+    )
+    .map_err(admission_rejection)?;
     let fee_asset_definition_id =
         policy_fee_asset_definition_id(&policy).map_err(admission_rejection)?;
     let mut collection = TransferCollection {
@@ -1821,6 +1885,13 @@ where
     Ok(())
 }
 #[cfg(test)]
+fn no_hijiri_account_risk(
+    _account_id: &AccountId,
+) -> Result<Option<HijiriAccountRiskV1>, ValidationFeeAdmissionError> {
+    Ok(None)
+}
+
+#[cfg(test)]
 fn enforce_deferred_policy(
     authority: &AccountId,
     instructions: &[InstructionBox],
@@ -1828,10 +1899,31 @@ fn enforce_deferred_policy(
 ) -> Result<(), ValidationFeeAdmissionError> {
     enforce_deferred_policy_with_credit(authority, instructions, policy).map(|_| ())
 }
+#[cfg(test)]
 fn enforce_deferred_policy_with_credit(
     authority: &AccountId,
     instructions: &[InstructionBox],
     policy: &ValidationFeePolicyV1,
+) -> Result<u64, ValidationFeeAdmissionError> {
+    enforce_deferred_policy_with_credit_and_hijiri(
+        authority,
+        instructions,
+        policy,
+        None,
+        &no_hijiri_account_risk,
+    )
+}
+fn enforce_deferred_policy_with_credit_and_hijiri(
+    authority: &AccountId,
+    instructions: &[InstructionBox],
+    policy: &ValidationFeePolicyV1,
+    hijiri: Option<&HijiriParametersV1>,
+    resolve_account_risk: &dyn Fn(
+        &AccountId,
+    ) -> Result<
+        Option<HijiriAccountRiskV1>,
+        ValidationFeeAdmissionError,
+    >,
 ) -> Result<u64, ValidationFeeAdmissionError> {
     let fee_asset_definition_id = policy_fee_asset_definition_id(policy)?;
     let treasury = policy_treasury_account_id(policy)?;
@@ -1856,10 +1948,13 @@ fn enforce_deferred_policy_with_credit(
     )?;
     let mut credited_minor_units = 0_u64;
     for (context_index, context) in transfer_collection.contexts.iter().enumerate() {
+        let resolved_hijiri =
+            resolve_hijiri_fee(hijiri, &context.execution_account_id, resolve_account_risk)?;
         let marker_fee_coordinate = multisig_marker_coordinate_for_context(
             context_index,
             context,
             policy,
+            resolved_hijiri.map(|resolved| resolved.quote_hash),
             &transfer_collection.multisig_fee_markers,
             &fee_asset_transfers,
         )?;
@@ -1873,6 +1968,7 @@ fn enforce_deferred_policy_with_credit(
             &fee_asset_transfers,
             marker_fee_coordinate,
             false,
+            resolved_hijiri.map(|resolved| resolved.multiplier),
         )?;
         if context_index == 0 {
             credited_minor_units = validated.credited_minor_units;
@@ -1885,6 +1981,88 @@ fn active_policy(
 ) -> Result<Option<ValidationFeePolicyV1>, TransactionRejectionReason> {
     let registry = validated_policy_registry(state_transaction)?;
     active_policy_from_validated_registry(registry.as_ref(), state_transaction)
+}
+
+fn active_hijiri_parameters(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<Option<HijiriParametersV1>, TransactionRejectionReason> {
+    let parameter_id = HijiriParametersV1::parameter_id();
+    let Some(custom) = state_transaction
+        .world
+        .parameters()
+        .custom()
+        .get(&parameter_id)
+    else {
+        return Ok(None);
+    };
+    match HijiriParametersV1::from_custom_parameter(custom) {
+        Ok(Some(parameters)) => Ok(Some(parameters)),
+        Ok(None) => Err(admission_rejection(
+            ValidationFeeAdmissionError::MalformedHijiriParameters,
+        )),
+        Err(iroha_data_model::hijiri::HijiriParametersError::MalformedPayload) => Err(
+            admission_rejection(ValidationFeeAdmissionError::MalformedHijiriParameters),
+        ),
+        Err(error) => Err(admission_rejection(
+            ValidationFeeAdmissionError::InvalidHijiriParameters(error.to_string()),
+        )),
+    }
+}
+
+fn active_hijiri_account_risk(
+    state_transaction: &StateTransaction<'_, '_>,
+    account_id: &AccountId,
+) -> Result<Option<HijiriAccountRiskV1>, ValidationFeeAdmissionError> {
+    let parameter_id = HijiriAccountRiskV1::parameter_id_for(account_id)
+        .map_err(|error| ValidationFeeAdmissionError::InvalidHijiriParameters(error.to_string()))?;
+    let Some(custom) = state_transaction
+        .world
+        .parameters()
+        .custom()
+        .get(&parameter_id)
+    else {
+        return Ok(None);
+    };
+    HijiriAccountRiskV1::from_custom_parameter(custom)
+        .map_err(|error| ValidationFeeAdmissionError::InvalidHijiriParameters(error.to_string()))?
+        .ok_or_else(|| {
+            ValidationFeeAdmissionError::InvalidHijiriParameters(
+                "account-risk record changed its reserved identity".to_owned(),
+            )
+        })
+        .map(Some)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedHijiriFee {
+    multiplier: Q16,
+    quote_hash: [u8; 32],
+}
+
+fn resolve_hijiri_fee(
+    parameters: Option<&HijiriParametersV1>,
+    account_id: &AccountId,
+    resolve_account_risk: &dyn Fn(
+        &AccountId,
+    ) -> Result<
+        Option<HijiriAccountRiskV1>,
+        ValidationFeeAdmissionError,
+    >,
+) -> Result<Option<ResolvedHijiriFee>, ValidationFeeAdmissionError> {
+    let Some(parameters) = parameters else {
+        return Ok(None);
+    };
+    let account_risk = resolve_account_risk(account_id)?;
+    let multiplier = parameters
+        .multiplier_for(account_id, account_risk.as_ref())
+        .map_err(|error| ValidationFeeAdmissionError::InvalidHijiriParameters(error.to_string()))?;
+    let quote_hash = parameters
+        .fee_quote_hash(account_id, account_risk.as_ref())
+        .map_err(|error| ValidationFeeAdmissionError::InvalidHijiriParameters(error.to_string()))?;
+    Ok(Some(ResolvedHijiriFee {
+        multiplier,
+        quote_hash,
+    }))
 }
 
 fn validated_policy_registry(
@@ -2811,9 +2989,23 @@ fn enforce_policy(
 /// Validate all signed fee coordinates and return only the credit whose transfer executes in the
 /// top-level transaction context. Nested multisig proposal contents are signed but deferred, so
 /// they are deliberately excluded until [`enforce_deferred_policy_with_credit`] runs them.
+#[cfg(test)]
 fn enforce_policy_with_credit(
     tx: &SignedTransaction,
     policy: &ValidationFeePolicyV1,
+) -> Result<u64, ValidationFeeAdmissionError> {
+    enforce_policy_with_credit_and_hijiri(tx, policy, None, &no_hijiri_account_risk)
+}
+fn enforce_policy_with_credit_and_hijiri(
+    tx: &SignedTransaction,
+    policy: &ValidationFeePolicyV1,
+    hijiri: Option<&HijiriParametersV1>,
+    resolve_account_risk: &dyn Fn(
+        &AccountId,
+    ) -> Result<
+        Option<HijiriAccountRiskV1>,
+        ValidationFeeAdmissionError,
+    >,
 ) -> Result<u64, ValidationFeeAdmissionError> {
     match policy.charging_mode {
         ValidationFeeChargingMode::Disabled => return Ok(0),
@@ -2829,9 +3021,6 @@ fn enforce_policy_with_credit(
         &fee_asset_definition_id,
     )?;
     let metadata_contains_validation_fee = has_validation_fee_metadata(tx.metadata());
-    if metadata_contains_validation_fee {
-        validate_policy_metadata(tx.metadata(), policy)?;
-    }
     let fee_coordinate = validation_fee_coordinate(tx.metadata())?;
     let explicit_fee_context_index = fee_coordinate
         .map(|coordinate| {
@@ -2840,7 +3029,16 @@ fn enforce_policy_with_credit(
         .transpose()?;
     let mut requires_policy_metadata = false;
     let mut credited_minor_units = 0_u64;
+    let mut top_level_hijiri_quote_hash = None;
     for (context_index, context) in transfer_collection.contexts.iter().enumerate() {
+        let resolved_hijiri =
+            resolve_hijiri_fee(hijiri, &context.execution_account_id, resolve_account_risk)?;
+        if context_index == 0 {
+            top_level_hijiri_quote_hash = resolved_hijiri.map(|resolved| resolved.quote_hash);
+            if metadata_contains_validation_fee {
+                validate_policy_metadata(tx.metadata(), policy, top_level_hijiri_quote_hash)?;
+            }
+        }
         let transaction_fee_coordinate = if explicit_fee_context_index == Some(context_index) {
             fee_coordinate
         } else {
@@ -2850,6 +3048,7 @@ fn enforce_policy_with_credit(
             context_index,
             context,
             policy,
+            resolved_hijiri.map(|resolved| resolved.quote_hash),
             &transfer_collection.multisig_fee_markers,
             &fee_asset_transfers,
         )?;
@@ -2872,6 +3071,7 @@ fn enforce_policy_with_credit(
             &fee_asset_transfers,
             context_fee_coordinate,
             false,
+            resolved_hijiri.map(|resolved| resolved.multiplier),
         )?;
         requires_policy_metadata |= validated.requires_policy_metadata;
         if context_index == 0 {
@@ -2879,7 +3079,7 @@ fn enforce_policy_with_credit(
         }
     }
     if requires_policy_metadata && !metadata_contains_validation_fee {
-        validate_policy_metadata(tx.metadata(), policy)?;
+        validate_policy_metadata(tx.metadata(), policy, top_level_hijiri_quote_hash)?;
     }
     Ok(credited_minor_units)
 }
@@ -2887,6 +3087,7 @@ fn multisig_marker_coordinate_for_context(
     context_index: usize,
     context: &TransferExecutionContext,
     policy: &ValidationFeePolicyV1,
+    expected_hijiri_fee_quote_hash: Option<[u8; 32]>,
     markers: &[MultisigFeeMarkerSummary],
     fee_asset_transfers: &[FeeAssetTransferSummary],
 ) -> Result<Option<FeeInstructionCoordinate>, ValidationFeeAdmissionError> {
@@ -2938,6 +3139,14 @@ fn multisig_marker_coordinate_for_context(
             },
         );
     }
+    if marker.hijiri_fee_quote_hash != expected_hijiri_fee_quote_hash {
+        return Err(
+            ValidationFeeAdmissionError::WrongMultisigFeeMarkerHijiriFeeQuoteHash {
+                expected_hash_hex: expected_hijiri_fee_quote_hash.map(hex::encode),
+                observed_hash_hex: marker.hijiri_fee_quote_hash.map(hex::encode),
+            },
+        );
+    }
     let instruction_index = usize::try_from(marker.instruction_index).map_err(|_| {
         ValidationFeeAdmissionError::MalformedMultisigFeeMarker {
             context_index,
@@ -2981,6 +3190,7 @@ fn enforce_context_policy(
     fee_asset_transfers: &[FeeAssetTransferSummary],
     fee_coordinate: Option<FeeInstructionCoordinate>,
     allow_implicit_context_fee: bool,
+    hijiri_multiplier: Option<Q16>,
 ) -> Result<ValidatedContextFee, ValidationFeeAdmissionError> {
     let mut qualifying_transfer_count = 0usize;
     let mut uncoordinated_fee_candidates = Vec::new();
@@ -3012,7 +3222,8 @@ fn enforce_context_policy(
             }
             return Ok(ValidatedContextFee::NONE);
         }
-        let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
+        let required_fee_minor_units =
+            required_fee_minor_units(qualifying_transfer_count, policy, hijiri_multiplier)?;
         if fee_transfer.amount_minor_units != required_fee_minor_units {
             return Err(ValidationFeeAdmissionError::WrongFeeAmount {
                 expected_minor_units: required_fee_minor_units,
@@ -3067,7 +3278,8 @@ fn enforce_context_policy(
         }
     }
     if uncoordinated_fee_candidates.is_empty() {
-        let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
+        let required_fee_minor_units =
+            required_fee_minor_units(qualifying_transfer_count, policy, hijiri_multiplier)?;
         return Err(ValidationFeeAdmissionError::MissingFee {
             required_minor_units: required_fee_minor_units,
         });
@@ -3077,7 +3289,8 @@ fn enforce_context_policy(
             count: uncoordinated_fee_candidates.len(),
         });
     }
-    let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
+    let required_fee_minor_units =
+        required_fee_minor_units(qualifying_transfer_count, policy, hijiri_multiplier)?;
     let fee_transfer = &uncoordinated_fee_candidates[0];
     if fee_transfer.amount_minor_units != required_fee_minor_units {
         return Err(ValidationFeeAdmissionError::WrongFeeAmount {
@@ -3173,16 +3386,22 @@ fn resolve_fee_coordinate_context(
 fn required_fee_minor_units(
     qualifying_transfer_count: usize,
     policy: &ValidationFeePolicyV1,
+    hijiri_multiplier: Option<Q16>,
 ) -> Result<u64, ValidationFeeAdmissionError> {
-    let per_transfer_minor_units =
+    let base_per_transfer_minor_units =
         quantity_to_minor_units(&policy.fee, policy.ds_scale, usize::MAX)
             .map_err(|_| ValidationFeeAdmissionError::RequiredFeeOverflow)?;
-    u64::try_from(
+    let aggregate_base_minor_units = u64::try_from(
         (qualifying_transfer_count as u128)
-            .checked_mul(u128::from(per_transfer_minor_units))
+            .checked_mul(u128::from(base_per_transfer_minor_units))
             .ok_or(ValidationFeeAdmissionError::RequiredFeeOverflow)?,
     )
-    .map_err(|_| ValidationFeeAdmissionError::RequiredFeeOverflow)
+    .map_err(|_| ValidationFeeAdmissionError::RequiredFeeOverflow)?;
+    hijiri_multiplier
+        .map_or(Some(aggregate_base_minor_units), |multiplier| {
+            multiplier.checked_mul_u64_ceil(aggregate_base_minor_units)
+        })
+        .ok_or(ValidationFeeAdmissionError::RequiredFeeOverflow)
 }
 fn validation_fee_coordinate(
     metadata: &Metadata,
@@ -3222,6 +3441,7 @@ fn validation_fee_coordinate(
 fn validate_policy_metadata(
     metadata: &Metadata,
     policy: &ValidationFeePolicyV1,
+    expected_hijiri_fee_quote_hash: Option<[u8; 32]>,
 ) -> Result<(), ValidationFeeAdmissionError> {
     let observed_version = metadata
         .get(VALIDATION_FEE_POLICY_VERSION_METADATA_KEY)
@@ -3250,6 +3470,31 @@ fn validate_policy_metadata(
             observed_hash_hex,
         });
     }
+    let observed_hijiri_hash = metadata.get(VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY);
+    match (expected_hijiri_fee_quote_hash, observed_hijiri_hash) {
+        (None, None) => {}
+        (None, Some(_)) => {
+            return Err(ValidationFeeAdmissionError::UnexpectedHijiriFeeQuoteHashMetadata);
+        }
+        (Some(_), None) => {
+            return Err(ValidationFeeAdmissionError::MissingHijiriFeeQuoteHashMetadata);
+        }
+        (Some(expected), Some(observed)) => {
+            let observed_hash_hex = observed
+                .try_into_any_norito::<String>()
+                .map_err(|_| ValidationFeeAdmissionError::MalformedHijiriFeeQuoteHashMetadata)?;
+            let observed_hash = decode_canonical_hash_hex(&observed_hash_hex)
+                .ok_or(ValidationFeeAdmissionError::MalformedHijiriFeeQuoteHashMetadata)?;
+            if observed_hash != expected {
+                return Err(
+                    ValidationFeeAdmissionError::WrongHijiriFeeQuoteHashMetadata {
+                        expected_hash_hex: hex::encode(expected),
+                        observed_hash_hex,
+                    },
+                );
+            }
+        }
+    }
     Ok(())
 }
 fn has_validation_fee_metadata(metadata: &Metadata) -> bool {
@@ -3258,6 +3503,9 @@ fn has_validation_fee_metadata(metadata: &Metadata) -> bool {
         .is_some()
         || metadata
             .get(VALIDATION_FEE_POLICY_HASH_METADATA_KEY)
+            .is_some()
+        || metadata
+            .get(VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY)
             .is_some()
         || metadata
             .get(VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY)
@@ -3749,6 +3997,7 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::kaigi::RecordKaigiUsage,
         iroha_data_model::isi::kaigi::SetKaigiRelayManifest,
         iroha_data_model::isi::kaigi::RegisterKaigiRelay,
+        iroha_data_model::isi::kaigi::UnregisterKaigiRelay,
         iroha_data_model::isi::kaigi::ReportKaigiRelayHealth,
         SetKeyValueBox,
         RemoveKeyValueBox,
@@ -4015,6 +4264,16 @@ fn decode_hash_hex(value: &str) -> Option<[u8; 32]> {
     let bytes = hex::decode(value).ok()?;
     bytes.try_into().ok()
 }
+fn decode_canonical_hash_hex(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    decode_hash_hex(value)
+}
 fn format_entry_index(entry_index: Option<usize>) -> String {
     entry_index.map_or_else(String::new, |entry_index| format!("/{entry_index}"))
 }
@@ -4032,6 +4291,7 @@ mod tests {
             time::{ExecutionTime, Schedule, TimeEventFilter},
         },
         governance::types::{GovernanceAttemptId, GovernanceCertificateId},
+        hijiri::{FeeMultiplierBand, HijiriAccountRiskV1, HijiriFeePolicy, Q16},
         isi::{
             InstructionBox, Transfer, TransferAssetBatchEntry,
             offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
@@ -4130,6 +4390,20 @@ mod tests {
             exemption_classes: Vec::new(),
             treasury_payout_binding: None,
         }
+    }
+    fn hijiri_parameters(default_account_risk: Q16) -> HijiriParametersV1 {
+        let fee_policy = HijiriFeePolicy::new(
+            vec![
+                FeeMultiplierBand::new(Q16::from_parts(0, 0x8000), Q16::ONE)
+                    .expect("low-risk fee band"),
+                FeeMultiplierBand::new(Q16::ONE, Q16::from_parts(2, 0))
+                    .expect("high-risk fee band"),
+            ],
+            Q16::from_parts(2, 0),
+        )
+        .expect("Hijiri fee policy");
+        HijiriParametersV1::try_new(1, None, fee_policy, default_account_risk)
+            .expect("Hijiri parameters")
     }
     fn xor_asset() -> AssetDefinitionId {
         asset_definition("xor")
@@ -5098,6 +5372,19 @@ mod tests {
         );
         metadata
     }
+    fn metadata_for_hijiri_fee_instruction(
+        policy: &ValidationFeePolicyV1,
+        hijiri_fee_quote_hash: [u8; 32],
+        instruction_index: usize,
+    ) -> Metadata {
+        let mut metadata = metadata_for_fee_instruction(policy, instruction_index);
+        metadata.insert(
+            Name::from_str(VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY)
+                .expect("metadata key"),
+            Json::new(hex::encode(hijiri_fee_quote_hash)),
+        );
+        metadata
+    }
     fn metadata_for_fee_instruction_coordinate(instruction_index: usize) -> Metadata {
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -5120,6 +5407,21 @@ mod tests {
     }
     fn with_multisig_fee_marker(
         policy: &ValidationFeePolicyV1,
+        instructions: Vec<InstructionBox>,
+        fee_instruction_index: usize,
+        fee_entry_index: Option<usize>,
+    ) -> Vec<InstructionBox> {
+        with_multisig_fee_marker_and_hijiri(
+            policy,
+            None,
+            instructions,
+            fee_instruction_index,
+            fee_entry_index,
+        )
+    }
+    fn with_multisig_fee_marker_and_hijiri(
+        policy: &ValidationFeePolicyV1,
+        hijiri_fee_quote_hash: Option<[u8; 32]>,
         mut instructions: Vec<InstructionBox>,
         fee_instruction_index: usize,
         fee_entry_index: Option<usize>,
@@ -5128,6 +5430,7 @@ mod tests {
             ValidationFeeMultisigMarkerV1::new(
                 policy.policy_version,
                 policy.policy_hash().expect("policy hash"),
+                hijiri_fee_quote_hash,
                 u64::try_from(fee_instruction_index).expect("instruction index fits u64"),
                 fee_entry_index.map(|index| u64::try_from(index).expect("entry index fits u64")),
             )
@@ -5524,7 +5827,7 @@ mod tests {
         use iroha_data_model::{
             isi::kaigi::{
                 CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
-                ReportKaigiRelayHealth, SetKaigiRelayManifest,
+                ReportKaigiRelayHealth, SetKaigiRelayManifest, UnregisterKaigiRelay,
             },
             kaigi::{KaigiId, KaigiRelayHealthStatus, KaigiRelayRegistration, NewKaigi},
         };
@@ -5593,6 +5896,10 @@ mod tests {
                     hpke_public_key: vec![1],
                     bandwidth_class: 1,
                 },
+            }
+            .into(),
+            UnregisterKaigiRelay {
+                relay_id: relay.clone(),
             }
             .into(),
             ReportKaigiRelayHealth {
@@ -5920,6 +6227,175 @@ mod tests {
         enforce_policy(&tx, &policy).expect("valid fee-bearing transaction");
     }
     #[test]
+    fn hijiri_account_risk_changes_the_exact_validation_fee() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let hijiri = hijiri_parameters(Q16::ONE);
+        let multiplier = hijiri
+            .multiplier_for(&user, None)
+            .expect("default multiplier");
+        let quote_hash = hijiri
+            .fee_quote_hash(&user, None)
+            .expect("default quote hash");
+        assert_eq!(
+            required_fee_minor_units(1, &policy, Some(multiplier)).expect("bounded Hijiri fee"),
+            20
+        );
+
+        let exact = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
+                transfer(&user, &fee_asset, minor_units(20), &treasury),
+            ],
+            metadata_for_hijiri_fee_instruction(&policy, quote_hash, 1),
+        );
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &exact,
+                &policy,
+                Some(&hijiri),
+                &no_hijiri_account_risk,
+            )
+            .expect("risk-adjusted fee validates"),
+            20
+        );
+
+        let stale_base_fee = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+            ],
+            metadata_for_hijiri_fee_instruction(&policy, quote_hash, 1),
+        );
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &stale_base_fee,
+                &policy,
+                Some(&hijiri),
+                &no_hijiri_account_risk,
+            ),
+            Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                expected_minor_units: 20,
+                observed_minor_units: 10,
+            })
+        );
+    }
+    #[test]
+    fn hijiri_explicit_low_risk_preserves_the_base_fee() {
+        let user = account(1);
+        let policy = policy(&account(3));
+        let hijiri = hijiri_parameters(Q16::ONE);
+        let account_risk = HijiriAccountRiskV1::try_new(user.clone(), 1, None, Q16::ZERO).unwrap();
+        let multiplier = hijiri
+            .multiplier_for(&user, Some(&account_risk))
+            .expect("explicit multiplier");
+        assert_eq!(
+            required_fee_minor_units(3, &policy, Some(multiplier)).expect("bounded Hijiri fee"),
+            30
+        );
+    }
+    #[test]
+    fn hijiri_quote_binding_rejects_same_fee_after_risk_record_appears() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let hijiri = hijiri_parameters(Q16::ZERO);
+        let stale_quote_hash = hijiri.fee_quote_hash(&user, None).unwrap();
+        let account_risk = HijiriAccountRiskV1::try_new(user.clone(), 1, None, Q16::ZERO).unwrap();
+        let expected_quote_hash = hijiri.fee_quote_hash(&user, Some(&account_risk)).unwrap();
+        assert_ne!(stale_quote_hash, expected_quote_hash);
+        let signed_before_record = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+            ],
+            metadata_for_hijiri_fee_instruction(&policy, stale_quote_hash, 1),
+        );
+        let risk_for_user =
+            |account_id: &AccountId| Ok((account_id == &user).then(|| account_risk.clone()));
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &signed_before_record,
+                &policy,
+                Some(&hijiri),
+                &risk_for_user,
+            ),
+            Err(
+                ValidationFeeAdmissionError::WrongHijiriFeeQuoteHashMetadata {
+                    expected_hash_hex: hex::encode(expected_quote_hash),
+                    observed_hash_hex: hex::encode(stale_quote_hash),
+                }
+            )
+        );
+    }
+    #[test]
+    fn hijiri_quote_binding_is_mandatory_and_canonical_only_while_active() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let hijiri = hijiri_parameters(Q16::ZERO);
+        let quote_hash = hijiri.fee_quote_hash(&user, None).unwrap();
+        let instructions = || {
+            vec![
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+            ]
+        };
+
+        let missing = tx(1, instructions(), metadata_for_fee_instruction(&policy, 1));
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &missing,
+                &policy,
+                Some(&hijiri),
+                &no_hijiri_account_risk,
+            ),
+            Err(ValidationFeeAdmissionError::MissingHijiriFeeQuoteHashMetadata)
+        );
+
+        let unexpected = tx(
+            1,
+            instructions(),
+            metadata_for_hijiri_fee_instruction(&policy, quote_hash, 1),
+        );
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &unexpected,
+                &policy,
+                None,
+                &no_hijiri_account_risk,
+            ),
+            Err(ValidationFeeAdmissionError::UnexpectedHijiriFeeQuoteHashMetadata)
+        );
+
+        let mut malformed_metadata = metadata_for_hijiri_fee_instruction(&policy, quote_hash, 1);
+        malformed_metadata.insert(
+            Name::from_str(VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY)
+                .expect("metadata key"),
+            Json::new(hex::encode_upper(quote_hash)),
+        );
+        let malformed = tx(1, instructions(), malformed_metadata);
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &malformed,
+                &policy,
+                Some(&hijiri),
+                &no_hijiri_account_risk,
+            ),
+            Err(ValidationFeeAdmissionError::MalformedHijiriFeeQuoteHashMetadata)
+        );
+    }
+    #[test]
     fn active_policy_rejects_raw_contract_and_ivm_executables_fail_closed() {
         let treasury = account(3);
         let policy = policy(&treasury);
@@ -6242,6 +6718,58 @@ mod tests {
         }
     }
     #[test]
+    fn deferred_multisig_marker_rejects_stale_hijiri_quote_with_same_fee() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let hijiri = hijiri_parameters(Q16::ZERO);
+        let stale_hash = hijiri.fee_quote_hash(&user, None).unwrap();
+        let account_risk = HijiriAccountRiskV1::try_new(user.clone(), 1, None, Q16::ZERO).unwrap();
+        let current_hash = hijiri.fee_quote_hash(&user, Some(&account_risk)).unwrap();
+        let instructions = |quote_hash| {
+            with_multisig_fee_marker_and_hijiri(
+                &policy,
+                Some(quote_hash),
+                vec![
+                    transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
+                    transfer(&user, &fee_asset, minor_units(10), &treasury),
+                ],
+                1,
+                None,
+            )
+        };
+        let resolve_risk =
+            |account_id: &AccountId| Ok((account_id == &user).then(|| account_risk.clone()));
+        assert_eq!(
+            enforce_deferred_policy_with_credit_and_hijiri(
+                &user,
+                &instructions(stale_hash),
+                &policy,
+                Some(&hijiri),
+                &resolve_risk,
+            ),
+            Err(
+                ValidationFeeAdmissionError::WrongMultisigFeeMarkerHijiriFeeQuoteHash {
+                    expected_hash_hex: Some(hex::encode(current_hash)),
+                    observed_hash_hex: Some(hex::encode(stale_hash)),
+                }
+            )
+        );
+        assert_eq!(
+            enforce_deferred_policy_with_credit_and_hijiri(
+                &user,
+                &instructions(current_hash),
+                &policy,
+                Some(&hijiri),
+                &resolve_risk,
+            )
+            .expect("current Hijiri marker must validate"),
+            10
+        );
+    }
+    #[test]
     fn deferred_multisig_marker_is_unique_policy_bound_and_batch_aware() {
         let user = account(1);
         let recipient = account(2);
@@ -6255,6 +6783,7 @@ mod tests {
             ValidationFeeMultisigMarkerV1::new(
                 policy.policy_version,
                 policy.policy_hash().expect("policy hash"),
+                None,
                 1,
                 None,
             )
@@ -6285,6 +6814,7 @@ mod tests {
             ValidationFeeMultisigMarkerV1::new(
                 policy.policy_version + 1,
                 policy.policy_hash().expect("policy hash"),
+                None,
                 1,
                 None,
             )
@@ -6302,7 +6832,7 @@ mod tests {
         let wrong_hash = vec![
             principal(),
             fee(),
-            ValidationFeeMultisigMarkerV1::new(policy.policy_version, [0x55; 32], 1, None)
+            ValidationFeeMultisigMarkerV1::new(policy.policy_version, [0x55; 32], None, 1, None)
                 .into_instruction(),
         ];
         assert_eq!(

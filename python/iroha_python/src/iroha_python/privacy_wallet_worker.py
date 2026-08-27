@@ -29,7 +29,7 @@ import threading
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import BinaryIO
+from typing import IO
 
 PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V1 = 1
 PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1 = 34 * 1_024 * 1_024
@@ -787,7 +787,7 @@ def _encode_frame(
     return struct.pack(">I", len(framed)) + framed
 
 
-def _read_exact(reader: BinaryIO, count: int) -> bytes:
+def _read_exact(reader: IO[bytes], count: int) -> bytes:
     chunks = bytearray()
     while len(chunks) < count:
         piece = reader.read(count - len(chunks))
@@ -799,7 +799,7 @@ def _read_exact(reader: BinaryIO, count: int) -> bytes:
 
 
 def _read_frame(
-    reader: BinaryIO, auth_key: bytes | bytearray
+    reader: IO[bytes], auth_key: bytes | bytearray
 ) -> tuple[PrivacyWalletWorkerCommandV1, int, bytes]:
     length = struct.unpack(">I", _read_exact(reader, 4))[0]
     if not 18 + _AUTH_TAG_BYTES_V1 <= length <= PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1:

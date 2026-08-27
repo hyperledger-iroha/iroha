@@ -29,6 +29,7 @@ use super::{
     v2::VerifiedHeightContext,
     v2_apply::{
         PostCarrierEvidenceRepairAuthorization, post_carrier_evidence_repair_authorizations,
+        retire_autonomous_lane_replica_with_queue_disposition,
         validate_historical_autonomous_lane_recovery_record,
     },
     v2_candidate::{
@@ -129,6 +130,8 @@ use crate::{
     state::{PendingQueuePlanAdmissionDisposition, State, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
+#[cfg(test)]
+use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
 use iroha_data_model::{
     block::{
         AutonomousLanePayloadEnvelopeV1, BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
@@ -653,6 +656,8 @@ pub(crate) struct V2LaneWorkLimits {
     native_session_capacity: NonZeroUsize,
     native_body_buckets_per_session: NonZeroUsize,
     native_source_capacity: NonZeroUsize,
+    /// Ordinary effect owners; one additional autonomous NewView progress
+    /// occurrence is reserved while such an occurrence is queued.
     effect_capacity: NonZeroUsize,
     relay_capacity: NonZeroUsize,
     merge_capacity: NonZeroUsize,
@@ -5405,14 +5410,56 @@ impl V2LaneWorkAdapter {
                     }
                 }
             }
-            super::v2_apply::retire_autonomous_lane_slot_and_release_reservations(
-                self.kura.as_ref(),
-                queue.as_ref(),
-                &retirement,
-                network_id,
-                epoch,
+            let process_generation = self
+                .autonomous_lifecycle_process_generation
+                .as_ref()
+                .ok_or_else(|| {
+                    V2LaneWorkError::InvalidContext(
+                        "losing retirement lacks the validator process generation".to_owned(),
+                    )
+                })?;
+            let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
+                payload.reservation_keys.iter(),
             )
-            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            .map_err(|reason| V2LaneWorkError::Persistence(reason.to_owned()))?;
+            let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+                self.context.id(),
+                descriptor.lane_block_height,
+                payload,
+                reservation_group,
+                &self.local_peer,
+            )
+            .map_err(|reason| V2LaneWorkError::Persistence(reason.to_owned()))?;
+            let cursor_read = self
+                .kura
+                .read_autonomous_lifecycle_cursor(payload, &binding, process_generation)
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            let cursor = cursor_read.cursor().cloned().ok_or_else(|| {
+                V2LaneWorkError::Persistence(
+                    "losing retirement has no completed signed lifecycle cursor".to_owned(),
+                )
+            })?;
+            let (_, local_actor) = cursor.binding().local_validator_identity();
+            if local_actor == cursor.binding().producer_actor_projection() {
+                super::v2_apply::retire_autonomous_lane_slot_and_release_reservations(
+                    self.kura.as_ref(),
+                    queue.as_ref(),
+                    &retirement,
+                    network_id,
+                    epoch,
+                )
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            } else {
+                retire_autonomous_lane_replica_with_queue_disposition(
+                    self.kura.as_ref(),
+                    queue.as_ref(),
+                    &retirement,
+                    cursor_read,
+                    network_id,
+                    epoch,
+                )
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            }
         }
         Ok(())
     }
@@ -6002,6 +6049,7 @@ impl V2LaneWorkAdapter {
             iroha_logger::error!(
                 %error,
                 height = self.context.height,
+                block = %block_hash,
                 "canonical carrier failed pending merge-sidecar retention"
             );
             return V2LaneIngressOutcome::Rejected;
@@ -6014,19 +6062,28 @@ impl V2LaneWorkAdapter {
             if winning_unanchored.insert(key, unanchored).is_some() {
                 iroha_logger::error!(
                     height = self.context.height,
-                    "canonical carrier contains duplicate autonomous lane slots"
+                    block = %block_hash,
+                    lane = %payload.origin_proposal.descriptor.lane_id.as_u32(),
+                    lane_block_height = payload.origin_proposal.descriptor.lane_block_height,
+                    "canonical carrier contains duplicate autonomous payload ownership"
                 );
                 return V2LaneIngressOutcome::Rejected;
             }
         }
-        if winning_unanchored.iter().any(|(key, payload)| {
+        if let Some((key, payload)) = winning_unanchored.iter().find(|(key, payload)| {
             self.pending_autonomous_anchor_payloads
                 .get(key)
-                .is_some_and(|pending| pending != payload)
+                .is_some_and(|pending| pending != *payload)
         }) {
             iroha_logger::error!(
                 height = self.context.height,
-                "canonical carrier conflicts with a pending autonomous lane owner"
+                block = %block_hash,
+                lane = %payload.origin_proposal.descriptor.lane_id.as_u32(),
+                lane_block_height = payload.origin_proposal.descriptor.lane_block_height,
+                pending_payloads = self.pending_autonomous_anchor_payloads.len(),
+                winning_payloads = winning_unanchored.len(),
+                key = ?key,
+                "canonical carrier conflicts with pending autonomous payload ownership"
             );
             return V2LaneIngressOutcome::Rejected;
         }
@@ -6040,6 +6097,7 @@ impl V2LaneWorkAdapter {
             iroha_logger::error!(
                 %error,
                 height = self.context.height,
+                block = %block_hash,
                 losing_payloads = losing_pending.len(),
                 "canonical carrier failed losing autonomous payload retirement"
             );
@@ -6053,9 +6111,11 @@ impl V2LaneWorkAdapter {
                 Some(_) => {
                     iroha_logger::error!(
                         height = self.context.height,
+                        block = %block_hash,
                         lane = %payload.origin_proposal.descriptor.lane_id.as_u32(),
                         lane_block_height = payload.origin_proposal.descriptor.lane_block_height,
-                        "canonical carrier conflicts with a retained autonomous payload"
+                        key = ?key,
+                        "canonical carrier conflicts with retained autonomous payload ownership"
                     );
                     return V2LaneIngressOutcome::Rejected;
                 }
@@ -12872,10 +12932,32 @@ impl V2LaneWorkAdapter {
         if !lane_work_effect_reply_routes_are_valid(effect) {
             return Err(LaneWorkEffectInsertionOutcome::Rejected);
         }
-        if self.effects.len() >= self.limits.effect_capacity.get() {
+        let ordinary_capacity = self.limits.effect_capacity.get();
+        let autonomous_new_view_progress = Self::is_autonomous_new_view_progress_effect(effect)
+            || self
+                .effects
+                .iter()
+                .any(Self::is_autonomous_new_view_progress_effect);
+        // Retain one bounded autonomous pacemaker occurrence beyond the
+        // ordinary lane-output bound. Without this reserve, a continuously
+        // full delivery queue can reject every due NewView fanout before it
+        // acquires retry ownership, permanently pinning the lane cursor.
+        let admission_capacity =
+            ordinary_capacity.saturating_add(usize::from(autonomous_new_view_progress));
+        if self.effects.len() >= admission_capacity {
             return Err(LaneWorkEffectInsertionOutcome::Rejected);
         }
         Ok(key)
+    }
+    fn is_autonomous_new_view_progress_effect(effect: &V2LaneWorkEffect) -> bool {
+        matches!(
+            effect,
+            V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneBlockNewViewVote(_)
+                    | BlockMessage::LaneBlockNewViewCertificate(_),
+                ..
+            }
+        )
     }
     fn push_effect_with_fresh_authorization<Authorization>(
         &mut self,
@@ -17799,6 +17881,15 @@ pub(super) mod tests {
                 .insert(record.public_key.to_string(), vec![id]);
         }
         world.peers = mv::cell::Cell::new(peers);
+        if matches!(mode, wire::ConsensusMode::Npos) {
+            let parameters = SumeragiNposParameters::default();
+            parameters
+                .validate()
+                .expect("default lane-work NPoS parameters must be valid");
+            let mut block = world.parameters.block();
+            block.set_parameter(Parameter::Custom(parameters.into_custom_parameter()));
+            block.commit();
+        }
         let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
             world,
             Arc::clone(&kura),
@@ -17806,19 +17897,11 @@ pub(super) mod tests {
             chain_id,
             network_id,
         ));
-        let mut npos_epoch_length = None;
-        if matches!(mode, wire::ConsensusMode::Npos) {
-            let parameters = iroha_data_model::parameter::system::SumeragiNposParameters::default();
-            parameters
-                .validate()
-                .expect("default lane-work NPoS parameters must be valid");
-            npos_epoch_length = Some(parameters.epoch_length_blocks().get());
-            let mut block = state.world.parameters.block();
-            block.set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                parameters.into_custom_parameter(),
-            ));
-            block.commit();
-        }
+        let npos_epoch_length = matches!(mode, wire::ConsensusMode::Npos).then(|| {
+            SumeragiNposParameters::default()
+                .epoch_length_blocks()
+                .get()
+        });
         let context_epoch = {
             let world = state.world_view();
             crate::sumeragi::epoch_for_height_from_world(&world, height, mode)
@@ -24766,34 +24849,6 @@ pub(super) mod tests {
             prepare_qc: certificate.prepare_qc.clone(),
             commit_qc: certificate.commit_qc.clone(),
         }
-    }
-    fn install_finalized_vrf_epoch(
-        adapter: &V2LaneWorkAdapter,
-        epoch: u64,
-        updated_at_height: u64,
-    ) {
-        let mut world = adapter.state.world.block();
-        world.vrf_epochs_mut_for_testing().insert(
-            epoch,
-            iroha_data_model::consensus::VrfEpochRecord {
-                epoch,
-                seed: adapter.context.leader_seed,
-                epoch_length: 2,
-                commit_deadline_offset: 0,
-                reveal_deadline_offset: 0,
-                roster_len: 0,
-                finalized: true,
-                updated_at_height,
-                participants: Vec::new(),
-                late_reveals: Vec::new(),
-                committed_no_reveal: Vec::new(),
-                no_participation: Vec::new(),
-                penalties_applied: false,
-                penalties_applied_at_height: None,
-                validator_election: None,
-            },
-        );
-        world.commit();
     }
     fn posted_sidecar_chunk(effect: &V2LaneWorkEffect) -> Option<&CertifiedMergeSidecarChunkV1> {
         match effect {

@@ -458,7 +458,7 @@ public sealed partial class ToriiClientTests
                 CanonicalVerifyingKeyTransactionPayload(
                     request,
                     wireNameOverride:
-                        "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey"),
+                        "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey"),
                 "requested verifying-key registry operation"
             ),
             (

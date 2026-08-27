@@ -53,7 +53,8 @@ use crate::{
     kura::{
         AutonomousLaneReservationEvidenceError, AutonomousLaneReservationEvidenceV1,
         AutonomousLaneRetirementQueueSnapshotPhaseV1, AutonomousLaneRetirementSnapshotEvidenceV1,
-        AutonomousLaneSlotRetirementV1, AutonomousLifecyclePendingCanonicalCarrierRecovery,
+        AutonomousLaneSlotRetirementV1, AutonomousLifecycleCursorRead,
+        AutonomousLifecyclePendingCanonicalCarrierRecovery,
         AutonomousLifecyclePendingTerminalOutcomeRecovery, CommitManifest,
         HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS, HistoricalAutonomousLaneRecoveryPersistOutcome,
         HistoricalAutonomousLaneRecoveryRecordV1, Kura, KuraV2CommitReceipt,
@@ -698,13 +699,12 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
 ) -> Result<usize, V2ReservationLifecycleError> {
     kura.persist_autonomous_lane_slot_retirement(retirement, expected_network_id, expected_epoch)?;
     let barrier = retirement.queue_release_barrier()?;
-    let replica_fifo_authorization = if let Some(replica_authorization) =
-        kura.authorize_autonomous_nonqueue_replica_claim_release(
+    let replica_fifo_authorization = if let Some(replica_authorization) = kura
+        .authorize_autonomous_nonqueue_replica_claim_release(
             retirement,
             expected_network_id,
             expected_epoch,
-        )?
-    {
+        )? {
         let fifo_authorization =
             queue.authenticate_autonomous_nonqueue_replica_fifo_ownership(replica_authorization)?;
         Some(kura.finalize_autonomous_nonqueue_replica_claim_release(
@@ -739,9 +739,7 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
             expected_network_id,
             expected_epoch,
         )?;
-    let completion = if let Some(replica_fifo_authorization) =
-        replica_fifo_authorization.as_ref()
-    {
+    let completion = if let Some(replica_fifo_authorization) = replica_fifo_authorization.as_ref() {
         queue.finalize_lane_reservation_release_barrier_with_replica_fifo_authorization(
             &barrier,
             finalization_authorization,
@@ -760,6 +758,64 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
     kura.complete_autonomous_lifecycle_release_terminal_outcome(terminal_evidence)?;
     drop(replica_fifo_authorization);
     Ok(finalized_reservations)
+}
+/// Close one replicated autonomous attempt without impersonating its producer's Queue owner.
+///
+/// Queue authenticates the exact signed observer cursor and retains a per-hash
+/// transition fence while Kura advances the already-retired attempt to its
+/// replica-specific terminal state. The authorization accepts only a complete
+/// ordinary FIFO replica or exhaustive Queue absence; partial or reservation-
+/// owning cuts remain fail-closed in Queue.
+pub(crate) fn retire_autonomous_lane_replica_with_queue_disposition(
+    kura: &Kura,
+    queue: &Queue,
+    retirement: &AutonomousLaneSlotRetirementV1,
+    cursor_read: AutonomousLifecycleCursorRead,
+    expected_network_id: iroha_data_model::NetworkId,
+    expected_epoch: u64,
+) -> Result<(), V2ReservationLifecycleError> {
+    let barrier = retirement.queue_release_barrier()?;
+    let authorization = queue
+        .authorize_autonomous_lane_replica_queue_disposition(&cursor_read, &barrier.ordered_keys)?;
+    kura.retire_autonomous_lane_slot_with_replica_queue_disposition(
+        retirement,
+        expected_network_id,
+        expected_epoch,
+        cursor_read,
+        authorization,
+    )?;
+    Ok(())
+}
+/// Receipt-bound startup form of replicated-custody terminalization.
+///
+/// Queue revalidates the still-quarantined reconciliation snapshot while
+/// holding its mutation locks, so unrelated replay owners do not force the
+/// observer to impersonate a producer or wait for ingress publication.
+pub(crate) fn recover_autonomous_lane_replica_with_queue_disposition(
+    kura: &Kura,
+    queue: &Queue,
+    retirement: &AutonomousLaneSlotRetirementV1,
+    cursor_read: AutonomousLifecycleCursorRead,
+    receipt: &LaneReservationStartupReconciliationReceipt,
+    snapshot: &LaneQueueReservationReconciliationSnapshotV1,
+    expected_network_id: iroha_data_model::NetworkId,
+    expected_epoch: u64,
+) -> Result<(), V2ReservationLifecycleError> {
+    let barrier = retirement.queue_release_barrier()?;
+    let authorization = queue.authorize_autonomous_lane_replica_queue_disposition_during_startup(
+        &cursor_read,
+        &barrier.ordered_keys,
+        receipt,
+        snapshot,
+    )?;
+    kura.retire_autonomous_lane_slot_with_replica_queue_disposition(
+        retirement,
+        expected_network_id,
+        expected_epoch,
+        cursor_read,
+        authorization,
+    )?;
+    Ok(())
 }
 include!("v2_apply/autonomous_recovery_types.rs");
 /// Revalidate the exact finalized proposal body before using envelope absence

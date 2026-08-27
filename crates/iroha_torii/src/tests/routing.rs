@@ -778,8 +778,6 @@ mod tests {
         assert!(super::sumeragi_npos_diagnostics(&zero_seed, &reducer).is_err());
         let invalid_windows = iroha_data_model::parameter::system::SumeragiNposParameters {
             epoch_length_blocks: NonZeroU64::new(10).expect("non-zero epoch length"),
-            vrf_commit_window_blocks: 8,
-            vrf_reveal_window_blocks: 4,
             ..Default::default()
         };
         assert!(super::sumeragi_npos_diagnostics(&invalid_windows, &reducer).is_err());

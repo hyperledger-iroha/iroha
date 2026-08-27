@@ -5,8 +5,8 @@ use ivm::zk_verify::batch_verify_open_envelopes;
 #[test]
 fn zk_open_batch_smoke() {
     // Build two identical envelopes that should verify successfully.
-    let params = h2::Params::new(1).unwrap();
-    let coeffs = vec![h2::PrimeField64::from(1u64)];
+    let params = h2::Params::new(2).unwrap();
+    let coeffs = vec![h2::PrimeField64::from(1u64), h2::PrimeField64::from(2u64)];
     let poly = h2::Polynomial::from_coeffs(coeffs);
     let mut transcript = h2::Transcript::new("smoke");
     let p_g = poly.commit(&params).unwrap();

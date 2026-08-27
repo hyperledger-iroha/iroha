@@ -758,61 +758,61 @@ macro_rules! define_builtin_query_registry {
 }
 define_builtin_query_registry! {
     ErasedIterQuery<crate::domain::Domain>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>",
+        => "iroha.query.v1::iterable::domain::Domain",
     ErasedIterQuery<crate::account::Account>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::account::model::Account>",
+        => "iroha.query.v1::iterable::account::Account",
     ErasedIterQuery<crate::account::AccountId>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::account::model::AccountId>",
+        => "iroha.query.v1::iterable::account::AccountId",
     ErasedIterQuery<crate::asset::value::Asset>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::asset::value::model::Asset>",
+        => "iroha.query.v1::iterable::asset::Asset",
     ErasedIterQuery<crate::asset::definition::AssetDefinition>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::asset::definition::model::AssetDefinition>",
+        => "iroha.query.v1::iterable::asset::AssetDefinition",
     ErasedIterQuery<crate::repo::RepoAgreement>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::repo::RepoAgreement>",
+        => "iroha.query.v1::iterable::repo::RepoAgreement",
     ErasedIterQuery<crate::nft::Nft>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::nft::model::Nft>",
+        => "iroha.query.v1::iterable::nft::Nft",
     ErasedIterQuery<crate::rwa::Rwa>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::rwa::Rwa>",
+        => "iroha.query.v1::iterable::rwa::Rwa",
     ErasedIterQuery<crate::role::Role>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::role::model::Role>",
+        => "iroha.query.v1::iterable::role::Role",
     ErasedIterQuery<crate::role::RoleId>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::role::model::RoleId>",
+        => "iroha.query.v1::iterable::role::RoleId",
     ErasedIterQuery<crate::peer::PeerId>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::peer::model::PeerId>",
+        => "iroha.query.v1::iterable::peer::PeerId",
     ErasedIterQuery<crate::trigger::TriggerId>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::trigger::model::model::TriggerId>",
+        => "iroha.query.v1::iterable::trigger::TriggerId",
     ErasedIterQuery<crate::trigger::Trigger>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::trigger::model::model::Trigger>",
+        => "iroha.query.v1::iterable::trigger::Trigger",
     ErasedIterQuery<CommittedTransaction>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::query::model::CommittedTransaction>",
+        => "iroha.query.v1::iterable::transaction::CommittedTransaction",
     ErasedIterQuery<crate::block::SignedBlock>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::block::model::SignedBlock>",
+        => "iroha.query.v1::iterable::block::SignedBlock",
     ErasedIterQuery<crate::block::BlockHeader>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::block::header::model::BlockHeader>",
+        => "iroha.query.v1::iterable::block::BlockHeader",
     ErasedIterQuery<crate::proof::ProofRecord>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::proof::ProofRecord>",
+        => "iroha.query.v1::iterable::proof::ProofRecord",
     ErasedIterQuery<crate::oracle::FeedConfig>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::oracle::FeedConfig>",
+        => "iroha.query.v1::iterable::oracle::FeedConfig",
     ErasedIterQuery<crate::events::data::oracle::FeedEventRecord>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::events::data::oracle::FeedEventRecord>",
+        => "iroha.query.v1::iterable::oracle::FeedEventRecord",
     ErasedIterQuery<crate::oracle::OracleProviderStatsRecord>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::oracle::OracleProviderStatsRecord>",
+        => "iroha.query.v1::iterable::oracle::OracleProviderStatsRecord",
     ErasedIterQuery<crate::oracle::OracleDispute>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::oracle::OracleDispute>",
+        => "iroha.query.v1::iterable::oracle::OracleDispute",
     ErasedIterQuery<crate::oracle::OracleChangeProposal>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::oracle::OracleChangeProposal>",
+        => "iroha.query.v1::iterable::oracle::OracleChangeProposal",
     ErasedIterQuery<crate::oracle::TwitterBindingRecord>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::oracle::TwitterBindingRecord>",
+        => "iroha.query.v1::iterable::oracle::TwitterBindingRecord",
     ErasedIterQuery<crate::oracle::DefiOracleAttestation>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::oracle::DefiOracleAttestation>",
+        => "iroha.query.v1::iterable::oracle::DefiOracleAttestation",
     ErasedIterQuery<crate::permission::Permission>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::permission::model::Permission>",
+        => "iroha.query.v1::iterable::permission::Permission",
     ErasedIterQuery<crate::escrow::AssetEscrowRecord>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::escrow::AssetEscrowRecord>",
+        => "iroha.query.v1::iterable::escrow::AssetEscrowRecord",
     ErasedIterQuery<crate::nexus::FeeSponsorProgram>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgram>",
+        => "iroha.query.v1::iterable::nexus::FeeSponsorProgram",
     ErasedIterQuery<crate::nexus::FeeSponsorProgramId>
-        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramId>",
+        => "iroha.query.v1::iterable::nexus::FeeSponsorProgramId",
 }
 /// Set the global query registry used to decode queries by stable wire identifier.
 ///

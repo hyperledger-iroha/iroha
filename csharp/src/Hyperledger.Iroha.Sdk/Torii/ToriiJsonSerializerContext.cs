@@ -8,6 +8,7 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(JsonNode))]
 [JsonSerializable(typeof(JsonObject))]
 [JsonSerializable(typeof(UnsignedTransactionPayload))]
+[JsonSerializable(typeof(FeeChargeKind))]
 [JsonSerializable(typeof(FeeChargeLimit))]
 [JsonSerializable(typeof(FeeSponsorProgramId))]
 [JsonSerializable(typeof(FeePaymentIntent))]

@@ -19,7 +19,6 @@ use std::{
 fn configured_difficulty_remains_static_after_repeated_failures() {
     let metrics = Arc::new(Metrics::new());
     let mut pow_cfg = PowConfig {
-        required: true,
         difficulty: 4,
         max_future_skew_secs: 120,
         min_ticket_ttl_secs: 30,
@@ -35,15 +34,8 @@ fn configured_difficulty_remains_static_after_repeated_failures() {
         Duration::from_secs(pow_cfg.max_future_skew_secs),
         Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
     );
-    let controls = DoSControls::new(
-        base,
-        &pow_cfg,
-        None,
-        None,
-        Arc::clone(&metrics),
-        RelayMode::Entry,
-    )
-    .expect("dos controls");
+    let controls = DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
+        .expect("dos controls");
     let remote: SocketAddr = "192.0.2.10:7447".parse().expect("valid socket");
     for _ in 0..16 {
         let attempt = controls
@@ -66,38 +58,23 @@ fn puzzle_failures_surface_and_sync_policies() {
         Duration::from_secs(30),
     );
     let mut pow_cfg = PowConfig {
-        required: true,
         difficulty: 6,
         max_future_skew_secs: 120,
         min_ticket_ttl_secs: 30,
         quotas: QuotaConfig {
             per_remote_burst: 8,
-            per_descriptor_burst: 4,
             ..QuotaConfig::default()
         },
-        puzzle: Some(PuzzleConfig {
-            enabled: true,
+        puzzle: PuzzleConfig {
             memory_kib: puzzle_params.memory_kib().get(),
             time_cost: puzzle_params.time_cost().get(),
             lanes: puzzle_params.lanes().get(),
-        }),
+        },
         ..PowConfig::default()
     };
     pow_cfg.apply_defaults().expect("pow defaults");
-    let base = PowParameters::new(
-        pow_cfg.difficulty.min(u8::MAX as u32) as u8,
-        Duration::from_secs(pow_cfg.max_future_skew_secs),
-        Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
-    );
-    let controls = DoSControls::new(
-        base,
-        &pow_cfg,
-        Some(puzzle_params),
-        None,
-        Arc::clone(&metrics),
-        RelayMode::Entry,
-    )
-    .expect("dos controls");
+    let controls = DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
+        .expect("dos controls");
     let remote: SocketAddr = "192.0.2.44:7555".parse().expect("valid socket");
     let descriptor = DEFAULT_DESCRIPTOR_COMMIT;
     let relay_id = [0xCC; 32];
@@ -106,9 +83,7 @@ fn puzzle_failures_surface_and_sync_policies() {
     let attempt = controls
         .begin(remote, Some(&descriptor))
         .expect("attempt should be accepted");
-    let params = controls
-        .current_puzzle_parameters()
-        .expect("puzzle policy active");
+    let params = controls.current_puzzle_parameters();
     let ttl = Duration::from_secs(45);
     let binding = PuzzleBinding::new(&descriptor, &relay_id, &transcript);
     let mut ticket = puzzle::mint_ticket(&params, &binding, ttl, &mut rng).expect("mint ticket");
@@ -120,9 +95,7 @@ fn puzzle_failures_surface_and_sync_policies() {
     };
     controls.record_pow_failure(&attempt, Duration::from_millis(5));
     let pow_state = controls.current_pow_parameters();
-    let puzzle_state = controls
-        .current_puzzle_parameters()
-        .expect("puzzle policy active");
+    let puzzle_state = controls.current_puzzle_parameters();
     assert_eq!(
         pow_state.difficulty(),
         puzzle_state.difficulty(),
@@ -169,15 +142,12 @@ fn static_difficulty_outcome_replay_is_deterministic() {
                 }
             }
             pow_diffs.push(controls.current_pow_parameters().difficulty());
-            let puzzle = controls
-                .current_puzzle_parameters()
-                .expect("puzzle parameters available");
+            let puzzle = controls.current_puzzle_parameters();
             puzzle_diffs.push(puzzle.difficulty());
         }
         (pow_diffs, puzzle_diffs)
     }
     let mut pow_cfg = PowConfig {
-        required: true,
         difficulty: 5,
         max_future_skew_secs: 300,
         min_ticket_ttl_secs: 60,
@@ -185,44 +155,20 @@ fn static_difficulty_outcome_replay_is_deterministic() {
             per_remote_burst: 16,
             ..QuotaConfig::default()
         },
-        puzzle: Some(PuzzleConfig {
-            enabled: true,
+        puzzle: PuzzleConfig {
             memory_kib: 32 * 1024,
             time_cost: 2,
             lanes: 1,
-        }),
+        },
         ..PowConfig::default()
     };
     pow_cfg.apply_defaults().expect("pow defaults");
-    let base_params = PowParameters::new(
-        pow_cfg.difficulty.min(u8::MAX as u32) as u8,
-        Duration::from_secs(pow_cfg.max_future_skew_secs),
-        Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
-    );
-    let puzzle_params = pow_cfg
-        .puzzle_parameters(&base_params)
-        .expect("puzzle defaults valid")
-        .expect("puzzle parameters enabled");
     let metrics_primary = Arc::new(Metrics::new());
     let metrics_replay = Arc::new(Metrics::new());
-    let controls_primary = DoSControls::new(
-        base_params,
-        &pow_cfg,
-        Some(puzzle_params),
-        None,
-        metrics_primary,
-        RelayMode::Entry,
-    )
-    .expect("primary dos controls");
-    let controls_replay = DoSControls::new(
-        base_params,
-        &pow_cfg,
-        Some(puzzle_params),
-        None,
-        metrics_replay,
-        RelayMode::Entry,
-    )
-    .expect("replay dos controls");
+    let controls_primary = DoSControls::new(&pow_cfg, None, metrics_primary, RelayMode::Entry)
+        .expect("primary dos controls");
+    let controls_replay = DoSControls::new(&pow_cfg, None, metrics_replay, RelayMode::Entry)
+        .expect("replay dos controls");
     let remote: SocketAddr = "192.0.2.200:7555".parse().expect("valid socket addr");
     let descriptor = DEFAULT_DESCRIPTOR_COMMIT;
     let events = [
@@ -283,15 +229,12 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
     const SLO_MS: u64 = 300;
     let metrics = Arc::new(Metrics::new());
     let mut pow_cfg = PowConfig {
-        required: true,
         difficulty: 6,
         max_future_skew_secs: 90,
         min_ticket_ttl_secs: 20,
         quotas: QuotaConfig {
             per_remote_burst: 6,
             per_remote_window_secs: 3,
-            per_descriptor_burst: 24,
-            per_descriptor_window_secs: 3,
             cooldown_secs: 4,
             max_entries: 128,
         },
@@ -302,12 +245,11 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
             window_secs: 6,
             penalty_secs: 5,
         },
-        puzzle: Some(PuzzleConfig {
-            enabled: true,
+        puzzle: PuzzleConfig {
             memory_kib: 4_096,
             time_cost: 1,
             lanes: 1,
-        }),
+        },
         ..PowConfig::default()
     };
     pow_cfg
@@ -319,24 +261,8 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
     let slowloris_threshold =
         usize::try_from(pow_cfg.slowloris.timeout_threshold).expect("threshold fits into usize");
     let slowloris_penalty = Duration::from_secs(pow_cfg.slowloris.penalty_secs);
-    let base_params = PowParameters::new(
-        pow_cfg.difficulty.min(u8::MAX as u32) as u8,
-        Duration::from_secs(pow_cfg.max_future_skew_secs),
-        Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
-    );
-    let puzzle_params = pow_cfg
-        .puzzle_parameters(&base_params)
-        .expect("puzzle parameters")
-        .expect("puzzle enabled");
-    let controls = DoSControls::new(
-        base_params,
-        &pow_cfg,
-        Some(puzzle_params),
-        None,
-        Arc::clone(&metrics),
-        RelayMode::Entry,
-    )
-    .expect("dos controls");
+    let controls = DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
+        .expect("dos controls");
     let descriptor = DEFAULT_DESCRIPTOR_COMMIT;
     let relay_id = [0xBA; 32];
     let transcript = [0xBC; 32];
@@ -352,9 +278,7 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         let attempt = controls
             .begin_at(remote1, Some(&descriptor), now)
             .expect("attempt within burst limit");
-        let params = controls
-            .current_puzzle_parameters()
-            .expect("puzzle policy active");
+        let params = controls.current_puzzle_parameters();
         observed_difficulties.push(params.difficulty());
         assert_eq!(
             params.difficulty(),
@@ -395,9 +319,7 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         let attempt = controls
             .begin_at(remote2, Some(&descriptor), now)
             .expect("attempt within slowloris window");
-        let params = controls
-            .current_puzzle_parameters()
-            .expect("puzzle policy active");
+        let params = controls.current_puzzle_parameters();
         observed_difficulties.push(params.difficulty());
         let ticket = puzzle::mint_ticket(
             &params,

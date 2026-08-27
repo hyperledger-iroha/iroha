@@ -14,7 +14,7 @@ use clap::Parser;
 use color_eyre::eyre::{Context, Result, eyre};
 use hex::{decode, encode};
 use iroha_crypto::soranet::{
-    pow::{self, Parameters as PowParameters, SignedTicket, Ticket as PowTicket},
+    pow::{SignedTicket, Ticket as PowTicket},
     puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
     token::{AdmissionToken, MintError as AdmissionTokenMintError, compute_issuer_fingerprint},
 };
@@ -475,8 +475,7 @@ fn mark_sensitive_response(response: &mut Response) {
 struct PuzzleService {
     descriptor_commit: [u8; 32],
     relay_id: [u8; 32],
-    pow_params: PowParameters,
-    puzzle_params: Option<PuzzleParameters>,
+    puzzle_params: PuzzleParameters,
     ticket_ttl: Duration,
     min_ticket_ttl: Duration,
     max_future_skew: Duration,
@@ -527,22 +526,12 @@ impl PuzzleService {
         let relay_id = derive_relay_id(policy, &descriptor_commit, now_unix)
             .wrap_err("failed to derive relay identity for bindings")?;
         let pow_cfg = config.pow_config().clone();
-        let base_params = PowParameters::new(
-            pow_cfg.difficulty.min(u8::MAX as u32) as u8,
-            Duration::from_secs(pow_cfg.max_future_skew_secs),
-            Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
-        );
+        let base_params = pow_cfg.parameters().wrap_err("invalid PoW configuration")?;
         let puzzle_params = pow_cfg
             .puzzle_parameters(&base_params)
             .wrap_err("invalid puzzle configuration")?;
-        let min_ticket_ttl = puzzle_params
-            .as_ref()
-            .map(PuzzleParameters::min_ticket_ttl)
-            .unwrap_or_else(|| base_params.min_ticket_ttl());
-        let max_future_skew = puzzle_params
-            .as_ref()
-            .map(PuzzleParameters::max_future_skew)
-            .unwrap_or_else(|| base_params.max_future_skew());
+        let min_ticket_ttl = puzzle_params.min_ticket_ttl();
+        let max_future_skew = puzzle_params.max_future_skew();
         let mint_corridor = max_future_skew
             .checked_sub(min_ticket_ttl)
             .filter(|window| !window.is_zero())
@@ -588,11 +577,6 @@ impl PuzzleService {
                 "signed_ticket_secret_* supplied but pow.signed_ticket_public_key_hex missing from relay config"
             ));
         }
-        if signed_ticket_public_key.is_some() && puzzle_params.is_none() {
-            return Err(eyre!(
-                "pow.signed_ticket_public_key_hex requires the mandatory Argon2 puzzle policy"
-            ));
-        }
         if signed_ticket_public_key.is_some() && signed_ticket_secret.is_none() {
             return Err(eyre!(
                 "pow.signed_ticket_public_key_hex requires --signed-ticket-secret-path in the puzzle issuer"
@@ -607,7 +591,6 @@ impl PuzzleService {
         Ok(Self {
             descriptor_commit,
             relay_id,
-            pow_params: base_params,
             puzzle_params,
             ticket_ttl,
             min_ticket_ttl,
@@ -647,18 +630,9 @@ impl PuzzleService {
         transcript_hash: [u8; 32],
         rng: &mut R,
     ) -> Result<PowTicket, ChallengeMintError> {
-        if let Some(params) = &self.puzzle_params {
-            let binding =
-                PuzzleBinding::new(&self.descriptor_commit, &self.relay_id, &transcript_hash);
-            puzzle::mint_ticket(params, &binding, ttl, rng).map_err(ChallengeMintError::Puzzle)
-        } else {
-            let binding = pow::ChallengeBinding::new(
-                &self.descriptor_commit,
-                &self.relay_id,
-                &transcript_hash,
-            );
-            pow::mint_ticket(&self.pow_params, &binding, ttl, rng).map_err(ChallengeMintError::Pow)
-        }
+        let binding = PuzzleBinding::new(&self.descriptor_commit, &self.relay_id, &transcript_hash);
+        puzzle::mint_ticket(&self.puzzle_params, &binding, ttl, rng)
+            .map_err(ChallengeMintError::Puzzle)
     }
     fn token_summary(&self) -> Result<TokenConfigResponse, TokenIssuerError> {
         let Some(issuer_mutex) = &self.token else {
@@ -706,8 +680,6 @@ impl PuzzleService {
 }
 #[derive(Debug, Error)]
 enum ChallengeMintError {
-    #[error("pow ticket mint failed: {0}")]
-    Pow(pow::MintError),
     #[error("puzzle ticket mint failed: {0}")]
     Puzzle(puzzle::MintError),
 }
@@ -1114,12 +1086,11 @@ impl IntoResponse for SensitiveJsonBytes {
 }
 #[derive(Debug, JsonSerialize)]
 struct ConfigResponse {
-    required: bool,
     difficulty: u8,
     max_future_skew_secs: u64,
     min_ticket_ttl_secs: u64,
     ticket_ttl_secs: u64,
-    puzzle: Option<PuzzleParamsResponse>,
+    puzzle: PuzzleParamsResponse,
     token: TokenConfigResponse,
     #[norito(default)]
     revocation_store_capacity: Option<u64>,
@@ -1296,16 +1267,15 @@ async fn get_config(State(state): State<Arc<PuzzleService>>) -> Result<JsonBytes
         .public_token_summary()
         .map_err(|err| ApiError::Internal(format!("token summary error: {err}")))?;
     let response = ConfigResponse {
-        required: state.pow_params.difficulty() > 0 || state.puzzle_params.is_some(),
-        difficulty: state.pow_params.difficulty(),
+        difficulty: state.puzzle_params.difficulty(),
         max_future_skew_secs: state.max_future_skew.as_secs(),
         min_ticket_ttl_secs: state.min_ticket_ttl.as_secs(),
         ticket_ttl_secs: state.ticket_ttl.as_secs(),
-        puzzle: state.puzzle_params.as_ref().map(|p| PuzzleParamsResponse {
-            memory_kib: p.memory_kib().get(),
-            time_cost: p.time_cost().get(),
-            lanes: p.lanes().get(),
-        }),
+        puzzle: PuzzleParamsResponse {
+            memory_kib: state.puzzle_params.memory_kib().get(),
+            time_cost: state.puzzle_params.time_cost().get(),
+            lanes: state.puzzle_params.lanes().get(),
+        },
         token,
         revocation_store_capacity: Some(state.pow_revocation_store_capacity),
         revocation_store_ttl_secs: Some(state.pow_revocation_store_ttl_secs),
@@ -1337,7 +1307,7 @@ async fn mint_ticket(
         .map_err(|err| ApiError::BadRequest(format!("invalid JSON body: {err}")))?;
     let ttl_override = payload.ttl_secs.map(Duration::from_secs);
     let ttl = state.clamp_ttl(ttl_override);
-    if state.puzzle_params.is_some() && ttl <= state.min_ticket_ttl {
+    if ttl <= state.min_ticket_ttl {
         return Err(ApiError::BadRequest(format!(
             "ttl_secs must exceed the puzzle minimum remaining ttl of {} seconds",
             state.min_ticket_ttl.as_secs()
@@ -1351,11 +1321,6 @@ async fn mint_ticket(
         ));
     }
     let signed = payload.signed;
-    if signed && state.puzzle_params.is_none() {
-        return Err(ApiError::BadRequest(
-            "signed tickets require the mandatory Argon2 puzzle policy".to_owned(),
-        ));
-    }
     if state.signed_ticket_public_key.is_some() && !signed {
         return Err(ApiError::BadRequest(
             "signed must be true when a signed-ticket verifier key is configured".to_owned(),
@@ -1730,7 +1695,7 @@ mod tests {
     use iroha_crypto::{
         Algorithm, KeyPair,
         soranet::{
-            pow::ChallengeBinding,
+            pow::{ChallengeBinding, Parameters as PowParameters},
             token::{AdmissionTokenVerifier, InMemoryTokenStore, TokenStore, TokenStoreLimits},
         },
     };
@@ -2010,6 +1975,20 @@ mod tests {
         assert!(load_signed_ticket_secret(&options).is_err());
         let _ = fs::remove_file(path);
     }
+    fn test_puzzle_parameters(
+        difficulty: u8,
+        max_future_skew: Duration,
+        min_ticket_ttl: Duration,
+    ) -> PuzzleParameters {
+        PuzzleParameters::new(
+            NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
+            NonZeroU32::new(1).expect("non-zero iterations"),
+            NonZeroU32::new(1).expect("non-zero lanes"),
+            difficulty,
+            max_future_skew,
+            min_ticket_ttl,
+        )
+    }
     fn base_service() -> PuzzleService {
         let pow_params = PowParameters::new(5, Duration::from_secs(120), Duration::from_secs(30));
         let min_ticket_ttl = pow_params.min_ticket_ttl();
@@ -2017,8 +1996,11 @@ mod tests {
         PuzzleService {
             descriptor_commit: [0u8; 32],
             relay_id: [0u8; 32],
-            pow_params,
-            puzzle_params: None,
+            puzzle_params: test_puzzle_parameters(
+                pow_params.difficulty(),
+                max_future_skew,
+                min_ticket_ttl,
+            ),
             ticket_ttl: Duration::from_secs(45),
             min_ticket_ttl,
             max_future_skew,
@@ -2183,8 +2165,11 @@ mod tests {
         let service = PuzzleService {
             descriptor_commit: [0u8; 32],
             relay_id,
-            pow_params,
-            puzzle_params: None,
+            puzzle_params: test_puzzle_parameters(
+                pow_params.difficulty(),
+                max_future_skew,
+                min_ticket_ttl,
+            ),
             ticket_ttl: Duration::from_secs(45),
             min_ticket_ttl,
             max_future_skew,
@@ -2298,8 +2283,7 @@ mod tests {
         let service = PuzzleService {
             descriptor_commit,
             relay_id,
-            pow_params,
-            puzzle_params: Some(puzzle_params),
+            puzzle_params,
             ticket_ttl: Duration::from_secs(90),
             min_ticket_ttl,
             max_future_skew,
@@ -2314,43 +2298,40 @@ mod tests {
     #[test]
     fn clamp_ttl_respects_bounds() {
         let service = base_service();
-        let min = service.pow_params.min_ticket_ttl();
-        let max = service.pow_params.max_future_skew();
+        let min = service.puzzle_params.min_ticket_ttl();
+        let max = service.puzzle_params.max_future_skew();
         assert_eq!(service.clamp_ttl(Some(Duration::from_secs(5))), min);
         assert_eq!(service.clamp_ttl(Some(Duration::from_secs(500))), max);
         assert_eq!(service.clamp_ttl(None), Duration::from_secs(45));
     }
     #[test]
-    fn mint_ticket_uses_pow_when_puzzle_disabled() {
+    fn mint_ticket_uses_mandatory_puzzle() {
         let service = base_service();
         let mut rng = StdRng::from_seed([7u8; 32]);
         let ttl = service.clamp_ttl(Some(Duration::from_secs(40)));
         let ticket = service
             .mint_ticket(ttl, [0x10; 32], &mut rng)
-            .expect("pow mint should succeed");
-        assert_eq!(ticket.difficulty, service.pow_params.difficulty());
+            .expect("puzzle mint should succeed");
+        assert_eq!(ticket.difficulty, service.puzzle_params.difficulty());
         assert!(ticket.expires_at > 0);
     }
     #[test]
     fn mint_ticket_uses_puzzle_when_configured() {
         let mut service = base_service();
-        service.puzzle_params = Some(PuzzleParameters::new(
+        service.puzzle_params = PuzzleParameters::new(
             NonZeroU32::new(8_192).unwrap(),
             NonZeroU32::new(1).unwrap(),
             NonZeroU32::new(1).unwrap(),
             6,
             Duration::from_secs(90),
             Duration::from_secs(30),
-        ));
+        );
         let mut rng = StdRng::from_seed([9u8; 32]);
         let ttl = service.clamp_ttl(Some(Duration::from_secs(60)));
         let ticket = service
             .mint_ticket(ttl, [0x20; 32], &mut rng)
             .expect("puzzle mint should succeed");
-        assert_eq!(
-            ticket.difficulty,
-            service.puzzle_params.as_ref().unwrap().difficulty()
-        );
+        assert_eq!(ticket.difficulty, service.puzzle_params.difficulty());
         assert!(ticket.expires_at > 0);
     }
     #[test]
@@ -2358,21 +2339,21 @@ mod tests {
         let mut service = base_service();
         service.descriptor_commit = [0xAB; 32];
         service.relay_id = [0xCD; 32];
-        service.puzzle_params = Some(PuzzleParameters::new(
+        service.puzzle_params = PuzzleParameters::new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).unwrap(),
             NonZeroU32::new(1).unwrap(),
             NonZeroU32::new(1).unwrap(),
             1,
             Duration::from_secs(90),
             Duration::from_secs(30),
-        ));
+        );
         let mut rng = StdRng::seed_from_u64(42);
         let transcript = [0xAA; 32];
         let ttl = service.clamp_ttl(Some(Duration::from_secs(40)));
         let ticket = service
             .mint_ticket(ttl, transcript, &mut rng)
             .expect("puzzle mint should succeed");
-        let params = service.puzzle_params.as_ref().expect("params");
+        let params = &service.puzzle_params;
         let binding =
             PuzzleBinding::new(&service.descriptor_commit, &service.relay_id, &transcript);
         let verify_time = ticket
@@ -2422,14 +2403,14 @@ mod tests {
         let mut service = base_service();
         service.descriptor_commit = [0x01; 32];
         service.relay_id = [0x02; 32];
-        service.puzzle_params = Some(PuzzleParameters::new(
+        service.puzzle_params = PuzzleParameters::new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).unwrap(),
             NonZeroU32::new(1).unwrap(),
             NonZeroU32::new(1).unwrap(),
             3,
             Duration::from_secs(90),
             Duration::from_secs(30),
-        ));
+        );
         let state = Arc::new(service);
         let transcript = [0x44; 32];
         let payload = format!(
@@ -2451,7 +2432,7 @@ mod tests {
             )
             .expect("base64 decode");
         let ticket = PowTicket::parse(&ticket_bytes).expect("ticket parse");
-        let params = state.puzzle_params.as_ref().expect("params");
+        let params = &state.puzzle_params;
         let binding = PuzzleBinding::new(&state.descriptor_commit, &state.relay_id, &transcript);
         puzzle::verify(&ticket, &binding, params).expect("verification succeeds");
     }
@@ -2461,14 +2442,14 @@ mod tests {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let mut service = base_service();
         service.relay_id = [0x12; 32];
-        service.puzzle_params = Some(PuzzleParameters::new(
+        service.puzzle_params = PuzzleParameters::new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
-            service.pow_params.difficulty(),
+            service.puzzle_params.difficulty(),
             service.max_future_skew,
             service.min_ticket_ttl,
-        ));
+        );
         service.signed_ticket_public_key = Some(keypair.public_key().to_vec());
         service.signed_ticket_secret = Some(keypair.secret_key().to_vec().into());
         let state = Arc::new(service);
@@ -2501,7 +2482,7 @@ mod tests {
             &signed,
             state.signed_ticket_public_key.as_ref().expect("public key"),
             &binding,
-            state.puzzle_params.as_ref().expect("puzzle policy"),
+            &state.puzzle_params,
         )
         .expect("signed Argon2 ticket should verify");
         assert_eq!(
@@ -2664,13 +2645,8 @@ mod tests {
             &service.relay_id,
             &transcript_hash,
         );
-        puzzle::verify_signed_ticket(
-            &signed,
-            &public,
-            &binding,
-            service.puzzle_params.as_ref().expect("puzzle policy"),
-        )
-        .expect("signed ticket should verify");
+        puzzle::verify_signed_ticket(&signed, &public, &binding, &service.puzzle_params)
+            .expect("signed ticket should verify");
     }
     #[tokio::test]
     async fn http_mint_signed_ticket_returns_signed_payload() {
@@ -2701,13 +2677,8 @@ mod tests {
         let signed_bytes = STANDARD.decode(signed_b64).expect("decode signed ticket");
         let signed = SignedTicket::decode(&signed_bytes).expect("decode signed ticket");
         let binding = PuzzleBinding::new(&state.descriptor_commit, &state.relay_id, &[0x11; 32]);
-        puzzle::verify_signed_ticket(
-            &signed,
-            &public,
-            &binding,
-            state.puzzle_params.as_ref().expect("puzzle policy"),
-        )
-        .expect("signed ticket verifies");
+        puzzle::verify_signed_ticket(&signed, &public, &binding, &state.puzzle_params)
+            .expect("signed ticket verifies");
         assert_eq!(
             fingerprint,
             hex::encode(signed.revocation_fingerprint()),
@@ -2734,14 +2705,14 @@ mod tests {
     async fn http_mint_puzzle_rejects_ttl_without_solution_window() {
         use axum::{body::Bytes, extract::State};
         let mut service = base_service();
-        service.puzzle_params = Some(PuzzleParameters::new(
+        service.puzzle_params = PuzzleParameters::new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             1,
             service.max_future_skew,
             service.min_ticket_ttl,
-        ));
+        );
         let state = Arc::new(service);
         let request = MintRequest {
             ttl_secs: Some(state.min_ticket_ttl.as_secs()),

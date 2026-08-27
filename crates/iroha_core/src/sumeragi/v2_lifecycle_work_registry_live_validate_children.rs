@@ -360,6 +360,15 @@ impl DurableLiveWalApplyWork {
         }
     }
 
+    fn validate_predecessor_ordinal(&self) -> u128 {
+        match &self.validation_source {
+            DurableLiveWalApplyValidationSourceV1::Linked { parent_address, .. } => {
+                parent_address.ordinal
+            }
+            DurableLiveWalApplyValidationSourceV1::Released(terminal) => terminal.ordinal(),
+        }
+    }
+
     fn validates_at(&self, address: ConcreteWorkAddress, digest: LifecycleDigest) -> bool {
         self.address == address
             && address.owner.causal_root() == self.candidate.causal_root
@@ -686,6 +695,7 @@ impl DurableLiveWalApplyWork {
         };
         Some(LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
             dispatch_key,
+            validate_predecessor_ordinal: self.validate_predecessor_ordinal(),
             tag: *tag,
             subject: *subject,
             certificate: certificate.clone(),
@@ -706,6 +716,7 @@ impl DurableLiveWalApplyWork {
             permit,
             self.context(),
             self.address,
+            self.validate_predecessor_ordinal(),
             self.digest(),
             &self.admission.bound.effect,
             &self.validated_receipt,

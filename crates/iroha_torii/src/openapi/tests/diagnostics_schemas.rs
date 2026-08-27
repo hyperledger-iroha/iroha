@@ -122,7 +122,7 @@ fn pipeline_status_openapi_exposes_only_the_exact_first_release_scope() {
 }
 
 #[test]
-fn npos_diagnostics_excludes_retired_vrf_surfaces() {
+fn npos_schema_excludes_retired_process_local_and_vrf_surfaces() {
     let document = canonical_document();
     let schemas = component_schemas(&document);
     let retired = [

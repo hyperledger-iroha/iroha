@@ -36,7 +36,6 @@ fn emits_bucket_once_min_contributors_met() {
     let base = ts(120);
     aggregator.record_handshake_success(mode, base, Some(80), Some(5));
     aggregator.record_throttle(mode, base, PrivacyThrottleScope::Congestion);
-    aggregator.record_throttle(mode, base, PrivacyThrottleScope::DescriptorReplay);
     aggregator.record_throttle(mode, base, PrivacyThrottleScope::Emergency);
     aggregator.record_verified_bytes(mode, base, 4_096);
     aggregator.record_gar_category(mode, base, "Policy::Spam");
@@ -73,7 +72,6 @@ fn emits_bucket_once_min_contributors_met() {
     assert_eq!(bucket.handshake_timeout_total, 0);
     assert_eq!(bucket.throttle_congestion_total, 1);
     assert_eq!(bucket.throttle_remote_total, 0);
-    assert_eq!(bucket.throttle_descriptor_replay_total, 1);
     assert_eq!(bucket.throttle_emergency_total, 1);
     assert_eq!(bucket.verified_bytes_total, 4_096);
     assert_eq!(bucket.active_circuits_mean, Some(6));
@@ -89,7 +87,6 @@ fn emits_bucket_once_min_contributors_met() {
     );
     assert_eq!(bucket.gar_abuse_counts.len(), 1);
     assert_eq!(bucket.gar_abuse_counts[0].count, 1);
-    assert_eq!(bucket.throttle_descriptor_total, 0);
 }
 #[test]
 fn force_flush_emits_suppressed_bucket() {
@@ -483,7 +480,6 @@ fn prio_shares_combine_into_bucket() {
     share2.handshake_downgrade_share = 1;
     share2.throttle_congestion_share = 1;
     share2.throttle_remote_share = 1;
-    share2.throttle_descriptor_share = 1;
     share2.throttle_emergency_share = 1;
     share2.active_circuits_sum_share = 45;
     share2.active_circuits_sample_share = 3;
@@ -515,8 +511,6 @@ fn prio_shares_combine_into_bucket() {
     assert_eq!(bucket.contributor_count, 5);
     assert_eq!(bucket.throttle_congestion_total, 1);
     assert_eq!(bucket.throttle_remote_total, 1);
-    assert_eq!(bucket.throttle_descriptor_total, 1);
-    assert_eq!(bucket.throttle_descriptor_replay_total, 0);
     assert_eq!(bucket.throttle_emergency_total, 1);
     assert_eq!(bucket.verified_bytes_total, 3_072);
     assert_eq!(bucket.active_circuits_mean, Some(15));

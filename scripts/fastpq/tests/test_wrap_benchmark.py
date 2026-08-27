@@ -1,5 +1,7 @@
 """Tests for the FASTPQ benchmark wrapper summaries."""
 
+import pytest
+
 from scripts.fastpq import wrap_benchmark
 
 
@@ -157,3 +159,21 @@ def test_require_poseidon_telemetry_skips_non_metal_backends():
     }
 
     wrap_benchmark.require_poseidon_telemetry(report)
+
+
+def test_filter_metric_samples_does_not_fall_back_to_another_device():
+    samples = [{"labels": {"device_class": "other"}, "value": 1}]
+
+    assert wrap_benchmark.filter_metric_samples(samples, "wanted") == []
+
+
+def test_poseidon_metric_summary_rejects_another_device(tmp_path):
+    metrics_path = tmp_path / "metrics.prom"
+    metrics_path.write_text(
+        'fastpq_poseidon_pipeline_total{requested="gpu",resolved="gpu",path="fused",'
+        'device_class="other"} 1\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="missing fastpq_poseidon_pipeline_total samples"):
+        wrap_benchmark.build_poseidon_metric_summary(metrics_path, "wanted")

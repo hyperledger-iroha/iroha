@@ -142,6 +142,16 @@ fn parse_rejects_unknown_mode_bits() {
     assert_eq!(err, VMError::UnsupportedProgramFeatureBits { bits: 0x80 });
 }
 #[test]
+fn parse_rejects_retired_transactional_memory_bit() {
+    let bytes = encode_with(ProgramMetadata::default(), |metadata| {
+        metadata.mode = 0x04;
+    });
+    assert_eq!(
+        ProgramMetadata::parse(&bytes).unwrap_err(),
+        VMError::UnsupportedProgramFeatureBits { bits: 0x04 }
+    );
+}
+#[test]
 fn parse_accepts_generic_minor_zero_without_cntr() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.version_minor = 0;

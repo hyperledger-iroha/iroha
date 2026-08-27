@@ -4,12 +4,13 @@ import inspect
 import json
 from typing import Any
 
-import iroha_python
-import iroha_python.client as client_module
 import pytest
 import requests
-from iroha_python import SseStreamError, ToriiClient
 from requests.structures import CaseInsensitiveDict
+
+import iroha_python
+import iroha_python.client as client_module
+from iroha_python import SseStreamError, ToriiClient
 
 from .helpers import StubResponse
 

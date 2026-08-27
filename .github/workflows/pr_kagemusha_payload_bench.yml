@@ -1291,7 +1291,7 @@ jobs:
           bash ci/check_kagemusha_jvm_native_bridge.sh
 
   csharp-torii:
-    name: C# ABI-21/V4 Torii DTOs
+    name: C# ABI-23/V4 Torii DTOs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -1301,7 +1301,7 @@ jobs:
       - run: ci/check_kagemusha_recursive_spend_csharp_sdk.sh
 
   javascript-torii:
-    name: JavaScript ABI-21/V4 Torii DTOs
+    name: JavaScript ABI-23/V4 Torii DTOs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

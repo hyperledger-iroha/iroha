@@ -6,8 +6,8 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         consensus::{LaneBlockCertificateV1, LaneBlockProposalV1, LaneBlockQcV1},
         consensus_v2::{
-            ConsensusMessageV2, ConsensusMessageV2Payload, ExecutionCommitment,
-            MAX_EXECUTED_BLOCK_WIRE_BYTES, finality::V2FinalityArtifact,
+            ConsensusMessageV2, ExecutionCommitment, MAX_EXECUTED_BLOCK_WIRE_BYTES,
+            finality::V2FinalityArtifact,
         },
     },
     peer::PeerId,
@@ -83,23 +83,11 @@ impl BlockMessage {
     /// Validate a message before it enters a canonical live wire frame.
     pub(crate) fn ensure_live_outbound(&self) -> Result<(), ncore::Error> {
         match self {
-            Self::V2(message) => {
-                message.validate_version().map_err(|error| {
-                    ncore::Error::Message(format!(
-                        "refusing to emit non-canonical Sumeragi v2 message: {error}"
-                    ))
-                })?;
-                if matches!(
-                    &message.payload,
-                    ConsensusMessageV2Payload::VrfCommit(_)
-                        | ConsensusMessageV2Payload::VrfReveal(_)
-                ) {
-                    return Err(ncore::Error::Message(
-                        "refusing to emit retired Sumeragi consensus-VRF message".to_owned(),
-                    ));
-                }
-                Ok(())
-            }
+            Self::V2(message) => message.validate_version().map_err(|error| {
+                ncore::Error::Message(format!(
+                    "refusing to emit non-canonical Sumeragi v2 message: {error}"
+                ))
+            }),
             Self::KuraReplicaAdvert(advert) => advert.verify_keeper_signature().map_err(|error| {
                 ncore::Error::Message(format!(
                     "refusing to emit an invalid Kura replica advert: {error}"
@@ -123,22 +111,6 @@ impl BlockMessage {
             }),
             _ => Ok(()),
         }
-    }
-    /// Return whether this message belongs to an admitted live protocol.
-    ///
-    /// Lane-local traffic remains independent from global v2 finality and is
-    /// admitted by the lane adapter.
-    #[must_use]
-    pub fn is_authoritative_v2_ingress(&self) -> bool {
-        match self {
-            Self::V2(message) => message.validate_version().is_ok(),
-            _ => true,
-        }
-    }
-    /// Return whether asynchronous ingress must preserve this live message.
-    #[must_use]
-    pub fn requires_blocking_ingress(&self) -> bool {
-        self.is_authoritative_v2_ingress()
     }
     /// Network priority for this consensus message.
     pub fn priority(&self) -> iroha_p2p::Priority {
@@ -187,8 +159,8 @@ impl BlockMessageWire {
     ///
     /// # Errors
     ///
-    /// Returns an error for a non-canonical v2 protocol version, a retired
-    /// consensus-VRF tombstone, or an invalid authenticated auxiliary message.
+    /// Returns an error for a non-canonical v2 protocol version or an invalid
+    /// authenticated auxiliary message.
     pub(crate) fn try_preencoded(message: Arc<BlockMessage>) -> Result<Self, ncore::Error> {
         let encoded = Arc::new(Self::try_encode_live_message(message.as_ref())?);
         Ok(Self {
@@ -662,33 +634,20 @@ mod tests {
         };
         (proposal, vote, qc)
     }
-    fn sample_v2_payload_chunk_message() -> BlockMessage {
+    fn sample_v2_message() -> BlockMessage {
         use iroha_data_model::block::consensus_v2 as wire;
         BlockMessage::V2(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
-                manifest_hash: HashOf::<wire::PayloadManifest>::from_untyped_unchecked(Hash::new(
-                    b"live-v2-payload-chunk",
-                )),
+                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"synthetic-manifest")),
                 index: 0,
                 bytes: vec![0x71],
-                sender: 0,
+                sender: 3,
                 signature: vec![0x72],
             }),
         ))
     }
-    fn sample_v2_vrf_message() -> BlockMessage {
-        use iroha_data_model::block::consensus_v2 as wire;
-        BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::VrfCommit(wire::VrfCommit {
-                epoch: 7,
-                commitment: [0x71; 32],
-                signer: 3,
-                bls_sig: vec![0x72],
-            }),
-        ))
-    }
     fn retagged_block_message_frame(tag: u32) -> Vec<u8> {
-        let mut encoded = norito_core::to_bytes(&sample_v2_payload_chunk_message())
+        let mut encoded = norito_core::to_bytes(&sample_v2_message())
             .expect("encode canonical Sumeragi v2 fixture");
         let align = norito_core::archived_payload_align::<BlockMessage>();
         let padding = if align <= 1 {
@@ -806,7 +765,7 @@ mod tests {
                 "KuraReplicaAdvert",
                 BlockMessage::KuraReplicaAdvert(signed_kura_replica_advert_fixture()),
             ),
-            ("V2", sample_v2_payload_chunk_message()),
+            ("V2", sample_v2_message()),
             (
                 "LaneBlockProposal",
                 BlockMessage::LaneBlockProposal(lane_proposal),
@@ -824,7 +783,7 @@ mod tests {
     }
     #[test]
     fn block_message_wire_roundtrips_current_v2_payload() {
-        let msg = sample_v2_payload_chunk_message();
+        let msg = sample_v2_message();
         let encoded = BlockMessageWire::try_encode_live_message(&msg)
             .expect("encode current Sumeragi v2 message");
         let wire = <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&encoded)
@@ -834,26 +793,6 @@ mod tests {
         assert_eq!(wire.encoded_len(), Some(encoded.len()));
         assert!(matches!(wire.as_ref(), BlockMessage::V2(_)));
         assert_eq!(wire.encode(), encoded);
-    }
-    #[test]
-    fn legacy_vrf_tombstone_decodes_but_is_not_live_encodable() {
-        let message = sample_v2_vrf_message();
-        let raw =
-            norito_core::to_bytes(&message).expect("encode a raw historical consensus-VRF fixture");
-        let (decoded, consumed) =
-            <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&raw)
-                .expect("decode the retained consensus-VRF tombstone");
-        assert_eq!(consumed, raw.len());
-        assert!(matches!(
-            decoded.as_message(),
-            BlockMessage::V2(ConsensusMessageV2 {
-                payload: ConsensusMessageV2Payload::VrfCommit(_),
-                ..
-            })
-        ));
-        assert!(message.ensure_live_outbound().is_err());
-        assert!(BlockMessageWire::try_encode_live_message(&message).is_err());
-        assert!(norito_core::to_bytes(&decoded).is_err());
     }
     #[test]
     fn noncanonical_v2_protocol_version_is_not_live_encodable() {
@@ -907,7 +846,7 @@ mod tests {
             );
         }
         const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
-        let wrapped = sample_v2_payload_chunk_message();
+        let wrapped = sample_v2_message();
         let wrapped_encoded =
             BlockMessageWire::try_encode_live_message(&wrapped).expect("encode current v2 marker");
         assert!(wrapped_encoded.starts_with(&norito_core::MAGIC));
@@ -1130,8 +1069,6 @@ mod tests {
         let message = BlockMessage::KuraReplicaAdvert(advert.clone());
         assert!(message.is_live_auxiliary());
         assert!(!message.is_lane_local());
-        assert!(message.is_authoritative_v2_ingress());
-        assert!(message.requires_blocking_ingress());
         message
             .ensure_live_outbound()
             .expect("authenticated replica advert is an admitted live auxiliary type");

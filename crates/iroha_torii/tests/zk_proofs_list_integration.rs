@@ -267,3 +267,33 @@ async fn proofs_list_rejects_zero_and_over_limit() {
         );
     }
 }
+
+#[tokio::test]
+async fn proofs_list_rejects_excessive_ordered_window() {
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(World::new(), kura, query));
+    let limits = iroha_torii::ProofApiLimits::new(
+        5,
+        Duration::from_millis(50),
+        Duration::from_secs(defaults::torii::PROOF_CACHE_MAX_AGE_SECS),
+        Duration::from_secs(defaults::torii::PROOF_RETRY_AFTER_SECS),
+        defaults::torii::PROOF_MAX_BODY_BYTES.get(),
+        Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS),
+    );
+    let result = iroha_torii::handle_list_proofs(
+        state,
+        limits,
+        iroha_torii::MaybeTelemetry::disabled(),
+        iroha_torii::NoritoQuery(iroha_torii::ProofListQuery {
+            offset: Some(
+                u32::try_from(iroha_core::torii::zk::proofs::MAX_PROOF_QUERY_WINDOW)
+                    .expect("proof query window fits u32"),
+            ),
+            limit: Some(1),
+            ..Default::default()
+        }),
+    )
+    .await;
+    assert!(result.is_err(), "excessive ordered window must fail closed");
+}

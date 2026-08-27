@@ -106,6 +106,8 @@ def _validate_norito_frame(
     major, minor = body[4], body[5]
     if major != 0 or minor != 0:
         raise ValueError(f"{context} uses unsupported NRT0 version {major}.{minor}")
+    if body[6:22] == bytes(16):
+        raise ValueError(f"{context} must advertise a non-zero Norito schema hash")
     if (
         expected_type_name is not None
         and body[6:22] != schema_hash_for_type_name(expected_type_name)
@@ -126,7 +128,8 @@ def _validate_norito_frame(
         raise ValueError(f"{context} uses an invalid Norito header flag combination")
     if expected_flags is not None and flags != expected_flags:
         raise ValueError(
-            f"{context} uses Norito flags 0x{flags:02x}; expected 0x{expected_flags:02x}"
+            f"{context} uses Norito layout flags 0x{flags:02x}; "
+            f"the exact type requires 0x{expected_flags:02x}"
         )
 
     padding_length = len(body) - _HEADER_BYTES - payload_length

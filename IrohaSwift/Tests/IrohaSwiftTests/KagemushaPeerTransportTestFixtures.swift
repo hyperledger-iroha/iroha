@@ -58,8 +58,11 @@ enum KagemushaPeerTransportTestFixtures {
         let publicKey = try KagemushaDevicePublicKeyV2(
             sec1Bytes: signingKey.publicKey.x963Representation
         )
+        let recipientPublicKey = try Keypair(
+            privateKeyBytes: fixed32(seed)
+        ).publicKey
         let recipient = try AccountAddress
-            .fromAccount(publicKey: fixed32(seed))
+            .fromAccount(publicKey: recipientPublicKey)
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let amount = try KagemushaScaledAmount(atomicUnits: "125", scale: 2)
         let note = try KagemushaSpendableNoteDescriptor(

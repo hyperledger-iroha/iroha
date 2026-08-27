@@ -986,7 +986,7 @@ fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
 }
 #[test]
 #[allow(clippy::too_many_lines)]
-fn deferred_locked_commit_delivery_tracks_generation_after_tc() {
+fn deferred_locked_commit_delivery_tracks_consumer_tag_after_tc() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
@@ -1184,14 +1184,14 @@ fn deferred_locked_commit_delivery_tracks_generation_after_tc() {
         adapter
             .ingress_deliveries
             .get(&key)
-            .expect("deferred delivery is recorded in its consumer generation")
-            .generation,
-        adapter.current_tag().generation()
+            .expect("deferred delivery is recorded under its consumer tag")
+            .consumer_tag,
+        adapter.current_tag()
     );
     assert_eq!(
         adapter
             .receive_authenticated(AuthenticatedConsensusMessage::for_test(locked_vote))
-            .expect("suppress a later duplicate in the TC generation")
+            .expect("suppress a later duplicate under the TC consumer tag")
             .disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );

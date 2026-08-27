@@ -96,6 +96,11 @@ persist the indices without reassembling tuples manually.
 | `taikai.instrumentation.live_edge_drift_ms` | Live-edge drift vs ingest arrival (ms; negative = ahead) | Optional |
 | `taikai.instrumentation.ingest_node_id` | Ingest worker identifier | Optional |
 
+`taikai.segment.sequence` and `DaIngestRequest.sequence` are intentionally
+independent. The former orders one rendition; the latter is the replay nonce
+for the whole `(lane_id, epoch)` request stream. Publishers must not force the
+two counters to match, particularly when interleaving multiple renditions.
+
 The CLI bundler can emit this JSON map via `--ingest-metadata-out`, ensuring the
 exact key spellings required by Torii.
 
@@ -275,10 +280,47 @@ the SoraNS anchor service; the SSM file contains the Norito-encoded
 `TaikaiSegmentSigningManifestV1` (including alias proofs) that was verified
 during admission, and the optional TRM file persists the
 `TaikaiRoutingManifestV1` window when publishers provide `taikai.trm`
-metadata. Configure Torii with `torii.da_ingest.taikai_anchor`
-(`endpoint`, optional `api_token`, and `poll_interval_secs`) to enable the
+metadata. Configure Torii with `torii.da_ingest.taikai_anchor` (`endpoint`,
+optional `api_token`, pinned Ed25519 `receipt_public_key`,
+`poll_interval_secs`, and non-zero `request_timeout_secs`) to enable the
 background uploader that periodically scans the spool and POSTs Taikai payloads
-to the anchor endpoint.
+to the anchor endpoint. Production endpoints must use HTTPS; plain HTTP is
+accepted only for loopback hosts. The worker does not follow redirects and the
+request timeout covers both upload and receipt download.
+
+#### Signed anchor acknowledgement contract
+
+An HTTP success status is transport evidence only. The anchor must return a
+bounded JSON `TaikaiAnchorReceiptV1` whose signed body contains:
+
+| Field | Required value |
+| --- | --- |
+| `schema` | Exact `iroha.taikai.anchor-receipt.v1`. |
+| `version` | `1`. |
+| `base_id` | The canonical five-field spool identifier from the upload. |
+| `request_digest` | BLAKE3 digest of the exact JSON request bytes received. |
+| `acknowledged_unix_secs` | Non-zero time at which durable acceptance completed. |
+| `signature` | Ed25519 signature over the complete receipt body, verifiable with the configured `receipt_public_key`. |
+
+The receiver must durably commit both the exact request identity and the anchor
+state it represents before signing or returning the receipt. Retries for the
+same `(base_id, request_digest)` must return the original, byte-identical
+canonical receipt, including the original acknowledgement time. Reusing a
+`base_id` with a different request digest is a conflict and must fail without a
+success receipt. This makes retries idempotent and prevents a successful HTTP
+response from acknowledging content that was not durably accepted.
+
+Torii captures the exact request as
+`taikai-anchor-request-<base_id>.json`, verifies every returned field and the
+pinned signature, then durably creates the no-clobber
+`taikai-anchor-<base_id>.ok` receipt before retiring the source envelope and
+companions. Restart and retention scans repeat the same verification against
+the request capture. Empty bodies, status-only replies, legacy timestamp
+markers, mismatched IDs or digests, wrong signers, and malformed receipts never
+count as delivery. Existing invalid `.ok` markers are quarantined as
+`taikai-anchor-<base_id>.ok.invalid-<blake3>`; the source upload remains pending
+and the scan continues with other entries. There is no timestamp or file
+presence fallback.
 
 ## Consumer Expectations
 
@@ -338,6 +380,10 @@ gateways can emit meaningful `Sora-Name` and `Sora-Proof` headers for viewers.
 Before Torii admits a TRM, the data-model enforces the following invariants:
 
 - The manifest `segment_window` must be well-ordered (`start <= end`).
+- A `segment_window` must cover at most 120 sequence numbers, inclusive, and
+  `end_sequence` must be less than `u64::MAX`. The terminal value is reserved
+  so every accepted window has a possible successor; neither a terminal nor an
+  oversized window can monopolise an alias lineage indefinitely.
 - Every rendition’s `ssm_range` must also be well-ordered **and** lie within
   the manifest window. A rendition that advertises `ssm_range` slices outside
   of the manifest window fails validation and is rejected before any alias or
@@ -449,7 +495,7 @@ review.
 | `publisher_account` | `AccountId` | Account responsible for this broadcast window. |
 | `publisher_key` | `PublicKey` | Key used to sign the SSM. |
 | `signature` | `SignatureOf<TaikaiSegmentSigningManifestV1>` | Detached signature covering the fields above. |
-| `signed_unix_ms` | `u64` | Millisecond timestamp when the signature was produced. |
+| `signed_unix_ms` | `u64` | Non-zero millisecond timestamp when the signature was produced. |
 | `alias_proof` | `AliasProofBundleV1` | Proof stapled into `Sora-Proof` headers so operators can trace the alias state. |
 | `metadata` | `ExtraMetadata` | Policy tags (e.g., licensing SKU, region allowlist). |
 
@@ -460,15 +506,26 @@ out-of-band, reducing ingress load during large Taikai launches.
 
 ### Publisher Signing & SoraNS Anchoring
 
-1. **Envelope finalisation** — Once the ingest worker writes the envelope and
-   CAR summary to disk, it queues the payload for the Taikai anchor task.
-2. **SSM construction** — The anchor task builds `TaikaiSegmentSigningManifestV1`
-   using the envelope hash, manifest hash, CAR digest, and publisher metadata.
-   Signing keys are loaded from the `taikai.publisher_keystore` config or KMS.
-3. **Alias proof stapling** — After signing, the anchor task requests an alias
-   proof from the SoraNS service (`POST /v1/sorans/alias_proof`) scoped to the
-   Taikai alias. The returned `AliasProofBundleV1` is embedded into the SSM and
-   cached so gateways can emit `Sora-Proof` headers without additional I/O.
+1. **Manifest and envelope finalisation** — Before admission, the publisher
+   builds the complete `DaManifestV1`, assigns a non-zero `issued_at_unix`, and
+   derives the envelope and CAR commitments. Torii recomputes every manifest
+   field and the storage ticket, but preserves that caller-supplied Taikai
+   issuance time in the canonical manifest bytes.
+2. **Alias proof acquisition** — The publisher requests an alias proof from the
+   SoraNS service (`POST /v1/sorans/alias_proof`) for the canonical manifest CID.
+   This must precede signing because the complete alias binding is part of the
+   signed SSM body.
+3. **SSM construction and ingest** — The publisher builds and signs
+   `TaikaiSegmentSigningManifestV1` using the envelope hash, manifest hash, CAR
+   digest, alias proof, and publisher metadata, then submits both the exact
+   caller-supplied `norito_manifest` and `taikai.ssm` in the signed DA request.
+   In V1 the authenticated DA owner must equal the SSM `publisher_account`;
+   relaying requires a future signed delegation capability rather than an
+   alternate owner. Because the outer request signature covers every metadata
+   value, this equality also authenticates the exact optional `taikai.trm`
+   bytes as publisher-authorized. Torii verifies these bindings before
+   persisting artefacts for the anchor task; the anchor task does not create or
+   mutate the admitted SSM.
 4. **TRM emission** — When a window completes (e.g., every 120 segments) the
    anchor task assembles the TRM: combining the stream/rendition policies,
    rolling window boundaries, replication assignments, and the set of SSM ids
@@ -498,13 +555,18 @@ Torii admission now requires Taikai uploads to provide both the envelope and a
 matching SSM:
 
 1. Clients submit the CMAF payload with the ingest metadata table documented
-   earlier **plus** a `taikai.ssm` field containing the Norito-encoded SSM.
-   Once a routing window is ready, the same request includes `taikai.trm`
-   containing the Norito-encoded `TaikaiRoutingManifestV1` so Torii can spool
-   it alongside the envelope.
+   earlier, a `taikai.ssm` field containing the Norito-encoded SSM, and the
+   exact caller-supplied `norito_manifest` whose non-zero `issued_at_unix` was
+   used to derive the SSM commitments. A Taikai request carrying `taikai.ssm`
+   without that manifest is rejected. Once a routing window is ready, the same
+   request includes `taikai.trm` containing the Norito-encoded
+   `TaikaiRoutingManifestV1` so Torii can spool it alongside the envelope.
 2. Torii recomputes the envelope hash/manifest hash/car digest locally and
-   verifies the publisher signature. If any digest mismatch occurs, admission
-   returns `ERR_TAIKAI_SSM_MISMATCH`.
+   verifies the publisher signature. The outer authenticated DA owner must be
+   the same canonical account as the SSM publisher, so pin quota, SSM
+   authority, TRM authority, and persisted lineage have one principal. If any
+   identity or digest mismatch occurs, admission fails before Taikai artefacts
+   are spooled.
 3. The alias proof embedded in the SSM is validated through
    `sorafs_manifest::alias_cache` against the operator-controlled
    `sorafs.discovery.admission` council roster and signature threshold. Torii

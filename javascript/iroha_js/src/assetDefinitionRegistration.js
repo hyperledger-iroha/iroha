@@ -1,3 +1,5 @@
+import { normalizeAssetDefinitionName } from "./instructionBuilderPrimitives.js";
+
 export function createRegisterAssetDefinitionInstructionBuilder({
   normalizeTransactionAssetDefinitionId,
   buildMintAssetInstruction,
@@ -64,6 +66,7 @@ export function createRegisterAssetDefinitionInstructionBuilder({
         "assetDefinition.owningDomain is required for DataspaceRestricted balances",
       );
     }
+    const name = normalizeAssetDefinitionName(assetDefinition.name, "assetDefinition.name");
     const assetDefinitionId = normalizeTransactionAssetDefinitionId(
       assetDefinition.assetDefinitionId,
       "assetDefinition.assetDefinitionId",
@@ -80,6 +83,7 @@ export function createRegisterAssetDefinitionInstructionBuilder({
       Register: {
         AssetDefinition: {
           id: assetDefinitionId,
+          name,
           logo: assetDefinition.logo ?? null,
           metadata: assetDefinition.metadata ?? {},
           mintable: assetDefinition.mintable ?? "Infinitely",

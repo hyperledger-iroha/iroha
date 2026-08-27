@@ -538,6 +538,382 @@ state_test! { sync pipeline_trigger_fails_closed_on_missing_bytecode
     let_row! { trigger = view .world .triggers() .pipeline_triggers() .get(&trigger_id) .expect("failed pipeline trigger should remain for storage repair") };
     assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
 }
+state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_healthy_sibling
+    use iroha_data_model::events::pipeline::{
+        BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+    };
+    pipeline_trigger_transaction!(state, block1, state_block, stx);
+    let bad_trigger_id: TriggerId = "a_pipeline_failure".parse().unwrap();
+    let good_trigger_id: TriggerId = "b_pipeline_healthy".parse().unwrap();
+    let rolled_back_key: Name = "pipeline_rolled_back".parse().unwrap();
+    let healthy_key: Name = "pipeline_healthy".parse().unwrap();
+    let missing_account = AccountId::new(crate::state::checked_keypair().public_key().clone());
+    let_row! { bad_action = Action::new(
+        vec![
+            InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                rolled_back_key.clone(),
+                Json::from(norito::json!("must-roll-back")),
+            )),
+            InstructionBox::from(SetKeyValue::account(
+                missing_account,
+                "missing".parse().unwrap(),
+                Json::from(norito::json!("boom")),
+            )),
+        ],
+        Repeats::Indefinitely,
+        ALICE_ID.clone(),
+        PipelineEventFilterBox::from(
+            BlockEventFilter::new().for_status(BlockStatus::Approved),
+        ),
+    ).expect("bad pipeline trigger action") };
+    let_row! { good_action = Action::new(
+        vec![InstructionBox::from(SetKeyValue::account(
+            ALICE_ID.clone(),
+            healthy_key.clone(),
+            Json::from(norito::json!("ok")),
+        ))],
+        Repeats::Exactly(1),
+        ALICE_ID.clone(),
+        PipelineEventFilterBox::from(
+            BlockEventFilter::new().for_status(BlockStatus::Approved),
+        ),
+    ).expect("healthy pipeline trigger action") };
+    Register::trigger(Trigger::new(bad_trigger_id.clone(), bad_action))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+    Register::trigger(Trigger::new(good_trigger_id.clone(), good_action))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+    stx.apply();
+    state_block.commit().unwrap();
+
+    let_row! { block2 = new_dummy_block_with_payload(|h| {
+        h.set_height(NonZeroU64::new(2).unwrap());
+    }) };
+    let mut state_block = state.block(block2.as_ref().header());
+    let outcomes = state_block.execute_pipeline_triggers_isolated([
+        PipelineEventBox::from(BlockEvent {
+            header: block2.as_ref().header(),
+            status: BlockStatus::Approved,
+        }),
+    ]);
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes[0].1.is_err(), "bad trigger must report failure");
+    assert!(outcomes[1].1.is_ok(), "healthy sibling must still execute");
+    state_block.commit().unwrap();
+
+    let view = state.view();
+    let account = view.world.account(&ALICE_ID).expect("alice account");
+    assert!(
+        account.metadata().get(&rolled_back_key).is_none(),
+        "prefix effects from the failed callback must roll back",
+    );
+    assert_eq!(
+        account.metadata().get(&healthy_key),
+        Some(&Json::from(norito::json!("ok"))),
+    );
+    let bad_trigger = view
+        .world
+        .triggers()
+        .pipeline_triggers()
+        .get(&bad_trigger_id)
+        .expect("failed trigger remains available for inspection");
+    assert_eq!(bad_trigger.repeats(), &Repeats::Indefinitely);
+    assert!(!crate::smartcontracts::isi::triggers::trigger_is_enabled(
+        bad_trigger.metadata()
+    ));
+    assert!(
+        view.world
+            .triggers()
+            .active_pipeline_trigger_ids()
+            .get(&bad_trigger_id)
+            .is_none(),
+        "failed trigger must be quarantined from later blocks",
+    );
+    assert!(
+        view.world.triggers().ids().get(&good_trigger_id).is_none(),
+        "healthy one-shot trigger should be depleted",
+    );
+}
+state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
+    use iroha_data_model::events::pipeline::{
+        BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+    };
+    pipeline_trigger_transaction!(state, block1, state_block, stx);
+    let trigger_id: TriggerId = "pipeline_self_replacement".parse().unwrap();
+    let filter = PipelineEventFilterBox::from(
+        BlockEventFilter::new().for_status(BlockStatus::Approved),
+    );
+    let_row! { replacement = Trigger::new(
+        trigger_id.clone(),
+        Action::new(
+            Vec::<InstructionBox>::new(),
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            filter.clone(),
+        ).expect("replacement trigger action"),
+    ) };
+    let_row! { original = Trigger::new(
+        trigger_id.clone(),
+        Action::new(
+            vec![
+                InstructionBox::from(Unregister::trigger(trigger_id.clone())),
+                InstructionBox::from(Register::trigger(replacement)),
+            ],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            filter,
+        ).expect("original trigger action"),
+    ) };
+    Register::trigger(original)
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+    stx.apply();
+    state_block.commit().unwrap();
+
+    let_row! { block2 = new_dummy_block_with_payload(|h| {
+        h.set_height(NonZeroU64::new(2).unwrap());
+    }) };
+    let mut state_block = state.block(block2.as_ref().header());
+    let outcomes = state_block.execute_pipeline_triggers_isolated([
+        PipelineEventBox::from(BlockEvent {
+            header: block2.as_ref().header(),
+            status: BlockStatus::Approved,
+        }),
+    ]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].1.is_ok());
+    state_block.commit().unwrap();
+
+    let view = state.view();
+    let replacement = view
+        .world
+        .triggers()
+        .pipeline_triggers()
+        .get(&trigger_id)
+        .expect("replacement trigger must remain registered");
+    assert_eq!(replacement.repeats(), &Repeats::Exactly(1));
+}
+state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matching
+    use iroha_data_model::events::pipeline::{
+        BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+    };
+    pipeline_trigger_transaction!(state, block1, state_block, stx);
+    let replacer_id: TriggerId = "a_pipeline_sibling_replacer".parse().unwrap();
+    let replaced_id: TriggerId = "b_pipeline_sibling_replaced".parse().unwrap();
+    let replacement_executed: Name = "pipeline_replacement_executed".parse().unwrap();
+    let filter = PipelineEventFilterBox::from(
+        BlockEventFilter::new().for_status(BlockStatus::Approved),
+    );
+    let_row! { replacement = Trigger::new(
+        replaced_id.clone(),
+        Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                replacement_executed.clone(),
+                Json::from(norito::json!(true)),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            filter.clone(),
+        ).expect("replacement sibling action"),
+    ) };
+    let_row! { replacer = Trigger::new(
+        replacer_id.clone(),
+        Action::new(
+            vec![
+                InstructionBox::from(Unregister::trigger(replaced_id.clone())),
+                InstructionBox::from(Register::trigger(replacement)),
+            ],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            filter.clone(),
+        ).expect("sibling replacer action"),
+    ) };
+    let_row! { original_sibling = Trigger::new(
+        replaced_id.clone(),
+        Action::new(
+            Vec::<InstructionBox>::new(),
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            filter,
+        ).expect("original sibling action"),
+    ) };
+    Register::trigger(replacer)
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+    Register::trigger(original_sibling)
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+    stx.apply();
+    state_block.commit().unwrap();
+
+    let_row! { block2 = new_dummy_block_with_payload(|h| {
+        h.set_height(NonZeroU64::new(2).unwrap());
+    }) };
+    let mut state_block = state.block(block2.as_ref().header());
+    let outcomes = state_block.execute_pipeline_triggers_isolated([
+        PipelineEventBox::from(BlockEvent {
+            header: block2.as_ref().header(),
+            status: BlockStatus::Approved,
+        }),
+    ]);
+    assert_eq!(outcomes.len(), 1, "the stale sibling match must be skipped");
+    assert_eq!(outcomes[0].0, replacer_id);
+    assert!(outcomes[0].1.is_ok());
+    assert_eq!(
+        state_block.committed_fragment_count(),
+        1,
+        "a skipped stale match must not commit a phantom empty fragment",
+    );
+    state_block.commit().unwrap();
+
+    {
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert!(
+            account.metadata().get(&replacement_executed).is_none(),
+            "a replacement registered after ID matching must not execute in the same block",
+        );
+        let replacement = view
+            .world
+            .triggers()
+            .pipeline_triggers()
+            .get(&replaced_id)
+            .expect("replacement sibling must remain registered");
+        assert_eq!(replacement.repeats(), &Repeats::Exactly(1));
+    }
+
+    let_row! { block3 = new_dummy_block_with_payload(|h| {
+        h.set_height(NonZeroU64::new(3).unwrap());
+    }) };
+    let mut state_block = state.block(block3.as_ref().header());
+    let outcomes = state_block.execute_pipeline_triggers_isolated([
+        PipelineEventBox::from(BlockEvent {
+            header: block3.as_ref().header(),
+            status: BlockStatus::Approved,
+        }),
+    ]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].1.is_ok());
+    state_block.commit().unwrap();
+
+    let view = state.view();
+    let account = view.world.account(&ALICE_ID).expect("alice account");
+    assert_eq!(
+        account.metadata().get(&replacement_executed),
+        Some(&Json::from(norito::json!(true))),
+        "the replacement becomes eligible in the following block",
+    );
+}
+state_test! { sync data_trigger_revalidates_the_captured_incarnation_and_event
+    pipeline_trigger_transaction!(state, block1, state_block, stx);
+    let_row! { asset_definition_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "data_revalidation_coin".parse().unwrap(),
+    ) };
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_definition_id.clone(),
+        "data revalidation coin",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(DomainId::try_new("wonderland", "universal").unwrap()),
+    ))
+    .execute(&ALICE_ID, &mut stx)
+    .unwrap();
+    let asset_id = AssetId::new(asset_definition_id, ALICE_ID.clone());
+    let replacer_id: TriggerId = "a_data_sibling_replacer".parse().unwrap();
+    let replaced_id: TriggerId = "b_data_sibling_replaced".parse().unwrap();
+    let replacement_executed: Name = "data_replacement_executed".parse().unwrap();
+    let asset_filter = DataEventFilter::Asset(
+        data_pre::AssetEventFilter::new().for_asset(asset_id.clone()),
+    );
+    let_row! { replacement = Trigger::new(
+        replaced_id.clone(),
+        Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                replacement_executed.clone(),
+                Json::from(norito::json!(true)),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            asset_filter.clone(),
+        ).expect("replacement data-trigger action"),
+    ) };
+    let_row! { replacer = Trigger::new(
+        replacer_id.clone(),
+        Action::new(
+            vec![
+                InstructionBox::from(Unregister::trigger(replaced_id.clone())),
+                InstructionBox::from(Register::trigger(replacement)),
+            ],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            asset_filter.clone(),
+        ).expect("data-trigger sibling replacer action"),
+    ) };
+    let_row! { original_sibling = Trigger::new(
+        replaced_id.clone(),
+        Action::new(
+            Vec::<InstructionBox>::new(),
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            asset_filter,
+        ).expect("original data-trigger sibling action"),
+    ) };
+    Register::trigger(replacer)
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+    Register::trigger(original_sibling)
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+    stx.apply();
+    state_block.commit().unwrap();
+
+    let_row! { block2 = new_dummy_block_with_payload(|h| {
+        h.set_height(NonZeroU64::new(2).unwrap());
+    }) };
+    let mut state_block = state.block(block2.as_ref().header());
+    let mut stx = state_block.transaction();
+    Mint::asset_quantity(1_u32, asset_id.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+    let first_sequence = stx
+        .execute_data_triggers_dfs(&ALICE_ID)
+        .expect("the matching replacer executes");
+    assert!(first_sequence.iter().any(|step| step.id == replacer_id));
+    assert!(
+        stx.world
+            .account(&ALICE_ID)
+            .unwrap()
+            .metadata()
+            .get(&replacement_executed)
+            .is_none(),
+        "the replacement must not inherit the predecessor's captured asset event",
+    );
+    let replacement = stx
+        .world
+        .triggers
+        .data_triggers()
+        .get(&replaced_id)
+        .expect("replacement data trigger remains registered");
+    assert_eq!(replacement.repeats(), &Repeats::Exactly(1));
+
+    Mint::asset_quantity(1_u32, asset_id)
+    .execute(&ALICE_ID, &mut stx)
+    .unwrap();
+    stx.execute_data_triggers_dfs(&ALICE_ID)
+        .expect("a fresh matching asset event executes the replacement");
+    assert_eq!(
+        stx.world
+            .account(&ALICE_ID)
+            .unwrap()
+            .metadata()
+            .get(&replacement_executed),
+        Some(&Json::from(norito::json!(true))),
+    );
+}
 state_test! { sync pipeline_trigger_instruction_failure_rolls_back_and_preserves_repeats
     use iroha_data_model::events::pipeline::{
         BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,

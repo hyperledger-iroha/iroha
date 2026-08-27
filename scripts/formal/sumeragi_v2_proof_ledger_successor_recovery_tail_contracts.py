@@ -3933,7 +3933,7 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             "lane_work.schedule_retransmission()",
             "dispatch_lane_work_effects(",
             "else",
-            "broadcast_npos_vrf_messages(",
+            "broadcast_npos_beacon_messages(",
             "let discovery_was_outstanding = if lane_only_completion_barrier",
             "block_sync_request.is_some()",
             "retry_exact_output_and_apply_sidecar_admissions(",
@@ -4004,7 +4004,7 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
                 "advance_executor(",
                 "retry_exact_output_and_apply_sidecar_admissions(",
                 "replay_buffered_chunks(",
-                "broadcast_npos_vrf_messages(",
+                "broadcast_npos_beacon_messages(",
                 "service_kura_replica_advert_refresh_turn(",
                 "schedule_local_proposal(",
             )

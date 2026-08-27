@@ -418,6 +418,42 @@ enum AutonomousLaneClaimReleaseAuthorizationMode {
     QueuePrepared,
     /// A non-producer replica is already exact FIFO-owned under Queue's fence.
     ReplicaFifo,
+    /// Queue supplied a fenced, replica-specific absent-or-FIFO disposition.
+    ReplicaDisposition,
+}
+/// Formal Queue state retained while Kura advances an exact `Released` prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutonomousLaneReleasedClaimDisposition {
+    /// Producer-owned ordered release is protected by its durable Queue barrier.
+    QueueReleasePrepared,
+    /// A nonproducer replica proved exhaustive local Queue absence.
+    ReplicaQueueAbsent,
+    /// A nonproducer replica preserved a byte-identical ordinary FIFO copy.
+    ReplicaQueueFifoPreserved,
+}
+impl AutonomousLaneReleasedClaimDisposition {
+    const fn reservation_state(self) -> u8 {
+        match self {
+            Self::QueueReleasePrepared => IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED,
+            Self::ReplicaQueueAbsent => IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT,
+            Self::ReplicaQueueFifoPreserved => {
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+            }
+        }
+    }
+    const fn replica_queue_disposition(
+        self,
+    ) -> Option<AutonomousLifecycleReplicaQueueDispositionV1> {
+        match self {
+            Self::QueueReleasePrepared => None,
+            Self::ReplicaQueueAbsent => {
+                Some(AutonomousLifecycleReplicaQueueDispositionV1::StrictQueueAbsent)
+            }
+            Self::ReplicaQueueFifoPreserved => {
+                Some(AutonomousLifecycleReplicaQueueDispositionV1::ExactOrdinaryFifo)
+            }
+        }
+    }
 }
 /// Move-only authority for Queue's exact ordered `PrepareRelease` append.
 ///
@@ -796,6 +832,7 @@ impl AutonomousLaneReleaseProjectionContext {
         finalize_release: bool,
         release_mode: AutonomousLaneClaimReleaseAuthorizationMode,
         prefix_before: u64,
+        released_disposition: AutonomousLaneReleasedClaimDisposition,
     ) -> std::result::Result<AutonomousLaneEntrypointClaimTransitionAuthorization, String> {
         let selected_count = self.reservation_group.reservation_count;
         let binding_a =
@@ -804,34 +841,64 @@ impl AutonomousLaneReleaseProjectionContext {
             return Err("autonomous claim transition names another retirement".to_owned());
         }
         let (action, actor, before, after) = if finalize_release {
+            let replacement_disposition = replacement.replica_queue_disposition();
             if prefix_before >= selected_count
-                || !matches!(
+                || replacement_disposition != released_disposition.replica_queue_disposition()
+                || (!matches!(
                     replacement.state,
                     AutonomousLaneEntrypointClaimStateV1::Released(_)
-                )
+                ) && replacement_disposition.is_none())
             {
                 return Err("invalid autonomous Released prefix transition".to_owned());
             }
-            let (reservation_state, fifo_restored, actor) = match release_mode {
-                AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared => (
-                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED,
-                    false,
-                    0,
-                ),
-                AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo => {
-                    if self.actor == self.producer {
+            let (reservation_state, fifo_restored, actor) =
+                match (release_mode, released_disposition) {
+                    (
+                        AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared,
+                        AutonomousLaneReleasedClaimDisposition::QueueReleasePrepared,
+                    ) => (
+                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED,
+                        false,
+                        0,
+                    ),
+                    (
+                        AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo,
+                        AutonomousLaneReleasedClaimDisposition::QueueReleasePrepared,
+                    ) => {
+                        if self.actor == self.producer {
+                            return Err(
+                                "producer cannot use non-Queue replica FIFO release authority"
+                                    .to_owned(),
+                            );
+                        }
+                        (
+                            IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
+                            true,
+                            self.actor,
+                        )
+                    }
+                    (
+                        AutonomousLaneClaimReleaseAuthorizationMode::ReplicaDisposition,
+                        disposition @ (
+                            AutonomousLaneReleasedClaimDisposition::ReplicaQueueAbsent
+                            | AutonomousLaneReleasedClaimDisposition::ReplicaQueueFifoPreserved
+                        ),
+                    ) => {
+                        if self.actor == self.producer {
+                            return Err(
+                                "producer cannot use replica Queue disposition authority"
+                                    .to_owned(),
+                            );
+                        }
+                        (disposition.reservation_state(), false, 0)
+                    }
+                    _ => {
                         return Err(
-                            "producer cannot use non-Queue replica FIFO release authority"
+                            "autonomous claim release authority and Queue disposition disagree"
                                 .to_owned(),
                         );
                     }
-                    (
-                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
-                        true,
-                        self.actor,
-                    )
-                }
-            };
+                };
             let before = self.state_with_fifo(
                 binding_a,
                 reservation_state,
@@ -916,10 +983,7 @@ impl AutonomousLaneReleaseProjectionContext {
         let (before_reservation, before_fifo) = if released_prefix == 0 {
             (IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE, false)
         } else {
-            (
-                IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
-                true,
-            )
+            (IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED, true)
         };
         let before = self.state_with_fifo(
             binding_a,
@@ -950,6 +1014,62 @@ impl AutonomousLaneReleaseProjectionContext {
                 "non-producer replica FIFO ownership failed the composed direct-release gate"
                     .to_owned()
             })
+    }
+    /// Check the formal handoff from the globally selected reservation state
+    /// to one exact nonproducer replica Queue disposition.
+    fn observe_replica_queue_release_transition(
+        self,
+        exact_ordinary_fifo_preserved: bool,
+    ) -> std::result::Result<
+        CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
+        String,
+    > {
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(self.reservation_group);
+        let before = self.state(
+            binding_a,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            true,
+            self.reservation_group.reservation_count,
+            0,
+        );
+        check_production_in_flight_first_release_observe_replica_queue_release_transition(
+            before,
+            exact_ordinary_fifo_preserved,
+        )
+        .ok_or_else(|| {
+            "autonomous replica Queue observation failed the composed transition gate".to_owned()
+        })
+    }
+    /// Return the exact terminal state reached after every replica claim is
+    /// Released without asserting FIFO restoration by the producer protocol.
+    fn replica_queue_release_state(
+        self,
+        exact_ordinary_fifo_preserved: bool,
+        released_prefix: u64,
+    ) -> ProductionInFlightFirstReleaseStateProjection {
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(self.reservation_group);
+        self.state(
+            binding_a,
+            if exact_ordinary_fifo_preserved {
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+            } else {
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT
+            },
+            true,
+            self.reservation_group.reservation_count,
+            released_prefix,
+        )
+    }
+    fn replica_queue_terminal_state(
+        self,
+        exact_ordinary_fifo_preserved: bool,
+    ) -> ProductionInFlightFirstReleaseStateProjection {
+        self.replica_queue_release_state(
+            exact_ordinary_fifo_preserved,
+            self.reservation_group.reservation_count,
+        )
     }
     fn queue_preparation_authorization(
         self,
@@ -2651,7 +2771,7 @@ impl Kura {
                 "injected autonomous merge bundle publication failure",
             ));
         }
-        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
+        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         #[cfg(test)]
         if FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_APPEND_DATA_SYNC.with(|flag| flag.replace(false)) {
@@ -2696,7 +2816,7 @@ impl Kura {
                 "autonomous merge bundle changed before durable readback",
             ));
         }
-        let after_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
+        let after_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
         self.update_disk_usage_delta(before_bytes, after_bytes);
         accounting_mutation.finish();
         #[cfg(test)]

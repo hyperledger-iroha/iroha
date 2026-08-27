@@ -513,12 +513,6 @@ fn validate_prepared_network_projection(
         path.display()
     );
     ensure!(
-        config.network.debug_packet_loss_inbound_percent == 0
-            && config.network.debug_packet_loss_outbound_percent == 0,
-        "prepared validator config {} enables debug packet loss, which can deterministically prevent committee progress",
-        path.display()
-    );
-    ensure!(
         config.network.allow_cidrs.is_empty() && config.network.deny_cidrs.is_empty(),
         "prepared validator config {} uses P2P CIDR ACLs whose meaning changes on a Compose bridge",
         path.display()

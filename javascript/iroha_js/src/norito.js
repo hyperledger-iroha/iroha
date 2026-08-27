@@ -279,14 +279,15 @@ const UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID = "iroha_data_model::isi::smart_c
 const FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload";
 const CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload";
 const REMOVE_SMART_CONTRACT_BYTES_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes";
-const CREATE_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::CreateKaigi";
-const JOIN_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::JoinKaigi";
-const LEAVE_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::LeaveKaigi";
-const END_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::EndKaigi";
-const RECORD_KAIGI_USAGE_WIRE_ID = "iroha_data_model::isi::kaigi::RecordKaigiUsage";
-const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha_data_model::isi::kaigi::SetKaigiRelayManifest";
-const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha_data_model::isi::kaigi::RegisterKaigiRelay";
-const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth";
+const CREATE_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::CreateKaigi";
+const JOIN_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::JoinKaigi";
+const LEAVE_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::LeaveKaigi";
+const END_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::EndKaigi";
+const RECORD_KAIGI_USAGE_WIRE_ID = "iroha.instruction.v1::kaigi::RecordKaigiUsage";
+const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha.instruction.v1::kaigi::SetKaigiRelayManifest";
+const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::RegisterKaigiRelay";
+const UNREGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::UnregisterKaigiRelay";
+const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth";
 const KAIGI_WIRE_IDS = new Set([
   CREATE_KAIGI_WIRE_ID,
   JOIN_KAIGI_WIRE_ID,
@@ -295,6 +296,7 @@ const KAIGI_WIRE_IDS = new Set([
   RECORD_KAIGI_USAGE_WIRE_ID,
   SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
   REGISTER_KAIGI_RELAY_WIRE_ID,
+  UNREGISTER_KAIGI_RELAY_WIRE_ID,
   REPORT_KAIGI_RELAY_HEALTH_WIRE_ID,
 ]);
 const PROPOSE_DEPLOY_CONTRACT_WIRE_ID = "iroha_data_model::isi::governance::ProposeDeployContract";
@@ -325,14 +327,20 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [ISSUE_REPLICATION_ORDER_WIRE_ID]: ISSUE_REPLICATION_ORDER_WIRE_ID,
   [COMPLETE_REPLICATION_ORDER_WIRE_ID]: COMPLETE_REPLICATION_ORDER_WIRE_ID,
   [EXPIRE_REPLICATION_ORDER_WIRE_ID]: EXPIRE_REPLICATION_ORDER_WIRE_ID,
-  [CREATE_KAIGI_WIRE_ID]: CREATE_KAIGI_WIRE_ID,
-  [JOIN_KAIGI_WIRE_ID]: JOIN_KAIGI_WIRE_ID,
-  [LEAVE_KAIGI_WIRE_ID]: LEAVE_KAIGI_WIRE_ID,
-  [END_KAIGI_WIRE_ID]: END_KAIGI_WIRE_ID,
-  [RECORD_KAIGI_USAGE_WIRE_ID]: RECORD_KAIGI_USAGE_WIRE_ID,
-  [SET_KAIGI_RELAY_MANIFEST_WIRE_ID]: SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
-  [REGISTER_KAIGI_RELAY_WIRE_ID]: REGISTER_KAIGI_RELAY_WIRE_ID,
-  [REPORT_KAIGI_RELAY_HEALTH_WIRE_ID]: REPORT_KAIGI_RELAY_HEALTH_WIRE_ID,
+  [CREATE_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::CreateKaigi",
+  [JOIN_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::JoinKaigi",
+  [LEAVE_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::LeaveKaigi",
+  [END_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::EndKaigi",
+  [RECORD_KAIGI_USAGE_WIRE_ID]:
+    "iroha_data_model::isi::kaigi::RecordKaigiUsage",
+  [SET_KAIGI_RELAY_MANIFEST_WIRE_ID]:
+    "iroha_data_model::isi::kaigi::SetKaigiRelayManifest",
+  [REGISTER_KAIGI_RELAY_WIRE_ID]:
+    "iroha_data_model::isi::kaigi::RegisterKaigiRelay",
+  [UNREGISTER_KAIGI_RELAY_WIRE_ID]:
+    "iroha_data_model::isi::kaigi::UnregisterKaigiRelay",
+  [REPORT_KAIGI_RELAY_HEALTH_WIRE_ID]:
+    "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth",
   [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]: PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
   [CAST_ZK_BALLOT_WIRE_ID]: CAST_ZK_BALLOT_WIRE_ID,
   [CAST_PLAIN_BALLOT_WIRE_ID]: CAST_PLAIN_BALLOT_WIRE_ID,
@@ -1102,6 +1110,13 @@ export function noritoEncodeMultisigProposeRequest(request) {
         ),
       ],
       [
+        encodeOptionValue(
+          validationFeeMetadata.hijiriFeeQuoteHash,
+          encodeNoritoStringValue,
+          "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash",
+        ),
+      ],
+      [
         encodeNoritoVec(request.instructions, (instruction, index) =>
           encodeEmbeddedInstructionBox(
             instruction,
@@ -1132,15 +1147,23 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
   rejectValidationFeeCamelCaseDtoFields(request);
   const policyVersion = request.validation_fee_policy_version ?? null;
   const policyHash = request.validation_fee_policy_hash ?? null;
+  const hijiriFeeQuoteHash = request.validation_fee_hijiri_fee_quote_hash ?? null;
   const instructionIndex = request.validation_fee_instruction_index ?? null;
   const transferEntryIndex = request.validation_fee_transfer_entry_index ?? null;
   const hasPolicyVersion = policyVersion !== null && policyVersion !== undefined;
   const hasPolicyHash = policyHash !== null && policyHash !== undefined;
+  const hasHijiriFeeQuoteHash =
+    hijiriFeeQuoteHash !== null && hijiriFeeQuoteHash !== undefined;
   const hasInstructionIndex = instructionIndex !== null && instructionIndex !== undefined;
   const hasTransferEntryIndex = transferEntryIndex !== null && transferEntryIndex !== undefined;
   if (hasPolicyVersion !== hasPolicyHash) {
     throw new TypeError(
       "MultisigProposeDto.validation_fee_policy_version and validation_fee_policy_hash must be provided together",
+    );
+  }
+  if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
+    throw new TypeError(
+      "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash requires validation fee policy metadata",
     );
   }
   if (!hasPolicyVersion && hasInstructionIndex) {
@@ -1159,7 +1182,13 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
     );
   }
   if (!hasPolicyVersion) {
-    return { policyVersion: null, policyHash: null, instructionIndex: null, transferEntryIndex: null };
+    return {
+      policyVersion: null,
+      policyHash: null,
+      hijiriFeeQuoteHash: null,
+      instructionIndex: null,
+      transferEntryIndex: null,
+    };
   }
   return {
     policyVersion: normalizeU64Input(
@@ -1170,6 +1199,12 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
       policyHash,
       "MultisigProposeDto.validation_fee_policy_hash",
     ),
+    hijiriFeeQuoteHash: hasHijiriFeeQuoteHash
+      ? normalizeValidationFeePolicyHashString(
+          hijiriFeeQuoteHash,
+          "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash",
+        )
+      : null,
     instructionIndex: hasInstructionIndex
       ? normalizeU64Input(
           instructionIndex,
@@ -1189,6 +1224,7 @@ function rejectValidationFeeCamelCaseDtoFields(request) {
   for (const [camelName, snakeName] of [
     ["validationFeePolicyVersion", "validation_fee_policy_version"],
     ["validationFeePolicyHash", "validation_fee_policy_hash"],
+    ["validationFeeHijiriFeeQuoteHash", "validation_fee_hijiri_fee_quote_hash"],
     ["validationFeeInstructionIndex", "validation_fee_instruction_index"],
     ["validationFeeTransferEntryIndex", "validation_fee_transfer_entry_index"],
   ]) {
@@ -4190,6 +4226,21 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
+    case UNREGISTER_KAIGI_RELAY_WIRE_ID: {
+      const fields = decodeStructFields(payload, "Kaigi.UnregisterKaigiRelay", [
+        "relay_id",
+      ]);
+      return {
+        Kaigi: {
+          UnregisterKaigiRelay: {
+            relay_id: decodeAccountIdValue(
+              fields.relay_id,
+              "Kaigi.UnregisterKaigiRelay.relay_id",
+            ),
+          },
+        },
+      };
+    }
     case REPORT_KAIGI_RELAY_HEALTH_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.ReportKaigiRelayHealth", [
         "call_id",
@@ -6254,6 +6305,12 @@ function encodeKaigiInstruction(instruction) {
       encodeRegisterKaigiRelayPayload(instruction.RegisterKaigiRelay),
     );
   }
+  if (isPlainObject(instruction.UnregisterKaigiRelay)) {
+    return encodeInstructionEnvelope(
+      UNREGISTER_KAIGI_RELAY_WIRE_ID,
+      encodeUnregisterKaigiRelayPayload(instruction.UnregisterKaigiRelay),
+    );
+  }
   if (isPlainObject(instruction.ReportKaigiRelayHealth)) {
     return encodeInstructionEnvelope(
       REPORT_KAIGI_RELAY_HEALTH_WIRE_ID,
@@ -6317,6 +6374,12 @@ function encodeSetKaigiRelayManifestPayload(value) {
 function encodeRegisterKaigiRelayPayload(value) {
   return encodeStructValue([
     [encodeKaigiRelayRegistrationValue(value.relay, "Kaigi.RegisterKaigiRelay.relay")],
+  ]);
+}
+
+function encodeUnregisterKaigiRelayPayload(value) {
+  return encodeStructValue([
+    [encodeAccountIdValue(value.relay_id, "Kaigi.UnregisterKaigiRelay.relay_id")],
   ]);
 }
 

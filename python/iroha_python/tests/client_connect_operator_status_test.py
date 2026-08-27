@@ -13,7 +13,6 @@ from iroha_torii_client.client import canonical_request_message
 from iroha_python import NetworkId, OperatorSigningContext, ToriiClient
 from iroha_python.crypto import Ed25519KeyPair
 
-
 NETWORK_BYTES = bytes([0xC7]) * 32
 NETWORK_ID = NetworkId.from_bytes(NETWORK_BYTES)
 KEY_PAIR = Ed25519KeyPair.from_private_key(bytes([0x17]) * 32)

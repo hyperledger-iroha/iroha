@@ -6,7 +6,18 @@ import json
 import re
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional, TypeAlias, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Final,
+    Iterable,
+    Mapping,
+    Optional,
+    TypeAlias,
+    Union,
+    cast,
+)
 
 from ._native import load_crypto_extension
 from .address import AccountAddress
@@ -16,7 +27,18 @@ _crypto = load_crypto_extension()
 # Exact genesis-derived transaction domain. Construction is closed in the
 # native boundary so ordinary signing APIs cannot reinterpret labels or bare
 # byte strings as a NetworkId.
-NetworkId = _crypto.NetworkId
+if TYPE_CHECKING:
+    class NetworkId(Any):
+        """Static view of the required native ``NetworkId`` value."""
+
+        literal: str
+
+        @classmethod
+        def parse(cls, literal: str) -> "NetworkId": ...
+
+        def to_bytes(self) -> bytes: ...
+else:
+    NetworkId = _crypto.NetworkId
 
 
 def _require_network_id(value: Any, context: str = "network_id") -> NetworkId:
@@ -67,14 +89,9 @@ PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATION_STATUS_V1: Final[Mapping[str, int
     )
 )
 _PRIVACY_MAX_BRIDGE_ABI_VERSION: Final[int] = 0xFFFF_FFFF
-try:
-    SUPPORTED_CRYPTO_ALGORITHMS: Final[tuple[str, ...]] = tuple(
-        _crypto.supported_crypto_algorithms()
-    )
-except AttributeError as exc:  # pragma: no cover - stale native extension guard
-    raise RuntimeError(
-        "iroha_python._crypto is missing the all-algorithm crypto API; rebuild the extension"
-    ) from exc
+SUPPORTED_CRYPTO_ALGORITHMS: Final[tuple[str, ...]] = tuple(
+    _crypto.supported_crypto_algorithms()
+)
 
 ED25519_PRIVATE_KEY_LENGTH: Final[int] = 32
 ED25519_PUBLIC_KEY_LENGTH: Final[int] = 32
@@ -91,22 +108,6 @@ SM2_PRIVATE_KEY_LENGTH: Final[int] = 32
 SM2_PUBLIC_KEY_LENGTH: Final[int] = 65
 SM2_SIGNATURE_LENGTH: Final[int] = 64
 SM2_DEFAULT_DISTINGUISHED_ID: Final[str] = _crypto.sm2_default_distid()
-
-_SM2_FIXTURE_REFERENCE: Dict[str, str] = {
-    "distid": "1234567812345678",
-    "seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
-    "message_hex": "69726F686120736D2073646B2066697874757265",
-    "private_key_hex": "A333F581EC034C1689B750A827E150240565B483DEB28294DDB2089AD925A569",
-    "public_key_sec1_hex": "04361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F",
-    "public_key_multihash": "86265300103132333435363738313233343536373804361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F",
-    "public_key_prefixed": "sm2:86265300103132333435363738313233343536373804361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F",
-    "za": "E54EDEDE2A2FCC1C9DF868C56F8A2DD8C562F1AD3C78DC11DD7D91BB6F0EBD46",
-    "signature": "1877845D5FFE0305946EEA3046D0279BE886B866EF620B7325413602CAD17C7FF72EBF26C29E77AAAB2226EDFBEE2D6D6ABC0D6C9B2C9A2248E2BD9324A12268",
-    "r": "1877845D5FFE0305946EEA3046D0279BE886B866EF620B7325413602CAD17C7F",
-    "s": "F72EBF26C29E77AAAB2226EDFBEE2D6D6ABC0D6C9B2C9A2248E2BD9324A12268",
-}
-_SM2_FIXTURE_SEED = bytes.fromhex(_SM2_FIXTURE_REFERENCE["seed_hex"])
-_SM2_FIXTURE_MESSAGE = bytes.fromhex(_SM2_FIXTURE_REFERENCE["message_hex"])
 
 __all__ = [
     "ED25519_ALGORITHM",
@@ -1457,17 +1458,6 @@ def sm2_fixture_from_seed(
     else:
         message_bytes = bytes(message)
 
-    if not hasattr(_crypto, "sm2_fixture_from_seed"):
-        if (
-            distid == _SM2_FIXTURE_REFERENCE["distid"]
-            and seed_bytes == _SM2_FIXTURE_SEED
-            and message_bytes == _SM2_FIXTURE_MESSAGE
-        ):
-            return dict(_SM2_FIXTURE_REFERENCE)
-        raise RuntimeError(
-            "SM2 fixture helper unavailable; rebuild iroha_python._crypto with SM support"
-        )
-
     fixture = _crypto.sm2_fixture_from_seed(distid, seed_bytes, message_bytes)
     # The native layer returns a dictionary mapping to uppercase hex strings.
     return dict(fixture)
@@ -1998,7 +1988,7 @@ def _privacy_unsigned_byte_view(
     typed_message: str,
 ) -> memoryview:
     try:
-        view = memoryview(value)
+        view = memoryview(cast(Any, value))
     except TypeError as exc:
         raise TypeError(bytes_like_message) from exc
     if view.format != "B" or view.itemsize != 1:
@@ -2362,9 +2352,16 @@ def signed_transaction_envelope_from_versioned_v1(
         ) from exc
     except Exception:
         raise ValueError("invalid canonical signed transaction") from None
-    if not isinstance(result, SignedTransactionEnvelope):
+    if not _is_native_crypto_instance(result, "SignedTransactionEnvelope"):
         raise RuntimeError("native signed transaction envelope returned an invalid result")
     return result
+
+
+def _is_native_crypto_instance(value: object, type_name: str) -> bool:
+    """Return whether ``value`` has the named concrete PyO3 extension type."""
+
+    native_type = getattr(_crypto, type_name, None)
+    return isinstance(native_type, type) and isinstance(value, native_type)
 
 
 def verify_prepared_transaction_context_v1(
@@ -2403,7 +2400,7 @@ def verify_prepared_transaction_context_v1(
         ) from exc
     except Exception:
         raise ValueError("invalid prepared transaction context") from None
-    if not isinstance(result, SignedTransactionEnvelope):
+    if not _is_native_crypto_instance(result, "SignedTransactionEnvelope"):
         raise RuntimeError("native prepared transaction verifier returned an invalid result")
     return result
 

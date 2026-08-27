@@ -1,7 +1,7 @@
 //! Helpers to generate predecoder golden fixtures (JSON/bin) for tests and tools.
 //!
 //! Exposed so unit tests can generate fixtures on demand without shelling out to Cargo.
-use crate::{ProgramMetadata, encoding, instruction, ivm_cache::IvmCache, kotodama::wide as kwide};
+use crate::{ProgramMetadata, encoding, instruction, ivm_cache::IvmCache};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -10,17 +10,24 @@ use std::{
 fn build_mixed_code() -> Vec<u8> {
     let mut code = Vec::new();
     // 1) Wide ADD r3 = r1 + r2
-    code.extend_from_slice(&kwide::encode_add(3, 1, 2).to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2).to_le_bytes(),
+    );
     // 2) Wide SUB r6 = r4 - r5
-    code.extend_from_slice(&kwide::encode_sub(6, 4, 5).to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::SUB, 6, 4, 5).to_le_bytes(),
+    );
     // 3) Wide XOR r9 = r7 ^ r8
-    code.extend_from_slice(&kwide::encode_xor(9, 7, 8).to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::XOR, 9, 7, 8).to_le_bytes(),
+    );
     // 4) Branch if r1 == r1 to skip the next instruction (offset = 2 words)
-    let beq = kwide::encode_branch_checked(instruction::wide::control::BEQ, 1, 1, 2)
-        .expect("branch offset fits in imm8");
+    let beq = encoding::wide::encode_branch(instruction::wide::control::BEQ, 1, 1, 2);
     code.extend_from_slice(&beq.to_le_bytes());
     // 5) Filler instruction (will be skipped)
-    code.extend_from_slice(&kwide::encode_add(15, 15, 0).to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 15, 15, 0).to_le_bytes(),
+    );
     // 6) HALT
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     code
@@ -111,7 +118,7 @@ pub fn generate_predecoder_mixed_fixtures(root: &Path) -> Result<(), Box<dyn std
         .map(|op| {
             json_object([
                 ("pc".to_owned(), norito::json::Value::from(op.pc)),
-                ("len".to_owned(), norito::json::Value::from(op.len)),
+                ("len".to_owned(), norito::json::Value::from(4_u8)),
                 ("inst".to_owned(), norito::json::Value::from(op.inst)),
                 (
                     "inst_hex".to_owned(),

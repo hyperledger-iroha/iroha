@@ -568,9 +568,6 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
 fn lint_opaque_access_hints(program: &Program, warnings: &mut Vec<LintWarning>) {
     for item in &program.items {
         if let Item::Function(func) = item {
-            if !func.modifiers.access_reads.is_empty() || !func.modifiers.access_writes.is_empty() {
-                continue;
-            }
             lint_opaque_access_block(&func.body, warnings);
         }
     }
@@ -959,6 +956,9 @@ fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
             }
             Statement::While { cond, body } => {
                 record_expr_idents(cond, &state_lookup, &mut used);
+                if let Some(tail) = &body.tail {
+                    record_expr_idents(tail, &state_lookup, &mut used);
+                }
                 for stmt in body.statements.iter().rev() {
                     stmt_stack.push(stmt);
                 }
@@ -979,12 +979,18 @@ fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
                 if let Some(step_stmt) = step {
                     stmt_stack.push(&**step_stmt);
                 }
+                if let Some(tail) = &body.tail {
+                    record_expr_idents(tail, &state_lookup, &mut used);
+                }
                 for stmt in body.statements.iter().rev() {
                     stmt_stack.push(stmt);
                 }
             }
             Statement::ForEachMap { map, body, .. } => {
                 record_expr_idents(map, &state_lookup, &mut used);
+                if let Some(tail) = &body.tail {
+                    record_expr_idents(tail, &state_lookup, &mut used);
+                }
                 for stmt in body.statements.iter().rev() {
                     stmt_stack.push(stmt);
                 }
@@ -1242,6 +1248,9 @@ fn lint_unused_parameters(program: &Program, warnings: &mut Vec<LintWarning>) {
                     }
                     Statement::While { cond, body } => {
                         record_expr_idents(cond, &lookup, &mut used);
+                        if let Some(tail) = &body.tail {
+                            record_expr_idents(tail, &lookup, &mut used);
+                        }
                         for stmt in body.statements.iter().rev() {
                             stmt_stack.push(stmt);
                         }
@@ -1262,12 +1271,18 @@ fn lint_unused_parameters(program: &Program, warnings: &mut Vec<LintWarning>) {
                         if let Some(step_stmt) = step {
                             stmt_stack.push(&**step_stmt);
                         }
+                        if let Some(tail) = &body.tail {
+                            record_expr_idents(tail, &lookup, &mut used);
+                        }
                         for stmt in body.statements.iter().rev() {
                             stmt_stack.push(stmt);
                         }
                     }
                     Statement::ForEachMap { map, body, .. } => {
                         record_expr_idents(map, &lookup, &mut used);
+                        if let Some(tail) = &body.tail {
+                            record_expr_idents(tail, &lookup, &mut used);
+                        }
                         for stmt in body.statements.iter().rev() {
                             stmt_stack.push(stmt);
                         }
@@ -2168,6 +2183,38 @@ mod tests {
             .find(|warning| warning.code == "unused-parameter")
             .expect("expected unused-parameter lint for unused argument");
         assert_eq!(warning.diagnostic_code(), "K5003");
+    }
+    #[test]
+    fn loop_body_tail_uses_count_for_state_and_parameter_lints() {
+        let program = parse(
+            "seiyaku Demo { \
+                state StateMap<int, int> values; \
+                fn sink(Option<int> value) {} \
+                fn consume(int amount) { \
+                    for index in range(1) { sink(values.get(index + amount)) } \
+                } \
+            }",
+        )
+        .expect("parse loop-tail uses");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|warning| {
+                matches!(
+                    &warning.message,
+                    LintMessage::UnusedState { name } if name == "values"
+                )
+            }),
+            "loop tail must count as a state use: {warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|warning| {
+                matches!(
+                    &warning.message,
+                    LintMessage::UnusedParameter { name, .. } if name == "amount"
+                )
+            }),
+            "loop tail must count as a parameter use: {warnings:?}"
+        );
     }
     #[test]
     fn lint_unused_parameters_ignores_underscore() {

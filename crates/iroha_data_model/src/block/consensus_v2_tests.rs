@@ -1570,7 +1570,7 @@ mod tests {
                 request_hash: HashOf::new(&request),
                 manifest,
                 body: b"body".to_vec(),
-                responder: 0,
+                responder: context.roster[0].validator.clone(),
                 signature: vec![3],
             }),
             ConsensusMessageV2Payload::CommitCertificateRequest(commit_request.clone()),
@@ -1579,19 +1579,6 @@ mod tests {
                 certificate: commit,
                 responder: context.roster[0].validator.clone(),
                 signature: vec![4],
-            }),
-            ConsensusMessageV2Payload::VrfCommit(VrfCommit {
-                epoch: context.epoch,
-                commitment: [0x77; 32],
-                signer: 1,
-                bls_sig: vec![5],
-            }),
-            ConsensusMessageV2Payload::VrfReveal(VrfReveal {
-                epoch: context.epoch,
-                reveal: [0x88; 32],
-                signer: 1,
-                vrf_proof: vec![0x99],
-                bls_sig: vec![6],
             }),
             ConsensusMessageV2Payload::GlobalBeaconPartialSignature(beacon_partial),
         ];
@@ -2083,7 +2070,7 @@ mod tests {
             request_hash: HashOf::new(&request),
             manifest,
             body,
-            responder: 0,
+            responder: context.roster[0].validator.clone(),
             signature: vec![0x77; 48],
         };
         assert_eq!(response.validate(&context), Ok(()));
@@ -2117,7 +2104,7 @@ mod tests {
             Err(ValidationError::ResponderIdentityMismatch)
         );
         let mut archive_response = response.clone();
-        archive_response.responder = 3;
+        archive_response.responder = context.roster[3].validator.clone();
         assert_eq!(
             archive_response.validate_against(&context, &request, &context.roster[3].validator,),
             Ok(())
@@ -2125,6 +2112,12 @@ mod tests {
         assert_eq!(
             archive_response.validate_against(&context, &request, &context.roster[2].validator,),
             Err(ValidationError::ResponderIdentityMismatch)
+        );
+        let rotated_responder = peer(101);
+        archive_response.responder = rotated_responder.clone();
+        assert_eq!(
+            archive_response.validate_against(&context, &request, &rotated_responder),
+            Ok(())
         );
         let mut wrong_request = response.clone();
         wrong_request.request_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong request"));

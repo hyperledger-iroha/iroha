@@ -1,8 +1,5 @@
 //! Wide opcode 128-bit memory operation tests.
-use ivm::{
-    IVM, Memory, ProgramMetadata, VMError, encoding, instruction, ivm_mode,
-    kotodama::wide::{encode_addi, encode_load128, encode_store128},
-};
+use ivm::{IVM, Memory, ProgramMetadata, VMError, encoding, instruction, ivm_mode};
 const HALT: u32 = encoding::wide::encode_halt();
 fn program_header() -> Vec<u8> {
     let meta = ProgramMetadata {
@@ -21,9 +18,9 @@ fn append_word(buf: &mut Vec<u8>, word: u32) {
 #[test]
 fn wide_store_load128_roundtrip() {
     let target_addr = Memory::HEAP_START + 0x80;
-    let adjust = encode_addi(4, 4, 16);
-    let store = encode_store128(4, 5, 6);
-    let load = encode_load128(4, 8, 9);
+    let adjust = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 4, 4, 16);
+    let store = encoding::wide::encode_store128(instruction::wide::memory::STORE128, 4, 5, 6);
+    let load = encoding::wide::encode_load128(instruction::wide::memory::LOAD128, 8, 4, 9);
     let mut program = program_header();
     for word in [adjust, store, load, HALT] {
         append_word(&mut program, word);
@@ -53,8 +50,8 @@ fn wide_store_load128_roundtrip() {
 #[test]
 fn wide_store_load128_requires_alignment() {
     let target_addr = Memory::HEAP_START + 0x88;
-    let adjust = encode_addi(4, 4, 16);
-    let store = encode_store128(4, 5, 6);
+    let adjust = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 4, 4, 16);
+    let store = encoding::wide::encode_store128(instruction::wide::memory::STORE128, 4, 5, 6);
     let mut program = program_header();
     for word in [adjust, store, HALT] {
         append_word(&mut program, word);
@@ -71,10 +68,11 @@ fn wide_store_load128_requires_alignment() {
 fn wide_chunked_frame_updates_step_in_16_byte_chunks() {
     let first_addr = Memory::HEAP_START + 0xA0;
     let mut program = program_header();
-    let adjust_to_first = encode_addi(4, 4, 16);
-    let store_first = encode_store128(4, 5, 6);
-    let advance_chunk = encode_addi(4, 4, 16);
-    let store_second = encode_store128(4, 7, 8);
+    let adjust_to_first = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 4, 4, 16);
+    let store_first = encoding::wide::encode_store128(instruction::wide::memory::STORE128, 4, 5, 6);
+    let advance_chunk = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 4, 4, 16);
+    let store_second =
+        encoding::wide::encode_store128(instruction::wide::memory::STORE128, 4, 7, 8);
     for word in [
         adjust_to_first,
         store_first,

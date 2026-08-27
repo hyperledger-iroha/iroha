@@ -2038,6 +2038,51 @@ public final class KagemushaRecursiveSpendProver {
     return text;
   }
 
+  private static String requireStableOperationCode(final String value) {
+    if (value == null || value.isEmpty() || value.length() > 64) {
+      throw new IllegalArgumentException("rejection code must use the stable lowercase code grammar");
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char character = value.charAt(index);
+      final boolean alphanumeric = (character >= 'a' && character <= 'z')
+          || (character >= '0' && character <= '9');
+      if (!alphanumeric && (index == 0 || character != '_')) {
+        throw new IllegalArgumentException(
+            "rejection code must use the stable lowercase code grammar");
+      }
+    }
+    return value;
+  }
+
+  private static String requireCanonicalOperationMessage(final String value) {
+    if (value == null || value.isEmpty()
+        || isUnicodeWhitespace(value.codePointAt(0))
+        || isUnicodeWhitespace(value.codePointBefore(value.length()))
+        || value.codePointCount(0, value.length()) > 1024
+        || value.getBytes(StandardCharsets.UTF_8).length > 4096) {
+      throw new IllegalArgumentException("rejection message must be bounded canonical text");
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char character = value.charAt(index);
+      if (Character.isISOControl(character)) {
+        throw new IllegalArgumentException("rejection message must be bounded canonical text");
+      }
+      if (Character.isHighSurrogate(character)) {
+        if (index + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(index + 1))) {
+          throw new IllegalArgumentException("rejection message must be bounded canonical text");
+        }
+        index++;
+      } else if (Character.isLowSurrogate(character)) {
+        throw new IllegalArgumentException("rejection message must be bounded canonical text");
+      }
+    }
+    return value;
+  }
+
+  private static boolean isUnicodeWhitespace(final int codePoint) {
+    return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
+  }
+
   private static boolean bool(final byte[] value, final String field) {
     if (value.length != 1 || (value[0] != 0 && value[0] != 1)) {
       throw new IllegalStateException("native Kagemusha " + field + " is invalid");
@@ -2202,7 +2247,9 @@ public final class KagemushaRecursiveSpendProver {
     return switch (schema) {
       case "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
           "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2",
-          "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" -> 8;
+          "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4",
+          "iroha.torii.v1.offline.top_up.request",
+          "iroha.torii.v1.offline.redeem.request" -> 8;
       case "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2" -> 0;
       default -> 0;
     };
@@ -4013,8 +4060,8 @@ public final class KagemushaRecursiveSpendProver {
     private final String message;
 
     private OperationRejection(final String code, final String message) {
-      this.code = code;
-      this.message = message;
+      this.code = requireStableOperationCode(code);
+      this.message = requireCanonicalOperationMessage(message);
     }
 
     public String code() { return code; }
@@ -4034,6 +4081,9 @@ public final class KagemushaRecursiveSpendProver {
         final long serverTimeMilliseconds) {
       this.anchor = anchor;
       this.finalityProof = finalityProof;
+      if (finalizedBlockHeight <= 0 || serverTimeMilliseconds <= 0) {
+        throw new IllegalArgumentException("finalized top-up times must be positive");
+      }
       this.finalizedBlockHeight = finalizedBlockHeight;
       this.serverTimeMilliseconds = serverTimeMilliseconds;
     }
@@ -4065,10 +4115,31 @@ public final class KagemushaRecursiveSpendProver {
         final Long serverTimeMilliseconds,
         final FinalizedTopUp finalizedTopUp,
         final OperationRejection rejection) {
-      this.state = state;
-      this.kind = kind;
       this.operationId = requireDigest(operationId, "operationId");
       this.transactionHash = requireDigest(transactionHash, "transactionHash");
+      if (state == null || kind == null) {
+        throw new IllegalArgumentException("operation state and kind must be present");
+      }
+      final boolean valid = switch (state) {
+        case PENDING -> submittedAtMilliseconds != null && submittedAtMilliseconds > 0
+            && finalizedBlockHeight == null && serverTimeMilliseconds == null
+            && finalizedTopUp == null && rejection == null;
+        case APPLIED -> submittedAtMilliseconds == null
+            && finalizedBlockHeight != null && finalizedBlockHeight > 0
+            && serverTimeMilliseconds != null && serverTimeMilliseconds > 0
+            && rejection == null
+            && ((kind == OperationKind.TOP_UP && finalizedTopUp != null
+                    && finalizedTopUp.finalizedBlockHeight == finalizedBlockHeight
+                    && finalizedTopUp.serverTimeMilliseconds == serverTimeMilliseconds)
+                || (kind == OperationKind.REDEEM && finalizedTopUp == null));
+        case REJECTED -> submittedAtMilliseconds == null && finalizedBlockHeight == null
+            && serverTimeMilliseconds == null && finalizedTopUp == null && rejection != null;
+      };
+      if (!valid) {
+        throw new IllegalArgumentException("operation status fields are inconsistent");
+      }
+      this.state = state;
+      this.kind = kind;
       this.submittedAtMilliseconds = submittedAtMilliseconds;
       this.finalizedBlockHeight = finalizedBlockHeight;
       this.serverTimeMilliseconds = serverTimeMilliseconds;
@@ -4096,6 +4167,7 @@ public final class KagemushaRecursiveSpendProver {
     public static final String RECEIVER_LINEAGE_PATH = "/v1/offline/receiver-lineage";
     public static final String JSON_MEDIA_TYPE = "application/json";
     public static final String NORITO_MEDIA_TYPE = "application/x-norito";
+    private static final String UNSIGNED_LONG_MAX = "18446744073709551615";
 
     private final String baseUri;
     private final TransportExecutor transport;
@@ -4183,7 +4255,50 @@ public final class KagemushaRecursiveSpendProver {
                   .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
                   .build(),
               202)
-          .thenApply(response -> new OperationReference(response.body()));
+          .thenApply(
+              response -> {
+                requireCommandResponseHeaders(response, id);
+                return new OperationReference(response.body());
+              });
+    }
+
+    private static void requireCommandResponseHeaders(
+        final TransportResponse response, final String operationId) {
+      final String expectedLocation = OPERATIONS_PATH + "/" + operationId;
+      final List<String> locations =
+          response.headers().getOrDefault("Location", Collections.emptyList());
+      if (locations.size() != 1 || !expectedLocation.equals(locations.get(0))) {
+        throw new IllegalStateException(
+            "Kagemusha Torii Location must match the canonical operation resource");
+      }
+      final List<String> retryAfterValues =
+          response.headers().getOrDefault("Retry-After", Collections.emptyList());
+      if (retryAfterValues.size() != 1) {
+        throw new IllegalStateException(
+            "Kagemusha Torii Retry-After must occur exactly once");
+      }
+      final String retryAfter = retryAfterValues.get(0);
+      if (retryAfter.isEmpty() || retryAfter.length() > 20) {
+        throw new IllegalStateException(
+            "Kagemusha Torii Retry-After must be a positive u64 delay");
+      }
+      int firstSignificant = 0;
+      for (int index = 0; index < retryAfter.length(); index++) {
+        final char character = retryAfter.charAt(index);
+        if (character < '0' || character > '9') {
+          throw new IllegalStateException(
+              "Kagemusha Torii Retry-After must be a positive u64 delay");
+        }
+        if (firstSignificant == index && character == '0') firstSignificant++;
+      }
+      final String significant = retryAfter.substring(firstSignificant);
+      if (significant.isEmpty()
+          || significant.length() > UNSIGNED_LONG_MAX.length()
+          || (significant.length() == UNSIGNED_LONG_MAX.length()
+              && significant.compareTo(UNSIGNED_LONG_MAX) > 0)) {
+        throw new IllegalStateException(
+            "Kagemusha Torii Retry-After must be a positive u64 delay");
+      }
     }
 
     private CompletableFuture<TransportResponse> execute(

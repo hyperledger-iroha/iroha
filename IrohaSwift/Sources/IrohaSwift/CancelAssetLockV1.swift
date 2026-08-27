@@ -33,8 +33,11 @@ public enum CancelAssetLockV1Error: Error, LocalizedError, Equatable, Sendable {
 /// ledger rejects cancellation if committed state no longer has that exact
 /// remaining quantity.
 public struct CancelAssetLockInstructionV1: Equatable, Sendable {
-    /// Native dynamic-instruction identifier.
-    public static let wireId = "iroha_data_model::isi::escrow::CancelAssetLock"
+    /// Canonical dynamic-instruction wire identifier.
+    public static let wireId = "iroha.instruction.v1::escrow::CancelAssetLock"
+
+    /// Concrete Norito schema name used only to frame the typed payload.
+    static let schemaName = "iroha_data_model::isi::escrow::CancelAssetLock"
 
     /// Maximum UTF-8 bytes accepted for the lock-id preimage in V1.
     public static let maxLockIdUTF8BytesV1 = 4096
@@ -141,7 +144,7 @@ public struct CancelAssetLockInstructionV1: Equatable, Sendable {
             )
         )
         return noritoEncode(
-            typeName: Self.wireId,
+            typeName: Self.schemaName,
             payload: payload.data,
             flags: NoritoHeader.compactLen
         )
@@ -189,7 +192,7 @@ public struct CancelAssetLockInstructionV1: Equatable, Sendable {
         guard let frame = noritoDecodeFrame(archive) else {
             throw CancelAssetLockV1Error.invalidNorito("invalid frame")
         }
-        guard frame.header.schema == noritoSchemaHash(forTypeName: Self.wireId) else {
+        guard frame.header.schema == noritoSchemaHash(forTypeName: Self.schemaName) else {
             throw CancelAssetLockV1Error.invalidNorito("schema hash mismatch")
         }
         guard frame.header.compression == .none,

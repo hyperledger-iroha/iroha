@@ -3,7 +3,8 @@
 use super::*;
 
 use iroha_data_model::offline::{
-    KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS,
+    KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1,
+    KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS,
     KAGEMUSHA_V4_RELEASE_LIFECYCLE_STATE_KEY_PREFIX_V1,
     KAGEMUSHA_V4_RELEASE_LIFECYCLE_STATE_SCHEMA_V1, KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
     KagemushaExactBytesDigestV1, KagemushaRecursiveSpendArtifactBindingV4,
@@ -60,6 +61,60 @@ pub(crate) struct LifecycleEntrypointContext {
     kind: LifecycleEntrypointKind,
     transaction_intent: HashOf<SignedTransaction>,
     instruction_digest: Hash,
+    stage_expires_at_height: Option<u64>,
+}
+
+impl LifecycleEntrypointContext {
+    /// Reject a Stage carrier whose height expiry can never fit the receipt's
+    /// bounded successor chain, even under the newest possible trusted anchor.
+    pub(crate) fn validate_stage_expiry_horizon(
+        &self,
+        carrier_height: u64,
+    ) -> Result<(), iroha_data_model::ValidationFail> {
+        if self.kind != LifecycleEntrypointKind::Stage {
+            return Ok(());
+        }
+        let expiry = self.stage_expires_at_height.ok_or_else(|| {
+            iroha_data_model::ValidationFail::NotPermitted(
+                "Kagemusha V4 Stage lifecycle transaction requires a nonzero expires_at_height"
+                    .to_owned(),
+            )
+        })?;
+        // A valid receipt has at least one successor after its pre-submission
+        // anchor, so `anchor < carrier`. Its exclusive expiry is bounded by
+        // `anchor + proof_count_max + 1`, hence necessarily by
+        // `carrier + proof_count_max`.
+        let proof_count_max = u64::try_from(KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1)
+            .expect("Kagemusha V4 finality proof-count bound fits u64");
+        let maximum_possible_expiry = carrier_height.saturating_add(proof_count_max);
+        if expiry > maximum_possible_expiry {
+            return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
+                "Kagemusha V4 Stage lifecycle expires_at_height {expiry} exceeds the receipt-capable maximum {maximum_possible_expiry} at carrier height {carrier_height}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn lifecycle_expires_at_height(
+    transaction: &SignedTransaction,
+    kind: LifecycleEntrypointKind,
+) -> Result<Option<u64>, iroha_data_model::ValidationFail> {
+    // Height TTL is generic transaction metadata and may be required by
+    // network policy for every lifecycle kind. Stage alone makes its presence
+    // part of the later activation-receipt contract.
+    let expiry = transaction.expires_at_height().map_err(|error| {
+        iroha_data_model::ValidationFail::NotPermitted(format!(
+            "Kagemusha V4 {kind:?} lifecycle expires_at_height must be an unsigned integer: {error}"
+        ))
+    })?;
+    if kind == LifecycleEntrypointKind::Stage && expiry.is_none_or(|height| height == 0) {
+        return Err(iroha_data_model::ValidationFail::NotPermitted(
+            "Kagemusha V4 Stage lifecycle transaction requires a nonzero expires_at_height"
+                .to_owned(),
+        ));
+    }
+    Ok(expiry)
 }
 
 fn require_distinct_governance_signers(
@@ -94,7 +149,8 @@ fn require_no_proof_attachments(
 }
 
 /// Derive lifecycle context only from one ordinary, direct native instruction carrying at least
-/// two verified canonical distinct governance signatures and no proof attachments.
+/// two verified canonical distinct governance signatures and no proof attachments. Stage also
+/// requires the nonzero height expiry later bounded against its carrier height.
 pub(crate) fn signed_lifecycle_entrypoint_context(
     transaction: &SignedTransaction,
 ) -> Result<Option<LifecycleEntrypointContext>, iroha_data_model::ValidationFail> {
@@ -116,6 +172,15 @@ pub(crate) fn signed_lifecycle_entrypoint_context(
     }
     require_no_proof_attachments(transaction)?;
     require_distinct_governance_signers(transaction, kind)?;
+    let expires_at_height = lifecycle_expires_at_height(transaction, kind)?;
+    let stage_expires_at_height = match kind {
+        LifecycleEntrypointKind::Stage => {
+            Some(expires_at_height.expect("Stage expiry was checked above"))
+        }
+        LifecycleEntrypointKind::Enable
+        | LifecycleEntrypointKind::Cancel
+        | LifecycleEntrypointKind::Deactivate => None,
+    };
     Ok(Some(LifecycleEntrypointContext {
         kind,
         transaction_intent: transaction.hash(),
@@ -124,6 +189,7 @@ pub(crate) fn signed_lifecycle_entrypoint_context(
                 "failed to encode exact Kagemusha lifecycle instruction: {error}"
             ))
         })?),
+        stage_expires_at_height,
     }))
 }
 
@@ -1147,6 +1213,16 @@ pub(super) mod tests {
     fn signed(
         instructions: impl IntoIterator<Item = CancelKagemushaRecursiveReleaseV4>,
     ) -> SignedTransaction {
+        signed_with_metadata(
+            instructions,
+            iroha_data_model::metadata::Metadata::default(),
+        )
+    }
+
+    fn signed_with_metadata(
+        instructions: impl IntoIterator<Item = CancelKagemushaRecursiveReleaseV4>,
+        metadata: iroha_data_model::metadata::Metadata,
+    ) -> SignedTransaction {
         let keys = [0x51_u8, 0x52].map(|seed| {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("derive lifecycle context test key")
@@ -1170,7 +1246,19 @@ pub(super) mod tests {
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
+        .with_metadata(metadata)
         .sign_multisig([keys[0].private_key(), keys[1].private_key()])
+    }
+
+    fn signed_with_height_expiry(expiry: u64) -> SignedTransaction {
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            "expires_at_height"
+                .parse()
+                .expect("valid expiry metadata key"),
+            Json::from(expiry),
+        );
+        signed_with_metadata([cancellation(0x43)], metadata)
     }
 
     fn weighted_signed(
@@ -2200,6 +2288,50 @@ pub(super) mod tests {
             context.transaction_intent,
             changed_context.transaction_intent
         );
+    }
+
+    #[test]
+    fn stage_lifecycle_expiry_is_mandatory_and_receipt_bounded() {
+        let missing = signed([cancellation(0x42)]);
+        let error = lifecycle_expires_at_height(&missing, LifecycleEntrypointKind::Stage)
+            .expect_err("Stage must carry the receipt's exclusive height expiry");
+        assert!(error.to_string().contains("nonzero expires_at_height"));
+        let zero = signed_with_height_expiry(0);
+        assert!(
+            lifecycle_expires_at_height(&zero, LifecycleEntrypointKind::Stage).is_err(),
+            "zero is not an exclusive Stage height expiry"
+        );
+
+        let carrier_height = 10;
+        let maximum_expiry = carrier_height
+            + u64::try_from(KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1)
+                .expect("proof-count bound fits u64");
+        let bounded = signed_with_height_expiry(maximum_expiry);
+        assert_eq!(
+            lifecycle_expires_at_height(&bounded, LifecycleEntrypointKind::Stage)
+                .expect("bounded Stage expiry metadata"),
+            Some(maximum_expiry)
+        );
+        // Height TTL is generic transaction metadata and remains legal on a
+        // non-Stage lifecycle transaction (including networks that require it).
+        signed_lifecycle_entrypoint_context(&bounded)
+            .expect("non-Stage lifecycle height TTL remains valid")
+            .expect("exact direct lifecycle context");
+
+        let mut context = LifecycleEntrypointContext {
+            kind: LifecycleEntrypointKind::Stage,
+            transaction_intent: bounded.hash(),
+            instruction_digest: Hash::new(b"stage-expiry-horizon"),
+            stage_expires_at_height: Some(maximum_expiry),
+        };
+        context
+            .validate_stage_expiry_horizon(carrier_height)
+            .expect("latest receipt-capable expiry must remain admissible");
+        context.stage_expires_at_height = Some(maximum_expiry + 1);
+        let error = context
+            .validate_stage_expiry_horizon(carrier_height)
+            .expect_err("expiry beyond every possible trusted anchor must fail");
+        assert!(error.to_string().contains("receipt-capable maximum"));
     }
 
     #[test]

@@ -1093,7 +1093,11 @@ impl PartialOrd for SetSoracloudInrouReplicaRuntimeState {
         Some(encoded_order(self, other))
     }
 }
-/// Clear authoritative runtime state for one placed Inrou replica.
+/// Clear one exact authoritative Inrou replica runtime-state row.
+///
+/// The validator recorded in the row may clear it after its placement or
+/// revision retires. The placement incarnation is an exact compare-and-swap
+/// guard, and clearing an already absent row is idempotent.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -1102,7 +1106,7 @@ pub struct ClearSoracloudInrouReplicaRuntimeState {
     pub service_name: Name,
     /// Service revision whose replica state should be removed.
     pub service_version: String,
-    /// One-based placed replica slot whose state should be removed.
+    /// One-based replica slot whose recorded state should be removed.
     pub replica_slot: u16,
     /// Compare-and-swap incarnation of the runtime state being removed.
     pub expected_placement_incarnation: Hash,

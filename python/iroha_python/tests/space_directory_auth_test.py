@@ -17,12 +17,13 @@ from iroha_python.client import (
     ToriiClient,
     canonical_network_request_signature_message,
 )
-from iroha_python.crypto import NetworkId
+from iroha_python.crypto import Ed25519KeyPair, NetworkId
 
 
 def _account(seed: int) -> str:
+    public_key = Ed25519KeyPair.from_private_key(bytes([seed]) * 32).public_key
     return AccountAddress.from_account(
-        public_key=bytes([seed]) * 32,
+        public_key=public_key,
     ).to_i105(0x02F1)
 
 
@@ -44,6 +45,25 @@ class _Session(requests.Session):
 
     def request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
         self.calls.append({"method": method, "url": url, **kwargs})
+        response = requests.Response()
+        response.status_code = 200
+        response.headers["Content-Type"] = "application/json"
+        response._content = json.dumps(_draft()).encode("utf-8")
+        response.encoding = "utf-8"
+        return response
+
+    def send(
+        self, request: requests.PreparedRequest, **kwargs: Any
+    ) -> requests.Response:
+        self.calls.append(
+            {
+                "method": request.method,
+                "url": request.url,
+                "headers": dict(request.headers),
+                "data": request.body,
+                **kwargs,
+            }
+        )
         response = requests.Response()
         response.status_code = 200
         response.headers["Content-Type"] = "application/json"

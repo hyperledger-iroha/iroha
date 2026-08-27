@@ -20,31 +20,56 @@ const STATUS_RETRY_DEFAULT: Duration = Duration::from_secs(120);
 ///
 /// Returns the final status error when retries are exhausted or a sandbox denial is detected.
 pub fn get_status_with_retry(client: &Client) -> Result<Status> {
+    get_status_with_retry_at_least(client, 0)
+}
+/// Poll `/status` until the authoritative applied height reaches `minimum_blocks`.
+///
+/// # Errors
+///
+/// Returns the final status error, a below-height exhaustion error, or a sandbox denial.
+pub fn get_status_with_retry_at_least(client: &Client, minimum_blocks: u64) -> Result<Status> {
+    enum LastObservation {
+        BelowHeight(u64),
+        Error(eyre::Report),
+    }
     let retry_budget = status_retry_budget_env();
     let deadline = Instant::now() + retry_budget;
-    let mut last_err = None;
+    let mut last_observation = None;
     while Instant::now() < deadline {
         match client.get_status() {
-            Ok(status) => return Ok(status),
+            Ok(status) => {
+                if status_reaches_height(&status, minimum_blocks) {
+                    return Ok(status);
+                }
+                last_observation = Some(LastObservation::BelowHeight(status.blocks));
+            }
             Err(err) => {
                 if let Some(reason) = crate::sandbox::sandbox_reason(&err) {
                     return Err(eyre::eyre!(
                         "sandboxed network restriction detected while polling /status: {reason}"
                     ));
                 }
-                last_err = Some(err);
-                sleep(STATUS_RETRY_DELAY);
+                last_observation = Some(LastObservation::Error(err));
             }
         }
+        sleep(STATUS_RETRY_DELAY);
     }
-    Err(last_err.unwrap_or_else(|| eyre::eyre!("status retry budget exhausted"))).wrap_err_with(
-        || {
-            format!(
-                "status retry budget exhausted after {:?} hitting {}",
-                retry_budget, client.torii_url
-            )
-        },
-    )
+    let terminal = match last_observation {
+        Some(LastObservation::BelowHeight(height)) => eyre::eyre!(
+            "authoritative status remained at block height {height}, below required height {minimum_blocks}"
+        ),
+        Some(LastObservation::Error(err)) => err,
+        None => eyre::eyre!("status retry budget exhausted"),
+    };
+    Err(terminal).wrap_err_with(|| {
+        format!(
+            "status retry budget exhausted after {:?} hitting {}",
+            retry_budget, client.torii_url
+        )
+    })
+}
+fn status_reaches_height(status: &Status, minimum_blocks: u64) -> bool {
+    status.blocks >= minimum_blocks
 }
 /// Poll `/status` with a bounded retry budget, falling back to storage-derived
 /// heights when Torii stalls.
@@ -275,6 +300,18 @@ mod tests {
         let _env_guard = lock_env_guard();
         let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
         assert_eq!(status_retry_budget_env(), STATUS_RETRY_DEFAULT);
+    }
+    #[test]
+    fn startup_status_predicate_rejects_height_zero_and_accepts_target_height() {
+        let height_zero = Status::default();
+        assert!(!status_reaches_height(&height_zero, 1));
+        let height_one = Status {
+            blocks: 1,
+            blocks_non_empty: 1,
+            ..Status::default()
+        };
+        assert!(status_reaches_height(&height_one, 1));
+        assert!(!status_reaches_height(&height_one, 2));
     }
     #[tokio::test]
     async fn status_retry_async_returns_error_for_unreachable_host() {

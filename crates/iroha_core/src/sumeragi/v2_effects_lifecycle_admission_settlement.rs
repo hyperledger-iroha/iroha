@@ -287,6 +287,74 @@ impl DurableValidateRetrySealV1 {
         }
     }
 
+    /// Return whether a resolved ordinary Validate tombstone must yield to
+    /// one exact newer-view protected-Prepare admission.
+    ///
+    /// An ordinal-bound seal still has a concrete registry row which can
+    /// absorb authority refinement. Once that row has terminalized, however,
+    /// its ordinal-free tombstone owns neither service work nor a completion
+    /// carrier. It therefore cannot satisfy a later protected view's first
+    /// Prepare-authorized `ValidationCompleted` transition. This predicate is
+    /// deliberately closed over the live ordinary-to-Prepare upgrade; cold
+    /// owners, published direct-lifecycle markers, Commit upgrades, and
+    /// same/stale retries keep their existing stutter policy.
+    fn is_unbound_live_ordinary_to_prepare_upgrade(
+        &self,
+        projected: &DurableValidateRetryProjectionV1,
+    ) -> bool {
+        let (
+            Self::Live {
+                effect: incumbent_effect,
+                ownership: incumbent_ownership,
+                lifecycle_ordinal: None,
+                ..
+            },
+            Self::Live {
+                effect: projected_effect,
+                ownership: projected_ownership,
+                lifecycle_ordinal: None,
+                ..
+            },
+        ) = (self, &projected.seal)
+        else {
+            return false;
+        };
+        let (
+            AdapterEffect::ValidateBody {
+                tag: incumbent_tag, ..
+            },
+            AdapterEffect::ValidateBody {
+                tag: projected_tag, ..
+            },
+        ) = (incumbent_effect, projected_effect)
+        else {
+            return false;
+        };
+        if !projected_tag.strictly_advances(*incumbent_tag) {
+            return false;
+        }
+        let Some(incumbent_statement) = incumbent_ownership
+            .exact_pending_adapter_effect_binding(incumbent_effect)
+            .ok()
+            .and_then(|pending| pending.candidate_statement())
+        else {
+            return false;
+        };
+        let Some(projected_statement) = projected_ownership
+            .exact_pending_adapter_effect_binding(projected_effect)
+            .ok()
+            .and_then(|pending| pending.candidate_statement())
+        else {
+            return false;
+        };
+        incumbent_statement.phase().is_none()
+            && incumbent_statement.execution_commitment().is_none()
+            && projected_statement.phase() == Some(wire::GlobalPhase::Prepare)
+            && projected_statement.execution_commitment().is_some()
+            && incumbent_statement.body_stage_authority_relation_to(projected_statement)
+                == Some(RuntimeFetchAuthorityRelation::Upgrade)
+    }
+
     /// Project one late durable Store carrier through the inert predecessor
     /// owner retained when this live Validate admission consumed its replay.
     fn project_store_terminal_retry(
@@ -1031,6 +1099,77 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
         })
     }
 
+    /// Return whether this terminal marker is the exact Commit-authorized
+    /// Validate owner for one already-fsynced successful validation.
+    ///
+    /// This is comparison-only. It cannot create work and deliberately rejects
+    /// an ordinal-bound marker because that marker still has a concrete row
+    /// which must settle under its original lifecycle owner.
+    fn is_unbound_exact_decision_owner(
+        &self,
+        decision: DurableDecision,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> bool {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = &self.latest_effect
+        else {
+            return false;
+        };
+        !self.owns_live_lifecycle_row()
+            && tag.height() == decision.0.height
+            && *round == decision.1
+            && *subject == decision.2
+            && self.durable_receipt == *validated_receipt.durable()
+            && validated_receipt.execution_commitment() == decision.3
+            && self.latest_statement.context_id() == decision.0.context_id
+            && self.latest_statement.round() == decision.0
+            && self.latest_statement.proposal_round() == decision.1
+            && self.latest_statement.subject() == Some(decision.2)
+            && self.latest_statement.phase() == Some(wire::GlobalPhase::Commit)
+            && self.latest_statement.execution_commitment() == Some(decision.3)
+            && self
+                .store_terminal
+                .exactly_precedes_validate_marker(&self.latest_effect, self.latest_statement)
+    }
+
+    /// Return whether a resolved direct-lifecycle marker must redispatch one
+    /// exact newer-tag Commit refinement into normal Validate admission.
+    ///
+    /// Same/stale retries remain inert. The strict authority and tag advance
+    /// ensure that a marker already projected to the Decision cannot repeatedly
+    /// mint replacement lifecycle rows.
+    fn is_unbound_exact_decision_upgrade(
+        &self,
+        projected: &Self,
+        decision: DurableDecision,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> bool {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: incumbent_tag, ..
+            },
+            AdapterEffect::ValidateBody {
+                tag: projected_tag, ..
+            },
+        ) = (&self.latest_effect, &projected.latest_effect)
+        else {
+            return false;
+        };
+        !self.owns_live_lifecycle_row()
+            && !projected.owns_live_lifecycle_row()
+            && projected_tag.strictly_advances(*incumbent_tag)
+            && self.durable_receipt == projected.durable_receipt
+            && self.store_terminal == projected.store_terminal
+            && self
+                .latest_statement
+                .body_stage_authority_relation_to(projected.latest_statement)
+                == Some(RuntimeFetchAuthorityRelation::Upgrade)
+            && projected.is_unbound_exact_decision_owner(decision, validated_receipt)
+    }
+
     fn project_store_retry(
         &self,
         durable_receipt: &DurableBodyReceipt,
@@ -1215,6 +1354,69 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     self.protected_decision
                         .is_some_and(|(_, round, subject, _)| *key == (round, subject))
                 })
+    }
+
+    /// Project a bounded, payload-free census for a finalization stall.
+    ///
+    /// The ordinary readiness predicate deliberately collapses every retry
+    /// ownership failure into one blocker label. This diagnostic keeps the
+    /// operator record useful without exposing block bytes: it identifies the
+    /// retained owner kind, its logical ordinal, and whether its body key is
+    /// the exact protected Decision selected for this height.
+    pub(in crate::sumeragi) fn durable_validate_retry_finalization_diagnostic(&self) -> String {
+        let selected = self
+            .protected_decision
+            .map(|(_, round, subject, _)| (round, subject));
+        let seals = self
+            .durable_validate_retry_seals
+            .iter()
+            .take(8)
+            .map(|(key, seal)| {
+                let kind = match seal {
+                    DurableValidateRetrySealV1::Live { .. } => "Live",
+                    DurableValidateRetrySealV1::Recovered { .. } => "Recovered",
+                };
+                format!(
+                    "{kind}:key={key:?}:ordinal={:?}:selected={}",
+                    seal.lifecycle_ordinal(),
+                    selected == Some(*key)
+                )
+            })
+            .collect::<Vec<_>>();
+        let validate_markers = self
+            .published_lifecycle_validate_retry_markers
+            .iter()
+            .take(8)
+            .map(|(key, marker)| {
+                format!(
+                    "key={key:?}:ordinal={:?}:selected={}",
+                    marker.lifecycle_ordinal,
+                    selected == Some(*key)
+                )
+            })
+            .collect::<Vec<_>>();
+        let store_markers = self
+            .published_lifecycle_store_retry_markers
+            .iter()
+            .take(8)
+            .map(|(key, marker)| {
+                format!(
+                    "key={key:?}:valid={}",
+                    marker
+                        .publication_census_entry()
+                        .is_some_and(|entry| entry.key() == *key)
+                )
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "selected={selected:?} decision_body_drained={} seals_total={} seals={seals:?} \
+             validate_markers_total={} validate_markers={validate_markers:?} \
+             store_markers_total={} store_markers={store_markers:?}",
+            self.decision_body_drained,
+            self.durable_validate_retry_seals.len(),
+            self.published_lifecycle_validate_retry_markers.len(),
+            self.published_lifecycle_store_retry_markers.len(),
+        )
     }
 
     /// Project the complete immutable executor-side Store publication census.
@@ -1476,9 +1678,105 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
 
+    /// Recheck the sole retry authority for one exact live Validate row.
+    fn exactly_owns_validate_retry_lifecycle_ordinal(
+        &self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        lifecycle_ordinal: u128,
+    ) -> bool {
+        if lifecycle_ordinal == 0 {
+            return false;
+        }
+        match (
+            self.durable_validate_retry_seals.get(&key),
+            self.published_lifecycle_validate_retry_markers.get(&key),
+        ) {
+            (Some(seal), None) => seal.lifecycle_ordinal() == Some(lifecycle_ordinal),
+            (None, Some(marker)) => marker.lifecycle_ordinal == Some(lifecycle_ordinal),
+            (Some(_), Some(_)) | (None, None) => false,
+        }
+    }
+
+    /// Preflight the sole Validate retry row authenticated as one recovered
+    /// Decision Apply's durable predecessor.
+    fn preflight_recovered_apply_validate_retry_predecessor(
+        &self,
+        dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        validate_predecessor_ordinal: u128,
+    ) -> Result<Option<u128>, EffectExecutorError> {
+        if dispatch_key.lineage() != LifecycleDecisionApplyLineageV1::Recovered
+            || !dispatch_key.matches_height_context(&self.context)
+        {
+            return Err(EffectExecutorError::Contract(
+                "recovered Apply retry cleanup changed its exact carrier lineage".to_owned(),
+            ));
+        }
+        if validate_predecessor_ordinal == 0
+            || validate_predecessor_ordinal >= dispatch_key.lifecycle_ordinal()
+        {
+            return Err(EffectExecutorError::Contract(
+                "recovered Apply retry cleanup omitted its Validate predecessor".to_owned(),
+            ));
+        }
+        match (
+            self.durable_validate_retry_seals.get(&key),
+            self.published_lifecycle_validate_retry_markers.get(&key),
+        ) {
+            (None, None) => Ok(None),
+            (Some(seal), None) => match seal.lifecycle_ordinal() {
+                None => Ok(None),
+                Some(ordinal) if ordinal == validate_predecessor_ordinal => {
+                    Ok(Some(validate_predecessor_ordinal))
+                }
+                Some(_) => Err(EffectExecutorError::Contract(
+                    "recovered Apply changed its exact durable Validate predecessor ordinal"
+                        .to_owned(),
+                )),
+            },
+            (None, Some(marker)) => match marker.lifecycle_ordinal {
+                None => Ok(None),
+                Some(ordinal) if ordinal == validate_predecessor_ordinal => {
+                    Ok(Some(validate_predecessor_ordinal))
+                }
+                Some(_) => Err(EffectExecutorError::Contract(
+                    "recovered Apply changed its exact published Validate predecessor ordinal"
+                        .to_owned(),
+                )),
+            },
+            (Some(_), Some(_)) => Err(EffectExecutorError::Contract(
+                "recovered Apply retained two Validate predecessor retry authorities".to_owned(),
+            )),
+        }
+    }
+
+    /// Release only the preflighted recovered Apply predecessor, leaving an
+    /// already-inert tombstone or an absent retry authority unchanged.
+    fn release_recovered_apply_validate_retry_predecessor(
+        &mut self,
+        dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        validate_predecessor_ordinal: u128,
+    ) -> Result<bool, EffectExecutorError> {
+        let Some(predecessor_ordinal) = self.preflight_recovered_apply_validate_retry_predecessor(
+            dispatch_key,
+            key,
+            validate_predecessor_ordinal,
+        )?
+        else {
+            return Ok(false);
+        };
+        if !self.release_validate_retry_lifecycle_ordinal(key, predecessor_ordinal)? {
+            return Err(EffectExecutorError::Contract(
+                "recovered Apply lost its preflighted Validate predecessor retry authority"
+                    .to_owned(),
+            ));
+        }
+        Ok(true)
+    }
+
     /// Release only the retry authority bound to the lifecycle row that just
     /// durably terminalized or advanced to its successor.
-    #[cfg(test)]
     pub(in crate::sumeragi) fn release_validate_retry_lifecycle_ordinal(
         &mut self,
         key: (wire::ConsensusRound, wire::BlockSubject),
@@ -1709,6 +2007,57 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
 
+    /// Atomically replace one terminal direct-lifecycle Validate marker with
+    /// the exact pending admission which will replay its missing successor.
+    ///
+    /// Every fallible proof is completed while the immutable marker remains in
+    /// the catalog. Once the seal exists, the map swap consists only of exact
+    /// removals and infallible inserts, so a partial owner transition cannot be
+    /// observed or survive an error.
+    fn replace_terminal_published_validate_with_pending_admission(
+        &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        expected_marker: PublishedLifecycleValidateRetryMarkerV1,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+        pending: PendingDurableValidateAdmissionV1,
+        store_terminal: DurableStoreTerminalRetrySealV1,
+    ) -> Result<(), EffectExecutorError> {
+        if expected_marker.owns_live_lifecycle_row()
+            || self.published_lifecycle_validate_retry_markers.get(&key) != Some(&expected_marker)
+            || self.pending_durable_validate_admissions.contains_key(&key)
+            || self.durable_validate_retry_seals.contains_key(&key)
+            || self
+                .published_lifecycle_store_retry_markers
+                .contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "terminal published Validate changed before lifecycle readmission".to_owned(),
+            ));
+        }
+        let seal = DurableValidateRetrySealV1::seal_exact(
+            effect,
+            ownership,
+            &pending,
+            Some(store_terminal),
+        )
+        .ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "terminal published Validate could not seal its replacement retry owner".to_owned(),
+            )
+        })?;
+
+        let removed = self.published_lifecycle_validate_retry_markers.remove(&key);
+        assert_eq!(removed, Some(expected_marker));
+        let previous = self
+            .pending_durable_validate_admissions
+            .insert(key, pending);
+        assert!(previous.is_none());
+        let previous = self.durable_validate_retry_seals.insert(key, seal);
+        assert!(previous.is_none());
+        Ok(())
+    }
+
     fn bind_validate_retry_lifecycle_ordinal(
         &mut self,
         key: (wire::ConsensusRound, wire::BlockSubject),
@@ -1875,6 +2224,17 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     ) -> Result<ProductionApplyTerminalDirectBroadcastSettlementV1, EffectExecutorError> {
         self.ensure_open()?;
         let key = prepared.pending_key();
+        if self
+            .lifecycle_decision_apply_successor_outputs
+            .as_ref()
+            .is_some_and(|attestation| !attestation.exactly_matches_terminal_preparation(&prepared))
+        {
+            let error = EffectExecutorError::Contract(format!(
+                "post-Apply direct Broadcast ordinal {} changed its attested pending owner",
+                prepared.ordinal()
+            ));
+            return Err(self.close(error, services));
+        }
         let Some(pending) = self.pending_lifecycle_output_admissions.remove(&key) else {
             let error = EffectExecutorError::Contract(format!(
                 "post-Apply direct Broadcast ordinal {} lost its exact pending owner",
@@ -1888,6 +2248,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             });
         match settlement {
             ProductionLifecycleOutputAdmissionSettlementV1::Completed => {
+                // The sealed proof is singleton and was checked before output
+                // service. Consume it only after the terminal publication and
+                // service transaction have completed.
+                self.lifecycle_decision_apply_successor_outputs = None;
                 Ok(ProductionApplyTerminalDirectBroadcastSettlementV1::Completed)
             }
             ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending) => {
@@ -2292,7 +2656,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .expect("preflight retained the exact terminal Validate marker");
         assert!(!marker.owns_live_lifecycle_row());
         assert!(marker.terminal_no_successor_ordinal().is_some());
-        assert_eq!(marker.latest_statement.phase(), Some(wire::GlobalPhase::Commit));
+        assert_eq!(
+            marker.latest_statement.phase(),
+            Some(wire::GlobalPhase::Commit)
+        );
         self.live_lifecycle_decision_apply = Some(LiveLifecycleDecisionApplyOwnerV1 {
             dispatch_key,
             tag,
@@ -2344,10 +2711,11 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         {
             Ok(prepared) => prepared,
             Err((pending, error)) => {
-                assert!(self
-                    .pending_released_lifecycle_validate_apply
-                    .replace(pending)
-                    .is_none());
+                assert!(
+                    self.pending_released_lifecycle_validate_apply
+                        .replace(pending)
+                        .is_none()
+                );
                 return Err(self.close(
                     EffectExecutorError::Contract(format!(
                         "released Validate Apply adapter preparation failed: {error}"
@@ -3127,13 +3495,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "released lifecycle Validate lost its exact runtime binding".to_owned(),
                     )
                 })?;
-            let incoming_statement = incoming_pending
-                .candidate_statement()
-                .ok_or_else(|| {
-                    EffectExecutorError::Contract(
-                        "released lifecycle Validate omitted its candidate statement".to_owned(),
-                    )
-                })?;
+            let incoming_statement = incoming_pending.candidate_statement().ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "released lifecycle Validate omitted its candidate statement".to_owned(),
+                )
+            })?;
             if marker.owns_live_lifecycle_row()
                 || marker.terminal_no_successor_ordinal().is_none()
                 || incoming_statement.phase() != Some(wire::GlobalPhase::Commit)
@@ -3216,14 +3582,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
             self.ensure_pending_slot()?;
             self.reconcile_decision_work(decision, true, services)?;
-            let retained_is_current_occurrence = self.retained_effect_batch.as_ref().is_some_and(
-                |batch| {
+            let retained_is_current_occurrence =
+                self.retained_effect_batch.as_ref().is_some_and(|batch| {
                     batch.effects.len() == 1
                         && batch.effects.front().is_some_and(|owned| {
                             owned.effect == effect && owned.ownership == ownership
                         })
-                },
-            );
+                });
             if self.protected_decision != Some(decision)
                 || !self.decision_body_drained
                 || self.pending_work() != 0
@@ -3281,10 +3646,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         .to_owned(),
                 ));
             }
-            assert!(self
-                .pending_released_lifecycle_validate_apply
-                .replace(deferred)
-                .is_none());
+            assert!(
+                self.pending_released_lifecycle_validate_apply
+                    .replace(deferred)
+                    .is_none()
+            );
             return Ok(None);
         }
         if let Some(seal) = self.durable_validate_retry_seals.get_mut(&key) {

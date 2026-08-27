@@ -47,7 +47,7 @@ def test_offline_capability_is_the_only_discovery_export() -> None:
         assert not hasattr(iroha_python, retired)
 
 
-def test_package_root_lazy_crypto_exports_preserve_import_error_cause() -> None:
+def test_package_import_fails_directly_when_native_crypto_is_unavailable() -> None:
     root = Path(__file__).resolve().parents[3]
     script = """
 import sys
@@ -61,21 +61,17 @@ def fail_crypto_import(name):
 stub.__getattr__ = fail_crypto_import
 sys.modules["iroha_python.crypto"] = stub
 
-import iroha_python
-
 try:
-    iroha_python.Ed25519KeyPair
+    import iroha_python
 except RuntimeError as exc:
     if sys.flags.optimize != 0:
-        raise AssertionError("fallback subprocess unexpectedly enabled optimization")
-    if "requires the compiled iroha_python._crypto extension module" not in str(exc):
-        raise AssertionError("fallback error lost the compiled-extension message")
-    if not isinstance(exc.__cause__, RuntimeError):
-        raise AssertionError("fallback error lost its RuntimeError cause")
-    if "forced crypto import failure" not in str(exc.__cause__):
-        raise AssertionError("fallback error lost the original cause message")
+        raise AssertionError("native-import subprocess unexpectedly enabled optimization")
+    if str(exc) != "forced crypto import failure":
+        raise AssertionError("package import wrapped or replaced the native crypto error")
+    if exc.__cause__ is not None:
+        raise AssertionError("package import added a compatibility error wrapper")
 else:
-    raise AssertionError("crypto export unexpectedly resolved")
+    raise AssertionError("package import unexpectedly accepted missing native crypto")
 """
     env = os.environ.copy()
     python_paths = [

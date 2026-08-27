@@ -118,8 +118,10 @@ java -cp /path/to/tla2tools.jar tlc2.TLC \
 The PR workflow uploads `sora-parliament-formal-pr` with stable
 `inputs/SoraParliamentV1.{tla,cfg}`, `run-metadata.json`,
 `source-contract.log`, and `tlc.log` paths plus separate exit-status files. TLC
-runs the archived input copies, while the metadata binds their SHA-256 digests,
-the checkout commit, and the pinned TLA2Tools JAR digest to that output.
+runs the archived input copies. The metadata binds the input and output byte
+sizes and SHA-256 digests, both recorded exit statuses, the checkout commit,
+and the pinned TLA2Tools JAR digest. A separate always-run closure check rejects
+missing, altered, or internally inconsistent evidence before upload.
 
 The checked configuration must be exhaustively rerun with pinned TLA2Tools
 v1.7.4 (TLC2 2.19) whenever this refinement or its commitment-window constant

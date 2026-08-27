@@ -34,12 +34,7 @@ public sealed record class ToriiAccountFaucetSolution
 
     public ToriiAccountFaucetClaimV1 ToClaim()
     {
-        return new ToriiAccountFaucetClaimV1
-        {
-            AccountId = AccountId,
-            PowAnchorHeight = AnchorHeight,
-            PowNonceHex = NonceHex,
-        };
+        return new ToriiAccountFaucetClaimV1(AccountId, AnchorHeight, NonceHex);
     }
 }
 

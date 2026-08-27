@@ -182,17 +182,15 @@ genesis/current `HeightContext`; the legacy local `consensus_mode` selector cann
 The returned `SumeragiV2Config` is a versioned Norito projection containing protocol and mode,
 cadence, finite transaction/body/queue/ready-work bounds, and consensus-key policy. The one round
 deadline and its one-fifth retransmission interval are derived deterministically from cadence rather
-than carried as mutable timing fields. The projection contains no live VRF schedule. Its
+than carried as mutable timing fields. Its
 domain-separated hash is the canonical shared-config fingerprint used by the adapter, peer gate,
 status API, and rollout checker.
 
 Peer admission also checks a distinct, domain-separated genesis fingerprint. Its canonical Norito
 projection contains the protocol, genesis-selected mode, signed cadence and block bound,
 DA/Nexus/execution-policy context, and (for NPoS) the epoch seed, election and reconfiguration
-inputs, plus the retained legacy VRF-window fields. Network identity is authenticated separately
-and deliberately excluded from this genesis-embedded value. Those legacy field names remain part
-of the canonical genesis representation but do not enable commit/reveal production. Legacy
-collectors, phase-specific/adaptive timeouts, the old global-DA
+inputs. Network identity is authenticated separately and deliberately excluded from this
+genesis-embedded value. Legacy collectors, phase-specific/adaptive timeouts, the old global-DA
 boolean, and mutable BLS-domain strings are excluded. The former full-parameter fingerprint is
 available only to archival tooling and is never an input to live v2 admission.
 
@@ -227,42 +225,41 @@ replay apply that same coordinator-inclusive boundary; a 256-participant receipt
 committee or aggregate-signature work.
 
 For authoritative NPoS validity, `sumeragi_npos_parameters` must exist in committed world state.
-Genesis builders emit it for NPoS chains. Epoch length, election, evidence attribution, and
-reconfiguration delays are read from that committed snapshot; customized node-local fallback
-values cannot change a candidate or follower result. The serialized legacy VRF-window fields remain
-shape-validated and genesis-fingerprinted, but the production runtime does not use them to schedule
-messages or penalties. An NPoS v2 node that cannot load the committed snapshot fails closed.
+Genesis builders emit it for NPoS chains. Epoch length, election inputs, evidence bounds, and
+slashing delay are read from that committed snapshot; customized node-local fallback values cannot
+change a candidate or follower result. An NPoS v2 node that cannot load the committed snapshot
+fails closed.
 
-### Finalized NPoS threshold-beacon randomness
+### Authenticated NPoS threshold beacon
 
-Every successor NPoS epoch consumes the unique finalized global threshold-BLS pulse stored in the
-last committed pre-boundary block. The live height-local producer binds the exact network, active
-key session, frozen roster, fixed pulse round, pulse height, and finalized parent anchor. It
-authenticates each transport sender and proof-carrying partial share, verifies the threshold
-aggregate, and exposes only the unique finalized pulse to candidate assembly.
+First-release NPoS has one randomness path: the adaptive global threshold beacon. Validators send
+`GlobalBeaconPartialSignature` messages for an exact height and view. The dedicated beacon
+lifecycle verifies every share against the active, network-bound DKG session and admits at most one
+canonical share per signer. A finalized pulse is persisted only after threshold aggregation and is
+reverified at the state-application boundary.
 
-The candidate at `height + 1 == epoch_end_height` must carry that finalized pulse. Candidate
-validation repeats the session, roster, height, network, anchor, and threshold-signature checks and
-persists the unique network-height pulse before the boundary context is built. Successor context
-construction then rereads and fully verifies the persisted pulse and derives the next epoch's
-leader/election seed from it. A missing or inconsistent mandatory pre-boundary pulse fails closed.
+The last committed pre-boundary block must contain the unique finalized pulse for that height. Epoch
+transition reconstructs its chain anchor from canonical block history, verifies the active key
+session and threshold signature again, checks the singleton history tail, and derives both the next
+committee-election seed and `leader_seed` from that pulse. Missing, duplicated, stale,
+foreign-chain, or otherwise inconsistent pulse state fails context construction.
+
 Committed Parliament sortition and timed-ballot requests use the same producer, but their slots are
 optional for chain liveness so the governance reducer can classify objective pulse absence and
 advance to a fresh attempt.
 
-Consensus VRF commit/reveal is retired in production. Non-test builds emit no `VrfCommit` or
-`VrfReveal`, retain no pending participant record, reject inbound legacy messages, and reject every
-candidate with a nonempty `vrf_epoch_seals` effect. Production also derives no VRF absence or
-non-reveal penalty action. Retained wire/data-model variants, parameter field names, and historical
-fixtures are compatibility tombstones and test material, not a second randomness path.
+The pre-release per-validator VRF commit/reveal protocol is not part of the wire enum, runner, or
+signed effects schema. Pre-release frames and effects therefore fail exact decoding instead of
+entering a compatibility-and-rejection branch. There is no alternate hash-chain seed fallback and
+no proposer-selected reveal subset. Economic penalties require self-contained, signature-verified
+equivocation evidence admitted by a prior committed block.
 
 V2 configuration validation fails closed if transaction or body bounds are absent, any adapter
 queue is zero, or a retired mode flip, phase-specific timeout, fast-finality cap, adaptive
 resilience path, or consensus fault-injection switch is supplied. Collector routing, global RBC
 state, adaptive pacemaker settings, and missing-QC recovery parameters are not part of the runtime
-configuration projection. Older fields with those labels, where still exposed by observability
-schemas, are non-authoritative counters and may remain zero. Validators retransmit
-correctness-critical control messages to the whole voting roster.
+configuration projection. Retired field names are rejected by exact configuration and diagnostics
+decoders. Validators retransmit correctness-critical control messages to the whole voting roster.
 
 Authenticated proposal/vote/timeout semantic keys are retained for the current view plus one full
 roster rotation. Capacity is derived from the frozen roster at four keys per validator per retained
@@ -273,9 +270,7 @@ needed to form the current QC or TC.
 
 At the local P2P scheduler, authoritative v2 proposals, votes, QCs, timeout votes/certificates,
 commit-certificate responses, and `GlobalBeaconPartialSignature` messages use `ConsensusSafety`.
-Retained VRF wire variants share that decode-time class but are never emitted by the production
-runtime and are rejected at its tombstone ingress boundary. This tag is derived after decode and is
-not part of the wire format. It has independent bounded network-actor,
+This tag is derived after decode and is not part of the wire format. It has independent bounded network-actor,
 per-peer, encrypted-frame, deferred-send, inbound-dispatch, and relay-subscriber queues. Auxiliary
 lane traffic uses `Consensus`; Torii proxy and streaming-control traffic use `Control`. Genesis is
 a local trust-root input and has no peer request/response route. An auxiliary or control-plane flood
@@ -303,12 +298,22 @@ successor roster, and reopens only after WAL replay. A Byzantine validator or a 
 non-roster identities therefore cannot indefinitely exclude an honest retransmission at the
 production ingress boundary.
 
-A proof-carrying `LaneHistoricalRecoveryResponse` is the only completion whose
-semantic origin may belong solely to a predecessor roster. It consumes that
-authenticated hop's bounded `H` TransportCompletion owner and bytes; the lane
-adapter accepts it only for an outstanding exact request and a responder named
-by the frozen historical CommitQC or READY certificate. Other DA completions
-still require a current-roster semantic origin.
+Two request-bound completion families may originate outside the active frozen
+roster. A proof-carrying `LaneHistoricalRecoveryResponse` may belong solely to
+a predecessor roster; the lane adapter accepts it only for an outstanding exact
+request and a responder named by the frozen historical CommitQC or READY
+certificate. A historical `CertifiedBodyResponse` instead names and signs with
+the archive responder's current `PeerId`; it is not interpreted as an index
+into the certified height's frozen roster. Both consume the authenticated hop's
+bounded `H` TransportCompletion owner and bytes. The exact request hash,
+historical QC, round, subject, manifest, and body hash remain frozen and
+independently verified. A non-roster certified response does not consume the
+roster-sized generic leader-wire lifecycle: production ingress seals it as a
+request-bound archive completion, and Phase B accepts that mode only after the
+exact outstanding-request, response-authentication, body-store, and durable
+LedgerV1 `Ready(Fetch)` checks succeed. Current-roster certified responses keep
+the ordinary leader-wire token and terminal path. Other DA completions,
+including `PayloadChunk`, still require an active-roster semantic origin.
 
 Removal from that fair ingress is conditional on the exact next queue. A reducer-directed head
 remains in its source lane unless the single runtime FIFO has room in that payload's Normal or
@@ -574,6 +579,19 @@ boundary before validation or voting. This avoids a durability barrier per shard
 the full-body voting gate. Chunk signatures bind epoch, height, view, context, parent, subject,
 payload root, encoding, chunk index, and total chunk count, preventing replay or mixed
 reconstruction.
+
+Historical CommitQC discovery and certified-body fetch choose bounded batches
+from the live, topology- and key-ACL-authenticated peer set. A service-owned
+cursor advances between batches and skips a local-only batch within one bounded
+topology cycle, so a rotated archive beyond the first batch remains reachable.
+An identical batch reuses its retained fanout and ranked actor tickets. While
+that fanout remains owned, a different rotated batch stays with the durable
+task/discovery source instead of consuming another exact-output unit; after the
+incumbent drains, a later source retry may install the next bounded batch.
+Request completion or cancellation removes the one retained request fanout.
+Only an empty live cycle falls back to the historical frozen-roster sources
+retained in the deterministic effect/WAL. Physical route discovery is therefore
+rotation-aware without making mutable topology part of replay authority.
 
 A checksummed validation-marker file is never restart authority by itself. Startup quarantines all
 recovered markers, reloads their exact signed bodies, and reproduces each execution commitment with
@@ -1180,6 +1198,11 @@ Ingress and Runtime owners are never pruned by this cut, admission rejects an
 identity below the durable view (or every identity after Decision), and both
 admission-ordinal high-watermarks survive retirement so the freed slot cannot
 resurrect an old identity or reuse an ordinal.
+The gate remains sized only for the frozen roster. An authenticated current
+archive outside that roster instead carries the sealed request-bound completion
+mode described above; its durable body frame plus LedgerV1 `Ready(Fetch)` row
+are the restart authority, so it neither fabricates a Runtime receipt nor marks
+a generic leader-wire terminal.
 At the transport boundary, a locally conflicting certified-body request is a
 nonfatal remote rejection, while a conflicting Commit-certificate response
 leaves discovery outstanding and retryable through another authenticated peer.

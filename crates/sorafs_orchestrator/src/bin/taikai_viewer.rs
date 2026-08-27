@@ -19,7 +19,7 @@ use sorafs_car::taikai::{
     validate_distinct_artifact_paths, validate_track_metadata, verify_taikai_car,
 };
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::{HashMap, HashSet},
     env,
@@ -646,12 +646,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-#[cfg(unix)]
-fn set_bounded_read_flags(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag() | platform_nonblocking_read_flag());
-}
-#[cfg(not(unix))]
-fn set_bounded_read_flags(_options: &mut fs::OpenOptions) {}
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_nonblocking_read_flag() -> i32 {
     0o4000
@@ -686,6 +680,89 @@ fn platform_nonblocking_read_flag() -> i32 {
 ))]
 fn platform_nonblocking_read_flag() -> i32 {
     0
+}
+#[cfg(unix)]
+fn open_bounded_input(path: &Path) -> io::Result<fs::File> {
+    let no_follow = platform_no_follow_flag();
+    let nonblocking = platform_nonblocking_read_flag();
+    if no_follow == 0 || nonblocking == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "secure direct-file input opens are unavailable on this Unix target",
+        ));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true).custom_flags(no_follow | nonblocking);
+    options.open(path)
+}
+#[cfg(windows)]
+fn open_bounded_input(path: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+#[cfg(not(any(unix, windows)))]
+fn open_bounded_input(_path: &Path) -> io::Result<fs::File> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "secure direct-file input opens are unavailable on this platform",
+    ))
+}
+fn bounded_input_metadata_is_indirect(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
+}
+#[cfg(unix)]
+fn bounded_input_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+#[cfg(windows)]
+fn bounded_input_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+#[cfg(not(any(unix, windows)))]
+fn bounded_input_metadata_same_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+#[cfg(unix)]
+fn bounded_input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    bounded_input_metadata_same_identity(left, right)
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+#[cfg(windows)]
+fn bounded_input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    bounded_input_metadata_same_identity(left, right)
+        && left.file_size() == right.file_size()
+        && left.last_write_time() == right.last_write_time()
+        && left.creation_time() == right.creation_time()
+}
+#[cfg(not(any(unix, windows)))]
+fn bounded_input_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
 }
 fn load_envelope(path: &Path) -> Result<TaikaiSegmentEnvelopeV1, Box<dyn std::error::Error>> {
     let bytes = read_bounded_regular_file(
@@ -859,55 +936,30 @@ fn validate_cek_receipt(receipt: &CekRotationReceiptV1) -> io::Result<()> {
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 fn read_bounded_regular_file(path: &Path, label: &str, max_bytes: usize) -> io::Result<Vec<u8>> {
-    let path_metadata = fs::symlink_metadata(path).map_err(|err| {
+    read_bounded_regular_file_with_post_read(path, label, max_bytes, || {})
+}
+fn read_bounded_regular_file_with_post_read(
+    path: &Path,
+    label: &str,
+    max_bytes: usize,
+    post_read: impl FnOnce(),
+) -> io::Result<Vec<u8>> {
+    let before = fs::symlink_metadata(path).map_err(|err| {
         io::Error::new(
             err.kind(),
             format!("failed to inspect {label} `{}`: {err}", path.display()),
         )
     })?;
-    if path_metadata.file_type().is_symlink() {
+    if bounded_input_metadata_is_indirect(&before) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("{label} `{}` must not be a symlink", path.display()),
         ));
     }
-    if !path_metadata.is_file() {
+    if !before.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("{label} `{}` must be a regular file", path.display()),
-        ));
-    }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    // The descriptor flags close the preflight/open race on Unix: a replacement symlink fails to
-    // open, while a replacement FIFO cannot block before the descriptor type check below.
-    set_bounded_read_flags(&mut options);
-    let file = options.open(path).map_err(|err| {
-        io::Error::new(
-            err.kind(),
-            format!("failed to open {label} `{}`: {err}", path.display()),
-        )
-    })?;
-    let metadata = file.metadata().map_err(|err| {
-        io::Error::new(
-            err.kind(),
-            format!("failed to inspect {label} `{}`: {err}", path.display()),
-        )
-    })?;
-    if !metadata.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{label} `{}` must be a regular file", path.display()),
-        ));
-    }
-    #[cfg(unix)]
-    if path_metadata.dev() != metadata.dev() || path_metadata.ino() != metadata.ino() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "{label} `{}` changed while it was being opened",
-                path.display()
-            ),
         ));
     }
     let max_bytes_u64 = u64::try_from(max_bytes).map_err(|_| {
@@ -916,13 +968,50 @@ fn read_bounded_regular_file(path: &Path, label: &str, max_bytes: usize) -> io::
             format!("{label} byte limit exceeds the platform file-size representation"),
         )
     })?;
-    if metadata.len() > max_bytes_u64 {
+    if before.len() > max_bytes_u64 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
                 "{label} `{}` is {} bytes; maximum is {max_bytes}",
                 path.display(),
-                metadata.len()
+                before.len()
+            ),
+        ));
+    }
+    let mut file = open_bounded_input(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to open {label} `{}`: {err}", path.display()),
+        )
+    })?;
+    let opened = file.metadata().map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to inspect {label} `{}`: {err}", path.display()),
+        )
+    })?;
+    if bounded_input_metadata_is_indirect(&opened) || !opened.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} `{}` must be a regular file", path.display()),
+        ));
+    }
+    let linked_after_open = fs::symlink_metadata(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to re-inspect {label} `{}`: {err}", path.display()),
+        )
+    })?;
+    if bounded_input_metadata_is_indirect(&linked_after_open)
+        || !linked_after_open.is_file()
+        || !bounded_input_metadata_unchanged(&before, &opened)
+        || !bounded_input_metadata_unchanged(&opened, &linked_after_open)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{label} `{}` changed while it was being opened",
+                path.display()
             ),
         ));
     }
@@ -932,7 +1021,7 @@ fn read_bounded_regular_file(path: &Path, label: &str, max_bytes: usize) -> io::
             format!("{label} byte limit cannot be incremented safely"),
         )
     })?;
-    let initial_capacity = usize::try_from(metadata.len()).unwrap_or(max_bytes);
+    let initial_capacity = usize::try_from(opened.len()).unwrap_or(max_bytes);
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(initial_capacity).map_err(|err| {
         io::Error::other(format!(
@@ -940,7 +1029,8 @@ fn read_bounded_regular_file(path: &Path, label: &str, max_bytes: usize) -> io::
             path.display()
         ))
     })?;
-    file.take(read_limit)
+    Read::by_ref(&mut file)
+        .take(read_limit)
         .read_to_end(&mut bytes)
         .map_err(|err| {
             io::Error::new(
@@ -953,6 +1043,37 @@ fn read_bounded_regular_file(path: &Path, label: &str, max_bytes: usize) -> io::
             io::ErrorKind::InvalidData,
             format!(
                 "{label} `{}` grew beyond the {max_bytes}-byte maximum while being read",
+                path.display()
+            ),
+        ));
+    }
+    post_read();
+    let opened_after_read = file.metadata().map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to re-inspect open {label} `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let linked_after_read = fs::symlink_metadata(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to re-inspect {label} `{}`: {err}", path.display()),
+        )
+    })?;
+    if bounded_input_metadata_is_indirect(&linked_after_read)
+        || !opened_after_read.is_file()
+        || !linked_after_read.is_file()
+        || !bounded_input_metadata_unchanged(&opened, &opened_after_read)
+        || !bounded_input_metadata_unchanged(&opened_after_read, &linked_after_read)
+        || u64::try_from(bytes.len()).ok() != Some(opened.len())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} `{}` changed while it was being read",
                 path.display()
             ),
         ));
@@ -1701,6 +1822,74 @@ mod tests {
 
         assert!(
             error.to_string().contains("must be a regular file"),
+            "unexpected error: {error}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_input_rejects_in_place_size_change_during_read() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let path = temp_path.join("changing.car");
+        fs::write(&path, b"original").expect("write original input");
+
+        let error = read_bounded_regular_file_with_post_read(&path, "Taikai CAR", 32, || {
+            fs::write(&path, b"x").expect("shrink input after read");
+        })
+        .expect_err("an in-place size change must invalidate the read");
+
+        assert!(
+            error
+                .to_string()
+                .contains("changed while it was being read"),
+            "unexpected error: {error}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_input_rejects_same_length_content_change_during_read() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let path = temp_path.join("mutating.car");
+        fs::write(&path, b"original").expect("write original input");
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open original input");
+        file.set_times(
+            fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1)),
+        )
+        .expect("set stable old modification time");
+        drop(file);
+
+        let error = read_bounded_regular_file_with_post_read(&path, "Taikai CAR", 32, || {
+            fs::write(&path, b"mutated!").expect("mutate input without changing its length");
+        })
+        .expect_err("a same-length in-place mutation must invalidate the read");
+
+        assert!(
+            error
+                .to_string()
+                .contains("changed while it was being read"),
+            "unexpected error: {error}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_input_rejects_same_length_path_replacement_during_read() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let path = temp_path.join("replaced.car");
+        let moved = temp_path.join("original.car");
+        fs::write(&path, b"original").expect("write original input");
+
+        let error = read_bounded_regular_file_with_post_read(&path, "Taikai CAR", 32, || {
+            fs::rename(&path, &moved).expect("move original input");
+            fs::write(&path, b"replaced").expect("publish same-length replacement");
+        })
+        .expect_err("a same-length path replacement must invalidate the read");
+
+        assert!(
+            error
+                .to_string()
+                .contains("changed while it was being read"),
             "unexpected error: {error}"
         );
     }

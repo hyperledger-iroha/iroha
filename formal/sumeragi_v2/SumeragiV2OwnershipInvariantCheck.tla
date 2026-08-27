@@ -136,7 +136,7 @@ OwnershipCertifiedResponseClaimProjectionAuthenticated(projection) ==
     /\ item.kind = "CertifiedResponse"
     /\ AsyncCertifiedResponseCanonicalWireIdentity(item) = projection
     /\ CertifiedResponseAuthenticatedOccurrence(item)
-    /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+    /\ item.envelope.responder \in AsyncArchiveServerIds
     /\ MatchingCertifiedRequests(item) # {}
     /\ \E request \in MatchingCertifiedRequests(item):
          FrozenCertifiedResponseBinding(item, request)

@@ -3,11 +3,13 @@ package org.hyperledger.iroha.android.model.instructions;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 import org.hyperledger.iroha.android.util.HashLiteral;
 
@@ -16,8 +18,43 @@ final class KaigiInstructionUtils {
 
   private static final String DOMAIN_KEY = "domain_id";
   private static final String CALL_NAME_KEY = "call_name";
+  static final int KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 = 8;
+  static final int KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 = 4 * 1024;
 
   private KaigiInstructionUtils() {}
+
+  static Set<String> argumentSet(final String... arguments) {
+    final Set<String> result = new HashSet<>();
+    Collections.addAll(result, arguments);
+    return Collections.unmodifiableSet(result);
+  }
+
+  static void requireKnownArguments(
+      final Map<String, String> arguments,
+      final Set<String> allowedArguments,
+      final String... allowedPrefixes) {
+    final List<String> unknownArguments = new ArrayList<>();
+    for (final String key : arguments.keySet()) {
+      if (allowedArguments.contains(key)) {
+        continue;
+      }
+      boolean allowedByPrefix = false;
+      for (final String prefix : allowedPrefixes) {
+        if (key.startsWith(prefix) && key.length() > prefix.length()) {
+          allowedByPrefix = true;
+          break;
+        }
+      }
+      if (!allowedByPrefix) {
+        unknownArguments.add(key);
+      }
+    }
+    if (!unknownArguments.isEmpty()) {
+      Collections.sort(unknownArguments);
+      throw new IllegalArgumentException(
+          "Unknown instruction argument(s): " + String.join(", ", unknownArguments));
+    }
+  }
 
   static void requireAction(final Map<String, String> arguments, final String expected) {
     final String actual = require(arguments, "action");
@@ -59,7 +96,8 @@ final class KaigiInstructionUtils {
       return;
     }
     final String effectivePrefix = prefix.endsWith(".") ? prefix : prefix + ".";
-    metadata.forEach((key, value) -> target.put(effectivePrefix + key, value));
+    new TreeMap<>(metadata)
+        .forEach((key, value) -> target.put(effectivePrefix + key, value));
   }
 
   static String canonicalizeHash(final byte[] bytes) {
@@ -67,14 +105,14 @@ final class KaigiInstructionUtils {
   }
 
   static String canonicalizeHash(final String value) {
-    return HashLiteral.canonicalize(value);
+    return HashLiteral.canonicalize(HashLiteral.decode(value));
   }
 
   static String canonicalizeOptionalHash(final String value) {
     if (value == null || value.trim().isEmpty()) {
       return null;
     }
-    return HashLiteral.canonicalizeOptional(value);
+    return canonicalizeHash(value);
   }
 
   static String canonicalizeOptionalHash(final byte[] value) {
@@ -154,11 +192,38 @@ final class KaigiInstructionUtils {
     return Base64.getEncoder().encodeToString(bytes);
   }
 
+  static String toHpkePublicKeyBase64(final byte[] bytes, final String fieldName) {
+    Objects.requireNonNull(bytes, fieldName);
+    if (bytes.length == 0) {
+      throw new IllegalArgumentException(fieldName + " must not be empty");
+    }
+    if (bytes.length > KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1) {
+      throw new IllegalArgumentException(
+          fieldName
+              + " must not exceed "
+              + KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1
+              + " bytes");
+    }
+    return Base64.getEncoder().encodeToString(bytes);
+  }
+
   static String requireBase64(final String value, final String fieldName) {
+    return requireBase64(value, fieldName, null);
+  }
+
+  static String requireHpkePublicKeyBase64(final String value, final String fieldName) {
+    return requireBase64(value, fieldName, KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1);
+  }
+
+  private static String requireBase64(
+      final String value, final String fieldName, final Integer maxDecodedBytes) {
     if (isBlank(value)) {
       throw new IllegalArgumentException(fieldName + " must not be blank");
     }
     final String trimmed = value.trim();
+    if (!trimmed.equals(value)) {
+      throw new IllegalArgumentException(fieldName + " must use canonical base64 syntax");
+    }
     final byte[] decoded;
     try {
       decoded = Base64.getDecoder().decode(trimmed);
@@ -168,7 +233,14 @@ final class KaigiInstructionUtils {
     if (decoded.length == 0) {
       throw new IllegalArgumentException(fieldName + " must decode to non-empty bytes");
     }
-    return trimmed;
+    if (maxDecodedBytes != null && decoded.length > maxDecodedBytes) {
+      throw new IllegalArgumentException(
+          fieldName + " must not exceed " + maxDecodedBytes + " decoded bytes");
+    }
+    if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
+      throw new IllegalArgumentException(fieldName + " must use canonical base64 syntax");
+    }
+    return value;
   }
 
   static PrivacyMode parsePrivacyMode(final Map<String, String> arguments, final String prefix) {
@@ -237,6 +309,12 @@ final class KaigiInstructionUtils {
       if (index < 0 || index >= hopArgumentCount) {
         throw new IllegalArgumentException("Relay manifest hop index is out of bounds: " + key);
       }
+      if (index >= KAIGI_RELAY_MANIFEST_MAX_HOPS_V1) {
+        throw new IllegalArgumentException(
+            "relay manifest must not contain more than "
+                + KAIGI_RELAY_MANIFEST_MAX_HOPS_V1
+                + " hops");
+      }
       final RelayManifestHop hop =
           hopsByIndex.computeIfAbsent(index, ignored -> new RelayManifestHop());
       final String attribute = tail.substring(separator + 1);
@@ -245,7 +323,7 @@ final class KaigiInstructionUtils {
           hop.relayId = entry.getValue();
           break;
         case "hpke_public_key":
-          hop.hpkePublicKey = requireBase64(entry.getValue(), key);
+          hop.hpkePublicKey = requireHpkePublicKeyBase64(entry.getValue(), key);
           break;
         case "weight":
           final int parsed = parseNonNegativeInt(entry.getValue(), "relay hop weight");
@@ -312,6 +390,12 @@ final class KaigiInstructionUtils {
     if (manifest.hops().size() < 3) {
       throw new IllegalArgumentException("relay manifest must contain at least 3 hops");
     }
+    if (manifest.hops().size() > KAIGI_RELAY_MANIFEST_MAX_HOPS_V1) {
+      throw new IllegalArgumentException(
+          "relay manifest must not contain more than "
+              + KAIGI_RELAY_MANIFEST_MAX_HOPS_V1
+              + " hops");
+    }
     final java.util.Set<String> relayIds = new java.util.HashSet<>();
     for (int index = 0; index < manifest.hops().size(); index++) {
       final RelayManifestHop hop = manifest.hops().get(index);
@@ -322,7 +406,7 @@ final class KaigiInstructionUtils {
       if (!relayIds.add(hop.relayId())) {
         throw new IllegalArgumentException("relay manifest relay IDs must be unique");
       }
-      requireBase64(
+      requireHpkePublicKeyBase64(
           hop.hpkePublicKey(), "relay_manifest.hop." + index + ".hpke_public_key");
       if (hop.weight() == null) {
         throw new IllegalArgumentException("relay_manifest.hop." + index + ".weight is required");
@@ -450,7 +534,15 @@ final class KaigiInstructionUtils {
 
     RelayManifest(final Long expiryMs, final List<RelayManifestHop> hops) {
       this.expiryMs = expiryMs;
-      this.hops = hops == null ? List.of() : hops;
+      if (hops == null || hops.isEmpty()) {
+        this.hops = Collections.emptyList();
+      } else {
+        final List<RelayManifestHop> copy = new ArrayList<>(hops.size());
+        for (final RelayManifestHop hop : hops) {
+          copy.add(new RelayManifestHop(hop.relayId(), hop.hpkePublicKey(), hop.weight()));
+        }
+        this.hops = Collections.unmodifiableList(copy);
+      }
     }
 
     Long expiryMs() {

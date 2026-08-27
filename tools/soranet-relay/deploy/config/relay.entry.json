@@ -8,13 +8,11 @@
     "private_key_path": "/etc/soranet/relay/tls/server.key"
   },
   "pow": {
-    "required": true,
     "difficulty": 6,
     "max_future_skew_secs": 600,
     "min_ticket_ttl_secs": 45,
     "revocation_store_path": "/var/lib/soranet-relay/ticket_revocations.norito",
     "puzzle": {
-      "enabled": true,
       "memory_kib": 8192,
       "time_cost": 3,
       "lanes": 2

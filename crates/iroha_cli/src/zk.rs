@@ -1132,7 +1132,7 @@ mod tests {
         let explicit: VkSubmissionJson =
             norito::json::from_value(encoded.clone()).expect("deserialize explicit namespace");
         assert_eq!(
-            build_vk_record(&explicit)
+            build_vk_record(&explicit, VkSubmissionOperation::Register)
                 .expect("build explicit namespace record")
                 .namespace,
             "offline_kagemusha"
@@ -1145,7 +1145,7 @@ mod tests {
         let omitted: VkSubmissionJson =
             norito::json::from_value(omitted).expect("deserialize omitted namespace");
         assert_eq!(
-            build_vk_record(&omitted)
+            build_vk_record(&omitted, VkSubmissionOperation::Register)
                 .expect("build default namespace record")
                 .namespace,
             DEFAULT_VK_NAMESPACE
@@ -1157,7 +1157,7 @@ mod tests {
         let null: VkSubmissionJson =
             norito::json::from_value(null).expect("deserialize null namespace");
         assert_eq!(
-            build_vk_record(&null)
+            build_vk_record(&null, VkSubmissionOperation::Register)
                 .expect("build null-defaulted namespace record")
                 .namespace,
             DEFAULT_VK_NAMESPACE
@@ -1166,8 +1166,11 @@ mod tests {
     #[test]
     fn vk_submission_namespace_rejects_blank_or_untrimmed_values() {
         for namespace in ["", " \t ", " offline_kagemusha", "offline_kagemusha "] {
-            let err = build_vk_record(&sample_vk_submission(Some(namespace)))
-                .expect_err("blank or untrimmed namespace must be rejected");
+            let err = build_vk_record(
+                &sample_vk_submission(Some(namespace)),
+                VkSubmissionOperation::Register,
+            )
+            .expect_err("blank or untrimmed namespace must be rejected");
             assert!(
                 err.to_string().contains("namespace must not"),
                 "unexpected error for {namespace:?}: {err}"
@@ -1194,6 +1197,72 @@ mod tests {
                 "unexpected error for {field}: {error}"
             );
         }
+    }
+    #[test]
+    fn vk_submission_enforces_backend_specific_key_size_limits() {
+        use base64::Engine as _;
+        let limit = iroha_core::zk::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES;
+        let mut inline = sample_vk_submission(None);
+        inline.backend = "stark/fri".to_owned();
+        inline.commitment_hex = None;
+        inline.vk_len = Some(u32::try_from(limit).expect("STARK VK limit fits u32"));
+        inline.vk_bytes = Some(base64::engine::general_purpose::STANDARD.encode(vec![0xA5; limit]));
+        assert!(
+            build_vk_record(&inline, VkSubmissionOperation::Register).is_ok(),
+            "the exact STARK VK byte limit must be admitted by the CLI builder"
+        );
+        inline.vk_len = Some(u32::try_from(limit + 1).expect("STARK VK overflow fits u32"));
+        inline.vk_bytes =
+            Some(base64::engine::general_purpose::STANDARD.encode(vec![0xA5; limit + 1]));
+        let error = build_vk_record(&inline, VkSubmissionOperation::Register)
+            .expect_err("the first byte over the STARK VK limit must be rejected");
+        assert!(error.to_string().contains("backend limit"), "{error}");
+
+        let mut commitment_only = sample_vk_submission(None);
+        commitment_only.backend = "stark/fri".to_owned();
+        commitment_only.vk_len = Some(u32::try_from(limit).expect("STARK VK limit fits u32"));
+        assert!(
+            build_vk_record(&commitment_only, VkSubmissionOperation::Register).is_ok(),
+            "the exact declared STARK VK limit must be admitted"
+        );
+        commitment_only.vk_len =
+            Some(u32::try_from(limit + 1).expect("STARK VK overflow fits u32"));
+        let error = build_vk_record(&commitment_only, VkSubmissionOperation::Register)
+            .expect_err("an oversized declared STARK VK length must be rejected");
+        assert!(error.to_string().contains("backend limit"), "{error}");
+    }
+    #[test]
+    fn vk_submission_requires_strict_withdrawal_ordering() {
+        for (activation_height, withdraw_height) in [(10, 10), (11, 10)] {
+            let mut payload = sample_vk_submission(None);
+            payload.activation_height = Some(activation_height);
+            payload.withdraw_height = Some(withdraw_height);
+            let error = build_vk_record(&payload, VkSubmissionOperation::Register)
+                .expect_err("withdrawal must follow activation");
+            assert!(
+                error.to_string().contains("greater than activation_height"),
+                "{error}"
+            );
+        }
+        let mut payload = sample_vk_submission(None);
+        payload.activation_height = Some(10);
+        payload.withdraw_height = Some(11);
+        assert!(build_vk_record(&payload, VkSubmissionOperation::Register).is_ok());
+    }
+    #[test]
+    fn vk_submission_rejects_withdrawn_registration_but_allows_update() {
+        use iroha::data_model::confidential::ConfidentialStatus;
+        let mut payload = sample_vk_submission(None);
+        payload.status = Some(ConfidentialStatus::Withdrawn);
+        let error = build_vk_record(&payload, VkSubmissionOperation::Register)
+            .expect_err("new withdrawn records must be rejected");
+        assert!(
+            error.to_string().contains("cannot be registered"),
+            "{error}"
+        );
+        let record = build_vk_record(&payload, VkSubmissionOperation::Update)
+            .expect("updates may transition an existing verifier to withdrawn");
+        assert_eq!(record.status, ConfidentialStatus::Withdrawn);
     }
     #[test]
     fn encode_encrypted_payload_rejects_empty_ciphertext() {
@@ -1370,6 +1439,11 @@ struct PreparedVkSubmission {
     id: iroha::data_model::proof::VerifyingKeyId,
     record: iroha::data_model::proof::VerifyingKeyRecord,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VkSubmissionOperation {
+    Register,
+    Update,
+}
 fn signed_vk_register_transaction(
     client: &Client,
     metadata: iroha::data_model::prelude::Metadata,
@@ -1438,6 +1512,7 @@ fn resolve_vk_namespace(namespace: Option<&str>) -> Result<String> {
 }
 fn build_vk_record(
     payload: &VkSubmissionJson,
+    operation: VkSubmissionOperation,
 ) -> Result<iroha::data_model::proof::VerifyingKeyRecord> {
     use iroha::data_model::{
         confidential::ConfidentialStatus,
@@ -1446,12 +1521,32 @@ fn build_vk_record(
     use iroha_core::zk::hash_vk;
     let backend =
         ensure_verifier_backend_registry_label_v1(&payload.backend, "verifying key backend")?;
+    let backend_tag = vk_backend_tag_from_label(backend)?;
+    let max_vk_bytes = match backend_tag {
+        iroha::data_model::zk::BackendTag::Halo2IpaPasta => {
+            iroha_core::zk::HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES
+        }
+        iroha::data_model::zk::BackendTag::Stark => {
+            iroha_core::zk::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES
+        }
+    };
     let vk_bytes = match payload.vk_bytes.as_deref() {
-        Some(value) => Some(
-            base64::engine::general_purpose::STANDARD
+        Some(value) => {
+            if base64::decoded_len_estimate(value.len()) > max_vk_bytes.saturating_add(2) {
+                eyre::bail!(
+                    "inline verifying-key container exceeds the {max_vk_bytes}-byte backend limit"
+                );
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
                 .decode(value.as_bytes())
-                .wrap_err("failed to decode vk_bytes base64")?,
-        ),
+                .wrap_err("failed to decode vk_bytes base64")?;
+            if bytes.len() > max_vk_bytes {
+                eyre::bail!(
+                    "inline verifying-key container exceeds the {max_vk_bytes}-byte backend limit"
+                );
+            }
+            Some(bytes)
+        }
         None => None,
     };
     let mut key_opt = None;
@@ -1483,11 +1578,15 @@ fn build_vk_record(
         if explicit_len == 0 {
             eyre::bail!("vk_len must be > 0");
         }
+        if usize::try_from(explicit_len).map_or(true, |len| len > max_vk_bytes) {
+            eyre::bail!(
+                "declared verifying-key length exceeds the {max_vk_bytes}-byte backend limit"
+            );
+        }
         vk_len_value = explicit_len;
     } else {
         eyre::bail!("provide either vk_bytes or commitment_hex");
     }
-    let backend_tag = vk_backend_tag_from_label(backend)?;
     let schema_hash = parse_hex32_str(
         &payload.public_inputs_schema_hash_hex,
         "public_inputs_schema_hash_hex",
@@ -1502,9 +1601,13 @@ fn build_vk_record(
     if let (Some(activation_height), Some(withdraw_height)) =
         (payload.activation_height, payload.withdraw_height)
     {
-        if activation_height > withdraw_height {
-            eyre::bail!("withdraw_height must be >= activation_height");
+        if activation_height >= withdraw_height {
+            eyre::bail!("withdraw_height must be greater than activation_height");
         }
+    }
+    let status = payload.status.unwrap_or(ConfidentialStatus::Active);
+    if operation == VkSubmissionOperation::Register && status == ConfidentialStatus::Withdrawn {
+        eyre::bail!("a new verifying key cannot be registered as withdrawn");
     }
     let mut record = VerifyingKeyRecord::new_with_owner(
         payload.version,
@@ -1518,7 +1621,7 @@ fn build_vk_record(
     );
     record.vk_len = vk_len_value;
     record.max_proof_bytes = payload.max_proof_bytes.unwrap_or(0);
-    record.status = payload.status.unwrap_or(ConfidentialStatus::Active);
+    record.status = status;
     record.metadata_uri_cid = payload.metadata_uri_cid.clone();
     record.vk_bytes_cid = payload.vk_bytes_cid.clone();
     record.activation_height = payload.activation_height;
@@ -1527,19 +1630,22 @@ fn build_vk_record(
     record.gas_schedule_id = payload.gas_schedule_id.clone();
     Ok(record)
 }
-fn load_vk_submission(path: &std::path::Path) -> Result<PreparedVkSubmission> {
+fn load_vk_submission(
+    path: &std::path::Path,
+    operation: VkSubmissionOperation,
+) -> Result<PreparedVkSubmission> {
     let payload: VkSubmissionJson = decode_zk_json_file(path, "verifying-key submission")?;
     let backend =
         ensure_verifier_backend_registry_label_v1(&payload.backend, "verifying key backend")?;
     let id =
         iroha::data_model::proof::VerifyingKeyId::new(backend.to_string(), payload.name.clone());
-    let record = build_vk_record(&payload)?;
+    let record = build_vk_record(&payload, operation)?;
     Ok(PreparedVkSubmission { id, record })
 }
 impl Run for VkRegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let prepared = load_vk_submission(&self.json)?;
+        let prepared = load_vk_submission(&self.json, VkSubmissionOperation::Register)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
         let fee_payment = context.transaction_fee_payment()?;
         let tx = signed_vk_register_transaction(&client, metadata, prepared, fee_payment)?;
@@ -1562,7 +1668,7 @@ pub struct VkUpdateArgs {
 impl Run for VkUpdateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let prepared = load_vk_submission(&self.json)?;
+        let prepared = load_vk_submission(&self.json, VkSubmissionOperation::Update)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
         let fee_payment = context.transaction_fee_payment()?;
         let tx = signed_vk_update_transaction(&client, metadata, prepared, fee_payment)?;

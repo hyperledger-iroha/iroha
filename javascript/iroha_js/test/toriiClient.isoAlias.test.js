@@ -11,6 +11,7 @@ import {
   generateKeyPair,
   verifyEd25519,
 } from "../src/index.js";
+import { isExactJsonMediaType } from "../src/toriiBoundedResponse.js";
 
 const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
 const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
@@ -458,11 +459,12 @@ test("routeRetailRecipient binds the response to the requested account", async (
   );
 });
 
-test("findFeeSponsorProgramById posts and binds the exact program id", async () => {
+test("findFeeSponsorProgramById binds controller identity and exact program name", async () => {
   const sponsor = ToriiClient._requireAccountId(VALID_ACCOUNT_ID);
+  const responseSponsor = AccountAddress.parseEncoded(sponsor).address.toI105(42);
   const programId = `${sponsor}/wallet_fx`;
   const program = {
-    id: { sponsor, name: "wallet_fx" },
+    id: { sponsor: responseSponsor, name: "wallet_fx" },
     payout_account: sponsor,
     lifecycle: { state: "active", value: null },
     active_revision: 7,
@@ -494,18 +496,207 @@ test("findFeeSponsorProgramById returns null and rejects mismatched lifecycle re
     null,
   );
 
-  const mismatched = new ToriiClient("https://example.test", {
-    fetchImpl: async () =>
-      jsonResponse(200, {
-        id: { sponsor, name: "other" },
-        payout_account: sponsor,
-        lifecycle: { state: "active", value: null },
-        active_revision: 1,
+  for (const id of [
+    { sponsor, name: "other" },
+    { sponsor: ALT_ACCOUNT_ID, name: "wallet_fx" },
+  ]) {
+    const mismatched = new ToriiClient("https://example.test", {
+      fetchImpl: async () =>
+        jsonResponse(200, {
+          id,
+          payout_account: sponsor,
+          lifecycle: { state: "active", value: null },
+          active_revision: 1,
+        }),
+    });
+    await assert.rejects(
+      () => mismatched.findFeeSponsorProgramById(`${sponsor}/wallet_fx`, { canonicalAuth }),
+      /does not match the requested exact program id/i,
+    );
+  }
+});
+
+test("findFeeSponsorProgramById rejects noncanonical names and optional lifecycle values", async () => {
+  const sponsor = ToriiClient._requireAccountId(VALID_ACCOUNT_ID);
+  const canonicalAuth = { accountId: sponsor, privateKey: Buffer.alloc(32, 15) };
+  const permittedFormatName = "wallet\u200b\u2060\ufeff\u00ad";
+  const permittedClient = new ToriiClient("https://example.test", {
+    fetchImpl: async () => jsonResponse(200, {
+      id: { sponsor, name: permittedFormatName },
+      payout_account: sponsor,
+      lifecycle: { state: "active", value: null },
+    }),
+  });
+  await assert.doesNotReject(() => permittedClient.findFeeSponsorProgramById(
+    `${sponsor}/${permittedFormatName}`,
+    { canonicalAuth },
+  ));
+
+  for (const name of ["x".repeat(256), "wallet\u0091", "wallet\u202e", "wallet\ud800"]) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => {
+        throw new Error("noncanonical request must fail before dispatch");
+      },
+    });
+    await assert.rejects(
+      () => client.findFeeSponsorProgramById(`${sponsor}/${name}`, { canonicalAuth }),
+      /canonical Iroha Name/i,
+    );
+  }
+
+  const invalidRecords = [
+    { active_revision: null },
+    { staged_revision: null },
+    { scheduled_activation: null },
+    { scheduled_activation: { revision: 1, activate_at_height: 0 } },
+    { id: { sponsor, name: "wallet\u202e" } },
+  ];
+  for (const mutation of invalidRecords) {
+    const program = {
+      id: { sponsor, name: "wallet_fx" },
+      payout_account: sponsor,
+      lifecycle: { state: "active", value: null },
+      ...mutation,
+    };
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, program),
+    });
+    await assert.rejects(
+      () => client.findFeeSponsorProgramById(`${sponsor}/wallet_fx`, { canonicalAuth }),
+      /canonical|positive|omitted|exact object/i,
+    );
+  }
+});
+
+test("findFeeSponsorProgramById enforces its strict 64 KiB transport boundary", async () => {
+  const sponsor = ToriiClient._requireAccountId(VALID_ACCOUNT_ID);
+  const programId = `${sponsor}/wallet_fx`;
+  const canonicalAuth = { accountId: sponsor, privateKey: Buffer.alloc(32, 16) };
+  const program = {
+    id: { sponsor, name: "wallet_fx" },
+    payout_account: sponsor,
+    lifecycle: { state: "active", value: null },
+    active_revision: 1,
+  };
+  const encoded = JSON.stringify(program);
+  const encodedBytes = Buffer.from(encoded, "utf8");
+  const exact = Buffer.concat([
+    encodedBytes,
+    Buffer.alloc(65_536 - encodedBytes.length, 0x20),
+  ]);
+  const exactClient = new ToriiClient("https://example.test", {
+    fetchImpl: async () => new Response(exact, {
+      status: 200,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    }),
+  });
+  assert.deepEqual(
+    await exactClient.findFeeSponsorProgramById(programId, { canonicalAuth }),
+    program,
+  );
+
+  for (const status of [200, 404, 503]) {
+    const oversized = new ToriiClient("https://example.test", {
+      fetchImpl: async () => new Response(Buffer.alloc(65_537, 0x20), {
+        status,
+        headers: { "Content-Type": "application/json" },
       }),
+    });
+    await assert.rejects(
+      () => oversized.findFeeSponsorProgramById(programId, { canonicalAuth }),
+      /65536-byte/u,
+    );
+  }
+
+  const duplicate = encoded.replace(
+    '"active_revision":1',
+    '"active_revision":1,"active_revision":2',
+  );
+  const malformedBodies = [
+    new Response(duplicate, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+    new Response(Uint8Array.from([0x7b, 0x22, 0x78, 0x22, 0x3a, 0xff, 0x7d]), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+    new Response(encoded, {
+      status: 200,
+      headers: { "Content-Type": "application/json, application/json" },
+    }),
+    new Response(encoded, {
+      status: 200,
+      headers: { "Content-Type": 'application/json; profile="a,b"' },
+    }),
+    new Response(encoded, {
+      status: 200,
+      headers: { "Content-Type": "application/json;" },
+    }),
+    new Response(encoded, {
+      status: 200,
+      headers: { "Content-Type": "application/json; charset" },
+    }),
+  ];
+  for (const response of malformedBodies) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => response,
+    });
+    await assert.rejects(
+      () => client.findFeeSponsorProgramById(programId, { canonicalAuth }),
+      /duplicate object key|valid UTF-8|application\/json media type/u,
+    );
+  }
+  for (const confusable of ["application/jſon", "applıcation/json", "applİcation/json"]) {
+    assert.equal(isExactJsonMediaType(confusable), false);
+  }
+
+  const parameterized = new ToriiClient("https://example.test", {
+    fetchImpl: async () => new Response(encoded, {
+      status: 200,
+      headers: {
+        "Content-Type": 'Application/JSON; charset="utf-8"; note="é"',
+      },
+    }),
+  });
+  const parameterizedProgram = await parameterized.findFeeSponsorProgramById(
+    programId,
+    { canonicalAuth },
+  );
+  assert.deepEqual(parameterizedProgram, program);
+
+  const quotedRevision = new ToriiClient("https://example.test", {
+    fetchImpl: async () => new Response(
+      encoded.replace('"active_revision":1', '"active_revision":"1"'),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
   });
   await assert.rejects(
-    () => mismatched.findFeeSponsorProgramById(`${sponsor}/wallet_fx`, { canonicalAuth }),
-    /does not match the requested exact program id/i,
+    () => quotedRevision.findFeeSponsorProgramById(programId, { canonicalAuth }),
+    /canonical unsigned integer/u,
+  );
+
+  const maximumU64 = new ToriiClient("https://example.test", {
+    fetchImpl: async () => new Response(
+      encoded.replace('"active_revision":1', '"active_revision":18446744073709551615'),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
+  });
+  const maximumProgram = await maximumU64.findFeeSponsorProgramById(
+    programId,
+    { canonicalAuth },
+  );
+  assert.equal(maximumProgram.active_revision, 18_446_744_073_709_551_615n);
+
+  const overflowU64 = new ToriiClient("https://example.test", {
+    fetchImpl: async () => new Response(
+      encoded.replace('"active_revision":1', '"active_revision":18446744073709551616'),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
+  });
+  await assert.rejects(
+    () => overflowU64.findFeeSponsorProgramById(programId, { canonicalAuth }),
+    /between 0 and 18446744073709551615/u,
   );
 });
 
@@ -573,6 +764,463 @@ test("quoteFees account-signs an exact non-default-network draft and returns typ
   assert.equal(new URL(lastRequest.input).pathname, "/v1/fees/quote");
 });
 
+test("quoteFees compares I105 displays by controller identity and permits exact alias auth", async () => {
+  const parsedAuthority = AccountAddress.parseEncoded(VALID_ACCOUNT_ID);
+  const authority = parsedAuthority.address.toI105(369);
+  const alternateDisplay = parsedAuthority.address.toI105(753);
+  const payload = {
+    authority,
+    fee_payment: {
+      payer: "authority",
+      value: { charge_limits: [], gas_limit: null },
+    },
+  };
+  const quote = {
+    intent: payload.fee_payment,
+    observation: {
+      ledger_time_ms: 1,
+      next_block_height: 1,
+      route_dataspace_id: 0,
+    },
+    components: [],
+    capacities: [],
+    decision: {
+      status: "accepted",
+      value: {
+        debit_source: { kind: "account", value: alternateDisplay },
+        program_revision: null,
+      },
+    },
+  };
+  let fetchCalls = 0;
+  const accountHeaders = [];
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async (_input, init) => {
+      fetchCalls += 1;
+      accountHeaders.push(new Headers(init.headers).get("X-Iroha-Account"));
+      return jsonResponse(200, quote);
+    },
+  });
+
+  assert.deepEqual(
+    await client.quoteFees({ payload }, {
+      canonicalAuth: {
+        accountId: alternateDisplay,
+        privateKey: Buffer.alloc(32, 19),
+      },
+    }),
+    quote,
+  );
+  assert.deepEqual(
+    await client.quoteFees({ payload }, {
+      canonicalAuth: {
+        accountId: "payer@taira",
+        privateKey: Buffer.alloc(32, 20),
+      },
+    }),
+    quote,
+  );
+  assert.equal(fetchCalls, 2);
+  assert.equal(accountHeaders[1], "payer@taira");
+});
+
+test("quoteFees rejects duplicate response keys before semantic decoding", async () => {
+  const authority = AccountAddress.parseEncoded(VALID_ACCOUNT_ID).address.toI105(369);
+  const payload = {
+    authority,
+    fee_payment: {
+      payer: "authority",
+      value: { charge_limits: [], gas_limit: null },
+    },
+  };
+  const responseText = JSON.stringify({
+    intent: payload.fee_payment,
+    observation: {
+      ledger_time_ms: 1,
+      next_block_height: 1,
+      route_dataspace_id: 0,
+    },
+    components: [],
+    capacities: [],
+    decision: {
+      status: "accepted",
+      value: {
+        debit_source: { kind: "account", value: authority },
+        program_revision: null,
+      },
+    },
+  }).replace(
+    '"program_revision":null',
+    '"program_revision":null,"program_revision":null',
+  );
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => new Response(responseText, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  });
+
+  await assert.rejects(
+    () => client.quoteFees({ payload }, {
+      canonicalAuth: {
+        accountId: authority,
+        privateKey: Buffer.alloc(32, 21),
+      },
+    }),
+    /duplicate object key/u,
+  );
+});
+
+test("quoteFees hard-rejects a 65,537-byte non-success body", async () => {
+  const authority = AccountAddress.parseEncoded(VALID_ACCOUNT_ID).address.toI105(369);
+  const payload = {
+    authority,
+    fee_payment: {
+      payer: "authority",
+      value: { charge_limits: [], gas_limit: null },
+    },
+  };
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => new Response(Buffer.alloc(65_537, 0x20), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    }),
+  });
+
+  await assert.rejects(
+    () => client.quoteFees({ payload }, {
+      canonicalAuth: {
+        accountId: authority,
+        privateKey: Buffer.alloc(32, 22),
+      },
+    }),
+    /fee quote error response exceeds its 65536-byte size bound/u,
+  );
+});
+
+test("quoteFees binds sponsored decisions and exact aggregate capacities", async () => {
+  const authority = AccountAddress.parseEncoded(VALID_ACCOUNT_ID).address.toI105(369);
+  const assetA = "61CtjvNd9T3THAR65GsMVHr82Bjc";
+  const assetB = "66owaQmAQMuHxPzxUN3bqZ6FJfDa";
+  const programId = { sponsor: authority, name: "wallet_fx" };
+  const payload = {
+    authority,
+    fee_payment: {
+      payer: "sponsor",
+      value: {
+        program_id: programId,
+        program_revision: 7,
+        charge_limits: [],
+        gas_limit: 50,
+      },
+    },
+  };
+  const quote = {
+    intent: {
+      payer: "sponsor",
+      value: {
+        program_id: programId,
+        program_revision: 7,
+        charge_limits: [
+          {
+            kind: { kind: "nexus", value: null },
+            asset_definition_id: assetA,
+            max_amount: "1.25",
+          },
+          {
+            kind: { kind: "pipeline_gas", value: null },
+            asset_definition_id: assetB,
+            max_amount: "2.5",
+          },
+        ],
+        gas_limit: 50,
+      },
+    },
+    observation: {
+      ledger_time_ms: 100,
+      next_block_height: 9,
+      route_dataspace_id: 0,
+    },
+    components: [],
+    capacities: [
+      {
+        asset_definition_id: assetA,
+        vault_balance: "2",
+        reserve_floor: "0.75",
+        block_remaining: "1.25",
+        program_epoch_remaining: "1.25",
+        beneficiary_epoch_remaining: "1.25",
+      },
+      {
+        asset_definition_id: assetB,
+        vault_balance: "4",
+        reserve_floor: "1.5",
+        block_remaining: "2.5",
+        program_epoch_remaining: "2.5",
+        beneficiary_epoch_remaining: "2.5",
+      },
+    ],
+    decision: {
+      status: "accepted",
+      value: {
+        debit_source: { kind: "sponsor_program", value: programId },
+        program_revision: 7,
+      },
+    },
+  };
+  quote.components = quote.intent.value.charge_limits.map((limit) => ({ ...limit }));
+  const canonicalAuth = {
+    accountId: authority,
+    privateKey: Buffer.alloc(32, 16),
+  };
+  const requestQuote = async (response) => {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, response),
+    });
+    return client.quoteFees({ payload }, { canonicalAuth });
+  };
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+
+  assert.deepEqual(await requestQuote(quote), quote);
+  const alternateSponsorDisplay = AccountAddress.parseEncoded(authority)
+    .address.toI105(753);
+  const alternateDisplayQuote = clone(quote);
+  alternateDisplayQuote.intent.value.program_id.sponsor = alternateSponsorDisplay;
+  alternateDisplayQuote.decision.value.debit_source.value.sponsor = alternateSponsorDisplay;
+  assert.deepEqual(await requestQuote(alternateDisplayQuote), alternateDisplayQuote);
+
+  const mutations = [
+    ["changed payer", (value) => { value.intent = { payer: "authority", value: { charge_limits: value.intent.value.charge_limits, gas_limit: 50 } }; }, /payer, sponsor revision, or gas bound/u],
+    ["changed sponsor", (value) => { value.intent.value.program_id.name = "other"; }, /payer, sponsor revision, or gas bound/u],
+    ["changed intent revision", (value) => { value.intent.value.program_revision = 8; }, /payer, sponsor revision, or gas bound/u],
+    ["changed gas bound", (value) => { value.intent.value.gas_limit = 51; }, /payer, sponsor revision, or gas bound/u],
+    ["zero height", (value) => { value.observation.next_block_height = 0; }, /next_block_height/u],
+    ["changed component", (value) => { value.components[0].max_amount = "1.24"; }, /components differ/u],
+    ["changed decision revision", (value) => { value.decision.value.program_revision = 8; }, /inconsistent with sponsor payment/u],
+    ["missing capacities", (value) => { value.capacities = []; }, /empty exactly when sponsored components/u],
+    ["duplicate capacity", (value) => { value.capacities[1].asset_definition_id = assetA; }, /canonical asset order/u],
+    ["unsorted capacities", (value) => { value.capacities.reverse(); }, /canonical asset order/u],
+    ["unrelated capacity", (value) => { value.capacities[1].asset_definition_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"; }, /canonical asset order/u],
+    ["short vault", (value) => { value.capacities[0].vault_balance = "1.99"; }, /vault_balance/u],
+    ["short block window", (value) => { value.capacities[0].block_remaining = "1.24"; }, /block_remaining/u],
+    ["short program window", (value) => { value.capacities[0].program_epoch_remaining = "1.24"; }, /program_epoch_remaining/u],
+    ["short beneficiary window", (value) => { value.capacities[0].beneficiary_epoch_remaining = "1.24"; }, /beneficiary_epoch_remaining/u],
+    ["missing gas slot", (value) => { delete value.intent.value.gas_limit; }, /missing required fields: gas_limit/u],
+    ["missing route slot", (value) => { delete value.observation.route_dataspace_id; }, /missing required fields: route_dataspace_id/u],
+    ["missing decision revision slot", (value) => { delete value.decision.value.program_revision; }, /missing required fields: program_revision/u],
+    ["legacy response field", (value) => { value.legacy_quote = true; }, /unsupported fields: legacy_quote/u],
+    ["legacy nested field", (value) => { value.decision.value.legacy_revision = 7; }, /unsupported fields: legacy_revision/u],
+  ];
+  for (const [label, mutate, pattern] of mutations) {
+    const changed = clone(quote);
+    mutate(changed);
+    await assert.rejects(requestQuote(changed), pattern, label);
+  }
+});
+
+test("quoteFees uses exact decimal arithmetic for shared assets and accepts fee-free sponsors", async () => {
+  const authority = AccountAddress.parseEncoded(VALID_ACCOUNT_ID).address.toI105(369);
+  const assetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa";
+  const programId = { sponsor: authority, name: "shared" };
+  const payload = {
+    authority,
+    fee_payment: {
+      payer: "sponsor",
+      value: {
+        program_id: programId,
+        program_revision: 3,
+        charge_limits: [],
+        gas_limit: null,
+      },
+    },
+  };
+  const quote = {
+    intent: {
+      payer: "sponsor",
+      value: {
+        program_id: programId,
+        program_revision: 3,
+        charge_limits: [
+          {
+            kind: { kind: "nexus", value: null },
+            asset_definition_id: assetDefinitionId,
+            max_amount: "0.1",
+          },
+          {
+            kind: { kind: "pipeline_gas", value: null },
+            asset_definition_id: assetDefinitionId,
+            max_amount: "0.2",
+          },
+        ],
+        gas_limit: null,
+      },
+    },
+    observation: {
+      ledger_time_ms: 1,
+      next_block_height: 1,
+      route_dataspace_id: 0,
+    },
+    components: [],
+    capacities: [{
+      asset_definition_id: assetDefinitionId,
+      vault_balance: "0.4",
+      reserve_floor: "0.1",
+      block_remaining: "0.3",
+      program_epoch_remaining: "0.3",
+      beneficiary_epoch_remaining: "0.3",
+    }],
+    decision: {
+      status: "accepted",
+      value: {
+        debit_source: { kind: "sponsor_program", value: programId },
+        program_revision: 3,
+      },
+    },
+  };
+  quote.components = quote.intent.value.charge_limits.map((limit) => ({ ...limit }));
+  const canonicalAuth = {
+    accountId: authority,
+    privateKey: Buffer.alloc(32, 17),
+  };
+  const requestQuote = async (response) => {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, response),
+    });
+    return client.quoteFees({ payload }, { canonicalAuth });
+  };
+
+  assert.deepEqual(await requestQuote(quote), quote);
+  const short = JSON.parse(JSON.stringify(quote));
+  short.capacities[0].block_remaining = "0.2999999999999999999999999999";
+  await assert.rejects(requestQuote(short), /block_remaining/u);
+
+  const maximum = (1n << 511n) - 1n;
+  const maximumText = maximum.toString();
+  const scaleOneMaximum = `${maximumText.slice(0, -1)}.${maximumText.slice(-1)}`;
+  const normalizedSum = ((maximum + 3n) / 10n).toString();
+  const normalizedExtreme = JSON.parse(JSON.stringify(quote));
+  normalizedExtreme.intent.value.charge_limits[0].max_amount = scaleOneMaximum;
+  normalizedExtreme.intent.value.charge_limits[1].max_amount = "0.3";
+  normalizedExtreme.components = normalizedExtreme.intent.value.charge_limits.map(
+    (limit) => ({ ...limit }),
+  );
+  Object.assign(normalizedExtreme.capacities[0], {
+    vault_balance: normalizedSum,
+    reserve_floor: "0",
+    block_remaining: normalizedSum,
+    program_epoch_remaining: normalizedSum,
+    beneficiary_epoch_remaining: normalizedSum,
+  });
+  assert.deepEqual(await requestQuote(normalizedExtreme), normalizedExtreme);
+
+  const scaleTwentyEightMaximum = `${maximumText.slice(0, -28)}.${maximumText.slice(-28)}`;
+  const sufficientExtremeScale = JSON.parse(JSON.stringify(quote));
+  sufficientExtremeScale.intent.value.charge_limits = [
+    {
+      ...sufficientExtremeScale.intent.value.charge_limits[0],
+      max_amount: "1",
+    },
+  ];
+  sufficientExtremeScale.components = sufficientExtremeScale.intent.value.charge_limits.map(
+    (limit) => ({ ...limit }),
+  );
+  Object.assign(sufficientExtremeScale.capacities[0], {
+    vault_balance: scaleTwentyEightMaximum,
+    reserve_floor: "0",
+    block_remaining: scaleTwentyEightMaximum,
+    program_epoch_remaining: scaleTwentyEightMaximum,
+    beneficiary_epoch_remaining: scaleTwentyEightMaximum,
+  });
+  assert.deepEqual(await requestQuote(sufficientExtremeScale), sufficientExtremeScale);
+
+  const insufficientExtreme = JSON.parse(JSON.stringify(quote));
+  insufficientExtreme.intent.value.charge_limits = [
+    {
+      ...insufficientExtreme.intent.value.charge_limits[0],
+      max_amount: maximumText,
+    },
+  ];
+  insufficientExtreme.components = insufficientExtreme.intent.value.charge_limits.map(
+    (limit) => ({ ...limit }),
+  );
+  Object.assign(insufficientExtreme.capacities[0], {
+    vault_balance: maximumText,
+    reserve_floor: "0",
+    block_remaining: scaleTwentyEightMaximum,
+    program_epoch_remaining: maximumText,
+    beneficiary_epoch_remaining: maximumText,
+  });
+  await assert.rejects(requestQuote(insufficientExtreme), /block_remaining/u);
+
+  const trailingZero = JSON.parse(JSON.stringify(quote));
+  trailingZero.capacities[0].block_remaining = "0.30";
+  await assert.rejects(requestQuote(trailingZero), /canonical/u);
+
+  const feeFree = JSON.parse(JSON.stringify(quote));
+  feeFree.intent.value.charge_limits = [];
+  feeFree.components = [];
+  feeFree.capacities = [];
+  assert.deepEqual(await requestQuote(feeFree), feeFree);
+});
+
+test("quoteFees binds authority decisions and forbids authority capacities", async () => {
+  const authority = AccountAddress.parseEncoded(VALID_ACCOUNT_ID).address.toI105(369);
+  const payload = {
+    authority,
+    fee_payment: {
+      payer: "authority",
+      value: { charge_limits: [], gas_limit: null },
+    },
+  };
+  const quote = {
+    intent: payload.fee_payment,
+    observation: {
+      ledger_time_ms: 1,
+      next_block_height: 1,
+      route_dataspace_id: 0,
+    },
+    components: [],
+    capacities: [],
+    decision: {
+      status: "accepted",
+      value: {
+        debit_source: { kind: "account", value: authority },
+        program_revision: null,
+      },
+    },
+  };
+  const canonicalAuth = {
+    accountId: authority,
+    privateKey: Buffer.alloc(32, 18),
+  };
+  const requestQuote = async (response) => {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, response),
+    });
+    return client.quoteFees({ payload }, { canonicalAuth });
+  };
+
+  assert.deepEqual(await requestQuote(quote), quote);
+  const wrongAccount = JSON.parse(JSON.stringify(quote));
+  wrongAccount.decision.value.debit_source.value = ALT_ACCOUNT_ID;
+  await assert.rejects(requestQuote(wrongAccount), /inconsistent with authority payment/u);
+
+  const wrongRevision = JSON.parse(JSON.stringify(quote));
+  wrongRevision.decision.value.program_revision = 1;
+  await assert.rejects(requestQuote(wrongRevision), /inconsistent with authority payment/u);
+
+  const withCapacity = JSON.parse(JSON.stringify(quote));
+  withCapacity.capacities.push({
+    asset_definition_id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+    vault_balance: "0",
+    reserve_floor: "0",
+    block_remaining: "0",
+    program_epoch_remaining: "0",
+    beneficiary_epoch_remaining: "0",
+  });
+  await assert.rejects(requestQuote(withCapacity), /empty for authority payment/u);
+});
+
 test("quoteFees requires canonical account authentication before sending", async () => {
   let fetchCalls = 0;
   const client = new ToriiClient("https://example.test", {
@@ -600,7 +1248,27 @@ test("quoteFees requires canonical account authentication before sending", async
         },
       },
     ),
-    /must equal the exact payload authority/i,
+    /must identify the payload authority/i,
+  );
+  assert.equal(fetchCalls, 0);
+
+  await assert.rejects(
+    () => client.quoteFees(
+      {
+        authority: VALID_ACCOUNT_ID,
+        fee_payment: {
+          payer: "authority",
+          value: { charge_limits: [] },
+        },
+      },
+      {
+        canonicalAuth: {
+          accountId: VALID_ACCOUNT_ID,
+          privateKey: Buffer.alloc(32, 16),
+        },
+      },
+    ),
+    /missing required fields: gas_limit/u,
   );
   assert.equal(fetchCalls, 0);
 });

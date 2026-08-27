@@ -4120,8 +4120,106 @@ static LANE_SETTLEMENT_COMMITMENTS: OnceLock<Mutex<Vec<LaneBlockCommitment>>> = 
 static LANE_RELAY_ENVELOPES: OnceLock<Mutex<Vec<LaneRelayEnvelope>>> = OnceLock::new();
 static LANE_GOVERNANCE: OnceLock<Mutex<Vec<LaneGovernanceSnapshot>>> = OnceLock::new();
 static NEXUS_FEE_STATUS: OnceLock<Mutex<NexusFeeSnapshot>> = OnceLock::new();
-static NEXUS_STAKING_STATUS: OnceLock<Mutex<BTreeMap<LaneId, NexusStakingLaneSnapshot>>> =
-    OnceLock::new();
+#[derive(Debug, Default)]
+struct NexusStakingStatusState {
+    lanes: BTreeMap<LaneId, NexusStakingLaneSnapshot>,
+    reset_epoch: u64,
+}
+static NEXUS_STAKING_STATUS: OnceLock<Mutex<NexusStakingStatusState>> = OnceLock::new();
+enum PublicLaneStakingStatusUpdate {
+    Bonded {
+        lane_id: LaneId,
+        amount: Quantity,
+        increase: bool,
+    },
+    PendingUnbond {
+        lane_id: LaneId,
+        amount: Quantity,
+        increase: bool,
+    },
+    Slash {
+        lane_id: LaneId,
+    },
+}
+#[derive(Default)]
+struct PublicLaneStakingStatusOverlayFrame {
+    reset_epoch: u64,
+    updates: Vec<PublicLaneStakingStatusUpdate>,
+}
+std::thread_local! {
+    static PUBLIC_LANE_STAKING_STATUS_OVERLAYS:
+        std::cell::RefCell<Vec<PublicLaneStakingStatusOverlayFrame>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+/// Transaction-local overlay for process-local public-lane staking diagnostics.
+///
+/// Updates recorded on the creating thread remain private until [`Self::commit`]
+/// is called. Dropping the guard discards them. Overlays are nestable and must
+/// be completed in last-in, first-out order.
+#[must_use = "dropping a public-lane staking status overlay rolls back its updates"]
+pub(crate) struct PublicLaneStakingStatusOverlay {
+    depth: usize,
+    finished: bool,
+    _not_send_or_sync: core::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl PublicLaneStakingStatusOverlay {
+    /// Merge staged updates into the parent overlay or publish them globally.
+    pub(crate) fn commit(mut self) {
+        self.finish(true);
+    }
+    fn finish(&mut self, commit: bool) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let updates = PUBLIC_LANE_STAKING_STATUS_OVERLAYS.with(|overlays| {
+            let mut overlays = overlays.borrow_mut();
+            assert_eq!(
+                overlays.len(),
+                self.depth,
+                "public-lane staking status overlays must be completed in last-in, first-out order"
+            );
+            let mut frame = overlays
+                .pop()
+                .expect("public-lane staking status overlay stack must contain the active guard");
+            if !commit {
+                return None;
+            }
+            if let Some(parent) = overlays.last_mut() {
+                parent.updates.append(&mut frame.updates);
+                None
+            } else {
+                Some((frame.reset_epoch, frame.updates))
+            }
+        });
+        if let Some((reset_epoch, updates)) = updates {
+            apply_public_lane_staking_status_updates(Some(reset_epoch), updates);
+        }
+    }
+}
+impl Drop for PublicLaneStakingStatusOverlay {
+    fn drop(&mut self) {
+        self.finish(false);
+    }
+}
+/// Begin a transaction-local public-lane staking diagnostics overlay.
+pub(crate) fn begin_public_lane_staking_status_overlay() -> PublicLaneStakingStatusOverlay {
+    let reset_epoch =
+        lock_operator_status_slot(nexus_staking_slot(), "nexus staking status").reset_epoch;
+    let depth = PUBLIC_LANE_STAKING_STATUS_OVERLAYS.with(|overlays| {
+        let mut overlays = overlays.borrow_mut();
+        overlays.push(PublicLaneStakingStatusOverlayFrame {
+            reset_epoch,
+            ..PublicLaneStakingStatusOverlayFrame::default()
+        });
+        overlays.len()
+    });
+    PublicLaneStakingStatusOverlay {
+        depth,
+        finished: false,
+        _not_send_or_sync: core::marker::PhantomData,
+    }
+}
 static PIPELINE_CONFLICT_RATE_BPS: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_DEPTH: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_CAPACITY: AtomicU64 = AtomicU64::new(0);
@@ -4853,8 +4951,8 @@ pub struct LaneRuntimeUpgradeHookSnapshot {
 fn nexus_fee_slot() -> &'static Mutex<NexusFeeSnapshot> {
     NEXUS_FEE_STATUS.get_or_init(|| Mutex::new(NexusFeeSnapshot::default()))
 }
-fn nexus_staking_slot() -> &'static Mutex<BTreeMap<LaneId, NexusStakingLaneSnapshot>> {
-    NEXUS_STAKING_STATUS.get_or_init(|| Mutex::new(BTreeMap::new()))
+fn nexus_staking_slot() -> &'static Mutex<NexusStakingStatusState> {
+    NEXUS_STAKING_STATUS.get_or_init(|| Mutex::new(NexusStakingStatusState::default()))
 }
 /// Record a Nexus fee debit outcome for later status/telemetry surfacing.
 pub fn record_nexus_fee_event(event: NexusFeeEvent) {
@@ -4906,22 +5004,16 @@ pub fn record_nexus_fee_event(event: NexusFeeEvent) {
         }
     }
 }
-fn update_staking_lane<F>(lane_id: LaneId, mut update: F)
-where
-    F: FnMut(&mut NexusStakingLaneSnapshot),
-{
-    #[cfg(test)]
-    let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
-        return;
-    };
-    let mut guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
-    let entry = guard
+fn staking_lane_entry(
+    status: &mut BTreeMap<LaneId, NexusStakingLaneSnapshot>,
+    lane_id: LaneId,
+) -> &mut NexusStakingLaneSnapshot {
+    status
         .entry(lane_id)
         .or_insert_with(|| NexusStakingLaneSnapshot {
             lane_id,
             ..NexusStakingLaneSnapshot::default()
-        });
-    update(entry);
+        })
 }
 fn adjust_quantity_value(current: Quantity, delta: &Quantity, increase: bool) -> Quantity {
     if delta.is_zero() {
@@ -4949,24 +5041,83 @@ fn adjust_quantity_value(current: Quantity, delta: &Quantity, increase: bool) ->
         })
     }
 }
+fn apply_public_lane_staking_status_update(
+    status: &mut NexusStakingStatusState,
+    update: PublicLaneStakingStatusUpdate,
+) {
+    match update {
+        PublicLaneStakingStatusUpdate::Bonded {
+            lane_id,
+            amount,
+            increase,
+        } => {
+            let snapshot = staking_lane_entry(&mut status.lanes, lane_id);
+            snapshot.bonded = adjust_quantity_value(snapshot.bonded.clone(), &amount, increase);
+        }
+        PublicLaneStakingStatusUpdate::PendingUnbond {
+            lane_id,
+            amount,
+            increase,
+        } => {
+            let snapshot = staking_lane_entry(&mut status.lanes, lane_id);
+            snapshot.pending_unbond =
+                adjust_quantity_value(snapshot.pending_unbond.clone(), &amount, increase);
+        }
+        PublicLaneStakingStatusUpdate::Slash { lane_id } => {
+            let snapshot = staking_lane_entry(&mut status.lanes, lane_id);
+            snapshot.slash_total = snapshot.slash_total.saturating_add(1);
+        }
+    }
+}
+fn apply_public_lane_staking_status_updates(
+    expected_reset_epoch: Option<u64>,
+    updates: impl IntoIterator<Item = PublicLaneStakingStatusUpdate>,
+) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
+        return;
+    };
+    let mut status = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
+    if expected_reset_epoch.is_some_and(|epoch| epoch != status.reset_epoch) {
+        return;
+    }
+    for update in updates {
+        apply_public_lane_staking_status_update(&mut status, update);
+    }
+}
+fn record_public_lane_staking_status_update(update: PublicLaneStakingStatusUpdate) {
+    let unstaged = PUBLIC_LANE_STAKING_STATUS_OVERLAYS.with(|overlays| {
+        let mut overlays = overlays.borrow_mut();
+        if let Some(frame) = overlays.last_mut() {
+            frame.updates.push(update);
+            None
+        } else {
+            Some(update)
+        }
+    });
+    if let Some(update) = unstaged {
+        apply_public_lane_staking_status_updates(None, core::iter::once(update));
+    }
+}
 /// Record a bonded stake delta for a Nexus lane.
 pub fn record_public_lane_bonded_delta(lane_id: LaneId, amount: &Quantity, increase: bool) {
-    update_staking_lane(lane_id, |snapshot| {
-        snapshot.bonded = adjust_quantity_value(snapshot.bonded.clone(), amount, increase);
+    record_public_lane_staking_status_update(PublicLaneStakingStatusUpdate::Bonded {
+        lane_id,
+        amount: amount.clone(),
+        increase,
     });
 }
 /// Record a pending-unbond delta for a Nexus lane.
 pub fn record_public_lane_pending_unbond_delta(lane_id: LaneId, amount: &Quantity, increase: bool) {
-    update_staking_lane(lane_id, |snapshot| {
-        snapshot.pending_unbond =
-            adjust_quantity_value(snapshot.pending_unbond.clone(), amount, increase);
+    record_public_lane_staking_status_update(PublicLaneStakingStatusUpdate::PendingUnbond {
+        lane_id,
+        amount: amount.clone(),
+        increase,
     });
 }
 /// Record a slash event for a Nexus lane.
 pub fn record_public_lane_slash(lane_id: LaneId) {
-    update_staking_lane(lane_id, |snapshot| {
-        snapshot.slash_total = snapshot.slash_total.saturating_add(1);
-    });
+    record_public_lane_staking_status_update(PublicLaneStakingStatusUpdate::Slash { lane_id });
 }
 /// Remove accumulated Nexus public-lane staking status for reset lanes.
 pub fn reset_public_lane_staking_lanes(lanes_to_reset: &BTreeSet<LaneId>) {
@@ -4979,8 +5130,12 @@ pub fn reset_public_lane_staking_lanes(lanes_to_reset: &BTreeSet<LaneId>) {
     };
     let mut guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
     for lane_id in lanes_to_reset {
-        guard.remove(lane_id);
+        guard.lanes.remove(lane_id);
     }
+    guard.reset_epoch = guard
+        .reset_epoch
+        .checked_add(1)
+        .expect("nexus staking reset epoch must not overflow");
 }
 /// Latest aggregated Nexus fee snapshot.
 pub fn nexus_fee_snapshot() -> NexusFeeSnapshot {
@@ -4989,7 +5144,7 @@ pub fn nexus_fee_snapshot() -> NexusFeeSnapshot {
 /// Latest aggregated Nexus staking snapshot.
 pub fn nexus_staking_snapshot() -> NexusStakingSnapshot {
     let guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
-    let mut lanes: Vec<_> = guard.values().cloned().collect();
+    let mut lanes: Vec<_> = guard.lanes.values().cloned().collect();
     lanes.sort_by_key(|lane| lane.lane_id.as_u32());
     NexusStakingSnapshot { lanes }
 }
@@ -5015,7 +5170,136 @@ pub fn reset_nexus_economics_for_tests() {
     }
     {
         let mut guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
-        guard.clear();
+        guard.lanes.clear();
+        guard.reset_epoch = guard
+            .reset_epoch
+            .checked_add(1)
+            .expect("nexus staking reset epoch must not overflow");
+    }
+}
+#[cfg(test)]
+mod public_lane_staking_status_overlay_tests {
+    use super::*;
+
+    fn lane_snapshot(lane_id: LaneId) -> Option<NexusStakingLaneSnapshot> {
+        nexus_staking_snapshot()
+            .lanes
+            .into_iter()
+            .find(|lane| lane.lane_id == lane_id)
+    }
+
+    #[test]
+    fn updates_remain_immediate_without_an_overlay() {
+        let _guard = rbc_status_test_guard();
+        reset_nexus_economics_for_tests();
+        let lane_id = LaneId::new(41);
+
+        record_public_lane_bonded_delta(lane_id, &Quantity::from(7_u32), true);
+        record_public_lane_pending_unbond_delta(lane_id, &Quantity::from(2_u32), true);
+        record_public_lane_slash(lane_id);
+
+        let snapshot = lane_snapshot(lane_id).expect("unscoped updates must publish immediately");
+        assert_eq!(snapshot.bonded, Quantity::from(7_u32));
+        assert_eq!(snapshot.pending_unbond, Quantity::from(2_u32));
+        assert_eq!(snapshot.slash_total, 1);
+        reset_nexus_economics_for_tests();
+    }
+
+    #[test]
+    fn dropping_an_overlay_discards_every_staking_update() {
+        let _guard = rbc_status_test_guard();
+        reset_nexus_economics_for_tests();
+        let lane_id = LaneId::new(42);
+
+        {
+            let _overlay = begin_public_lane_staking_status_overlay();
+            record_public_lane_bonded_delta(lane_id, &Quantity::from(7_u32), true);
+            record_public_lane_pending_unbond_delta(lane_id, &Quantity::from(2_u32), true);
+            record_public_lane_slash(lane_id);
+            assert!(lane_snapshot(lane_id).is_none());
+        }
+
+        assert!(lane_snapshot(lane_id).is_none());
+        reset_nexus_economics_for_tests();
+    }
+
+    #[test]
+    fn committing_an_overlay_publishes_ordered_updates() {
+        let _guard = rbc_status_test_guard();
+        reset_nexus_economics_for_tests();
+        let lane_id = LaneId::new(43);
+        let overlay = begin_public_lane_staking_status_overlay();
+        record_public_lane_bonded_delta(lane_id, &Quantity::from(5_u32), true);
+        record_public_lane_bonded_delta(lane_id, &Quantity::from(10_u32), false);
+        record_public_lane_bonded_delta(lane_id, &Quantity::from(3_u32), true);
+        record_public_lane_pending_unbond_delta(lane_id, &Quantity::from(2_u32), true);
+        record_public_lane_slash(lane_id);
+        assert!(lane_snapshot(lane_id).is_none());
+
+        overlay.commit();
+
+        let snapshot = lane_snapshot(lane_id).expect("committed overlay must publish updates");
+        assert_eq!(snapshot.bonded, Quantity::from(3_u32));
+        assert_eq!(snapshot.pending_unbond, Quantity::from(2_u32));
+        assert_eq!(snapshot.slash_total, 1);
+        reset_nexus_economics_for_tests();
+    }
+
+    #[test]
+    fn lifecycle_reset_prevents_a_stale_overlay_from_resurrecting_a_lane() {
+        let _guard = rbc_status_test_guard();
+        reset_nexus_economics_for_tests();
+        let lane_id = LaneId::new(44);
+        record_public_lane_bonded_delta(lane_id, &Quantity::from(1_u32), true);
+
+        let overlay = begin_public_lane_staking_status_overlay();
+        record_public_lane_bonded_delta(lane_id, &Quantity::from(5_u32), true);
+        record_public_lane_slash(lane_id);
+        let lanes_to_reset = BTreeSet::from([lane_id]);
+        reset_public_lane_staking_lanes(&lanes_to_reset);
+        assert!(lane_snapshot(lane_id).is_none());
+
+        overlay.commit();
+
+        assert!(lane_snapshot(lane_id).is_none());
+        reset_nexus_economics_for_tests();
+    }
+
+    #[test]
+    fn nested_commit_remains_private_and_follows_the_outer_outcome() {
+        let _guard = rbc_status_test_guard();
+        reset_nexus_economics_for_tests();
+        let discarded_lane = LaneId::new(45);
+        {
+            let _outer = begin_public_lane_staking_status_overlay();
+            record_public_lane_bonded_delta(discarded_lane, &Quantity::from(5_u32), true);
+            let inner = begin_public_lane_staking_status_overlay();
+            record_public_lane_slash(discarded_lane);
+            inner.commit();
+            assert!(lane_snapshot(discarded_lane).is_none());
+        }
+        assert!(lane_snapshot(discarded_lane).is_none());
+
+        let committed_lane = LaneId::new(46);
+        let outer = begin_public_lane_staking_status_overlay();
+        record_public_lane_bonded_delta(committed_lane, &Quantity::from(5_u32), true);
+        {
+            let _inner = begin_public_lane_staking_status_overlay();
+            record_public_lane_bonded_delta(committed_lane, &Quantity::from(9_u32), true);
+            record_public_lane_slash(committed_lane);
+        }
+        let inner = begin_public_lane_staking_status_overlay();
+        record_public_lane_pending_unbond_delta(committed_lane, &Quantity::from(2_u32), true);
+        inner.commit();
+        assert!(lane_snapshot(committed_lane).is_none());
+        outer.commit();
+
+        let snapshot =
+            lane_snapshot(committed_lane).expect("outer commit must publish its updates");
+        assert_eq!(snapshot.bonded, Quantity::from(5_u32));
+        assert_eq!(snapshot.pending_unbond, Quantity::from(2_u32));
+        assert_eq!(snapshot.slash_total, 0);
+        reset_nexus_economics_for_tests();
     }
 }
 /// Reasons a peer-consensus-key admission can be rejected.
@@ -5337,7 +5621,9 @@ pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
         ),
         lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot"),
         lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot"),
-        lock_operator_status_slot(nexus_staking_slot(), "nexus staking status"),
+        lock_operator_status_slot(nexus_staking_slot(), "nexus staking status")
+            .lanes
+            .clone(),
         lock_operator_status_slot(nexus_fee_slot(), "nexus fee status"),
     )
 }

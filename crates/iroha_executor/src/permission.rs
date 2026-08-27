@@ -164,6 +164,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::nft::{CanTransferNft},
     iroha_executor_data_model::permission::nft::{CanModifyNftMetadata},
     iroha_executor_data_model::permission::parameter::{CanSetParameters},
+    iroha_executor_data_model::permission::parameter::{CanSetHijiriParameters},
     iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
     iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
     iroha_executor_data_model::permission::offline::{CanManageOfflineEscrow},
@@ -250,16 +251,20 @@ impl AnyPermission {
                 | Self::CanManageFxCorridors(_)
         )
     }
-    /// Exact account-read holders may use their grant but cannot propagate it: only the
-    /// account named by the token controls its lifecycle. Exact asset-definition-alias holders
-    /// likewise cannot bypass the asset-owner plus namespace-authority grant rule. Genesis-only
-    /// roots are non-delegable after bootstrap.
+    /// Exact holders may use these grants but cannot propagate them: their dedicated owner or
+    /// manager roots retain lifecycle control. Exact asset-definition-alias holders likewise
+    /// cannot bypass the asset-owner plus namespace-authority grant rule. Genesis-only roots are
+    /// non-delegable after bootstrap.
     fn is_holder_delegable(&self) -> bool {
         !self.is_genesis_only()
             && !matches!(
                 self,
                 Self::CanReadAccountData(_)
+                    | Self::CanResolveAccountAlias(_)
                     | Self::CanIssueSoranetVpnQuote(_)
+                    | Self::CanExecuteSettlement(_)
+                    | Self::CanSetFxCorridorPolicy(_)
+                    | Self::CanManageFeeSponsorProgram(_)
                     | Self::DpnAdmin(_)
                     | Self::DpnUser(_)
                     | Self::DpnInori(_)
@@ -937,7 +942,9 @@ mod role {
 mod parameter {
     //! Module with pass conditions for parameter related tokens
     use super::*;
-    use iroha_executor_data_model::permission::parameter::CanSetParameters;
+    use iroha_executor_data_model::permission::parameter::{
+        CanSetHijiriParameters, CanSetParameters,
+    };
     impl ValidateGrantRevoke for CanSetParameters {
         fn validate_grant(
             &self,
@@ -965,6 +972,36 @@ mod parameter {
             Err(ValidationFail::NotPermitted(
                 "Current authority doesn't have the permission to set parameters, therefore it can't revoke it from another account"
                     .to_owned()
+            ))
+        }
+    }
+    impl ValidateGrantRevoke for CanSetHijiriParameters {
+        fn validate_grant(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if CanSetHijiriParameters.is_owned_by(authority, host) {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "Current authority doesn't have the permission to set Hijiri parameters, therefore it can't grant it to another account"
+                    .to_owned(),
+            ))
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if CanSetHijiriParameters.is_owned_by(authority, host) {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "Current authority doesn't have the permission to set Hijiri parameters, therefore it can't revoke it from another account"
+                    .to_owned(),
             ))
         }
     }
@@ -1956,9 +1993,11 @@ mod tests {
             CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
             CanPublishSpaceDirectoryManifestForUaid,
         },
+        parameter::CanSetHijiriParameters,
         peer::CanManagePeers,
         query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace},
-        settlement::CanExecuteSettlement,
+        sccp::CanProposeSccpRouteGovernance,
+        settlement::{CanExecuteSettlement, CanSetFxCorridorPolicy},
         smart_contract::CanInvokeContractEntrypoint,
         soranet::{CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers},
     };
@@ -1999,6 +2038,7 @@ mod tests {
             PermissionObject::from(CanManageRuntimeUpgrades),
             PermissionObject::from(CanManageConsensusKeys),
             PermissionObject::from(CanManageConfidentialParams),
+            PermissionObject::from(CanSetHijiriParameters),
         ];
 
         for raw in permissions {
@@ -2207,6 +2247,49 @@ mod tests {
                 .expect_err("unrelated authority must not grant consent"),
             ValidationFail::NotPermitted(_)
         ));
+    }
+    #[test]
+    fn exact_leaf_holders_cannot_bypass_dedicated_delegation_roots() {
+        let holder = make_account_id();
+        let root = make_other_account_id();
+        let context = make_context(&holder, 2);
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("fixture", "universal").expect("asset domain"),
+            "rose".parse().expect("asset name"),
+        );
+        let permissions = vec![
+            AnyPermission::CanResolveAccountAlias(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10)),
+            }),
+            AnyPermission::CanExecuteSettlement(CanExecuteSettlement {
+                debited_asset: AssetId::new(asset_definition, root.clone()),
+                settlement_id: "holder_bypass".parse().expect("settlement id"),
+                intent_hash: Hash::new(b"holder-only settlement consent"),
+            }),
+            AnyPermission::CanSetFxCorridorPolicy(CanSetFxCorridorPolicy {
+                policy_id: "holder_only_policy".parse().expect("policy id"),
+            }),
+            AnyPermission::CanManageFeeSponsorProgram(CanManageFeeSponsorProgram { sponsor: root }),
+        ];
+        for permission in permissions {
+            let name = PermissionObject::from(permission.clone()).name().to_owned();
+            assert!(
+                !permission.is_holder_delegable(),
+                "{name} must retain its dedicated lifecycle root"
+            );
+            let previous = test_override::replace_permissions(vec![permission.clone().into()]);
+            let grant = permission.validate_grant(&holder, &context, &Iroha);
+            let revoke = permission.validate_revoke(&holder, &context, &Iroha);
+            test_override::replace_permissions(previous);
+            assert!(
+                matches!(grant, Err(ValidationFail::NotPermitted(_))),
+                "an exact {name} holder unexpectedly delegated it: {grant:?}"
+            );
+            assert!(
+                matches!(revoke, Err(ValidationFail::NotPermitted(_))),
+                "an exact {name} holder unexpectedly revoked it: {revoke:?}"
+            );
+        }
     }
     #[test]
     fn vpn_quote_issuer_leaf_requires_manager_delegation() {
@@ -2468,6 +2551,7 @@ mod tests {
             PermissionObject::from(CanEnrollFeeSponsorProgram {
                 program_id: make_fee_sponsor_program_id(authority.clone(), "retail"),
             }),
+            PermissionObject::from(CanProposeSccpRouteGovernance),
         ];
         for raw in permissions {
             let name = raw.name().to_owned();

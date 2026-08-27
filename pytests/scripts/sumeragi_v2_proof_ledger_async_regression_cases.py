@@ -1349,9 +1349,11 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
             "CanAdmitIngressItemVia must equal only",
         ),
         (
+            "  /\\ \\/ NodeHasApplication(server)\n"
+            "     \\/ server \\in request.envelope.certificate.signers\n",
             "  /\\ server \\in request.envelope.certificate.signers\n",
-            "",
-            "CertifiedServeCanRespond must equal only",
+            "CertifiedServeCanRespond must equal only the reviewed normalized "
+            "operator body digest",
         ),
         (
             "  /\\ AsyncServeTransportAdmissionGateAllows(\n"

@@ -57,17 +57,16 @@ def build_report(root: Path) -> Report:
     failures: list[str] = []
 
     if not root.exists():
-        lines.append(
-            f"No attestation bundles directory found at {root}; skipping verification."
-        )
+        message = f"No attestation bundles directory found at {root}."
+        lines.append(message)
+        failures.append(message)
         return Report(lines, failures)
 
     bundle_dirs = collect_directories(root)
     if not bundle_dirs:
-        lines.append(
-            "No attestation bundles discovered under "
-            f"{root}; nothing to verify this run."
-        )
+        message = f"No attestation bundles discovered under {root}."
+        lines.append(message)
+        failures.append(message)
         return Report(lines, failures)
 
     details: list[str] = []

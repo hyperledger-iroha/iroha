@@ -11,8 +11,8 @@ use hkdf::Hkdf;
 use rand_core::TryCryptoRng;
 use sha3::{Digest, Sha3_256};
 use soranet_pq::{
-    HedgedRngSeed, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem, hedged_chacha20_rng,
-    try_generate_mlkem_keypair,
+    HedgedRngSeed, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem, generate_mlkem_keypair,
+    hedged_chacha20_rng,
 };
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
@@ -337,7 +337,7 @@ impl HybridKeyPair {
             HedgedRngSeed::from_entropy(*kem_seed),
             b"iroha-crypto:hybrid:keypair",
         );
-        let kem_pair = try_generate_mlkem_keypair(HYBRID_KEM_SUITE, &mut kem_rng)
+        let kem_pair = generate_mlkem_keypair(HYBRID_KEM_SUITE, &mut kem_rng)
             .map_err(|_| HybridError::InvalidKyberSecretKey)?;
         let x25519_secret_bytes = Zeroizing::new(x25519_secret.to_bytes());
         let secret = HybridSecretKey::from_bytes(

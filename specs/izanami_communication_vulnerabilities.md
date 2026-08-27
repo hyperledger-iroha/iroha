@@ -20,9 +20,9 @@ reported next to the paper baseline. In `--mode paper`, the matrix runner passes
 | --- | --- | --- |
 | `targeted-load` | One client sends valid transfer traffic at 200 TPS to a single blockchain node. | Native: one Izanami submitter pins submissions to one preferred Torii endpoint unless failover is needed. |
 | `transient-failure` | A small node fraction crashes at 133s and recovers at 266s. | Native crash/restart shape during the paper's timed fault window; the matrix script records recovery/loss metrics. |
-| `packet-loss` | 25-75% packet loss is introduced between a fault-threshold-sized group and the rest of the network. | Native Izanami fault: the matrix applies 75% in-process P2P application-frame loss during the paper's fault window without changing the validator roster. |
+| `packet-loss` | 25-75% packet loss is introduced between a fault-threshold-sized group and the rest of the network. | Reference only: first-release Izanami has no production-wide packet-drop injector, so the matrix reports this paper row as `not-run`. |
 | `stopping` | A large node fraction crashes and then rejoins; post-recovery liveness is the key signal. | Native crash/restart shape with a large faulty-peer count. |
-| `leader-isolation` | The current consensus leader gets 75% inbound and outbound packet loss during its leader window. | Native Izanami fault: Izanami samples Sumeragi leader telemetry and applies 75% in-process P2P application-frame loss to the current leader during the paper's fault window. |
+| `leader-isolation` | The current consensus leader gets 75% inbound and outbound packet loss during its leader window. | Approximation: Izanami samples Sumeragi leader telemetry and temporarily partitions the current leader during the paper's fault window. |
 
 ## Paper Baseline
 
@@ -73,7 +73,7 @@ baseline and the final `izanami::summary` line for each Iroha run.
 Use `--only <scenario>` while iterating:
 
 ```bash
-scripts/run_izanami_communication_vulnerability_matrix.sh --only packet-loss -- --target-blocks 200
+scripts/run_izanami_communication_vulnerability_matrix.sh --only leader-isolation -- --target-blocks 200
 ```
 
 ## Classification Guidance
@@ -84,7 +84,7 @@ Classify Iroha against each paper scenario with these signals:
 | --- | --- |
 | `targeted-load` | p50/p95 commit latency, ingress queue pressure, unexpected submission failures. |
 | `transient-failure` | recovery time, committed/offered ratio, quorum and strict height progress. |
-| `packet-loss` | height progress, p50/p95 latency, P2P/DA/RBC drop counters. |
+| `packet-loss` | Paper baseline only; the first-release Iroha row remains `not-run`. |
 | `stopping` | post-recovery liveness, height progress, committed/offered ratio. |
 | `leader-isolation` | zero-throughput windows, proposer/leader telemetry, recovery time. |
 

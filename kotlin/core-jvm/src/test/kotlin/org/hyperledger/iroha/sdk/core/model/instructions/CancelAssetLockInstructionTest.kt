@@ -237,7 +237,7 @@ class CancelAssetLockInstructionTest {
     private fun legacyOneFieldFrame(): ByteArray =
         NoritoCodec.encode(
             cancelAssetLockTestHexToBytes(FIXTURE_ESCROW_ID.substring(5, 69)),
-            CancelAssetLockInstruction.WIRE_NAME,
+            CancelAssetLockInstruction.SCHEMA_NAME,
             object : TypeAdapter<ByteArray> {
                 override fun encode(
                     encoder: NoritoEncoder,

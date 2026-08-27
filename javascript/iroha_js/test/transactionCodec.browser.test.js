@@ -380,7 +380,7 @@ test("browser transfer payload is byte-for-byte native Rust canonical", () => {
     sampleInput({
       metadata: { z: [true, null, { b: 2, a: "é" }], a: "-1.25" },
       quantity: "0.0000000000000000000000000001",
-      ttlMs: 0,
+      ttlMs: 1,
       nonce: 0xffff_ffff,
     }),
   ]) {
@@ -393,6 +393,10 @@ test("browser transfer payload is byte-for-byte native Rust canonical", () => {
     );
     assert.equal({}.safe, undefined, "metadata normalization must not mutate prototypes");
   }
+  expectCodecError(
+    () => buildBrowserTransferPayload(sampleInput({ ttlMs: 0 })),
+    "invalid_integer",
+  );
 });
 
 test("browser payload pins canonical TransactionDomain::Network wire and rejects domain aliases", () => {
@@ -518,11 +522,11 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   ]);
   expectCodecError(
     () => browserSignedTransactionHashHex(legacyOuterAttachment),
-    "malformed_signed_transaction",
+    "malformed_payload",
   );
 });
 
-test("browser signed hash matches the shared compact Android and native Rust golden", () => {
+test("shared compact Android/native golden stays generic while browser rejects ordinary admission", () => {
   const fixture = properties(FIXTURE_PATH);
   assert.equal(fixture["schema.version"], "2");
   assert.equal(fixture["source.fixture"], "transfer_asset");
@@ -557,7 +561,11 @@ test("browser signed hash matches the shared compact Android and native Rust gol
   const directHash = Buffer.from(blake2b256(canonical));
   directHash[directHash.length - 1] |= 1;
   assert.equal(directHash.toString("hex"), fixture["canonical.hash"]);
-  assert.equal(browserSignedTransactionHashHex(versioned), fixture["canonical.hash"]);
+  expectCodecError(
+    () => browserSignedTransactionHashHex(versioned),
+    "malformed_signed_transaction",
+    "ordinary-admission shared fixture",
+  );
   assert.equal(
     Buffer.from(getNativeBinding().hashSignedTransaction(versioned)).toString("hex"),
     fixture["canonical.hash"],
@@ -815,17 +823,18 @@ test("browser metadata JSON strings must already be exact and canonical", () => 
     Buffer.from(nativeBuild(controlObjectInput).payloadBytes),
     "stored Metadata Json must use Rust plain control escaping",
   );
-  const canonicalControls =
-    '{"v":"\\u0008\\u000C\\u0000\\u001F\\n\\r\\t"}';
+  const canonicalControls = JSON.stringify({ v: controlValue });
+  assert.equal(canonicalControls, '{"v":"\\b\\f\\u0000\\u001f\\n\\r\\t"}');
   const canonicalControlInput = sampleInput({ metadata: canonicalControls });
   assert.deepEqual(
     buildBrowserTransferPayload(canonicalControlInput),
     Buffer.from(nativeBuild(canonicalControlInput).payloadBytes),
   );
-  const javascriptControlAlias = JSON.stringify({ v: controlValue });
-  assert.notEqual(javascriptControlAlias, canonicalControls);
+  const longControlAlias =
+    '{"v":"\\u0008\\u000C\\u0000\\u001F\\n\\r\\t"}';
+  assert.notEqual(longControlAlias, canonicalControls);
   expectCodecError(
-    () => buildBrowserTransferPayload(sampleInput({ metadata: javascriptControlAlias })),
+    () => buildBrowserTransferPayload(sampleInput({ metadata: longControlAlias })),
     "invalid_metadata",
   );
 
@@ -1046,33 +1055,41 @@ test("browser signed payload validation enforces byte caps before decoding or bi
   const oversizedJson = JSON.stringify("x".repeat(65_535));
   assert.equal(Buffer.byteLength(oversizedJson), 65_537);
 
-  for (const [context, mutatedPayload] of [
+  for (const [context, mutatedPayload, expectedCode] of [
     [
-      "chain ID",
+      "NetworkId",
       replacePayloadField(
         payload,
         0,
-        struct([stringArchive("c".repeat(1_025))]),
+        struct([u32(0), field(Buffer.alloc(1_025, 1))]),
       ),
+      "malformed_signed_transaction",
     ],
-    ["wire ID", replaceTransferExecutable(payload, { wireId: "w".repeat(15) })],
+    [
+      "wire ID",
+      replaceTransferExecutable(payload, { wireId: "w".repeat(15) }),
+      "bounds_exceeded",
+    ],
     [
       "metadata key",
       replacePayloadMetadata(payload, metadataArchive([["k".repeat(256), "1"]])),
+      "bounds_exceeded",
     ],
     [
       "metadata JSON",
       replacePayloadMetadata(payload, metadataArchive([["json", oversizedJson]])),
+      "bounds_exceeded",
     ],
     [
       "numeric mantissa",
       replaceTransferExecutable(payload, { numericArchive: oversizedNumeric }),
+      "bounds_exceeded",
     ],
   ]) {
     const mutated = replaceSignedPayload(baseline, mutatedPayload);
     expectCodecError(
       () => browserSignedTransactionHashHex(mutated),
-      "bounds_exceeded",
+      expectedCode,
       context,
     );
     assert.ok(mutated.length < 1024 * 1024, `${context} fixture must stay bounded`);

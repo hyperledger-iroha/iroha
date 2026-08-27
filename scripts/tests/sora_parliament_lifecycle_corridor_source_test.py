@@ -14,6 +14,7 @@ WORKFLOW = ROOT / ".github/workflows/pr.yml"
 MANIFEST = ROOT / "integration_tests/Cargo.toml"
 CORRIDOR = ROOT / "integration_tests/tests/sora_parliament_lifecycle_smoke.rs"
 USER_CONFIG = ROOT / "crates/iroha_config/src/parameters/user.rs"
+ACTUAL_CONFIG = ROOT / "crates/iroha_config/src/parameters/actual.rs"
 TEST_NETWORK = ROOT / "crates/iroha_test_network/src/lib.rs"
 DAEMON = ROOT / "crates/irohad/src/main.rs"
 BEACON = ROOT / "crates/iroha_core/src/beacon.rs"
@@ -309,9 +310,17 @@ def validate_required_bounded_soranet_pow(source: str) -> None:
         SORANET_POW_REQUIRED_OVERRIDE not in compacted_source,
         "corridor must not override the hard-required SoraNet PoW admission field",
     )
+    actual_config = ACTUAL_CONFIG.read_text(encoding="utf-8")
+    pow_shape = re.search(r"pub struct SoranetPow \{(?P<body>.*?)^\}", actual_config, re.M | re.S)
+    require(pow_shape is not None, "actual SoraNet PoW configuration shape is missing")
     require(
-        "actual::SoranetPow{required:true," in compact(USER_CONFIG.read_text(encoding="utf-8")),
-        "user configuration no longer hard-requires SoraNet PoW admission",
+        "required" not in pow_shape.group("body"),
+        "SoraNet PoW regained a runtime required/optional toggle",
+    )
+    require(
+        "actual::SoranetPow{difficulty,max_future_skew,min_ticket_ttl,ticket_ttl,"
+        in compact(USER_CONFIG.read_text(encoding="utf-8")),
+        "user configuration no longer constructs the mandatory SoraNet PoW policy",
     )
     for marker in SORANET_POW_CORRIDOR_MARKERS:
         require(

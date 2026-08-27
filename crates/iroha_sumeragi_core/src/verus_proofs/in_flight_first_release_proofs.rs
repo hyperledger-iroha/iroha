@@ -264,7 +264,64 @@ pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_t
 {
     reveal(production_in_flight_first_release_transition_kernel);
 }
-/// Every extracted terminal owner is exclusive: WSV for commit, FIFO for release.
+/// Only the selected producer may refine the physical Queue release barrier.
+/// A nonproducer replica must use the exact-group observer action below.
+pub proof fn production_in_flight_first_release_queue_release_preparation_is_producer_only(
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+)
+    requires
+        projection.action
+            == refinement_tag_value!(
+                IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE
+            ),
+        production_in_flight_first_release_transition_kernel(projection),
+    ensures
+        projection.before.decision.release_owner == projection.before.producer,
+        projection.before.queue.reservation_state
+            == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE),
+        projection.after.queue.reservation_state
+            == refinement_tag_value!(
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED
+            ),
+{
+    reveal(production_in_flight_first_release_transition_kernel);
+}
+/// A replica Queue observation is a nonproducer disposition and never a Queue
+/// release barrier or FIFO-restoration transition.
+pub proof fn production_in_flight_first_release_replica_queue_observation_is_exact(
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+)
+    requires
+        projection.action
+            == refinement_tag_value!(
+                IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE
+            ),
+        production_in_flight_first_release_transition_kernel(projection),
+    ensures
+        projection.actor == 0u128,
+        projection.target <= 1u128,
+        projection.before.decision.release_owner != projection.before.producer,
+        projection.before.release.kura_retired,
+        projection.before.release.pending_prefix == projection.before.queue.selected_count,
+        projection.before.release.released_prefix == 0u64,
+        !projection.before.release.fifo_restored,
+        projection.after.queue.reservation_state
+            == if projection.target == 0u128 {
+                refinement_tag_value!(
+                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT
+                )
+            } else {
+                refinement_tag_value!(
+                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+                )
+            },
+        projection.after.release.fifo_restored == projection.before.release.fifo_restored,
+{
+    reveal(production_in_flight_first_release_transition_kernel);
+}
+/// Every extracted terminal disposition has non-overlapping ownership. Commit
+/// terminates at canonical WSV; replica Queue absence honestly has no local
+/// economic owner; all other release dispositions preserve or restore FIFO.
 pub proof fn production_in_flight_first_release_terminal_owner_is_exclusive(
     state: ProductionInFlightFirstReleaseStateProjection,
     terminal: ProductionInFlightFirstReleaseTerminalOwnerProjection,
@@ -272,13 +329,33 @@ pub proof fn production_in_flight_first_release_terminal_owner_is_exclusive(
     requires
         production_in_flight_first_release_terminal_owner(state) == Some(terminal),
     ensures
-        terminal.ordinary_fifo_owner != terminal.canonical_wsv_owner,
+        !(terminal.ordinary_fifo_owner && terminal.canonical_wsv_owner),
         terminal.commit_terminal != terminal.release_terminal,
         terminal.canonical_wsv_owner ==> (
             state.history.reservation_commit_forgotten_prefix
                 == state.queue.selected_count
         ),
+        terminal.release_terminal ==> !terminal.canonical_wsv_owner,
+        (terminal.release_terminal && !terminal.ordinary_fifo_owner) ==> (
+            state.queue.reservation_state
+                == refinement_tag_value!(
+                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT
+                )
+            && state.release.released_prefix == state.queue.selected_count
+            && !state.release.fifo_restored
+        ),
+        state.queue.reservation_state
+            == refinement_tag_value!(
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+            ) ==> (
+                terminal.ordinary_fifo_owner
+                && !terminal.canonical_wsv_owner
+                && terminal.release_terminal
+                && state.release.released_prefix == state.queue.selected_count
+                && !state.release.fifo_restored
+            ),
 {
     reveal(production_in_flight_first_release_terminal_owner);
+    reveal(production_in_flight_first_release_state_kernel);
 }
 } // verus!

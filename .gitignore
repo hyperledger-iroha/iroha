@@ -78,6 +78,7 @@ traces/*
 npm-iroha-js.log
 javascript/npm-iroha-js.log
 javascript/iroha_js/**/*.log
+javascript/iroha_js/.build-dist.lock
 javascript/iroha_js/native/
 javascript/iroha_js/scripts/release_matrix.targets.json
 build/*
@@ -116,8 +117,11 @@ specs/da/_generated/threat_model_report.json
 
 # Developer-local caches and sandboxes
 .cargo-temp/
+/.codex-*/
+/.codex-target/
 /crates/irohad/.tmp*/
-/.codex*
+/.codex/*
+!/.codex/.gitkeep
 .venv-*/
 .cache/
 .swift_test_home/
@@ -359,5 +363,7 @@ artifacts/*.json
 # Runtime output from the interactive setup wizard (may contain private keys).
 /wizard-output/
 
-# Relay tests and local runs create tempfile-backed replay stores and links here.
+# Relay tests and local runs create tempfile-backed replay stores and links in
+# either the repository root or the relay crate, depending on the test cwd.
+/.tmp*
 tools/soranet-relay/.tmp*

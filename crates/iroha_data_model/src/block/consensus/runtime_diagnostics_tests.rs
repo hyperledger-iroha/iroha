@@ -184,8 +184,6 @@ fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
 fn npos_diagnostics() -> SumeragiNposDiagnostics {
     SumeragiNposDiagnostics {
         epoch_length_blocks: NonZeroU64::new(100).unwrap(),
-        vrf_commit_deadline_offset: NonZeroU64::new(20).unwrap(),
-        vrf_reveal_deadline_offset: NonZeroU64::new(40).unwrap(),
         epoch_seed: [0xA5; 32],
         prf_height: 7,
         prf_view: 2,

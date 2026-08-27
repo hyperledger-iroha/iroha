@@ -89,6 +89,38 @@ const MULTISIG_CANONICAL_HEX =
   "0x0a010100030003010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b";
 const MULTISIG_CANONICAL_BYTES = hexToBytes(MULTISIG_CANONICAL_HEX);
 
+function singleKeyCanonicalBytes(tag, curve, publicKey, declaredLength = publicKey.length) {
+  const lengthBytes =
+    tag === 0x00
+      ? [declaredLength]
+      : [(declaredLength >> 8) & 0xff, declaredLength & 0xff];
+  return Buffer.concat([
+    Buffer.from([0x02, tag, curve, ...lengthBytes]),
+    Buffer.from(publicKey),
+  ]);
+}
+
+function oneMemberMultisigCanonicalBytes(curve, publicKey) {
+  const length = publicKey.length;
+  return Buffer.concat([
+    Buffer.from([
+      0x0a,
+      0x01,
+      0x01,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      curve,
+      0x00,
+      0x01,
+      (length >> 8) & 0xff,
+      length & 0xff,
+    ]),
+    Buffer.from(publicKey),
+  ]);
+}
+
 test("configureCurveSupport validates options and gating toggles", () => {
   configureCurveSupport();
   try {
@@ -136,16 +168,11 @@ test("configureCurveSupport validates options and gating toggles", () => {
     );
 
     configureCurveSupport({ allowMlDsa: true });
-    assert.throws(
-      () =>
-        AccountAddress.fromAccount({
-          publicKey: ML_DSA_PUBLIC_KEY,
-          algorithm: "ml-dsa",
-        }).toI105(),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG,
-    );
+    const singleMlDsaAddress = AccountAddress.fromAccount({
+      publicKey: ML_DSA_PUBLIC_KEY,
+      algorithm: "ml-dsa",
+    });
+    assert.ok(singleMlDsaAddress.toI105().startsWith("sora"));
     const mlDsaAddress = new AccountAddress(
       { version: 0, classId: 1, normVersion: 1, extFlag: false },
       {
@@ -169,6 +196,173 @@ test("configureCurveSupport validates options and gating toggles", () => {
     );
   } finally {
     configureCurveSupport();
+  }
+});
+
+test("ML-DSA single-key controllers use the canonical extended wire form", () => {
+  for (const [label, addressModule] of [
+    ["src", sourceAddressModule],
+    ["dist", distAddressModule],
+  ]) {
+    addressModule.configureCurveSupport({ allowMlDsa: true });
+    try {
+      const address = addressModule.AccountAddress.fromAccount({
+        publicKey: ML_DSA_PUBLIC_KEY,
+        algorithm: "ml-dsa",
+      });
+      const canonical = Buffer.from(address.canonicalBytes());
+      assert.deepEqual(
+        Array.from(canonical.subarray(0, 5)),
+        [0x02, 0x02, 0x02, 0x07, 0xa0],
+        `${label} emits header, extended tag, ML-DSA curve, and u16 length`,
+      );
+      assert.equal(canonical.length, 5 + ML_DSA_PUBLIC_KEY.length, `${label} wire length`);
+      assert.deepEqual(
+        canonical.subarray(5),
+        Buffer.from(ML_DSA_PUBLIC_KEY),
+        `${label} preserves the public key`,
+      );
+
+      const decoded = addressModule.AccountAddress.fromCanonicalBytes(canonical);
+      assert.deepEqual(
+        Buffer.from(decoded.canonicalBytes()),
+        canonical,
+        `${label} canonical round-trip`,
+      );
+      const i105 = address.toI105();
+      const decodedI105 = addressModule.AccountAddress.fromI105(i105);
+      assert.deepEqual(
+        Buffer.from(decodedI105.canonicalBytes()),
+        canonical,
+        `${label} I105 canonical round-trip`,
+      );
+      assert.equal(decodedI105.toI105(), i105, `${label} I105 text round-trip`);
+    } finally {
+      addressModule.configureCurveSupport();
+    }
+  }
+});
+
+test("ML-DSA key validation rejects non-protocol shapes at shared address boundaries", () => {
+  const invalidLengths = [32, 1_312, 1_951, 1_953, 2_592];
+  for (const [label, addressModule] of [
+    ["src", sourceAddressModule],
+    ["dist", distAddressModule],
+  ]) {
+    addressModule.configureCurveSupport({ allowMlDsa: true });
+    try {
+      for (const length of invalidLengths) {
+        const publicKey = new Uint8Array(length).fill(0x5a);
+        assert.throws(
+          () =>
+            addressModule.AccountAddress.fromAccount({
+              publicKey,
+              algorithm: "ml-dsa",
+            }),
+          (error) =>
+            error instanceof addressModule.AccountAddressError &&
+            error.code === addressModule.AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+          `${label} construction rejects ${length}-byte ML-DSA`,
+        );
+
+        const tag = length <= 0xff ? 0x00 : 0x02;
+        const canonical = singleKeyCanonicalBytes(tag, 0x02, publicKey);
+        assert.throws(
+          () => addressModule.AccountAddress.fromCanonicalBytes(canonical),
+          (error) =>
+            error instanceof addressModule.AccountAddressError &&
+            error.code === addressModule.AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+          `${label} decode rejects ${length}-byte ML-DSA`,
+        );
+      }
+
+      const allZero = new Uint8Array(ML_DSA_PUBLIC_KEY.length);
+      for (const [boundary, action] of [
+        [
+          "construction",
+          () =>
+            addressModule.AccountAddress.fromAccount({
+              publicKey: allZero,
+              algorithm: "ml-dsa",
+            }),
+        ],
+        [
+          "decode",
+          () =>
+            addressModule.AccountAddress.fromCanonicalBytes(
+              singleKeyCanonicalBytes(0x02, 0x02, allZero),
+            ),
+        ],
+        [
+          "shared validator",
+          () => addressModule.validatePublicKeyForCurve(0x02, allZero, "test public key"),
+        ],
+      ]) {
+        assert.throws(
+          action,
+          (error) =>
+            error instanceof addressModule.AccountAddressError &&
+            error.code === addressModule.AccountAddressErrorCode.INVALID_PUBLIC_KEY &&
+            /all-zero/u.test(error.message),
+          `${label} ${boundary} rejects all-zero ML-DSA`,
+        );
+      }
+    } finally {
+      addressModule.configureCurveSupport();
+    }
+  }
+});
+
+test("single-key and multisig wire decoders enforce canonical ML-DSA shapes", () => {
+  for (const [label, addressModule] of [
+    ["src", sourceAddressModule],
+    ["dist", distAddressModule],
+  ]) {
+    addressModule.configureCurveSupport({ allowMlDsa: true });
+    try {
+      const compactEd25519 = singleKeyCanonicalBytes(0x00, 0x01, DEFAULT_PUBLIC_KEY);
+      assert.deepEqual(
+        Buffer.from(
+          addressModule.AccountAddress.fromCanonicalBytes(compactEd25519).canonicalBytes(),
+        ),
+        compactEd25519,
+        `${label} retains the compact single-key form`,
+      );
+
+      const shortExtended = singleKeyCanonicalBytes(0x02, 0x01, DEFAULT_PUBLIC_KEY);
+      assert.throws(
+        () => addressModule.AccountAddress.fromCanonicalBytes(shortExtended),
+        (error) =>
+          error instanceof addressModule.AccountAddressError &&
+          error.code === addressModule.AccountAddressErrorCode.INVALID_LENGTH &&
+          /must exceed 255 bytes/u.test(error.message),
+        `${label} rejects a short key encoded with the extended tag`,
+      );
+
+      const validMultisig = oneMemberMultisigCanonicalBytes(0x02, ML_DSA_PUBLIC_KEY);
+      assert.deepEqual(
+        Buffer.from(
+          addressModule.AccountAddress.fromCanonicalBytes(validMultisig).canonicalBytes(),
+        ),
+        validMultisig,
+        `${label} accepts a nonzero ML-DSA multisig member`,
+      );
+
+      const allZeroMultisig = oneMemberMultisigCanonicalBytes(
+        0x02,
+        new Uint8Array(ML_DSA_PUBLIC_KEY.length),
+      );
+      assert.throws(
+        () => addressModule.AccountAddress.fromCanonicalBytes(allZeroMultisig),
+        (error) =>
+          error instanceof addressModule.AccountAddressError &&
+          error.code === addressModule.AccountAddressErrorCode.INVALID_PUBLIC_KEY &&
+          /all-zero/u.test(error.message),
+        `${label} rejects an all-zero ML-DSA multisig member`,
+      );
+    } finally {
+      addressModule.configureCurveSupport();
+    }
   }
 });
 
@@ -439,11 +633,23 @@ test("fromAccount rejects control and Unicode-confusable curve algorithm aliases
     "   ",
     " ed25519",
     "ed25519 ",
+    "\u00A0ed25519",
+    "ed25519\u00A0",
+    "\u2003ed25519",
+    "ed25519\u2003",
     "future-curve",
+    "ed 25519",
     "ed\t25519",
+    "ed.25519",
+    "ed/25519",
+    "ed@25519",
+    "ed#25519",
     "ed\u200B25519",
     "\u0435d25519",
+    "secp256\u212A1",
     "ml\uFF0Ddsa",
+    "MLDSA44",
+    "MLDSA87",
     "gost256\u0430",
   ];
 
@@ -455,6 +661,49 @@ test("fromAccount rejects control and Unicode-confusable curve algorithm aliases
           error instanceof sdk.AccountAddressError &&
           error.code === sdk.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
       );
+    }
+  }
+});
+
+test("curve registry accepts only the protocol ML-DSA-65 aliases in src and dist", () => {
+  for (const addressModule of [sourceAddressModule, distAddressModule]) {
+    addressModule.configureCurveSupport({ allowMlDsa: true });
+    try {
+      for (const algorithm of [
+        "ml-dsa",
+        "mldsa",
+        "ml_dsa",
+        "mldsa65",
+        "MLDSA65",
+        "ml-dsa-65",
+        "ML-DSA-65",
+        "ml_dsa_65",
+        "ML_DSA_65",
+        "ml_dsa-65",
+        "ML_DSA-65",
+      ]) {
+        assert.equal(addressModule.curveIdFromAlgorithm(algorithm), 2, algorithm);
+      }
+      for (const algorithm of [
+        "MLDSA44",
+        "MLDSA87",
+        "ML-DSA-44",
+        "ML-DSA-87",
+        "ML_DSA_44",
+        "ML_DSA_87",
+        "ML_DSA-44",
+        "ML_DSA-87",
+      ]) {
+        assert.throws(
+          () => addressModule.curveIdFromAlgorithm(algorithm),
+          (error) =>
+            error instanceof addressModule.AccountAddressError &&
+            error.code === addressModule.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
+          algorithm,
+        );
+      }
+    } finally {
+      addressModule.configureCurveSupport();
     }
   }
 });

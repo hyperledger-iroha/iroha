@@ -3,8 +3,6 @@
 
 package org.hyperledger.iroha.norito;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractMap;
 import java.util.ArrayList;
@@ -20,52 +18,13 @@ import java.util.function.Function;
 public final class NoritoAdapters {
   private NoritoAdapters() {}
 
-  // Reflection avoids unchecked casts while supporting Android API levels below 26.
-  private static final Method TYPE_ADAPTER_ENCODE;
-  private static final Method TYPE_ADAPTER_DECODE;
-
-  static {
-    try {
-      TYPE_ADAPTER_ENCODE =
-          TypeAdapter.class.getMethod("encode", NoritoEncoder.class, Object.class);
-      TYPE_ADAPTER_DECODE = TypeAdapter.class.getMethod("decode", NoritoDecoder.class);
-    } catch (NoSuchMethodException ex) {
-      throw new ExceptionInInitializerError(ex);
-    }
-  }
-
+  @SuppressWarnings("unchecked")
   private static void encodeAdapter(TypeAdapter<?> adapter, NoritoEncoder encoder, Object value) {
-    try {
-      TYPE_ADAPTER_ENCODE.invoke(adapter, encoder, value);
-    } catch (InvocationTargetException ex) {
-      Throwable target = ex.getTargetException();
-      if (target instanceof RuntimeException runtime) {
-        throw runtime;
-      }
-      if (target instanceof Error err) {
-        throw err;
-      }
-      throw new IllegalStateException("Unable to encode value", target);
-    } catch (IllegalAccessException ex) {
-      throw new IllegalStateException("Unable to encode value", ex);
-    }
+    ((TypeAdapter<Object>) adapter).encode(encoder, value);
   }
 
   private static Object decodeAdapter(TypeAdapter<?> adapter, NoritoDecoder decoder) {
-    try {
-      return TYPE_ADAPTER_DECODE.invoke(adapter, decoder);
-    } catch (InvocationTargetException ex) {
-      Throwable target = ex.getTargetException();
-      if (target instanceof RuntimeException runtime) {
-        throw runtime;
-      }
-      if (target instanceof Error err) {
-        throw err;
-      }
-      throw new IllegalStateException("Unable to decode value", target);
-    } catch (IllegalAccessException ex) {
-      throw new IllegalStateException("Unable to decode value", ex);
-    }
+    return adapter.decode(decoder);
   }
 
   public static TypeAdapter<Long> uint(int bits) {
@@ -101,21 +60,10 @@ public final class NoritoAdapters {
   }
 
   /**
-   * Adapter for Rust {@code #[norito(transparent)]} newtypes.
+   * Adapter for Rust {@code #[norito(transparent)]} newtypes with a Java wrapper type.
    *
    * <p>Transparent wrappers encode exactly like their inner value. They do not add a struct field
    * frame or any additional length prefix.
-   */
-  public static <T> TypeAdapter<T> transparent(TypeAdapter<T> inner) {
-    return transparent(inner, Function.identity(), Function.identity());
-  }
-
-  /**
-   * Adapter for Rust {@code #[norito(transparent)]} newtypes with a distinct Java wrapper type.
-   *
-   * <p>Use this for Java models that wrap an inner Norito value. It delegates directly to the inner
-   * adapter, so callers still add the usual outer field delimiter when this transparent type appears
-   * as a field of a struct or variant.
    */
   public static <T, U> TypeAdapter<T> transparent(
       TypeAdapter<U> inner,
@@ -128,20 +76,12 @@ public final class NoritoAdapters {
     return new OptionAdapter<>(inner);
   }
 
-  public static <T, E> TypeAdapter<Result<T, E>> result(TypeAdapter<T> ok, TypeAdapter<E> err) {
-    return new ResultAdapter<>(ok, err);
-  }
-
   public static <T> TypeAdapter<List<T>> sequence(TypeAdapter<T> element) {
     return new SequenceAdapter<>(element);
   }
 
   public static <K, V> TypeAdapter<Map<K, V>> map(TypeAdapter<K> key, TypeAdapter<V> value) {
     return new MapAdapter<>(key, value);
-  }
-
-  public static TypeAdapter<List<Object>> tuple(List<? extends TypeAdapter<?>> elements) {
-    return new TupleAdapter(elements);
   }
 
   public static <T> StructField<T> field(String name, TypeAdapter<T> adapter) {
@@ -537,70 +477,6 @@ public final class NoritoAdapters {
     }
   }
 
-  private static final class ResultAdapter<T, E> implements TypeAdapter<Result<T, E>> {
-    private final TypeAdapter<T> ok;
-    private final TypeAdapter<E> err;
-
-    private ResultAdapter(TypeAdapter<T> ok, TypeAdapter<E> err) {
-      this.ok = ok;
-      this.err = err;
-    }
-
-    @Override
-    public void encode(NoritoEncoder encoder, Result<T, E> value) {
-      if (value instanceof Result.Ok<T, E> okValue) {
-        encoder.writeByte(0);
-        NoritoEncoder child = encoder.childEncoder();
-        ok.encode(child, okValue.value());
-        byte[] payload = child.toByteArray();
-        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
-        encoder.writeLength(payload.length, compact);
-        encoder.writeBytes(payload);
-      } else if (value instanceof Result.Err<T, E> errValue) {
-        encoder.writeByte(1);
-        NoritoEncoder child = encoder.childEncoder();
-        err.encode(child, errValue.error());
-        byte[] payload = child.toByteArray();
-        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
-        encoder.writeLength(payload.length, compact);
-        encoder.writeBytes(payload);
-      } else {
-        throw new IllegalArgumentException("Unknown Result variant");
-      }
-    }
-
-    @Override
-    public Result<T, E> decode(NoritoDecoder decoder) {
-      int tag = decoder.readByte();
-      if (tag != 0 && tag != 1) {
-        throw new IllegalArgumentException("Invalid Result tag: " + tag);
-      }
-      long length = decoder.readLength(decoder.compactLenActive());
-      if (length > Integer.MAX_VALUE) {
-        throw new IllegalArgumentException("Result payload too large");
-      }
-      byte[] payload = decoder.readBytes((int) length);
-      NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
-      Object value = tag == 0 ? ok.decode(child) : err.decode(child);
-      if (child.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after Result payload");
-      }
-      if (tag == 0) {
-        @SuppressWarnings("unchecked")
-        T okValue = (T) value;
-        return new Result.Ok<>(okValue);
-      }
-      @SuppressWarnings("unchecked")
-      E errValue = (E) value;
-      return new Result.Err<>(errValue);
-    }
-
-    @Override
-    public boolean isSelfDelimiting() {
-      return true;
-    }
-  }
-
   private static final class SequenceAdapter<T> implements TypeAdapter<List<T>> {
     private final TypeAdapter<T> element;
 
@@ -960,43 +836,6 @@ public final class NoritoAdapters {
     }
   }
 
-  private static final class TupleAdapter implements TypeAdapter<List<Object>> {
-    private final List<TypeAdapter<?>> elements;
-
-    private TupleAdapter(List<? extends TypeAdapter<?>> elements) {
-      this.elements = List.copyOf(elements);
-    }
-
-    @Override
-    public void encode(NoritoEncoder encoder, List<Object> value) {
-      if (value.size() != elements.size()) {
-        throw new IllegalArgumentException("Tuple size mismatch");
-      }
-      for (int i = 0; i < elements.size(); i++) {
-        encodeAdapter(elements.get(i), encoder, value.get(i));
-      }
-    }
-
-    @Override
-    public List<Object> decode(NoritoDecoder decoder) {
-      List<Object> values = new ArrayList<>(elements.size());
-      for (TypeAdapter<?> element : elements) {
-        values.add(decodeAdapter(element, decoder));
-      }
-      return values;
-    }
-
-    @Override
-    public boolean isSelfDelimiting() {
-      for (TypeAdapter<?> element : elements) {
-        if (!element.isSelfDelimiting()) {
-          return false;
-        }
-      }
-      return true;
-    }
-  }
-
   public static final class StructField<T> {
     private final String name;
     private final TypeAdapter<T> adapter;
@@ -1134,23 +973,13 @@ public final class NoritoAdapters {
     }
 
     private static Object extractField(Object value, String name) {
-      if (value instanceof Map<?, ?> map) {
-        return map.get(name);
+      if (!(value instanceof Map<?, ?> map)) {
+        throw new IllegalArgumentException("Struct values must be maps");
       }
-      try {
-        Method method = value.getClass().getMethod(name);
-        return method.invoke(value);
-      } catch (NoSuchMethodException missing) {
-        String candidate = "get" + Character.toUpperCase(name.charAt(0)) + name.substring(1);
-        try {
-          Method method = value.getClass().getMethod(candidate);
-          return method.invoke(value);
-        } catch (Exception inner) {
-          throw new IllegalArgumentException("Unable to extract field " + name, inner);
-        }
-      } catch (Exception ex) {
-        throw new IllegalArgumentException("Unable to extract field " + name, ex);
+      if (!map.containsKey(name)) {
+        throw new IllegalArgumentException("Struct value is missing field " + name);
       }
+      return map.get(name);
     }
   }
 }

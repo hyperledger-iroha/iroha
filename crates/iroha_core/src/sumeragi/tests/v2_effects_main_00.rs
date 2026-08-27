@@ -193,6 +193,7 @@ struct FakeRuntime {
     exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
     retain_body_available_effect_ownership: bool,
     live_proposal_intent_wal_sign: Option<(AdapterEffect, LiveProposalIntentWalSignHandoffV1)>,
+    pending_live_decision_apply: Option<(EventTag, DurableDecision)>,
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
     terminal_body_candidate_queries: Vec<RuntimeEffectOwnership>,
     terminal_body_candidate_commits: usize,
@@ -332,6 +333,14 @@ impl FakeRuntime {
     }
 }
 impl EffectRuntime for FakeRuntime {
+    fn has_exact_pending_live_decision_apply(
+        &self,
+        tag: EventTag,
+        decision: DurableDecision,
+    ) -> bool {
+        self.pending_live_decision_apply == Some((tag, decision))
+    }
+
     fn lifecycle_live_clocks_are_armed(&self) -> bool {
         self.live_clocks_armed
     }
@@ -1692,7 +1701,7 @@ impl ProductionTransportFixture {
             ),
             iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES
                 .get(),
-            None,
+            Some(1),
         );
         let roster = self
             .context
@@ -1933,7 +1942,7 @@ fn lifecycle_apply_preflights_wait_for_serialized_runtime_ingress() {
     assert!(
         fixture
             .executor
-            .lifecycle_decision_apply_dispatch_available()
+            .lifecycle_decision_apply_dispatch_available(None)
             .expect("inspect idle lifecycle Apply dispatch cut")
     );
 
@@ -1958,7 +1967,7 @@ fn lifecycle_apply_preflights_wait_for_serialized_runtime_ingress() {
     assert!(
         !fixture
             .executor
-            .lifecycle_decision_apply_dispatch_available()
+            .lifecycle_decision_apply_dispatch_available(None)
             .expect("inspect queued lifecycle Apply dispatch cut"),
         "live Apply dispatch must wait for the inherited runtime FIFO"
     );
@@ -1972,12 +1981,13 @@ fn lifecycle_apply_preflights_wait_for_serialized_runtime_ingress() {
         vec![vec![0x5C]; fixture.context.roster.len()],
     );
     let dispatch_key =
-        LifecycleDecisionApplyDispatchKeyV1::for_height_context_test(&fixture.context, 1, 0xA7);
+        LifecycleDecisionApplyDispatchKeyV1::for_height_context_test(&fixture.context, 2, 0xA7);
     let authority =
         LifecycleDecisionApplyAdapterCompletionAuthorityV1::recovered_for_queue_preflight_test(
             fixture.executor.current_tag(),
             fixture.subject,
             dispatch_key,
+            1,
             artifact.clone(),
         );
     assert!(matches!(
@@ -1998,6 +2008,7 @@ fn lifecycle_apply_preflights_wait_for_serialized_runtime_ingress() {
             fixture.executor.current_tag(),
             fixture.subject,
             dispatch_key,
+            1,
             artifact,
         );
     assert!(matches!(

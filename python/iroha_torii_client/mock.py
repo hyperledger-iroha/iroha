@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -407,8 +408,14 @@ class _MockState:
                     "max_bls_aggregate_checks_per_block": 4_016,
                     "max_bls_signer_contributions_per_transaction": 131_713,
                     "max_bls_signer_contributions_per_block": 526_852,
+                    "max_ed25519_signature_checks_per_transaction": 65_536,
+                    "max_ed25519_signature_checks_per_block": 262_144,
+                    "max_ed25519_validator_key_checks_per_transaction": 198_656,
+                    "max_ed25519_validator_key_checks_per_block": 794_624,
                     "max_bn254_pairing_checks_per_transaction": 1,
                     "max_bn254_pairing_checks_per_block": 4,
+                    "max_bls12_381_pairing_checks_per_transaction": 1,
+                    "max_bls12_381_pairing_checks_per_block": 4,
                 },
                 "proof_submit_path": "/v1/bridge/proofs/submit",
                 "native_message_submit_path": "/v1/bridge/messages",
@@ -456,42 +463,44 @@ class _MockState:
                 raise ValueError("capabilities must be an object")
             self.sccp_capabilities = dict(capabilities)
 
-        for field, attribute in (
+        for field_name, attribute in (
             ("registry", "sccp_registry"),
             ("recent_messages", "sccp_recent_messages"),
             ("bridge_proof_response", "sccp_bridge_proof_response"),
             ("bridge_message_response", "sccp_bridge_message_response"),
         ):
-            value = payload.get(field)
+            value = payload.get(field_name)
             if value is not None:
                 if not isinstance(value, dict):
-                    raise ValueError(f"{field} must be an object")
+                    raise ValueError(f"{field_name} must be an object")
                 setattr(self, attribute, dict(value))
 
-        for field, attribute in (
+        for field_name, attribute in (
             ("message_bundles", "sccp_message_bundles"),
             ("proof_requests", "sccp_proof_requests"),
         ):
-            value = payload.get(field)
+            value = payload.get(field_name)
             if value is not None:
                 if not isinstance(value, dict) or not all(
                     isinstance(key, str) and isinstance(entry, dict)
                     for key, entry in value.items()
                 ):
-                    raise ValueError(f"{field} must map message ids to objects")
+                    raise ValueError(f"{field_name} must map message ids to objects")
                 setattr(self, attribute, {key: dict(entry) for key, entry in value.items()})
 
-        for field, attribute in (
+        for field_name, attribute in (
             ("message_bundle_norito_b64", "sccp_message_bundle_norito"),
             ("proof_request_norito_b64", "sccp_proof_request_norito"),
         ):
-            value = payload.get(field)
+            value = payload.get(field_name)
             if value is not None:
                 if not isinstance(value, dict) or not all(
                     isinstance(key, str) and isinstance(entry, str)
                     for key, entry in value.items()
                 ):
-                    raise ValueError(f"{field} must map message ids to base64 strings")
+                    raise ValueError(
+                        f"{field_name} must map message ids to base64 strings"
+                    )
                 try:
                     decoded = {
                         key: base64.b64decode(entry, validate=True) for key, entry in value.items()
@@ -952,25 +961,29 @@ class _MockState:
         unknown = sorted(set(payload).difference(supported_fields))
         if unknown:
             raise ValueError(f"zk-v1 ballot payload contains unknown field {unknown[0]!r}")
-        for field in ("authority", "chain_id", "election_id", "backend"):
-            value = payload.get(field)
+        for field_name in ("authority", "chain_id", "election_id", "backend"):
+            value = payload.get(field_name)
             if (
                 not isinstance(value, str)
                 or not value
                 or value != value.strip()
                 or any(char.isspace() for char in value)
             ):
-                raise ValueError(f"zk-v1 ballot payload.{field} must be an exact token")
+                raise ValueError(
+                    f"zk-v1 ballot payload.{field_name} must be an exact token"
+                )
         envelope_b64 = payload.get("envelope_b64")
         if not isinstance(envelope_b64, str) or not envelope_b64:
             raise ValueError("zk-v1 ballot payload.envelope_b64 must be non-empty base64")
         try:
             envelope = base64.b64decode(envelope_b64, validate=True)
-        except (ValueError, base64.binascii.Error) as err:
+        except (ValueError, binascii.Error) as err:
             raise ValueError("zk-v1 ballot payload.envelope_b64 must be valid base64") from err
         if not envelope or base64.b64encode(envelope).decode("ascii") != envelope_b64:
             raise ValueError("zk-v1 ballot payload.envelope_b64 must be canonical base64")
         election_id = payload.get("election_id")
+        if not isinstance(election_id, str):
+            raise ValueError("zk-v1 ballot payload.election_id must be an exact token")
         has_owner = payload.get("owner") is not None
         has_amount = payload.get("amount") is not None
         has_duration = payload.get("duration_blocks") is not None

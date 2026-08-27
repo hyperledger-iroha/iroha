@@ -3,10 +3,15 @@
 use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::SystemTime,
 };
 
+use crate::{
+    Error,
+    peer::{SoranetHandshakeConfig, SoranetHandshakeSharedState},
+    puzzle_work_admission::process_wide_admission,
+};
 use iroha_config::parameters::actual::{
     SoranetHandshake as ActualSoranetHandshake, SoranetPow as ActualSoranetPow,
 };
@@ -14,9 +19,6 @@ use iroha_crypto::soranet::{
     pow::{Parameters as PowParameters, TicketRevocationStore, TicketRevocationStoreLimits},
     puzzle,
 };
-use soranet_pq::MlDsaSuite;
-
-use crate::{Error, peer::SoranetHandshakeConfig, puzzle_work_admission::process_wide_admission};
 
 fn absolute_replay_state_path(path: &Path) -> std::io::Result<PathBuf> {
     if path.is_absolute() {
@@ -25,9 +27,171 @@ fn absolute_replay_state_path(path: &Path) -> std::io::Result<PathBuf> {
     Ok(std::env::current_dir()?.join(path))
 }
 
-pub fn runtime_from_handshake(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SoranetHandshakeOwnerConfig {
+    replay_state_path: PathBuf,
+    revocation_limits: TicketRevocationStoreLimits,
+    outbound_mint_capacity: NonZeroUsize,
+    inbound_verify_capacity: NonZeroUsize,
+}
+impl SoranetHandshakeOwnerConfig {
+    fn ensure_reload_compatible(&self, requested: &Self) -> Result<(), Error> {
+        if self.replay_state_path != requested.replay_state_path {
+            return Err(restart_required_error(
+                "pow.revocation_store_path",
+                self.replay_state_path.display(),
+                requested.replay_state_path.display(),
+            ));
+        }
+        if self.revocation_limits.max_entries != requested.revocation_limits.max_entries {
+            return Err(restart_required_error(
+                "pow.revocation_store_capacity",
+                self.revocation_limits.max_entries,
+                requested.revocation_limits.max_entries,
+            ));
+        }
+        if self.revocation_limits.max_ttl != requested.revocation_limits.max_ttl {
+            return Err(restart_required_error(
+                "pow.revocation_max_ttl",
+                format!("{:?}", self.revocation_limits.max_ttl),
+                format!("{:?}", requested.revocation_limits.max_ttl),
+            ));
+        }
+        if self.outbound_mint_capacity != requested.outbound_mint_capacity {
+            return Err(restart_required_error(
+                "pow.outbound_mint_capacity",
+                self.outbound_mint_capacity,
+                requested.outbound_mint_capacity,
+            ));
+        }
+        if self.inbound_verify_capacity != requested.inbound_verify_capacity {
+            return Err(restart_required_error(
+                "pow.inbound_verify_capacity",
+                self.inbound_verify_capacity,
+                requested.inbound_verify_capacity,
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn restart_required_error(
+    field: &str,
+    active: impl std::fmt::Display,
+    requested: impl std::fmt::Display,
+) -> Error {
+    Error::HandshakeSoranet(format!(
+        "SoraNet {field} cannot change while the network runtime is active; restart required (active {active}, requested {requested})"
+    ))
+}
+
+struct ValidatedSoranetHandshake {
+    descriptor_commit: Vec<u8>,
+    client_capabilities: Vec<u8>,
+    relay_capabilities: Vec<u8>,
+    trust_gossip: bool,
+    kem_id: u8,
+    sig_id: u8,
+    resume_hash: Option<Vec<u8>>,
+    pow_params: PowParameters,
+    puzzle_params: puzzle::Parameters,
+    ticket_ttl: std::time::Duration,
+    owner: SoranetHandshakeOwnerConfig,
+}
+impl ValidatedSoranetHandshake {
+    fn into_policy(
+        self,
+        shared_state: SoranetHandshakeSharedState,
+    ) -> Result<Arc<SoranetHandshakeConfig>, Error> {
+        Ok(Arc::new(SoranetHandshakeConfig::new_with_shared_state(
+            self.descriptor_commit,
+            self.client_capabilities,
+            self.relay_capabilities,
+            self.trust_gossip,
+            self.kem_id,
+            self.sig_id,
+            self.resume_hash,
+            true,
+            self.pow_params,
+            Some(self.puzzle_params),
+            self.ticket_ttl,
+            shared_state,
+        )?))
+    }
+}
+
+/// Reloadable policy snapshots backed by one process-owned replay authority.
+#[derive(Debug)]
+pub(crate) struct SoranetHandshakeRuntime {
+    policy: RwLock<Arc<SoranetHandshakeConfig>>,
+    shared_state: SoranetHandshakeSharedState,
+    owner: SoranetHandshakeOwnerConfig,
+}
+impl SoranetHandshakeRuntime {
+    /// Snapshot the policy for one new handshake attempt.
+    pub(crate) fn snapshot(&self) -> Result<Arc<SoranetHandshakeConfig>, Error> {
+        self.policy
+            .read()
+            .map(|policy| Arc::clone(&policy))
+            .map_err(|_| {
+                Error::HandshakeSoranet(
+                    "SoraNet handshake policy lock poisoned; refusing new handshakes".to_owned(),
+                )
+            })
+    }
+
+    /// Validate and atomically publish a policy that reuses the active owner.
+    pub(crate) fn reload(
+        &self,
+        handshake: ActualSoranetHandshake,
+    ) -> Result<Arc<SoranetHandshakeConfig>, Error> {
+        let validated = validate_handshake(handshake)?;
+        self.owner.ensure_reload_compatible(&validated.owner)?;
+        let next = validated.into_policy(self.shared_state.clone())?;
+        let mut policy = self.policy.write().map_err(|_| {
+            Error::HandshakeSoranet(
+                "SoraNet handshake policy lock poisoned; refusing policy reload".to_owned(),
+            )
+        })?;
+        *policy = Arc::clone(&next);
+        Ok(next)
+    }
+}
+
+pub(crate) fn runtime_from_handshake(
     handshake: ActualSoranetHandshake,
-) -> Result<Arc<SoranetHandshakeConfig>, Error> {
+) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
+    let validated = validate_handshake(handshake)?;
+    let owner = validated.owner.clone();
+    let puzzle_work_admission =
+        process_wide_admission(owner.outbound_mint_capacity, owner.inbound_verify_capacity)
+            .map_err(Error::HandshakeSoranet)?;
+    let revocation_store = TicketRevocationStore::load(
+        &owner.replay_state_path,
+        owner.revocation_limits,
+        SystemTime::now(),
+    )
+    .map_err(|err| {
+        Error::HandshakeSoranet(format!(
+            "failed to load soranet revocation store at {}: {err}",
+            owner.replay_state_path.display()
+        ))
+    })?;
+    let shared_state = SoranetHandshakeSharedState::new(
+        Arc::new(Mutex::new(revocation_store)),
+        puzzle_work_admission,
+    );
+    let policy = validated.into_policy(shared_state.clone())?;
+    Ok(Arc::new(SoranetHandshakeRuntime {
+        policy: RwLock::new(policy),
+        shared_state,
+        owner,
+    }))
+}
+
+fn validate_handshake(
+    handshake: ActualSoranetHandshake,
+) -> Result<ValidatedSoranetHandshake, Error> {
     let ActualSoranetHandshake {
         descriptor_commit,
         client_capabilities,
@@ -39,7 +203,6 @@ pub fn runtime_from_handshake(
         pow,
     } = handshake;
     let ActualSoranetPow {
-        required,
         difficulty,
         max_future_skew,
         min_ticket_ttl,
@@ -50,83 +213,59 @@ pub fn runtime_from_handshake(
         revocation_max_ttl,
         revocation_store_path,
         puzzle,
-        signed_ticket_public_key,
     } = pow;
     validate_revocation_window(max_future_skew, revocation_max_ttl)?;
     validate_puzzle_work_capacities(outbound_mint_capacity, inbound_verify_capacity)?;
-    let puzzle_work_admission =
-        process_wide_admission(outbound_mint_capacity, inbound_verify_capacity)
-            .map_err(Error::HandshakeSoranet)?;
     let pow_params =
         PowParameters::try_new(difficulty, max_future_skew, min_ticket_ttl).map_err(|err| {
             Error::HandshakeSoranet(format!("invalid soranet PoW configuration: {err}"))
         })?;
-    let puzzle_params = puzzle
-        .map(|cfg| {
-            puzzle::Parameters::try_new(
-                cfg.memory_kib,
-                cfg.time_cost,
-                cfg.lanes,
-                difficulty,
-                max_future_skew,
-                min_ticket_ttl,
-            )
-            .map_err(|err| {
-                Error::HandshakeSoranet(format!("invalid soranet puzzle configuration: {err}"))
-            })
-        })
-        .transpose()?;
-    if puzzle_params.is_some() && ticket_ttl <= min_ticket_ttl {
+    let puzzle_params = puzzle::Parameters::try_new(
+        puzzle.memory_kib,
+        puzzle.time_cost,
+        puzzle.lanes,
+        difficulty,
+        max_future_skew,
+        min_ticket_ttl,
+    )
+    .map_err(|err| {
+        Error::HandshakeSoranet(format!("invalid soranet puzzle configuration: {err}"))
+    })?;
+    if ticket_ttl <= min_ticket_ttl {
         return Err(Error::HandshakeSoranet(format!(
             "invalid soranet puzzle ticket timing: ticket_ttl {ticket_ttl:?} must exceed min_ticket_ttl {min_ticket_ttl:?}"
         )));
     }
-    let signed_ticket_public_key = validate_signed_ticket_public_key(signed_ticket_public_key)?;
     let revocation_limits =
         TicketRevocationStoreLimits::new(revocation_store_capacity, revocation_max_ttl).map_err(
             |err| {
                 Error::HandshakeSoranet(format!("invalid soranet revocation configuration: {err}"))
             },
         )?;
-    let revocation_store = if required {
-        let replay_path = absolute_replay_state_path(Path::new(revocation_store_path.as_ref()))
-            .map_err(|err| {
-                Error::HandshakeSoranet(format!(
-                    "failed to resolve soranet revocation store path {revocation_store_path}: {err}"
-                ))
-            })?;
-        TicketRevocationStore::load(&replay_path, revocation_limits, SystemTime::now()).map_err(
-            |err| {
-                Error::HandshakeSoranet(format!(
-                    "failed to load soranet revocation store at {}: {err}",
-                    replay_path.display()
-                ))
-            },
-        )?
-    } else {
-        // Production configuration fixes `required = true`. Programmatic test
-        // configurations that disable admission use only in-memory replay state.
-        TicketRevocationStore::in_memory(revocation_limits).map_err(|err| {
-            Error::HandshakeSoranet(format!("invalid soranet revocation configuration: {err}"))
-        })?
-    };
-    let config = SoranetHandshakeConfig::new(
-        descriptor_commit.into_value(),
-        client_capabilities.into_value(),
-        relay_capabilities.into_value(),
+    let replay_state_path = absolute_replay_state_path(Path::new(revocation_store_path.as_ref()))
+        .map_err(|err| {
+        Error::HandshakeSoranet(format!(
+            "failed to resolve soranet revocation store path {revocation_store_path}: {err}"
+        ))
+    })?;
+    Ok(ValidatedSoranetHandshake {
+        descriptor_commit: descriptor_commit.into_value(),
+        client_capabilities: client_capabilities.into_value(),
+        relay_capabilities: relay_capabilities.into_value(),
         trust_gossip,
         kem_id,
         sig_id,
-        resume_hash.map(iroha_config::base::WithOrigin::into_value),
-        required,
+        resume_hash: resume_hash.map(iroha_config::base::WithOrigin::into_value),
         pow_params,
         puzzle_params,
         ticket_ttl,
-        signed_ticket_public_key,
-        Arc::new(Mutex::new(revocation_store)),
-    )?
-    .with_puzzle_work_admission(puzzle_work_admission);
-    Ok(Arc::new(config))
+        owner: SoranetHandshakeOwnerConfig {
+            replay_state_path,
+            revocation_limits,
+            outbound_mint_capacity,
+            inbound_verify_capacity,
+        },
+    })
 }
 
 fn validate_revocation_window(
@@ -159,24 +298,8 @@ fn validate_puzzle_work_capacities(
     Ok(())
 }
 
-fn validate_signed_ticket_public_key(key: Option<Vec<u8>>) -> Result<Option<Vec<u8>>, Error> {
-    key.map(|key| {
-        MlDsaSuite::MlDsa44
-            .validate_public_key(&key)
-            .map_err(|error| {
-                Error::HandshakeSoranet(format!(
-                    "invalid soranet signed_ticket_public_key_hex (ML-DSA-44): {error}"
-                ))
-            })?;
-        Ok(key)
-    })
-    .transpose()
-}
-
 #[cfg(test)]
 mod tests {
-    use soranet_pq::generate_mldsa_keypair_from_os;
-
     use super::*;
 
     #[test]
@@ -194,21 +317,5 @@ mod tests {
         ));
         validate_revocation_window(max_future_skew, max_future_skew)
             .expect("an equal revocation and acceptance window is sufficient");
-    }
-
-    #[test]
-    fn signed_ticket_public_key_rejects_inert_material() {
-        let inert = vec![0_u8; MlDsaSuite::MlDsa44.public_key_len()];
-        assert!(validate_signed_ticket_public_key(Some(inert)).is_err());
-    }
-
-    #[test]
-    fn signed_ticket_public_key_accepts_generated_material() {
-        let keypair =
-            generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa44).expect("generate ML-DSA keypair");
-        let expected = keypair.public_key().to_vec();
-        let validated = validate_signed_ticket_public_key(Some(expected.clone()))
-            .expect("validate generated public key");
-        assert_eq!(validated.as_deref(), Some(expected.as_slice()));
     }
 }

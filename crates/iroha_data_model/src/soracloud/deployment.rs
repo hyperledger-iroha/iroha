@@ -520,6 +520,15 @@ impl SoraServiceDeploymentStateV1 {
                 "active service and container manifest hashes must match the admitted bundle exactly",
             ));
         }
+        if active_bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+            && self.active_rollout.is_some()
+        {
+            return Err(invalid_field(
+                "sora service deployment state",
+                "active_rollout",
+                "first-release Inrou services require exactly one active revision",
+            ));
+        }
         match active_bundle.service.execution_plane {
             SoraServiceExecutionPlaneV1::DeterministicService => {
                 if self.service_lease.is_some() || !self.lease_volume_states.is_empty() {

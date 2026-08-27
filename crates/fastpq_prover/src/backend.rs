@@ -141,6 +141,7 @@ pub fn try_acquire_gpu_lane() -> Option<MutexGuard<'static, ()>> {
         Err(TryLockError::WouldBlock) => None,
     }
 }
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub fn acquire_gpu_lane() -> MutexGuard<'static, ()> {
     match gpu_workload_mutex().lock() {
         Ok(guard) => guard,

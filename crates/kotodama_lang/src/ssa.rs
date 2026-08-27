@@ -146,7 +146,6 @@ impl Program {
         for function in &mut self.functions {
             function.optimize()?;
         }
-        self.verify()?;
         self.retain_reachable_functions(roots)?;
         self.verify()
     }
@@ -274,11 +273,10 @@ impl Function {
     }
     fn optimize(&mut self) -> Result<(), String> {
         loop {
-            self.verify()?;
             let analysis = SccpAnalysis::analyze(self)?;
             let mut changed = self.apply_sccp(&analysis)?;
             changed |= self.coalesce_trivial_values()?;
-            changed |= self.eliminate_dead_values();
+            changed |= self.eliminate_dead_values()?;
             changed |= self.simplify_control_flow()?;
             self.verify()?;
             if !changed {
@@ -354,102 +352,273 @@ impl Function {
         Ok(changed)
     }
     fn coalesce_trivial_values(&mut self) -> Result<bool, String> {
-        let mut changed = false;
-        loop {
-            let mut candidate = None;
-            'blocks: for (block_index, block) in self.blocks.iter().enumerate() {
-                for (phi_index, phi) in block.phis.iter().enumerate() {
-                    let sources = phi
-                        .inputs
-                        .iter()
-                        .map(|input| input.value)
-                        .filter(|source| *source != phi.destination)
-                        .collect::<BTreeSet<_>>();
-                    if sources.len() == 1
-                        && let Some(source) = sources.first().copied()
-                    {
-                        candidate = Some(CoalesceCandidate::Phi {
+        let mut aliases = BTreeMap::new();
+        let mut equivalence = ValueEquivalence::default();
+        for block in &self.blocks {
+            for instruction in &block.instructions {
+                let ir::Instr::Copy { dest, src } = instruction.as_ir() else {
+                    continue;
+                };
+                let destination = Value::decode(*dest);
+                let source = Value::decode(*src);
+                if destination == source {
+                    continue;
+                }
+                if aliases.insert(destination, source).is_some() {
+                    return Err(format!(
+                        "SSA copy destination {destination:?} is defined more than once"
+                    ));
+                }
+                equivalence.union(destination, source);
+            }
+        }
+
+        let phi_locations = self
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(block, body)| {
+                (0..body.phis.len()).map(move |index| PhiLocation { block, index })
+            })
+            .collect::<Vec<_>>();
+        let mut watchers = BTreeMap::<Value, BTreeSet<usize>>::new();
+        let mut phi_class_counts = Vec::with_capacity(phi_locations.len());
+        for (phi_id, location) in phi_locations.iter().enumerate() {
+            let phi = &self.blocks[location.block].phis[location.index];
+            let mut roots = BTreeSet::new();
+            roots.insert(equivalence.find(phi.destination));
+            roots.extend(phi.inputs.iter().map(|input| equivalence.find(input.value)));
+            phi_class_counts.push(roots.len());
+            for root in roots {
+                watchers.entry(root).or_default().insert(phi_id);
+            }
+        }
+
+        let mut pending = phi_class_counts
+            .iter()
+            .enumerate()
+            .filter_map(|(phi, classes)| (*classes == 2).then_some(phi))
+            .collect::<BTreeSet<_>>();
+        let mut removed_phis = vec![false; phi_locations.len()];
+        while let Some(phi_id) = pending.pop_first() {
+            if removed_phis[phi_id] || phi_class_counts[phi_id] != 2 {
+                continue;
+            }
+            let location = phi_locations[phi_id];
+            let phi = &self.blocks[location.block].phis[location.index];
+            let destination_root = equivalence.find(phi.destination);
+            let mut source = None;
+            let mut source_root = None;
+            for input in &phi.inputs {
+                let root = equivalence.find(input.value);
+                if root != destination_root {
+                    if source_root.is_some_and(|known| known != root) {
+                        return Err(format!(
+                            "SSA Phi {:?} class count drifted during coalescing",
+                            phi.destination
+                        ));
+                    }
+                    source_root = Some(root);
+                    if source.is_none() {
+                        source = Some(input.value);
+                    }
+                }
+            }
+            let source = source.ok_or_else(|| {
+                format!(
+                    "SSA Phi {:?} lost its non-self source during coalescing",
+                    phi.destination
+                )
+            })?;
+            if aliases.insert(phi.destination, source).is_some() {
+                return Err(format!(
+                    "SSA Phi destination {:?} is defined more than once",
+                    phi.destination
+                ));
+            }
+            removed_phis[phi_id] = true;
+            let Some(merged) = equivalence.union(phi.destination, source) else {
+                return Err(format!(
+                    "trivial SSA Phi {:?} unexpectedly aliases its own equivalence class",
+                    phi.destination
+                ));
+            };
+            let left = watchers.remove(&merged.left).unwrap_or_default();
+            let right = watchers.remove(&merged.right).unwrap_or_default();
+            let (mut combined, smaller) = if left.len() >= right.len() {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            // Only a Phi mentioning both merged classes loses a distinct
+            // class. Moving the smaller watcher set bounds membership work;
+            // operand lists are rescanned only when the Phi becomes trivial.
+            for phi in smaller {
+                if !combined.insert(phi) {
+                    if removed_phis[phi] {
+                        continue;
+                    }
+                    phi_class_counts[phi] =
+                        phi_class_counts[phi].checked_sub(1).ok_or_else(|| {
+                            format!("SSA Phi {phi} class count underflow during coalescing")
+                        })?;
+                    if phi_class_counts[phi] == 2 {
+                        pending.insert(phi);
+                    }
+                }
+            }
+            watchers.insert(merged.root, combined);
+        }
+
+        if aliases.is_empty() {
+            return Ok(false);
+        }
+        compress_aliases(&mut aliases)?;
+        let canonical = |value: Value| aliases.get(&value).copied().unwrap_or(value);
+        let mut phi_id = 0usize;
+        for block in &mut self.blocks {
+            block.phis.retain_mut(|phi| {
+                let remove = removed_phis[phi_id];
+                phi_id = phi_id.saturating_add(1);
+                if !remove {
+                    for input in &mut phi.inputs {
+                        input.value = canonical(input.value);
+                    }
+                }
+                !remove
+            });
+            block.instructions.retain_mut(|instruction| {
+                if let ir::Instr::Copy { dest, src } = instruction.as_ir()
+                    && dest != src
+                {
+                    return false;
+                }
+                rewrite_instr_uses(instruction.as_ir_mut(), |encoded| {
+                    *encoded = canonical(Value::decode(*encoded)).encoded();
+                });
+                true
+            });
+            rewrite_terminator_uses(block.terminator.as_ir_mut(), |encoded| {
+                *encoded = canonical(Value::decode(*encoded)).encoded();
+            });
+        }
+        Ok(true)
+    }
+    fn eliminate_dead_values(&mut self) -> Result<bool, String> {
+        let mut definitions = BTreeMap::new();
+        let mut live_phis = self
+            .blocks
+            .iter()
+            .map(|block| vec![false; block.phis.len()])
+            .collect::<Vec<_>>();
+        let mut live_instructions = self
+            .blocks
+            .iter()
+            .map(|block| vec![false; block.instructions.len()])
+            .collect::<Vec<_>>();
+        let mut pending = Vec::new();
+        for (block_index, block) in self.blocks.iter().enumerate() {
+            for (phi_index, phi) in block.phis.iter().enumerate() {
+                if definitions
+                    .insert(
+                        phi.destination,
+                        LiveDefinition::Phi {
                             block: block_index,
                             index: phi_index,
-                            destination: phi.destination,
-                            source,
-                        });
-                        break 'blocks;
-                    }
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(format!(
+                        "SSA value {:?} is defined more than once during dead-value elimination",
+                        phi.destination
+                    ));
                 }
-                for (instruction_index, instruction) in block.instructions.iter().enumerate() {
-                    if let ir::Instr::Copy { dest, src } = instruction.as_ir() {
-                        let destination = Value::decode(*dest);
-                        let source = Value::decode(*src);
-                        if destination != source {
-                            candidate = Some(CoalesceCandidate::Copy {
+            }
+            for (instruction_index, instruction) in block.instructions.iter().enumerate() {
+                let mut instruction_definitions = Vec::new();
+                visit_instr_defs(instruction.as_ir(), |value| {
+                    instruction_definitions.push(Value::decode(value));
+                });
+                for definition in &instruction_definitions {
+                    if definitions
+                        .insert(
+                            *definition,
+                            LiveDefinition::Instruction {
                                 block: block_index,
                                 index: instruction_index,
-                                destination,
-                                source,
-                            });
-                            break 'blocks;
-                        }
+                            },
+                        )
+                        .is_some()
+                    {
+                        return Err(format!(
+                            "SSA value {definition:?} is defined more than once during dead-value elimination"
+                        ));
                     }
                 }
-            }
-            let Some(candidate) = candidate else {
-                return Ok(changed);
-            };
-            let (destination, source) = candidate.values();
-            replace_ssa_uses(self, destination, source);
-            match candidate {
-                CoalesceCandidate::Phi { block, index, .. } => {
-                    self.blocks[block].phis.remove(index);
-                }
-                CoalesceCandidate::Copy { block, index, .. } => {
-                    self.blocks[block].instructions.remove(index);
-                }
-            }
-            changed = true;
-        }
-    }
-    fn eliminate_dead_values(&mut self) -> bool {
-        let mut any_changed = false;
-        loop {
-            let mut used = BTreeSet::new();
-            for block in &self.blocks {
-                for phi in &block.phis {
-                    used.extend(phi.inputs.iter().map(|input| input.value));
-                }
-                for instruction in &block.instructions {
+                if instruction_definitions.is_empty() || !is_ssa_dce_safe(instruction.as_ir()) {
+                    live_instructions[block_index][instruction_index] = true;
                     visit_instr_uses(instruction.as_ir(), |value| {
-                        used.insert(Value::decode(value));
+                        pending.push(Value::decode(value));
                     });
                 }
-                visit_terminator_uses(block.terminator.as_ir(), |value| {
-                    used.insert(Value::decode(value));
-                });
             }
-            let mut changed = false;
-            for block in &mut self.blocks {
-                block.phis.retain(|phi| {
-                    let keep = used.contains(&phi.destination);
-                    changed |= !keep;
-                    keep
-                });
-                block.instructions.retain(|instruction| {
-                    let mut definitions = Vec::new();
-                    visit_instr_defs(instruction.as_ir(), |value| {
-                        definitions.push(Value::decode(value));
+            visit_terminator_uses(block.terminator.as_ir(), |value| {
+                pending.push(Value::decode(value));
+            });
+        }
+
+        let mut live_values = BTreeSet::new();
+        while let Some(value) = pending.pop() {
+            if !live_values.insert(value) {
+                continue;
+            }
+            let definition = definitions.get(&value).copied().ok_or_else(|| {
+                format!("SSA value {value:?} has no definition during dead-value elimination")
+            })?;
+            match definition {
+                LiveDefinition::Phi { block, index } => {
+                    if live_phis[block][index] {
+                        continue;
+                    }
+                    live_phis[block][index] = true;
+                    pending.extend(
+                        self.blocks[block].phis[index]
+                            .inputs
+                            .iter()
+                            .map(|input| input.value),
+                    );
+                }
+                LiveDefinition::Instruction { block, index } => {
+                    if live_instructions[block][index] {
+                        continue;
+                    }
+                    live_instructions[block][index] = true;
+                    visit_instr_uses(self.blocks[block].instructions[index].as_ir(), |used| {
+                        pending.push(Value::decode(used))
                     });
-                    let dead = !definitions.is_empty()
-                        && definitions.iter().all(|value| !used.contains(value))
-                        && is_ssa_dce_safe(instruction.as_ir());
-                    changed |= dead;
-                    !dead
-                });
-            }
-            any_changed |= changed;
-            if !changed {
-                return any_changed;
+                }
             }
         }
+
+        let mut changed = false;
+        for (block_index, block) in self.blocks.iter_mut().enumerate() {
+            let mut phi_index = 0usize;
+            block.phis.retain(|_| {
+                let keep = live_phis[block_index][phi_index];
+                phi_index = phi_index.saturating_add(1);
+                changed |= !keep;
+                keep
+            });
+            let mut instruction_index = 0usize;
+            block.instructions.retain(|_| {
+                let keep = live_instructions[block_index][instruction_index];
+                instruction_index = instruction_index.saturating_add(1);
+                changed |= !keep;
+                keep
+            });
+        }
+        Ok(changed)
     }
     fn simplify_control_flow(&mut self) -> Result<bool, String> {
         let phi_labels = self
@@ -1247,58 +1416,92 @@ fn simplify_ssa_instruction(instruction: &ir::Instr, analysis: &SccpAnalysis) ->
         _ => None,
     }
 }
-enum CoalesceCandidate {
-    Phi {
-        block: usize,
-        index: usize,
-        destination: Value,
-        source: Value,
-    },
-    Copy {
-        block: usize,
-        index: usize,
-        destination: Value,
-        source: Value,
-    },
+#[derive(Clone, Copy)]
+struct PhiLocation {
+    block: usize,
+    index: usize,
 }
-impl CoalesceCandidate {
-    fn values(&self) -> (Value, Value) {
-        match *self {
-            Self::Phi {
-                destination,
-                source,
-                ..
+#[derive(Clone, Copy)]
+enum LiveDefinition {
+    Phi { block: usize, index: usize },
+    Instruction { block: usize, index: usize },
+}
+#[derive(Clone, Copy)]
+struct EquivalenceMerge {
+    left: Value,
+    right: Value,
+    root: Value,
+}
+#[derive(Default)]
+struct ValueEquivalence {
+    parents: BTreeMap<Value, Value>,
+    ranks: BTreeMap<Value, u8>,
+}
+impl ValueEquivalence {
+    fn find(&mut self, value: Value) -> Value {
+        let mut root = value;
+        while let Some(parent) = self.parents.get(&root).copied() {
+            if parent == root {
+                break;
             }
-            | Self::Copy {
-                destination,
-                source,
-                ..
-            } => (destination, source),
+            root = parent;
         }
+        self.parents.entry(root).or_insert(root);
+        let mut current = value;
+        while let Some(parent) = self.parents.get(&current).copied() {
+            if parent == root {
+                break;
+            }
+            self.parents.insert(current, root);
+            current = parent;
+        }
+        self.parents.entry(value).or_insert(root);
+        root
+    }
+    fn union(&mut self, left: Value, right: Value) -> Option<EquivalenceMerge> {
+        let left = self.find(left);
+        let right = self.find(right);
+        if left == right {
+            return None;
+        }
+        let left_rank = self.ranks.get(&left).copied().unwrap_or(0);
+        let right_rank = self.ranks.get(&right).copied().unwrap_or(0);
+        let (root, child, increment_rank) = if left_rank > right_rank {
+            (left, right, false)
+        } else if right_rank > left_rank {
+            (right, left, false)
+        } else if left <= right {
+            (left, right, true)
+        } else {
+            (right, left, true)
+        };
+        self.parents.insert(child, root);
+        if increment_rank {
+            self.ranks.insert(root, left_rank.saturating_add(1));
+        }
+        Some(EquivalenceMerge { left, right, root })
     }
 }
-fn replace_ssa_uses(function: &mut Function, from: Value, to: Value) {
-    for block in &mut function.blocks {
-        for phi in &mut block.phis {
-            for input in &mut phi.inputs {
-                if input.value == from {
-                    input.value = to;
-                }
+fn compress_aliases(aliases: &mut BTreeMap<Value, Value>) -> Result<(), String> {
+    let destinations = aliases.keys().copied().collect::<Vec<_>>();
+    for destination in destinations {
+        let mut current = destination;
+        let mut path = Vec::new();
+        let mut visited = BTreeSet::new();
+        while let Some(source) = aliases.get(&current).copied() {
+            if !visited.insert(current) {
+                return Err(format!(
+                    "cyclic SSA value aliases include {current:?} during coalescing"
+                ));
             }
+            path.push(current);
+            current = source;
         }
-        for instruction in &mut block.instructions {
-            rewrite_instr_uses(instruction.as_ir_mut(), |encoded| {
-                if Value::decode(*encoded) == from {
-                    *encoded = to.encoded();
-                }
-            });
+        for value in path {
+            aliases.insert(value, current);
         }
-        rewrite_terminator_uses(block.terminator.as_ir_mut(), |encoded| {
-            if Value::decode(*encoded) == from {
-                *encoded = to.encoded();
-            }
-        });
     }
+    Ok(())
 }
 fn is_ssa_dce_safe(instruction: &ir::Instr) -> bool {
     match instruction {
@@ -3204,7 +3407,7 @@ mod tests {
         ValueInstruction, ValueTerminator, validate_ssa_budget_counts,
     };
     use crate::{
-        ast::{BinaryOp, SourceLocation},
+        ast::{BinaryOp, SourceLocation, UnaryOp},
         ir::{BasicBlock, Function, Instr, Label, Program as IrProgram, Temp, Terminator},
     };
     use std::collections::BTreeSet;
@@ -3507,6 +3710,121 @@ mod tests {
                 location: SourceLocation { line: 9, column: 4 },
             }],
         }
+    }
+    #[test]
+    fn dead_value_elimination_retains_a_live_phi_cycle() {
+        let mut program = cyclic_loop_ssa_program();
+        program.verify().expect("verify live Phi cycle");
+
+        assert!(
+            !program.functions[0]
+                .eliminate_dead_values()
+                .expect("retain live Phi cycle")
+        );
+        program.verify().expect("verify retained Phi cycle");
+        assert_eq!(program.functions[0].blocks[0].instructions.len(), 2);
+        assert_eq!(program.functions[0].blocks[1].phis.len(), 2);
+    }
+    #[test]
+    fn dead_value_elimination_removes_an_unrooted_phi_cycle() {
+        let mut program = cyclic_loop_ssa_program();
+        program.functions[0].blocks[0]
+            .instructions
+            .push(ValueInstruction::new(Instr::LoadVar {
+                dest: Value(4).encoded(),
+                name: "condition".to_owned(),
+            }));
+        program.functions[0].blocks[1].terminator = ValueTerminator::new(Terminator::Branch {
+            cond: Value(4).encoded(),
+            then_bb: Label(1),
+            else_bb: Label(2),
+        });
+        program.functions[0].blocks[2].terminator = ValueTerminator::new(Terminator::Return(None));
+        program.verify().expect("verify unrooted Phi cycle");
+
+        assert!(
+            program.functions[0]
+                .eliminate_dead_values()
+                .expect("remove unrooted Phi cycle")
+        );
+        program.verify().expect("verify removed Phi cycle");
+        assert!(program.functions[0].blocks[1].phis.is_empty());
+        assert!(matches!(
+            program.functions[0].blocks[0].instructions.as_slice(),
+            [ValueInstruction(Instr::LoadVar { name, .. })] if name == "condition"
+        ));
+    }
+    #[test]
+    fn coalescing_collapses_a_self_referential_phi_with_one_seed() {
+        let mut program = Program {
+            functions: vec![SsaFunction {
+                name: "self_phi".to_owned(),
+                params: Vec::new(),
+                blocks: vec![
+                    SsaBlock {
+                        label: Label(0),
+                        phis: Vec::new(),
+                        instructions: vec![
+                            ValueInstruction::new(Instr::LoadVar {
+                                dest: Value(1).encoded(),
+                                name: "seed".to_owned(),
+                            }),
+                            ValueInstruction::new(Instr::LoadVar {
+                                dest: Value(2).encoded(),
+                                name: "condition".to_owned(),
+                            }),
+                        ],
+                        terminator: ValueTerminator::new(Terminator::Jump(Label(1))),
+                    },
+                    SsaBlock {
+                        label: Label(1),
+                        phis: vec![Phi {
+                            variable: Temp(0),
+                            destination: Value(0),
+                            inputs: vec![
+                                PhiInput {
+                                    predecessor: Label(0),
+                                    value: Value(1),
+                                },
+                                PhiInput {
+                                    predecessor: Label(1),
+                                    value: Value(0),
+                                },
+                            ],
+                        }],
+                        instructions: Vec::new(),
+                        terminator: ValueTerminator::new(Terminator::Branch {
+                            cond: Value(2).encoded(),
+                            then_bb: Label(1),
+                            else_bb: Label(2),
+                        }),
+                    },
+                    SsaBlock {
+                        label: Label(2),
+                        phis: Vec::new(),
+                        instructions: Vec::new(),
+                        terminator: ValueTerminator::new(Terminator::Return(Some(
+                            Value(0).encoded(),
+                        ))),
+                    },
+                ],
+                entry: Label(0),
+                location: SourceLocation { line: 9, column: 4 },
+            }],
+        };
+        program.verify().expect("verify self-referential Phi");
+
+        assert!(
+            program.functions[0]
+                .coalesce_trivial_values()
+                .expect("coalesce self-referential Phi")
+        );
+        program.verify().expect("verify coalesced Phi");
+        assert!(program.functions[0].blocks[1].phis.is_empty());
+        assert!(matches!(
+            program.functions[0].blocks[2].terminator.as_ir(),
+            Terminator::Return(Some(value)) if *value == Value(1).encoded()
+        ));
     }
     #[test]
     fn branch_join_has_one_explicit_phi() {
@@ -4105,7 +4423,7 @@ mod tests {
         }));
     }
     #[test]
-    fn checked_overflow_and_division_by_zero_are_retained_when_dead() {
+    fn checked_arithmetic_trap_boundaries_are_retained_when_dead() {
         let raw = IrProgram {
             functions: vec![function(vec![BasicBlock {
                 label: Label(0),
@@ -4122,17 +4440,36 @@ mod tests {
                         dest: Temp(2),
                         value: 0,
                     },
-                    Instr::Binary {
+                    Instr::Const {
                         dest: Temp(3),
+                        value: i64::MIN,
+                    },
+                    Instr::Const {
+                        dest: Temp(4),
+                        value: -1,
+                    },
+                    Instr::Binary {
+                        dest: Temp(5),
                         op: BinaryOp::Add,
                         left: Temp(0),
                         right: Temp(1),
                     },
                     Instr::Binary {
-                        dest: Temp(4),
+                        dest: Temp(6),
                         op: BinaryOp::Div,
                         left: Temp(1),
                         right: Temp(2),
+                    },
+                    Instr::Binary {
+                        dest: Temp(7),
+                        op: BinaryOp::Div,
+                        left: Temp(3),
+                        right: Temp(4),
+                    },
+                    Instr::Unary {
+                        dest: Temp(8),
+                        op: UnaryOp::Neg,
+                        operand: Temp(3),
                     },
                 ],
                 terminator: Terminator::Return(None),
@@ -4150,7 +4487,22 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(operations, vec![BinaryOp::Add, BinaryOp::Div]);
+        assert_eq!(
+            operations,
+            vec![BinaryOp::Add, BinaryOp::Div, BinaryOp::Div]
+        );
+        assert!(
+            program.functions[0].blocks[0]
+                .instructions
+                .iter()
+                .any(|instruction| matches!(
+                    instruction.as_ir(),
+                    Instr::Unary {
+                        op: UnaryOp::Neg,
+                        ..
+                    }
+                ))
+        );
     }
     #[test]
     fn algebraic_identity_is_simplified_and_the_copy_is_coalesced() {
@@ -4189,6 +4541,73 @@ mod tests {
             block.terminator.as_ir(),
             Terminator::Return(Some(_))
         ));
+    }
+    #[test]
+    fn coalescing_rewrites_a_long_copy_chain_in_one_batch() {
+        const COPIES: usize = 8_192;
+        let mut instructions = Vec::with_capacity(COPIES + 1);
+        instructions.push(Instr::LoadVar {
+            dest: Temp(0),
+            name: "input".to_owned(),
+        });
+        instructions.extend((1..=COPIES).map(|index| Instr::Copy {
+            dest: Temp(index),
+            src: Temp(index - 1),
+        }));
+        let mut program = Program::from_ir(IrProgram {
+            functions: vec![function(vec![BasicBlock {
+                label: Label(0),
+                instrs: instructions,
+                terminator: Terminator::Return(Some(Temp(COPIES))),
+            }])],
+        })
+        .expect("construct long-copy SSA");
+        assert!(
+            program.functions[0]
+                .coalesce_trivial_values()
+                .expect("coalesce long copy chain")
+        );
+        program.verify().expect("verify coalesced copy chain");
+        let block = &program.functions[0].blocks[0];
+        assert!(matches!(
+            block.instructions.as_slice(),
+            [ValueInstruction(Instr::LoadVar { name, .. })] if name == "input"
+        ));
+        let Terminator::Return(Some(result)) = block.terminator.as_ir() else {
+            panic!("copy-chain result must remain the function return");
+        };
+        let Instr::LoadVar { dest, .. } = block.instructions[0].as_ir() else {
+            unreachable!("matched the remaining input load")
+        };
+        assert_eq!(result, dest);
+    }
+    #[test]
+    fn dead_value_elimination_removes_a_long_unused_chain_in_one_mark_sweep() {
+        const COPIES: usize = 8_192;
+        let mut instructions = Vec::with_capacity(COPIES + 1);
+        instructions.push(Instr::LoadVar {
+            dest: Temp(0),
+            name: "unused".to_owned(),
+        });
+        instructions.extend((1..=COPIES).map(|index| Instr::Copy {
+            dest: Temp(index),
+            src: Temp(index - 1),
+        }));
+        let mut program = Program::from_ir(IrProgram {
+            functions: vec![function(vec![BasicBlock {
+                label: Label(0),
+                instrs: instructions,
+                terminator: Terminator::Return(None),
+            }])],
+        })
+        .expect("construct unused SSA chain");
+        assert!(
+            program.functions[0]
+                .eliminate_dead_values()
+                .expect("eliminate unused chain")
+        );
+        program.verify().expect("verify dead-value cleanup");
+        assert!(program.functions[0].blocks[0].instructions.is_empty());
     }
     #[test]
     fn effectful_state_write_is_retained_with_an_unused_result_graph() {

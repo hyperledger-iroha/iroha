@@ -8,6 +8,7 @@
 //! includes the two canonical eight-member admissions required for a minimum ring, successor-root
 //! account provisioning, and persisted key-image replay.
 use eyre::{Result, WrapErr as _, ensure, eyre};
+use futures_util::TryStreamExt as _;
 use integration_tests::sandbox;
 use iroha::client::Client;
 use iroha_core::{
@@ -66,10 +67,7 @@ use iroha_data_model::{
         ZK_AMS_PHC_VERSION_V1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
         zk_ams_registry_record_digest_v1,
     },
-    query::{
-        account::prelude::FindAccounts, block::prelude::FindBlocks,
-        transaction::prelude::FindTransactions,
-    },
+    query::account::prelude::FindAccounts,
     transaction::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
         TransactionPayload,
@@ -84,7 +82,7 @@ use p256::ecdsa::{
 use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 use sha2::{Digest, Sha256};
 use std::{
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep, timeout};
@@ -94,9 +92,16 @@ const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(90);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(90);
-const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(180);
-const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
+// The signed cadence below advances roughly 300 sequential activation blocks;
+// leave deterministic headroom for healthy one-second production and view churn.
+const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(900);
+// This release-evidence fixture exercises instrumented four-validator body
+// reconstruction, validation, replay, and restart rather than throughput. Use
+// the released one-second signed cadence so the deterministic Sumeragi view
+// backoff can cover that work without changing the production timer policy.
+const TEST_BLOCK_CADENCE: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
+const CANONICAL_GENESIS_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 const ACTION_TTL: Duration = Duration::from_secs(7_200);
 struct DeterministicCryptoRng {
     seed: [u8; 32],
@@ -260,21 +265,28 @@ fn assert_exact_protocol_row(
     );
     Ok(())
 }
-fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err("query committed blocks for canonical genesis binding")?;
-    let genesis = blocks
-        .iter()
-        .filter(|block| block.header().prev_block_hash().is_none())
-        .collect::<Vec<_>>();
+async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
+    let genesis = timeout(CANONICAL_GENESIS_FETCH_TIMEOUT, async {
+        let mut blocks = client
+            .listen_for_blocks_async(NonZeroU64::MIN)
+            .await
+            .wrap_err("subscribe to canonical block replay from genesis")?;
+        blocks
+            .try_next()
+            .await
+            .wrap_err("read canonical genesis block replay")?
+            .ok_or_else(|| eyre!("canonical block replay ended before genesis"))
+    })
+    .await
+    .map_err(|_| {
+        eyre!("canonical genesis block replay exceeded {CANONICAL_GENESIS_FETCH_TIMEOUT:?}")
+    })??;
     ensure!(
-        genesis.len() == 1,
-        "FindBlocks must contain exactly one canonical genesis block, got {}",
-        genesis.len()
+        genesis.header().height().get() == 1 && genesis.header().prev_block_hash().is_none(),
+        "canonical block replay returned a non-genesis block at height {}",
+        genesis.header().height()
     );
-    let hash = *genesis[0].header().hash().as_ref();
+    let hash = *genesis.header().hash().as_ref();
     ensure!(hash != [0; 32], "canonical genesis hash must be non-zero");
     Ok(hash)
 }
@@ -435,18 +447,29 @@ fn exact_applied_transaction_visible(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<bool> {
-    let expected_hash = transaction.hash_as_entrypoint();
-    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let transactions = client
-        .query(FindTransactions::new())
-        .execute_all()
-        .wrap_err("query finalized transactions")?;
-    let Some(committed) = transactions
-        .iter()
-        .find(|committed| committed.entrypoint_hash() == &expected_hash)
+    let signed_hash = transaction.hash();
+    let Some(status) = client
+        .get_transaction_status_response_local(signed_hash)
+        .wrap_err("query exact peer-local transaction status")?
     else {
         return Ok(false);
     };
+    match (status.status.kind.as_str(), status.resolved_from.as_str()) {
+        ("Applied", "state") => {}
+        ("Rejected" | "Expired", "state") => {
+            return Err(eyre!(
+                "canonical privacy transaction reached terminal {} status",
+                status.status.kind
+            ));
+        }
+        _ => return Ok(false),
+    }
+    let expected_hash = transaction.hash_as_entrypoint();
+    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
+    let details = client
+        .get_successful_transaction_details(expected_hash)
+        .wrap_err("query exact successful transaction details")?;
+    let committed = &details.transaction;
     ensure!(
         committed.entrypoint() == &expected_entrypoint,
         "entrypoint hash matched different transaction bytes"
@@ -1432,10 +1455,31 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         .with_block_cadence(TEST_BLOCK_CADENCE)
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
-            layer.write(
-                ["nexus", "storage", "local_budget_bytes"],
-                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
-            );
+            // Keep the production handshake enabled while minimizing its supported
+            // puzzle cost so this four-peer gate isolates consensus progress.
+            layer
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                )
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
@@ -1446,7 +1490,7 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "ZK-AMS/Vega lifecycle test requires exactly four trusted validators"
         );
         let client = bounded_client(network.client());
-        let genesis_hash = canonical_genesis_hash(&client)?;
+        let genesis_hash = canonical_genesis_hash(&client).await?;
         let zk_compiled = compiled_privacy_profile_v1(ZK_AMS_PROTOCOL)
             .wrap_err("load canonical compiled ZK-AMS profile")?;
         let vega_compiled = compiled_privacy_profile_v1(VEGA_PROTOCOL)
@@ -2028,7 +2072,7 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         )
         .await?;
         ensure!(
-            canonical_genesis_hash(&restarted_client)? == genesis_hash,
+            canonical_genesis_hash(&restarted_client).await? == genesis_hash,
             "restarted validator derived a different canonical genesis hash"
         );
         Ok(())
@@ -2049,10 +2093,31 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
         .with_block_cadence(TEST_BLOCK_CADENCE)
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
-            layer.write(
-                ["nexus", "storage", "local_budget_bytes"],
-                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
-            );
+            // Keep the production handshake enabled while minimizing its supported
+            // puzzle cost so this four-peer gate isolates consensus progress.
+            layer
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                )
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
@@ -2063,7 +2128,7 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             "Vega lifecycle test requires exactly four trusted validators"
         );
         let client = bounded_client(network.client());
-        let genesis_hash = canonical_genesis_hash(&client)?;
+        let genesis_hash = canonical_genesis_hash(&client).await?;
         let compiled = compiled_privacy_profile_v1(VEGA_PROTOCOL)
             .wrap_err("load canonical compiled Vega profile")?;
         let snapshot: PrivacyCompiledProfileSnapshotV1 = compiled.into();
@@ -2287,7 +2352,7 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
         .await?;
         let restarted_client = bounded_client(restart_peer.client());
         ensure!(
-            canonical_genesis_hash(&restarted_client)? == genesis_hash,
+            canonical_genesis_hash(&restarted_client).await? == genesis_hash,
             "restarted Vega validator derived a different canonical genesis hash"
         );
         println!(

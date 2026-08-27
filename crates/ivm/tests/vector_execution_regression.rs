@@ -43,12 +43,12 @@ fn run_vadd32(max_cycles: u64) -> Vec<u64> {
         .collect()
 }
 #[test]
-fn vadd32_matches_between_ilp_and_sequential_modes() {
-    let ilp = run_vadd32(0);
-    let sequential = run_vadd32(100);
+fn vadd32_matches_with_and_without_cycle_limit() {
+    let unbounded = run_vadd32(0);
+    let bounded = run_vadd32(100);
     let expected = vec![2, 1, 3, 0];
-    assert_eq!(ilp, expected);
-    assert_eq!(sequential, expected);
+    assert_eq!(unbounded, expected);
+    assert_eq!(bounded, expected);
 }
 #[test]
 fn vadd64_rejects_odd_vector_length() {

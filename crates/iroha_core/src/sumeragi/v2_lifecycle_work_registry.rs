@@ -27,15 +27,16 @@ use super::{
     replay_authority::{
         AuthenticatedCertifiedFetchReplayOriginV1, CertifiedFetchReplayEvidenceV1,
         CertifiedServeReplayEvidencePairV1, CertifiedServeTerminalReplayAuthorityPairV1,
-        CertifiedStoreReplayEvidenceV1, DurableCertifiedFetchReplayProjectionV1,
-        DurableValidateReplayEvidenceV1, InvalidBodyReportBoundEffectPermit,
-        LifecycleReplayAuthorityV1, LocalProposalIntentReplayEvidenceV1,
-        LocalValidateReplayEvidenceV1, PreparedDurableCertifiedBodyPipelineStartupV1,
-        PreparedDurableCertifiedBodyPipelineWorkV1, PreparedLifecycleLocalProposalReadyV1,
-        RecoveredLifecycleNextWalVoteCandidateProjectionV1, RemoteProposalFetchReplayEvidenceV1,
-        RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
-        RemoteProposalValidateReplayEvidenceV1, SealedLiveWalPersistedEffectV1,
-        exact_direct_signed_admission_authority, exact_pending_certified_fetch_admission_authority,
+        CertifiedStoreReplayEvidenceV1, ColdValidateRetryOwnerClassV1,
+        DurableCertifiedFetchReplayProjectionV1, DurableValidateReplayEvidenceV1,
+        InvalidBodyReportBoundEffectPermit, LifecycleReplayAuthorityV1,
+        LocalProposalIntentReplayEvidenceV1, LocalValidateReplayEvidenceV1,
+        PreparedDurableCertifiedBodyPipelineStartupV1, PreparedDurableCertifiedBodyPipelineWorkV1,
+        PreparedLifecycleLocalProposalReadyV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+        RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
+        RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
+        SealedLiveWalPersistedEffectV1, exact_direct_signed_admission_authority,
+        exact_pending_certified_fetch_admission_authority,
     },
     schema::{AttestedReadyValidateDemand, DurablePayloadReference, DurableRecordMetadata},
     selector::{CertifiedFetchCompletionAuthority, CertifiedFetchDequeuedResponse},
@@ -1970,7 +1971,7 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
                 ) && self
                     .broadcast
                     .exactly_matches_record(broadcast_record, parent.address.owner)
-                    && parent.predecessor_is_exact_in_ledger(ledger, true)
+                    && parent.predecessor_is_exact_in_ledger(ledger, Some(self.address.ordinal))
             }
             DurableRecoveredLifecycleSignParentV1::PhaseVote(parent) => ledger
                 .authenticate_recovered_phase_signed_broadcast(&self.verified, &parent.repair)
@@ -2254,6 +2255,16 @@ impl DurableRecoveredDecisionApplyWork {
                 == PhysicalSlotId::for_capacity(LifecycleWorkClass::Apply.capacity_class(), 0)
             && self.validates_digest(installed_digest)
     }
+    /// Recover the exact non-adjacent Validate predecessor only after the
+    /// coordinator reconstitutes this carrier's complete durable body chain.
+    fn validate_predecessor_ordinal_in_coordinator(
+        &self,
+        coordinator: &LifecycleCoordinator,
+    ) -> Option<u128> {
+        let ledger = super::ledger::LifecycleLedgerV1::from_coordinator(coordinator).ok()?;
+        self.carrier
+            .validate_predecessor_ordinal_in_ledger(&ledger, self.address.ordinal)
+    }
     fn matches_current_ready_record(
         &self,
         address: ConcreteWorkAddress,
@@ -2437,6 +2448,7 @@ impl ReadyLifecycleDecisionApplyAttestationV1 {
 #[must_use = "live Apply decision cleanup must complete before capacity capture"]
 pub(in crate::sumeragi) struct LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
     dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+    validate_predecessor_ordinal: u128,
     tag: crate::sumeragi::v2_core::EventTag,
     subject: wire::BlockSubject,
     certificate: wire::QuorumCertificate,
@@ -2454,6 +2466,10 @@ impl LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
     /// Return the immutable full-coordinate live carrier key.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         self.dispatch_key
+    }
+    /// Return the exact Validate row which durably advanced into this Apply.
+    pub(in crate::sumeragi) const fn validate_predecessor_ordinal(&self) -> u128 {
+        self.validate_predecessor_ordinal
     }
     /// Return the reducer incarnation which admitted the live Apply.
     pub(in crate::sumeragi) const fn tag(&self) -> crate::sumeragi::v2_core::EventTag {
@@ -2497,6 +2513,29 @@ impl LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
             && pending.causal_lifecycle_key() == &self.pending_causal_key
             && pending.exact_effect_identity() == &self.pending_effect_identity
             && pending.candidate_statement() == self.pending_candidate_statement
+    }
+
+    /// Recheck the semantic Apply rediscovered by the periodic Decision
+    /// retransmit without substituting its distinct physical occurrence for
+    /// the original Validate-to-Apply carrier.
+    pub(in crate::sumeragi) fn exactly_matches_retransmit_apply(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        matches!(
+            effect,
+            AdapterEffect::Apply {
+                tag,
+                subject,
+                certificate,
+            } if *tag == self.tag
+                && *subject == self.subject
+                && *certificate == self.certificate
+                && certificate.phase == wire::GlobalPhase::Commit
+                && certificate.subject == self.subject
+                && certificate.execution_commitment
+                    == self.validated_receipt.execution_commitment()
+        )
     }
 }
 /// Closed service demand authenticated for one Ready recovered Sign carrier.
@@ -3220,6 +3259,59 @@ enum ConcreteLifecycleWorkKind {
 }
 
 impl ConcreteLifecycleWorkRegistry {
+    /// Return a bounded, payload-free inventory for terminal-stall diagnostics.
+    ///
+    /// Ordinals and carrier kinds are sufficient to distinguish an already
+    /// refanned recovered Broadcast from a direct pending output without
+    /// exposing message bodies, signatures, or replay material.
+    pub(super) fn finalization_entry_kind_census(&self) -> (usize, Vec<(u128, &'static str)>) {
+        let entries = self
+            .entries
+            .iter()
+            .take(32)
+            .map(|(address, work)| {
+                let kind = match &work.kind {
+                    ConcreteLifecycleWorkKind::PendingAdapter { .. } => "PendingAdapter",
+                    ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_) => {
+                        "CertifiedFetchCompletion"
+                    }
+                    ConcreteLifecycleWorkKind::DurableStoreBody(_) => "DurableStoreBody",
+                    ConcreteLifecycleWorkKind::DurableValidateBody(_) => "DurableValidateBody",
+                    ConcreteLifecycleWorkKind::DurableValidateCompletion(_) => {
+                        "DurableValidateCompletion"
+                    }
+                    ConcreteLifecycleWorkKind::DurableLiveWalApply(_) => "DurableLiveWalApply",
+                    ConcreteLifecycleWorkKind::DurableLiveWalSign(_) => "DurableLiveWalSign",
+                    ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_) => {
+                        "DurableRecoveredWalSign"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_) => {
+                        "DurableRecoveredLifecycleNextWalVoteSign"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(_) => {
+                        "DurableRecoveredWalControlSign"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_) => {
+                        "DurableRecoveredLifecycleSignedBroadcast"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(_) => {
+                        "DurableRecoveredWalDecisionFetch"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(_) => {
+                        "DurableRecoveredDecisionStore"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(_) => {
+                        "DurableRecoveredDecisionApply"
+                    }
+                    ConcreteLifecycleWorkKind::DurableCertifiedServe(_) => "DurableCertifiedServe",
+                    ConcreteLifecycleWorkKind::DurableProducerTurn(_) => "DurableProducerTurn",
+                };
+                (address.ordinal, kind)
+            })
+            .collect();
+        (self.entries.len(), entries)
+    }
+
     /// Project every exact executable Store publication retained by the
     /// authenticated registry for finalized rollover cross-checking.
     pub(super) fn published_lifecycle_store_retry_census(
@@ -3299,8 +3391,8 @@ impl ConcreteLifecycleWorkRegistry {
         })
     }
 
-    /// Borrow every exact durable Validate row whose executable lifecycle
-    /// owner was already published before process restart.
+    /// Borrow every exact durable Validate row whose direct Store-successor
+    /// lifecycle owner was already published before process restart.
     pub(super) fn recovered_published_validate_retry_markers(
         &self,
     ) -> impl Iterator<
@@ -3315,12 +3407,15 @@ impl ConcreteLifecycleWorkRegistry {
             let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
                 return None;
             };
-            work.validate_exact().then_some((
-                &validate.effect,
-                &validate.pending,
-                &validate.durable_receipt,
-                address.ordinal,
-            ))
+            (work.validate_exact()
+                && validate.replay_evidence.cold_retry_owner_class()
+                    == ColdValidateRetryOwnerClassV1::PublishedStoreSuccessor)
+                .then_some((
+                    &validate.effect,
+                    &validate.pending,
+                    &validate.durable_receipt,
+                    address.ordinal,
+                ))
         })
     }
 }

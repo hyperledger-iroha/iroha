@@ -823,10 +823,66 @@ def device_attestation_governance_source_errors(texts: dict[str, str]) -> list[s
    r"_x509_extensions\(extension_payload\)\.get\(oid_value\)"),
   "strict bounded Android certificate DER and serial parsing",
  )
- rq(
-  al, DLS, e,
-  "evaluation_time_ms=time.time_ns() // 1_000_000,",
- )
+ try:
+  lab_tree = ast.parse(al)
+ except SyntaxError:
+  lab_tree = None
+ lab_functions = [] if lab_tree is None else [
+  node for node in lab_tree.body
+  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+  and node.name == "_validate_android_attestation_certificate_chain"
+ ]
+ single_clock_chain_validation = False
+ if len(lab_functions) == 1:
+  lab_function = lab_functions[0]
+  outer_tries = [node for node in lab_function.body if isinstance(node, ast.Try)]
+  expected_prefix = ast.parse(
+   'evaluation_time_ms = time.time_ns() // 1_000_000\n'
+   'status_receipt = authority["attestation_status_capture_receipt"]\n'
+   'status_snapshot = status_receipt["snapshot"]\n'
+   'fresh_until_ms = status_receipt["payload"]["fresh_until_ms"]\n'
+   'response_date_ms = status_snapshot["response_date_ms"]\n'
+   'if (not isinstance(response_date_ms, int) or '
+   'not isinstance(fresh_until_ms, int) or '
+   'evaluation_time_ms < response_date_ms or '
+   'evaluation_time_ms >= fresh_until_ms):\n'
+   ' raise ValueError("Android attestation status capture is stale during chain validation")\n'
+  ).body
+  expected_call = ast.parse(
+   '_validate_android_attestation_certificate_time_profile('
+   'certificates, evaluation_time_ms=evaluation_time_ms)'
+  ).body[0]
+  dump = lambda node: ast.dump(node, include_attributes=False)
+  validation_calls = [
+   node for node in ast.walk(lab_function)
+   if isinstance(node, ast.Call)
+   and isinstance(node.func, ast.Name)
+   and node.func.id == "_validate_android_attestation_certificate_time_profile"
+  ]
+  clock_calls = [
+   node for node in ast.walk(lab_function)
+   if isinstance(node, ast.Call)
+   and isinstance(node.func, ast.Attribute)
+   and isinstance(node.func.value, ast.Name)
+   and node.func.value.id == "time" and node.func.attr == "time_ns"
+  ]
+  clock_stores = [
+   node for node in ast.walk(lab_function)
+   if isinstance(node, ast.Name) and node.id == "evaluation_time_ms"
+   and isinstance(node.ctx, ast.Store)
+  ]
+  if len(outer_tries) == len(validation_calls) == len(clock_calls) == len(clock_stores) == 1:
+   body = outer_tries[0].body
+   direct_calls = [index for index, node in enumerate(body) if dump(node) == dump(expected_call)]
+   single_clock_chain_validation = (
+    len(body) >= len(expected_prefix)
+    and [dump(node) for node in body[:len(expected_prefix)]]
+        == [dump(node) for node in expected_prefix]
+    and len(direct_calls) == 1
+    and direct_calls[0] >= len(expected_prefix)
+   )
+ if not single_clock_chain_validation:
+  e.append(f"{DLS}: missing single-clock Android status freshness and certificate-time validation")
  rp(
   cert_fixtures,
   ANDROID_CERT_FIX,

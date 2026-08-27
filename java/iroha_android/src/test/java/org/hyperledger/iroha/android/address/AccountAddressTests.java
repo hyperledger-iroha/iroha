@@ -16,8 +16,11 @@ import org.hyperledger.iroha.android.client.IdentifierPolicySummary;
 import org.hyperledger.iroha.android.client.RamLfeJsonParser;
 import org.hyperledger.iroha.android.client.RamLfeProgramPolicySummary;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.android.crypto.MlDsaPublicKey;
+import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
 import org.hyperledger.iroha.android.testing.SimpleJson;
 import org.hyperledger.iroha.android.tx.MultisigSignature;
+import org.hyperledger.iroha.norito.Varint;
 
 public final class AccountAddressTests {
 
@@ -44,6 +47,8 @@ public final class AccountAddressTests {
     i105RejectsInvalidCharacters();
     curveSupportDefaults();
     curveSupportConfigurationToggle();
+    protocolMlDsa65AliasesAreExactAndCaseInsensitive();
+    mlDsa65KeyShapeAndWireMatrix();
     fullCryptoCurveRegistry();
     curveAlgorithmAliasesRejectBlankAndPaddedLabels();
     curveAlgorithmAliasesRejectControlsAndUnicodeConfusables();
@@ -411,6 +416,18 @@ public final class AccountAddressTests {
     throw new AssertionError(name + ": invalid Ed25519 public key was encoded");
   }
 
+  private static void expectInvalidMlDsaKey(
+      final String name, final CheckedRunnable action) throws Exception {
+    try {
+      action.run();
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("ML-DSA-65")
+          : name + ": unexpected ML-DSA key error " + ex.getMessage();
+      return;
+    }
+    throw new AssertionError(name + ": invalid ML-DSA-65 public key was accepted");
+  }
+
   private static void expectInvalidPublicKeyLiteral(
       final String name, final CheckedRunnable action) throws Exception {
     try {
@@ -648,7 +665,7 @@ public final class AccountAddressTests {
   }
 
   private static void curveSupportConfigurationToggle() throws Exception {
-    final byte[] key = new byte[32];
+    final byte[] key = nonzeroMlDsaKey(MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH);
     AccountAddress.configureCurveSupport(
         AccountAddress.CurveSupportConfig.builder().allowMlDsa(true).build());
     final AccountAddress address = AccountAddress.fromAccount(key, "ml-dsa");
@@ -656,6 +673,216 @@ public final class AccountAddressTests {
     assert Arrays.equals(address.canonicalBytes(), roundTripped.canonicalBytes())
         : "ML-DSA enablement round-trip mismatch";
     AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
+  }
+
+  private static void protocolMlDsa65AliasesAreExactAndCaseInsensitive() throws Exception {
+    final byte[] key = nonzeroMlDsaKey(MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH);
+    AccountAddress.configureCurveSupport(
+        AccountAddress.CurveSupportConfig.builder().allowMlDsa(true).build());
+    try {
+      for (final String algorithm :
+          new String[] {
+            "ml-dsa",
+            "mldsa",
+            "ml_dsa",
+            "mldsa65",
+            "MLDSA65",
+            "ml-dsa-65",
+            "ML-DSA-65",
+            "ml_dsa_65",
+            "ML_DSA_65",
+            "ml_dsa-65",
+            "ML_DSA-65",
+          }) {
+        final AccountAddress address = AccountAddress.fromAccount(key, algorithm);
+        assert address
+                .singleKeyPayload()
+                .orElseThrow(() -> new IllegalStateException("single-key payload missing"))
+                .curveId()
+            == 0x02
+            : "expected ML-DSA curve for " + algorithm;
+      }
+
+      for (final String algorithm :
+          new String[] {
+            "mldsa44",
+            "ml-dsa-44",
+            "ml_dsa_44",
+            "ml_dsa-44",
+            "mldsa87",
+            "ml-dsa-87",
+            "ml_dsa_87",
+            "ml_dsa-87",
+            "ml-dsa-\uFF16\uFF15",
+            "ml\uFF0Ddsa-65",
+          }) {
+        boolean threw = false;
+        try {
+          AccountAddress.fromAccount(key, algorithm);
+        } catch (final AccountAddress.AccountAddressException ex) {
+          threw =
+              ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM;
+        }
+        assert threw : "expected unsupported ML-DSA alias for " + algorithm;
+      }
+    } finally {
+      AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
+    }
+  }
+
+  private static void mlDsa65KeyShapeAndWireMatrix() throws Exception {
+    final byte[] valid = nonzeroMlDsaKey(MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH);
+    assert MlDsaPublicKeyAdmission.isValid(valid) : "valid ML-DSA-65 key rejected";
+    assert Arrays.equals(valid, new MlDsaPublicKey(valid).getEncoded())
+        : "ML-DSA public-key wrapper changed valid key bytes";
+
+    AccountAddress.configureCurveSupport(
+        AccountAddress.CurveSupportConfig.builder().allowMlDsa(true).build());
+    try {
+      final AccountAddress address = AccountAddress.fromAccount(valid, "ml-dsa-65");
+      final byte[] canonical = address.canonicalBytes();
+      assert (canonical[0] & 0xFF) == 0x02
+          : "single-key construction must emit the canonical class-0 header";
+      assert (canonical[1] & 0xFF) == 0x02
+          : "ML-DSA-65 single-key address must use the extended controller tag";
+      assert (canonical[2] & 0xFF) == 0x02 : "ML-DSA-65 curve id mismatch";
+      assert (((canonical[3] & 0xFF) << 8) | (canonical[4] & 0xFF)) == valid.length
+          : "ML-DSA-65 extended length mismatch";
+      final AccountAddress canonicalRoundTrip = AccountAddress.fromCanonicalBytes(canonical);
+      assert Arrays.equals(canonical, canonicalRoundTrip.canonicalBytes())
+          : "extended canonical address did not round-trip";
+      assert Arrays.equals(
+              valid,
+              canonicalRoundTrip
+                  .singleKeyPayload()
+                  .orElseThrow(() -> new IllegalStateException("single-key payload missing"))
+                  .publicKey())
+          : "extended canonical address changed ML-DSA-65 key bytes";
+      final byte[] mismatchedExtendedClass = Arrays.copyOf(canonical, canonical.length);
+      mismatchedExtendedClass[0] = 0x0A;
+      expectAddressError(
+          "extended single-key controller under multisig address class",
+          AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          () -> AccountAddress.fromCanonicalBytes(mismatchedExtendedClass));
+
+      final byte[] shortSingleCanonical =
+          AccountAddress.fromAccount(validEd25519Key(), "ed25519").canonicalBytes();
+      shortSingleCanonical[0] = 0x0A;
+      expectAddressError(
+          "short single-key controller under multisig address class",
+          AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          () -> AccountAddress.fromCanonicalBytes(shortSingleCanonical));
+
+      final String i105 = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      final AccountAddress i105RoundTrip =
+          AccountAddress.fromI105(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      assert Arrays.equals(canonical, i105RoundTrip.canonicalBytes())
+          : "extended ML-DSA-65 I105 address did not round-trip";
+      assert i105.equals(i105RoundTrip.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT))
+          : "extended ML-DSA-65 I105 address was not canonical";
+
+      final String literal = PublicKeyCodec.encodePublicKeyMultihash(0x02, valid);
+      final PublicKeyCodec.PublicKeyPayload literalPayload =
+          Objects.requireNonNull(PublicKeyCodec.decodePublicKeyLiteral("ml-dsa:" + literal));
+      assert literalPayload.curveId() == 0x02;
+      assert Arrays.equals(valid, literalPayload.keyBytes());
+      final byte[] compact = PublicKeyCodec.compactPublicKeyPayload(0x02, valid);
+      final PublicKeyCodec.PublicKeyPayload compactPayload =
+          Objects.requireNonNull(PublicKeyCodec.decodeCompactPublicKeyPayload(compact));
+      assert compact[0] == 4 : "ML-DSA compact algorithm tag mismatch";
+      assert Arrays.equals(valid, compactPayload.keyBytes());
+
+      final MultisigSignature directSignature =
+          MultisigSignature.fromCurveId(0x02, valid, new byte[] {0x01});
+      final MultisigSignature literalSignature =
+          MultisigSignature.fromPublicKeyLiteral(literal, new byte[] {0x02});
+      assert Arrays.equals(valid, directSignature.publicKey());
+      assert Arrays.equals(valid, literalSignature.publicKey());
+
+      final AccountAddress multisig =
+          AccountAddress.fromMultisigPolicy(mlDsaMultisigPolicy(valid));
+      assert (multisig.canonicalBytes()[0] & 0xFF) == 0x0A
+          : "multisig construction must emit the canonical class-1 header";
+      final AccountAddress decodedMultisig =
+          AccountAddress.fromCanonicalBytes(multisig.canonicalBytes());
+      assert Arrays.equals(multisig.canonicalBytes(), decodedMultisig.canonicalBytes())
+          : "ML-DSA multisig policy did not round-trip";
+      assert Arrays.equals(
+              valid,
+              decodedMultisig
+                  .multisigPolicyPayload()
+                  .orElseThrow(() -> new IllegalStateException("multisig payload missing"))
+                  .members()
+                  .get(0)
+                  .publicKey())
+          : "ML-DSA multisig policy changed member key bytes";
+      final byte[] mismatchedMultisigClass = multisig.canonicalBytes();
+      mismatchedMultisigClass[0] = 0x02;
+      expectAddressError(
+          "multisig controller under single-key address class",
+          AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          () -> AccountAddress.fromCanonicalBytes(mismatchedMultisigClass));
+
+      final String[] invalidNames = {
+        "empty", "32", "1312", "1951", "1953", "2592", "all-zero"
+      };
+      final byte[][] invalidKeys = {
+        new byte[0],
+        nonzeroMlDsaKey(32),
+        nonzeroMlDsaKey(1312),
+        nonzeroMlDsaKey(1951),
+        nonzeroMlDsaKey(1953),
+        nonzeroMlDsaKey(2592),
+        new byte[MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH],
+      };
+      for (int index = 0; index < invalidKeys.length; index++) {
+        final String name = "ML-DSA-65 " + invalidNames[index];
+        final byte[] invalid = invalidKeys[index];
+        assert !MlDsaPublicKeyAdmission.isValid(invalid) : name + ": validator accepted key";
+        expectInvalidMlDsaKey(name + " wrapper", () -> new MlDsaPublicKey(invalid));
+        expectInvalidPublicKey(name + " address", () -> AccountAddress.fromAccount(invalid, "ml-dsa"));
+        expectInvalidPublicKey(
+            name + " multisig construction",
+            () -> AccountAddress.fromMultisigPolicy(mlDsaMultisigPolicy(invalid)));
+
+        final int canonicalTag = invalid.length <= 0xFF ? 0x00 : 0x02;
+        expectInvalidPublicKey(
+            name + " canonical decode",
+            () -> AccountAddress.fromCanonicalBytes(singleMlDsaCanonical(canonicalTag, invalid)));
+        expectInvalidPublicKey(
+            name + " multisig decode",
+            () -> AccountAddress.fromCanonicalBytes(multisigMlDsaCanonical(invalid)));
+
+        expectInvalidMlDsaKey(
+            name + " literal encode",
+            () -> PublicKeyCodec.encodePublicKeyMultihash(0x02, invalid));
+        expectInvalidMlDsaKey(
+            name + " compact encode",
+            () -> PublicKeyCodec.compactPublicKeyPayload(0x02, invalid));
+        assert PublicKeyCodec.decodePublicKeyLiteral(rawMlDsaLiteral(invalid)) == null
+            : name + ": literal decoder accepted key";
+        assert PublicKeyCodec.decodeCompactPublicKeyPayload(rawMlDsaCompact(invalid)) == null
+            : name + ": compact decoder accepted key";
+        expectInvalidMlDsaKey(
+            name + " multisig signature",
+            () -> MultisigSignature.fromCurveId(0x02, invalid, new byte[] {0x01}));
+      }
+
+      for (final int shortExtendedLength : new int[] {0, 32, 255}) {
+        expectAddressError(
+            "short extended ML-DSA key length " + shortExtendedLength,
+            AccountAddress.AccountAddressErrorCode.INVALID_LENGTH,
+            () ->
+                AccountAddress.fromCanonicalBytes(
+                    singleMlDsaCanonical(
+                        0x02, nonzeroMlDsaKey(shortExtendedLength))));
+      }
+      expectInvalidPublicKey(
+          "long ML-DSA key under short controller tag",
+          () -> AccountAddress.fromCanonicalBytes(singleMlDsaCanonical(0x00, valid)));
+    } finally {
+      AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
+    }
   }
 
   private static void fullCryptoCurveRegistry() throws Exception {
@@ -802,6 +1029,82 @@ public final class AccountAddressTests {
 
   private static byte[] validEd25519Key() {
     return decodeHex(VALID_ED25519_PUBLIC_KEY_HEX);
+  }
+
+  private static byte[] nonzeroMlDsaKey(final int length) {
+    final byte[] key = new byte[length];
+    Arrays.fill(key, (byte) 0x5A);
+    return key;
+  }
+
+  private static AccountAddress.MultisigPolicyPayload mlDsaMultisigPolicy(
+      final byte[] publicKey) {
+    return AccountAddress.MultisigPolicyPayload.of(
+        1,
+        1,
+        Collections.singletonList(
+            AccountAddress.MultisigMemberPayload.of(0x02, 1, publicKey)));
+  }
+
+  private static byte[] singleMlDsaCanonical(final int tag, final byte[] publicKey) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(0x02);
+    out.write(tag);
+    out.write(0x02);
+    if (tag == 0x02) {
+      out.write((publicKey.length >>> 8) & 0xFF);
+      out.write(publicKey.length & 0xFF);
+    } else if (tag == 0x00) {
+      out.write(publicKey.length & 0xFF);
+    } else {
+      throw new IllegalArgumentException("unsupported single-key controller tag");
+    }
+    out.write(publicKey, 0, publicKey.length);
+    return out.toByteArray();
+  }
+
+  private static byte[] multisigMlDsaCanonical(final byte[] publicKey) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(0x0A);
+    out.write(0x01);
+    out.write(0x01);
+    out.write(0x00);
+    out.write(0x01);
+    out.write(0x00);
+    out.write(0x01);
+    out.write(0x02);
+    out.write(0x00);
+    out.write(0x01);
+    out.write((publicKey.length >>> 8) & 0xFF);
+    out.write(publicKey.length & 0xFF);
+    out.write(publicKey, 0, publicKey.length);
+    return out.toByteArray();
+  }
+
+  private static byte[] rawMlDsaCompact(final byte[] publicKey) {
+    final byte[] compact = new byte[1 + publicKey.length];
+    compact[0] = 4;
+    System.arraycopy(publicKey, 0, compact, 1, publicKey.length);
+    return compact;
+  }
+
+  private static String rawMlDsaLiteral(final byte[] publicKey) {
+    final byte[] code = Varint.encode(0xEEL);
+    final byte[] length = Varint.encode(publicKey.length);
+    final StringBuilder literal =
+        new StringBuilder((code.length + length.length + publicKey.length) * 2);
+    appendHex(literal, code);
+    appendHex(literal, length);
+    appendHex(literal, publicKey);
+    return literal.toString();
+  }
+
+  private static void appendHex(final StringBuilder output, final byte[] bytes) {
+    final char[] digits = "0123456789abcdef".toCharArray();
+    for (final byte value : bytes) {
+      output.append(digits[(value >>> 4) & 0x0F]);
+      output.append(digits[value & 0x0F]);
+    }
   }
 
   private static byte[] decodeHex(final String hex) {

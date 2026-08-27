@@ -658,8 +658,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
             trust_penalty_unknown_peer: defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
@@ -1207,7 +1205,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 min_update_spacing_ms: defaults::oracle::twitter_binding_min_update_spacing_ms(),
             },
         },
-        hijiri: A::Hijiri::new(None),
         fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring::new(
             defaults::fraud_monitoring::ENABLED,
             Vec::new(),

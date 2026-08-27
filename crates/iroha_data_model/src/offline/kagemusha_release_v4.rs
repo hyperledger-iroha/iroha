@@ -1448,6 +1448,9 @@ macro_rules! impl_kagemusha_recursive_spend_release_activation {
                     || record.commitment != expected_commitment
                     || u64::from(record.vk_len) != key_len
                     || record.max_proof_bytes != manifest.max_proof_bytes
+                    || record.gas_schedule_id.is_some()
+                    || record.metadata_uri_cid.is_some()
+                    || record.vk_bytes_cid.is_some()
                     || record.activation_height != Some(manifest.activation_height)
                     || record.withdraw_height.is_some()
                     || record.status != ConfidentialStatus::Active

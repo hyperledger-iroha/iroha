@@ -199,8 +199,14 @@ class SccpResourceLimits:
     max_bls_aggregate_checks_per_block: int
     max_bls_signer_contributions_per_transaction: int
     max_bls_signer_contributions_per_block: int
+    max_ed25519_signature_checks_per_transaction: int
+    max_ed25519_signature_checks_per_block: int
+    max_ed25519_validator_key_checks_per_transaction: int
+    max_ed25519_validator_key_checks_per_block: int
     max_bn254_pairing_checks_per_transaction: int
     max_bn254_pairing_checks_per_block: int
+    max_bls12_381_pairing_checks_per_transaction: int
+    max_bls12_381_pairing_checks_per_block: int
 
 
 @dataclass(frozen=True)
@@ -311,6 +317,13 @@ def _text(value: Any, label: str, maximum_bytes: int = 4096) -> str:
     if len(value.encode("utf-8")) > maximum_bytes:
         raise ValueError(f"{label} exceeds its byte-size bound")
     return value
+
+
+def _optional_text_field(
+    record: Mapping[str, Any], field: str, label: str
+) -> Optional[str]:
+    value = record.get(field)
+    return None if value is None else _text(value, f"{label}.{field}")
 
 
 def _integer(value: Any, label: str, minimum: int, maximum: int = (1 << 63) - 1) -> int:
@@ -897,8 +910,14 @@ def _normalize_resource_limits(value: Any) -> SccpResourceLimits:
             "max_bls_aggregate_checks_per_block",
             "max_bls_signer_contributions_per_transaction",
             "max_bls_signer_contributions_per_block",
+            "max_ed25519_signature_checks_per_transaction",
+            "max_ed25519_signature_checks_per_block",
+            "max_ed25519_validator_key_checks_per_transaction",
+            "max_ed25519_validator_key_checks_per_block",
             "max_bn254_pairing_checks_per_transaction",
             "max_bn254_pairing_checks_per_block",
+            "max_bls12_381_pairing_checks_per_transaction",
+            "max_bls12_381_pairing_checks_per_block",
         }
     )
     byte_fields = frozenset(
@@ -963,8 +982,20 @@ def _normalize_resource_limits(value: Any) -> SccpResourceLimits:
             limits.max_bls_signer_contributions_per_block,
         ),
         (
+            limits.max_ed25519_signature_checks_per_transaction,
+            limits.max_ed25519_signature_checks_per_block,
+        ),
+        (
+            limits.max_ed25519_validator_key_checks_per_transaction,
+            limits.max_ed25519_validator_key_checks_per_block,
+        ),
+        (
             limits.max_bn254_pairing_checks_per_transaction,
             limits.max_bn254_pairing_checks_per_block,
+        ),
+        (
+            limits.max_bls12_381_pairing_checks_per_transaction,
+            limits.max_bls12_381_pairing_checks_per_block,
         ),
     )
     if any(transaction > block for transaction, block in ordered_pairs):
@@ -1484,7 +1515,7 @@ def normalize_sccp_registry(value: Any) -> SccpRegistry:
                 lane_live_route_count += 1
                 live_route_count += 1
             if cutoff is not None:
-                anchor_index = next(
+                cutoff_anchor_index = next(
                     (
                         index
                         for index, anchor in enumerate(native_anchors)
@@ -1493,9 +1524,9 @@ def normalize_sccp_registry(value: Any) -> SccpRegistry:
                     None,
                 )
                 if (
-                    anchor_index is None
-                    or anchor_index + 1 >= len(native_anchors)
-                    or native_anchors[anchor_index + 1][2] != cutoff[1]
+                    cutoff_anchor_index is None
+                    or cutoff_anchor_index + 1 >= len(native_anchors)
+                    or native_anchors[cutoff_anchor_index + 1][2] != cutoff[1]
                 ):
                     raise ValueError(
                         f"{label}.routes[{route_index}].inbound_finality_cutoff "
@@ -1670,9 +1701,6 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
         if _integer(record["target_domain"], f"{label}.target_domain", 1, 5) != target[2]:
             raise ValueError(f"{label} profile and domain fields disagree")
 
-        def optional_text(field: str) -> Optional[str]:
-            return None if record.get(field) is None else _text(record[field], f"{label}.{field}")
-
         amount = _unsigned_decimal(record["amount"], f"{label}.amount", _MAX_U128, positive=True)
         destination_binding_hash = _lower_hex(
             record["destination_binding_hash"],
@@ -1691,9 +1719,9 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
         payload_projection = _payload_projection(
             record["payload_projection"], target[2], f"{label}.payload_projection"
         )
-        asset_id = optional_text("asset_id")
-        route_id = optional_text("route_id")
-        recipient = optional_text("recipient")
+        asset_id = _optional_text_field(record, "asset_id", label)
+        route_id = _optional_text_field(record, "route_id", label)
+        recipient = _optional_text_field(record, "recipient", label)
         transfer_projection = payload_projection["Transfer"]
         if (
             (

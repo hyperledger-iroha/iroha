@@ -8,7 +8,11 @@ const EXACT_JSON_MEDIA_TYPE_PATTERN =
   /^[ \t]*application\/json(?:[ \t]*;[ \t]*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:[!#$%&'*+\-.^_`|~0-9A-Za-z]+|"(?:[ \t!#-\[\]-~\u0080-\u00ff]|\\[ \t!-~\u0080-\u00ff])*"))*[ \t]*$/i;
 
 export function isExactJsonMediaType(value) {
-  return typeof value === "string" && EXACT_JSON_MEDIA_TYPE_PATTERN.test(value);
+  return (
+    typeof value === "string" &&
+    !value.includes(",") &&
+    EXACT_JSON_MEDIA_TYPE_PATTERN.test(value)
+  );
 }
 
 /**

@@ -837,10 +837,12 @@ impl TaikaiCacheStatsSnapshot {
 pub struct TaikaiCacheInsertOutcome {
     pub inserted_into: Vec<CacheTierKind>,
     pub evicted: Vec<CacheEviction>,
+    inserted_bytes: Vec<(CacheTierKind, u64)>,
 }
 impl TaikaiCacheInsertOutcome {
-    fn record_insert(&mut self, tier: CacheTierKind) {
+    fn record_insert(&mut self, tier: CacheTierKind, bytes: u64) {
         self.inserted_into.push(tier);
+        self.inserted_bytes.push((tier, bytes));
     }
     fn record_capacity_evictions(
         &mut self,
@@ -967,7 +969,7 @@ impl TaikaiCache {
             .map(|(key, segment)| (key, segment, true))
             .collect();
         if inserted {
-            outcome.record_insert(CacheTierKind::Hot);
+            outcome.record_insert(CacheTierKind::Hot, segment.size_bytes());
             self.stats.record_insert(CacheTierKind::Hot);
         } else if lowest_target != CacheTierKind::Hot {
             let key = segment.key();
@@ -989,7 +991,7 @@ impl TaikaiCache {
             let mut next_demote =
                 outcome.record_capacity_evictions(CacheTierKind::Warm, warm_demoted);
             if warm_inserted {
-                outcome.record_insert(CacheTierKind::Warm);
+                outcome.record_insert(CacheTierKind::Warm, demoted_segment.size_bytes());
                 self.stats.record_insert(CacheTierKind::Warm);
             }
             if !warm_inserted && may_fall_to_cold && !self.warm.entries.contains_key(&key) {
@@ -1004,12 +1006,12 @@ impl TaikaiCache {
                 outcome.record_expirations(CacheTierKind::Cold, cold_expired);
                 let _ = outcome.record_capacity_evictions(CacheTierKind::Cold, cold_demoted);
                 if cold_inserted {
-                    outcome.record_insert(CacheTierKind::Cold);
+                    outcome.record_insert(CacheTierKind::Cold, cold_segment.size_bytes());
                     self.stats.record_insert(CacheTierKind::Cold);
                 }
             }
         }
-        record_taikai_cache_insert_metrics_with(metrics, &segment, &outcome);
+        record_taikai_cache_insert_metrics_with(metrics, &outcome);
         for eviction in &outcome.evicted {
             self.stats.record_eviction(eviction.from, eviction.reason);
         }
@@ -1759,17 +1761,12 @@ impl TaikaiCacheHandle {
         Ok(queue.fail_at(ticket, Instant::now()))
     }
 }
-fn record_taikai_cache_insert_metrics_with(
-    metrics: &Metrics,
-    segment: &Arc<CachedSegment>,
-    outcome: &TaikaiCacheInsertOutcome,
-) {
+fn record_taikai_cache_insert_metrics_with(metrics: &Metrics, outcome: &TaikaiCacheInsertOutcome) {
     if outcome.inserted_into.is_empty() && outcome.evicted.is_empty() {
         return;
     }
-    let bytes = segment.size_bytes();
-    for tier in &outcome.inserted_into {
-        metrics.record_taikai_cache_insert(tier.label(), bytes);
+    for (tier, bytes) in &outcome.inserted_bytes {
+        metrics.record_taikai_cache_insert(tier.label(), *bytes);
     }
     for eviction in &outcome.evicted {
         metrics.record_taikai_cache_eviction(eviction.from.label(), eviction.reason.label());
@@ -3126,6 +3123,52 @@ mod tests {
                 .get(),
             1,
             "the isolated metrics sink must still record the cold hit"
+        );
+    }
+    #[test]
+    fn demotion_insert_metrics_use_each_inserted_segments_size() {
+        let mut cache = TaikaiCache::new(TaikaiCacheConfig {
+            hot_capacity_bytes: 8,
+            hot_retention: Duration::from_secs(10),
+            warm_capacity_bytes: 16,
+            warm_retention: Duration::from_mins(10),
+            cold_capacity_bytes: 32,
+            cold_retention: Duration::from_hours(1),
+            qos: QosConfig::balanced(),
+            reliability: ReliabilityTuning::default(),
+        });
+        let now = Instant::now();
+        let small = Arc::new(dummy_segment(6, 4, QosClass::Standard));
+        let large = Arc::new(dummy_segment(7, 8, QosClass::Standard));
+        let metrics = Metrics::default();
+
+        cache.insert_shared_through(small, now, CacheTierKind::Cold, &metrics);
+        let outcome = cache.insert_shared_through(
+            large,
+            now + Duration::from_millis(1),
+            CacheTierKind::Cold,
+            &metrics,
+        );
+
+        assert_eq!(
+            outcome.inserted_into,
+            vec![CacheTierKind::Hot, CacheTierKind::Warm]
+        );
+        assert_eq!(
+            metrics
+                .sorafs_taikai_cache_bytes_total
+                .with_label_values(&["insert", "hot"])
+                .get(),
+            12,
+            "hot telemetry must include the 4-byte and 8-byte direct inserts"
+        );
+        assert_eq!(
+            metrics
+                .sorafs_taikai_cache_bytes_total
+                .with_label_values(&["insert", "warm"])
+                .get(),
+            4,
+            "warm telemetry must use the demoted victim's actual size"
         );
     }
     #[test]

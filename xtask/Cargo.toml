@@ -60,7 +60,7 @@ iroha_telemetry = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha = { workspace = true, features = ["test-fixtures"] }
-ivm = { workspace = true, default-features = false, features = ["runtime"] }
+ivm = { workspace = true }
 norito_codegen_exporter = { path = "../tools/norito_codegen_exporter" }
 mv = { path = "../crates/mv" }
 fastpq_isi = { path = "../crates/fastpq_isi" }
