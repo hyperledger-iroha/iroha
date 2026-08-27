@@ -4410,7 +4410,6 @@ pub struct World {
     /// `SoraFS` pin manifest registry keyed by manifest digest.
     pub(crate) pin_manifests: Storage<ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by `namespace/name`.
-    #[norito(skip)]
     pub(crate) manifest_aliases: Storage<ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
     pub(crate) replication_orders: Storage<ReplicationOrderId, ReplicationOrderRecord>,
@@ -5120,7 +5119,6 @@ pub struct WorldBlock<'world> {
     /// `SoraFS` pin manifest registry keyed by manifest digest.
     pub(crate) pin_manifests: StorageBlock<'world, ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by alias identifier.
-    #[norito(skip)]
     pub(crate) manifest_aliases: StorageBlock<'world, ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
     pub(crate) replication_orders: StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord>,
@@ -38910,6 +38908,17 @@ impl State {
             warn!("emergency Fast startup deferred merge settlement replay until a Strict restart");
             Ok(())
         } else {
+            // Kura opens an authenticated configured catalog on its primary lane only.  The
+            // configured secondary lanes become authoritative in the geometry transition above,
+            // so seal their already-Complete replica claims before any later startup replay can
+            // consume the capacity required to make those claims archive-independent.
+            self.kura
+                .seal_completed_autonomous_lifecycle_replica_claims_on_startup()
+                .map_err(|err| {
+                    LaneLifecycleError::Storage(format!(
+                        "configured-lane replica claim startup seal: {err}"
+                    ))
+                })?;
             self.replay_persisted_merge_settlements().map_err(|err| {
                 LaneLifecycleError::Storage(format!("merge side-effect replay: {err}"))
             })

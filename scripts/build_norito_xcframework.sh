@@ -1816,7 +1816,11 @@ echo "[+] Removing task-owned staging intermediates before publication" >&2
 rm -rf "$STAGE_DIR"
 
 if [[ "$CI_HANDOFF_ONLY" == "1" ]]; then
+  # Pin projection leaves its task-private lock in the candidate root. The
+  # immutable handoff publishes no live writer state, so remove it before the
+  # exact two-entry root check and exclusive rename.
   rm -f "$PUBLISH_PROSPECTIVE_LOADER"
+  rm -f "$PUBLISH_ROOT/.NoritoBridge.publish.lockfile"
   run_isolated_python - "$PUBLISH_ROOT" "$CI_HANDOFF_DIR" <<'PY'
 import ctypes
 import os

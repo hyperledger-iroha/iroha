@@ -98,6 +98,20 @@ SORANET_POW_CORRIDOR_MARKERS = (
 SORANET_POW_REQUIRED_OVERRIDE = (
     '["network","soranet_handshake","pow","required"]'
 )
+PARLIAMENT_CRYPTO_WORKFLOW_MARKERS = (
+    "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: target/sora-parliament-crypto-evidence-",
+    "pytest==9.0.3",
+    "scripts/tests/check_sora_parliament_crypto_bench_test.py",
+    "IROHA_PARLIAMENT_CRYPTO_ALLOCATION_EVIDENCE_V1",
+    "cargo bench --locked -p iroha_crypto --bench parliament_crypto",
+    "parliament_crypto_allocation_budgets.json",
+    "--write-report",
+    "--verify-report",
+    "SHA256SUMS",
+    "name: sora-parliament-crypto-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+    "if-no-files-found: error",
+    "retention-days: 90",
+)
 
 
 class ContractError(AssertionError):
@@ -153,9 +167,37 @@ def validate_workflow(source: str) -> None:
         "CARGO_TARGET_DIR: target/sora-parliament-lifecycle",
         "python3 -I -S scripts/tests/sora_parliament_lifecycle_corridor_source_test.py",
         "bash ci/check_sora_parliament_lifecycle.sh",
+        *PARLIAMENT_CRYPTO_WORKFLOW_MARKERS,
     ):
         require(marker in body, f"Parliament PR job lost `{marker}`")
+    require(
+        body.count("cargo bench --locked -p iroha_crypto --bench parliament_crypto") == 2,
+        "Parliament crypto evidence needs one allocation and one Criterion invocation",
+    )
+    for marker, count in (
+        ("parliament_crypto_allocation_budgets.json", 3),
+        ("SHA256SUMS", 3),
+        ("if-no-files-found: error", 2),
+    ):
+        require(
+            body.count(marker) == count,
+            f"Parliament PR job needs exactly {count} `{marker}` occurrences",
+        )
     require("--release" not in body, "Parliament PR job must not consume release binaries")
+
+
+def mutate_parliament_workflow(source: str, marker: str) -> str:
+    """Remove one marker only from the dedicated Parliament workflow job."""
+
+    job = re.search(
+        r"(?ms)^  sora_parliament_lifecycle:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        source,
+    )
+    require(job is not None, "PR workflow does not schedule the Parliament corridor")
+    body = job.group("body")
+    require(marker in body, f"Parliament PR job does not contain `{marker}`")
+    mutated = body.replace(marker, "", 1)
+    return source[: job.start("body")] + mutated + source[job.end("body") :]
 
 
 def parliament_lifecycle_test(source: str) -> tuple[re.Match[str], str]:
@@ -536,6 +578,12 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         ):
             with self.subTest(marker=marker), self.assertRaises(ContractError):
                 validate_runner(source.replace(marker, "", 1))
+
+    def test_workflow_contract_rejects_each_removed_crypto_evidence_marker(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        for marker in PARLIAMENT_CRYPTO_WORKFLOW_MARKERS:
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_workflow(mutate_parliament_workflow(source, marker))
 
     def test_target_and_boundary_guards_remain_feature_isolated(self) -> None:
         manifest = MANIFEST.read_text(encoding="utf-8")

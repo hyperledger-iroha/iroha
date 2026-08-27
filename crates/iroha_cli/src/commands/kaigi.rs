@@ -501,6 +501,7 @@ impl KaigiCommitmentBuilder {
         })
     }
 }
+#[derive(Debug)]
 struct ParsedKaigiPrivacyArtifacts {
     commitment: Option<KaigiParticipantCommitment>,
     nullifier: Option<KaigiParticipantNullifier>,

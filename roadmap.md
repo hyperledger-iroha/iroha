@@ -344,15 +344,21 @@ Completed history lives in [`status.md`](./status.md).
   served OpenAPI as they already are from source and SDKs. Standalone referenda
   must remain explicitly separate from Parliament attempts, and automatic
   execution must remain only its non-submit-able audit outcome.
-- Add reviewed operator dashboards and alarms for stuck attempts and deadline
-  misses using the implemented aggregate-only Parliament counters/gauges;
-  qualify their restart and four-peer behavior without adding identifiers,
-  free-form labels, or private ballot material.
-- Run the bounded Parliament model and deterministic source/model contract from
-  the immutable candidate, then pass focused data-model/Core/Torii tests, the
-  legacy-codec guard, workspace tests, strict all-target Clippy, formatting, and
-  a clean signed release corridor. Bounded model checking is regression
-  evidence only and does not replace cryptographic review or multi-peer tests.
+- Review and candidate-qualify the implemented aggregate-only Parliament alert
+  rules for stuck attempts and deadline misses. Their five-rule `promtool` suite
+  is green locally; restart and four-peer behavior still require evidence
+  without identifiers, free-form labels, or private ballot material.
+- Freeze and rerun the implemented 23-case threshold-BLS/timed-OVN Criterion
+  and logical-allocation matrix from the same immutable candidate. The local
+  evidence checker and byte-identical pre-merge allocation runs establish the
+  harness contract, but do not replace fresh candidate measurements and an
+  archived sealed report.
+- Re-run the bounded Parliament model and deterministic source/model contract
+  from the immutable candidate, then pass focused data-model/Core/Torii tests,
+  the legacy-codec guard, workspace tests, strict all-target Clippy, formatting,
+  and a clean signed release corridor. The local TLC run and source/model gate
+  are green; bounded model checking remains regression evidence and does not
+  replace cryptographic review or multi-peer tests.
 
 ## ZK algorithm release qualification
 

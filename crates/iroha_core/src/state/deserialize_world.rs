@@ -6259,8 +6259,6 @@ fn parse_world(
     let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
     let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
     let account_aliases = take_required(&mut map, "account_aliases")?;
-    let account_aliases_by_account = take_required(&mut map, "account_aliases_by_account")?;
-    let account_scope_directory = take_required(&mut map, "account_scope_directory")?;
     let ram_lfe_program_policies = take_ram_lfe_program_policies(&mut map)?;
     validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
     let identifier_policies = take_required(&mut map, "identifier_policies")?;
@@ -6790,8 +6788,8 @@ fn parse_world(
         accounts,
         uaid_accounts: Storage::default(),
         account_aliases,
-        account_aliases_by_account,
-        account_scope_directory,
+        account_aliases_by_account: Storage::default(),
+        account_scope_directory: Storage::default(),
         account_scope_accounts: Storage::default(),
         opaque_uaids: Storage::default(),
         ram_lfe_program_policies,
@@ -7853,7 +7851,9 @@ fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::
 #[cfg(test)]
 mod decode_tests {
     use super::*;
+    use crate::query::store::LiveQueryStore;
     use iroha_crypto::SignatureOf;
+    use iroha_data_model::account::AccountDetails;
     use iroha_data_model::musubi::{
         MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiAliasHistoryActionV1,
         MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArtifactGovernanceStateV1,
@@ -7871,8 +7871,8 @@ mod decode_tests {
         MusubiTakedownArtifactActionV1, MusubiVerificationLockDigestV1,
     };
     use iroha_data_model::sorafs::pin_registry::{
-        ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionSignerPolicyV1,
-        ProviderIngestFinalizedAnchorV1,
+        ChunkerProfileHandle, ManifestAliasBinding, ManifestRootCid,
+        ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
     };
 
     #[test]
@@ -8731,14 +8731,30 @@ mod decode_tests {
     #[test]
     fn first_release_world_decoder_requires_every_canonical_field() {
         let encoded = json::to_json(&World::default()).expect("serialize default World");
-        let mut map = SnapshotJsonMap::parse(&encoded, "world").expect("parse default World");
-        map.remove("account_aliases")
-            .expect("canonical World contains account_aliases");
         let ivm = IVM::new(0);
         let seed = IvmSeed {
             ivm: &ivm,
             _marker: PhantomData,
         };
+
+        assert!(
+            !encoded.contains("\"account_aliases_by_account\"")
+                && !encoded.contains("\"account_scope_directory\""),
+            "derived account indexes must remain outside the canonical snapshot"
+        );
+        assert!(
+            encoded.contains("\"manifest_aliases\""),
+            "authoritative SoraFS alias records must remain in the canonical snapshot"
+        );
+        parse_world(
+            SnapshotJsonMap::parse(&encoded, "world").expect("parse default World"),
+            &seed,
+        )
+        .expect("canonical World must decode while rebuilding skipped account indexes");
+
+        let mut map = SnapshotJsonMap::parse(&encoded, "world").expect("parse default World");
+        map.remove("account_aliases")
+            .expect("canonical World contains account_aliases");
 
         let error = match parse_world(map, &seed) {
             Ok(_) => panic!("a first-release snapshot cannot default a missing World field"),
@@ -8747,6 +8763,103 @@ mod decode_tests {
         assert!(
             error.to_string().contains("account_aliases"),
             "unexpected missing-field diagnostic: {error}"
+        );
+    }
+    #[test]
+    fn canonical_state_snapshot_persists_manifest_aliases_and_rebuilds_account_indexes() {
+        let mut world = World::default();
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let alias_domain = AccountAliasDomain::new(
+            "parliament".parse().expect("account alias domain"),
+        );
+        let account_alias = AccountAlias::new(
+            "member".parse().expect("account alias label"),
+            Some(alias_domain.clone()),
+            DataSpaceId::UNIVERSAL,
+        );
+        let account_details = AccountDetails::new(
+            Metadata::default(),
+            Some(account_alias.clone()),
+            None,
+            Vec::new(),
+        );
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(account_details));
+        world
+            .account_aliases
+            .insert(account_alias.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            account_alias.clone(),
+            AccountRekeyRecord::new(account_alias.clone(), account_id.clone()),
+        );
+
+        let manifest_binding = ManifestAliasBinding {
+            name: "parliament".to_owned(),
+            namespace: "sora".to_owned(),
+            proof: vec![0xA5; 32],
+        };
+        let manifest_alias_id = ManifestAliasId::from(&manifest_binding);
+        let manifest_alias_record = ManifestAliasRecord::new(
+            manifest_binding,
+            ManifestDigest::new([0xB6; 32]),
+            account_id.clone(),
+            7,
+            19,
+        );
+        world
+            .manifest_aliases
+            .insert(manifest_alias_id.clone(), manifest_alias_record.clone());
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let encoded = json::to_json(&state).expect("serialize populated State");
+        assert!(!encoded.contains("\"account_aliases_by_account\""));
+        assert!(!encoded.contains("\"account_scope_directory\""));
+        let snapshot = json::to_value(&state).expect("serialize populated State snapshot");
+        let restored = KuraSeed {
+            kura,
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(snapshot)
+        .expect("restore populated canonical State");
+
+        assert_eq!(
+            restored
+                .world
+                .manifest_aliases
+                .view()
+                .get(&manifest_alias_id),
+            Some(&manifest_alias_record),
+            "authoritative manifest alias metadata must survive restart"
+        );
+        assert_eq!(
+            restored
+                .world
+                .account_aliases_by_account
+                .view()
+                .get(&account_id),
+            Some(&BTreeSet::from([account_alias.clone()])),
+            "the reverse alias index must be rebuilt from authoritative bindings"
+        );
+        let restored_scope = restored
+            .world
+            .account_scope_directory
+            .view()
+            .get(&account_id)
+            .cloned()
+            .expect("the account scope directory must be rebuilt");
+        assert!(
+            restored_scope.iter().any(|(dataspace, domains)| {
+                *dataspace == DataSpaceId::UNIVERSAL && domains.contains(&alias_domain)
+            }),
+            "the rebuilt account scope must retain the authoritative alias domain"
         );
     }
     #[test]

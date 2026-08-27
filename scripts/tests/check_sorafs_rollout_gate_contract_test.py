@@ -2073,12 +2073,25 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     user_puzzle = user_config.split("pub struct SoranetHandshakePuzzle", 1)[1].split(
         "impl SoranetHandshakePuzzle", 1
     )[0]
+    client_pow_summary = client_api.split("pub struct SoranetHandshakePowSummary", 1)[
+        1
+    ].split("impl From<&'_ base::SoranetPow>", 1)[0]
+    client_pow_update = client_api.split("pub struct SoranetHandshakePowUpdate", 1)[
+        1
+    ].split("impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary", 1)[0]
+    client_puzzle_update = client_api.split(
+        "pub struct SoranetHandshakePuzzleUpdate", 1
+    )[1].split("impl SoranetHandshakePuzzleUpdate", 1)[0]
 
     for stale in (
         "pow-optional",
         "pow_optional",
+        "pow-required",
+        "pow_required",
         "pow-puzzle-disable",
         "pow_puzzle_disable",
+        "pow-puzzle-enable",
+        "pow_puzzle_enable",
         "allow-sm-handshake-mismatch",
         "allow_sm_handshake_mismatch",
         "allow-sm-openssl-preview-mismatch",
@@ -2092,30 +2105,39 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "require_sm_handshake_match = Some(false)" not in into_payload
     assert "require_sm_openssl_preview_match = Some(false)" not in into_payload
 
-    assert "required: true" in actual_default_pow
+    assert "required:" not in actual_default_pow
+    assert "puzzle: SoranetPuzzle::default_const()" in actual_default_pow
     assert "signed_ticket_public_key" not in actual_config
     assert "signed_ticket_public_key_hex" not in user_config
     assert "signed_ticket_public_key_hex" not in client_api
     assert "required: bool" not in user_pow
     assert "enabled: bool" not in user_puzzle
-    assert "required: true" in user_config.split("fn parse(self) -> actual::SoranetPow", 1)[1].split(
-        "/// Puzzle configuration supplied at the user level.", 1
-    )[0]
-    assert "puzzle: Some(puzzle.parse())" in user_config.split(
+    user_pow_parse = user_config.split("fn parse(self) -> actual::SoranetPow", 1)[
+        1
+    ].split("/// Puzzle configuration supplied at the user level.", 1)[0]
+    assert "required:" not in user_pow_parse
+    assert "puzzle: puzzle.parse()" in user_config.split(
         "fn parse(self) -> actual::SoranetPow", 1
     )[1].split("/// Puzzle configuration supplied at the user level.", 1)[0]
     assert "actual::SoranetPuzzle" in user_config.split(
         "fn parse(self) -> actual::SoranetPuzzle", 1
     )[1].split("/// User-level configuration container for SoraNet privacy telemetry.", 1)[0]
+    assert "pub required:" not in client_pow_summary
+    assert "Option<SoranetHandshakePuzzleSummary>" not in client_pow_summary
+    assert "pub puzzle: SoranetHandshakePuzzleSummary" in client_pow_summary
+    assert "pub required:" not in client_pow_update
+    assert "pub enabled:" not in client_puzzle_update
 
     assert "SM handshake matching is mandatory" in apply_config_update
     assert "SM OpenSSL preview matching is mandatory" in apply_config_update
     assert "if !value" in apply_config_update
     assert "Self::apply_pow_update(&mut handshake.pow, &pow_update)?" in apply_handshake_update
     assert "-> Result<(), String>" in apply_pow_update
-    assert "PoW admission is mandatory" in apply_pow_update
-    assert "Argon2 puzzle admission is mandatory" in apply_pow_update
-    assert "pow.required = required;" in apply_pow_update
+    assert "update.required" not in apply_pow_update
+    assert "puzzle_update.enabled" not in apply_pow_update
+    assert "pow.puzzle.memory_kib" in apply_pow_update
+    assert "pow.puzzle.time_cost" in apply_pow_update
+    assert "pow.puzzle.lanes" in apply_pow_update
     assert "pow.puzzle = None" not in apply_pow_update
 
     assert "Fallback to unsigned tickets" not in peer

@@ -2978,7 +2978,9 @@ impl Kura {
     }
     /// Seal every source-authenticated Complete replica outcome before startup
     /// performs any unrelated capacity-consuming repair.
-    fn seal_completed_autonomous_lifecycle_replica_claims_on_startup(&self) -> Result<()> {
+    pub(crate) fn seal_completed_autonomous_lifecycle_replica_claims_on_startup(
+        &self,
+    ) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;

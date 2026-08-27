@@ -39158,6 +39158,30 @@ fn parliament_timed_ovn_resource_index_is_snapshot_skipped_and_rebuilt() {
 }
 
 #[test]
+fn world_block_snapshot_schema_matches_committed_world() {
+    let world = World::new();
+    let committed = norito::json::to_value(&world).expect("serialize committed world snapshot");
+    let block = world.block();
+    let staged = norito::json::to_value(&block).expect("serialize staged world snapshot");
+
+    let norito::json::Value::Object(mut committed) = committed else {
+        panic!("committed World snapshot must be an object");
+    };
+    let norito::json::Value::Object(staged) = staged else {
+        panic!("staged World snapshot must be an object");
+    };
+    assert!(
+        committed.remove("external_event_buf").is_some(),
+        "the committed-only event buffer must remain explicit"
+    );
+
+    assert_eq!(
+        staged, committed,
+        "staged and committed World serializers must expose the same canonical state"
+    );
+}
+
+#[test]
 fn global_beacon_pulse_slot_index_is_snapshot_skipped_rebuilt_and_unique() {
     let (_key_session, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         iroha_data_model::NetworkId::from_genesis_hash(

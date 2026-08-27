@@ -22,6 +22,7 @@ const UPDATED_POW_LANES: u32 = 2;
 const TEST_POW_MEMORY_KIB: u32 = 12 * 1024;
 const TEST_POW_TIME_COST: u32 = 3;
 const TEST_POW_LANES: u32 = 3;
+const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const CONFIG_APPLY_RETRY_ATTEMPTS: usize = 180;
 const CONFIG_APPLY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const CONFIG_PROPAGATION_RETRY_ATTEMPTS: usize = 600;
@@ -32,6 +33,10 @@ fn config_scenarios() -> eyre::Result<()> {
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|c| {
+            let c = c.write(
+                ["nexus", "storage", "local_budget_bytes"],
+                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+            );
             c.write(["network", "block_gossip_size"], 100)
                 .write(["queue", "capacity"], 100_000)
                 .write(["network", "soranet_handshake", "pow", "difficulty"], 6_i64)
