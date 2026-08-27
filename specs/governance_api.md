@@ -905,7 +905,10 @@ Governed `SumeragiNposParameters.reconfig.evidence_horizon_blocks` (default
 governance can cancel penalties before they apply. These are governed chain
 values, not local `[sumeragi]` configuration.
 
-VRF penalties are enforced automatically after `activation_lag_blocks` (offenders are jailed). Consensus slashing is applied only after the `slashing_delay_blocks` window unless governance cancels the penalty.
+Legacy VRF participation records and penalty effects are retired; production
+derives no VRF jail action. Automatic delayed slashing applies only to canonical
+Sumeragi-v2 equivocation evidence admitted by a prior committed block, and only
+after the `slashing_delay_blocks` window unless governance cancels the penalty.
 
 Operators and tooling can inspect the bounded audit projection through:
 
@@ -950,8 +953,9 @@ Any script that rotates <i105-account-id>s or applies slashing **must not** atte
 - Prometheus metrics export governance activity:
   - `governance_parliament_transitions_total{transition}` counts accepted
     Parliament transitions using the closed transition-kind vocabulary.
-  - `governance_parliament_no_result_total{class}` counts the seven bounded
-    public-finding/private-ballot `ParliamentNoResultKindV1` classes only.
+  - `governance_parliament_no_result_total{class}` counts the eight bounded
+    sortition/public-finding/private-ballot `ParliamentNoResultKindV1` classes
+    only.
   - `governance_parliament_attempts_by_status{status}` and
     `governance_parliament_attempts_by_stage{stage}` are recomputed from
     committed state at startup and after accepted attempt mutations. These

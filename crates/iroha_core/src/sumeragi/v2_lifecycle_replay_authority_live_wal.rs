@@ -441,7 +441,7 @@ impl SealedLiveWalPersistedEffectV1 {
     /// The work-registry Validate join is its sole production caller and keeps
     /// the receipt-bound completion private to that atomic transition.
     #[allow(clippy::result_large_err)]
-    pub(super) fn complete_exact_apply(
+    pub(in crate::sumeragi) fn complete_exact_apply(
         self,
         predecessor_effect: &AdapterEffect,
         predecessor_pending: &PendingRuntimeEffectBinding,

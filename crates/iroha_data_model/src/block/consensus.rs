@@ -1,9 +1,9 @@
 //! Norito-encoded consensus message types shared across Sumeragi implementations.
 //!
 //! These types cover shared consensus parameters and diagnostics, authenticated v2 evidence,
-//! lane-local certificates, and the retained QC/VRF projections. Global consensus messages and
-//! signed RS16 data availability live in [`super::consensus_v2`]; there is no global-v1 RBC
-//! message family.
+//! lane-local certificates, retained QC projections, and legacy VRF tombstones. Global consensus
+//! messages and signed RS16 data availability live in [`super::consensus_v2`]; there is no
+//! global-v1 RBC message family.
 use super::Header as BlockHeader;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -88,9 +88,9 @@ pub struct NposGenesisParams {
     pub epoch_length_blocks: NonZeroU64,
     /// Deterministic epoch seed for PRF-based leader and validator selection.
     pub epoch_seed: [u8; 32],
-    /// VRF commit window length in blocks.
+    /// Retained legacy VRF commit-window field; not a live message schedule.
     pub vrf_commit_window_blocks: u64,
-    /// VRF reveal window length in blocks.
+    /// Retained legacy VRF reveal-window field; not a live message schedule.
     pub vrf_reveal_window_blocks: u64,
     /// Exact bounded `3f + 1` ceiling for the next epoch committee.
     pub max_validators: u32,
@@ -3257,19 +3257,19 @@ pub struct SumeragiProposalGateStatus {
     #[norito(default)]
     pub last_successful_proposal_age_ms: u64,
 }
-/// Current `NPoS` schedule and PRF context for operator diagnostics.
+/// Current `NPoS` epoch and PRF context for operator diagnostics.
 ///
-/// Per-epoch penalty membership is exposed separately by the authoritative
-/// VRF epoch-report route rather than duplicated as process-local counters.
+/// The legacy VRF deadline fields remain in this closed wire shape but do not
+/// authorize a commit/reveal producer, penalty report, or operator route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SumeragiNposDiagnostics {
     /// Length of the active epoch in blocks.
     pub epoch_length_blocks: NonZeroU64,
-    /// VRF commit deadline offset from the epoch start.
+    /// Retained legacy VRF commit deadline offset from the epoch start.
     pub vrf_commit_deadline_offset: NonZeroU64,
-    /// VRF reveal deadline offset from the epoch start.
+    /// Retained legacy VRF reveal deadline offset from the epoch start.
     pub vrf_reveal_deadline_offset: NonZeroU64,
     /// Non-zero epoch seed used for deterministic leader and validator election.
     pub epoch_seed: [u8; 32],
@@ -3283,8 +3283,8 @@ impl SumeragiNposDiagnostics {
     ///
     /// # Errors
     ///
-    /// Returns a stable reason when the epoch seed is zero or the VRF windows
-    /// do not form a strict, in-epoch commit/reveal schedule.
+    /// Returns a stable reason when the epoch seed is zero or the retained
+    /// legacy window geometry is not strictly ordered within the epoch.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.epoch_seed == [0; 32] {
             return Err("NPoS diagnostics epoch seed must be non-zero");
@@ -4103,7 +4103,10 @@ pub struct ExecWitnessMsg {
     /// The execution witness payload.
     pub witness: ExecWitness,
 }
-/// VRF commit used by the Sumeragi epoch-randomness path.
+/// Retained legacy Sumeragi VRF commit wire type.
+///
+/// Production rejects this variant; it remains for canonical decode and
+/// historical regression fixtures.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct VrfCommit {
     /// Epoch index to which the commit applies.
@@ -4115,7 +4118,10 @@ pub struct VrfCommit {
     /// BLS signature over the canonical VRF-commit preimage.
     pub bls_sig: Vec<u8>,
 }
-/// VRF reveal used by the Sumeragi epoch-randomness path.
+/// Retained legacy Sumeragi VRF reveal wire type.
+///
+/// Production rejects this variant; it remains for canonical decode and
+/// historical regression fixtures.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct VrfReveal {
     /// Epoch index to which the reveal applies.

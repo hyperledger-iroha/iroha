@@ -313,9 +313,9 @@ mod model {
     pub struct SumeragiNposParameters {
         /// Deterministic epoch seed used for PRF-based leader and validator selection.
         pub epoch_seed: [u8; 32],
-        /// VRF commit window length in blocks.
+        /// Retained legacy VRF commit-window field; not a live message schedule.
         pub vrf_commit_window_blocks: u64,
-        /// VRF reveal window length in blocks.
+        /// Retained legacy VRF reveal-window field; not a live message schedule.
         pub vrf_reveal_window_blocks: u64,
         /// Exact bounded `3f + 1` ceiling for the next epoch committee.
         pub max_validators: u32,
@@ -365,12 +365,12 @@ mod model {
             value.validate().ok()?;
             Some(value)
         }
-        /// VRF commit window measured in blocks.
+        /// Return the retained legacy VRF commit-window field.
         #[must_use]
         pub fn vrf_commit_window_blocks(&self) -> u64 {
             self.vrf_commit_window_blocks
         }
-        /// VRF reveal window measured in blocks.
+        /// Return the retained legacy VRF reveal-window field.
         #[must_use]
         pub fn vrf_reveal_window_blocks(&self) -> u64 {
             self.vrf_reveal_window_blocks

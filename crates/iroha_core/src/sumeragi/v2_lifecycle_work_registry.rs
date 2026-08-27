@@ -9,11 +9,12 @@ use super::replay_authority::CertifiedValidateReplayEvidenceV1;
 #[cfg(test)]
 use super::{AdmissionRequest, LeaseId};
 use super::{
-    AuthenticatedLifecycleRecoveryCut, CandidateAdmission, CapacityClass, InitialLifecycleState,
-    LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase,
-    LifecycleRecord, LifecycleRound, LifecycleStage, LifecycleStageKind,
-    LifecycleValidateDispatchKeyV1, LifecycleWorkClass, OwnerId, PhysicalReplacement, PhysicalSlot,
-    PhysicalSlotId, PredecessorScope, ReadyEvent, TurnLease, WaitSource, WaitToken, authority,
+    AuthenticatedLifecycleRecoveryCut, AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+    CandidateAdmission, CapacityClass, InitialLifecycleState, LifecycleContext,
+    LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord,
+    LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleValidateDispatchKeyV1,
+    LifecycleWorkClass, OwnerId, PhysicalReplacement, PhysicalSlot, PhysicalSlotId,
+    PredecessorScope, ReadyEvent, TurnLease, WaitSource, WaitToken, authority,
     body_pipeline_transition::{
         SealedInvalidBodyReportProjection, SealedInvalidBodyReportProjectionPermit,
         SealedValidateApplyProjection, SealedValidateApplyProjectionPermit,
@@ -2293,6 +2294,9 @@ impl DurableRecoveredDecisionApplyWork {
             && digest == installed_digest
             && metadata.matches_admission(&candidate)
             && self.carrier.exactly_matches_candidate(&candidate)
+            && self
+                .carrier
+                .validates_released_terminal_in_coordinator(coordinator)
             && coordinator.key_index.get(&record.key) == Some(&record.ordinal)
             && coordinator.owner_index.get(&record.owner.causal_root()) == Some(&record.owner)
             && coordinator.ready_index.contains(&record.ordinal)
@@ -2345,6 +2349,9 @@ impl DurableRecoveredDecisionApplyWork {
             && digest == installed_digest
             && metadata.matches_admission(&candidate)
             && self.carrier.exactly_matches_candidate(&candidate)
+            && self
+                .carrier
+                .validates_released_terminal_in_coordinator(coordinator)
             && coordinator.key_index.get(&record.key) == Some(&record.ordinal)
             && coordinator.owner_index.get(&record.owner.causal_root()) == Some(&record.owner)
             && !coordinator.ready_index.contains(&record.ordinal)

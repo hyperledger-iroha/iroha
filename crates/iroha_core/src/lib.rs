@@ -2231,8 +2231,8 @@ mod tests {
         assert_eq!(v2_vrf.topic(), NetworkTopic::ConsensusSafety);
         assert_eq!(raw_network_topic(&v2_vrf), NetworkTopic::ConsensusSafety);
         assert!(
-            v2_vrf.is_outbound_allowed(),
-            "versioned VRF frames must use the authenticated v2 safety corridor"
+            !v2_vrf.is_outbound_allowed(),
+            "retired consensus-VRF frames must not enter the live outbound corridor"
         );
     }
     fn signed_kura_replica_advert_message() -> NetworkMessage {

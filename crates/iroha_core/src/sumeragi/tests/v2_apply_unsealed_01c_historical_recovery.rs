@@ -13,7 +13,8 @@ v2_apply_test!(
             block::consensus::{NativeAmxPhase, SumeragiAutonomousLaneExecutionStage},
             isi::SetKeyValue,
         };
-        let fixture = ApplyFixture::new_with_native_lane_lifecycle();
+        let fixture =
+            ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle();
         let assert_fixture_context = |stage: &str| {
             assert_eq!(
                 crate::sumeragi::v2_recovery::committed_execution_policy_hash(

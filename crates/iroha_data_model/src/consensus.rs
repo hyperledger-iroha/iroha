@@ -182,7 +182,7 @@ impl PartialOrd for NposConsensusEffects {
         Some(self.cmp(other))
     }
 }
-/// A deterministic VRF jail action.
+/// Retained legacy deterministic VRF-jail action; production rejects it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposVrfJailAction {
@@ -218,7 +218,7 @@ pub struct NposConsensusSlashAction {
     /// Amount to slash.
     pub amount: Quantity,
 }
-/// Marker that a VRF epoch's penalties were applied.
+/// Retained legacy marker for historical VRF epoch-penalty fixtures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposMarkVrfPenaltiesAppliedAction {
@@ -241,11 +241,11 @@ pub struct NposMarkConsensusEvidenceAppliedAction {
 #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub enum NposPenaltyAction {
-    /// Jail a validator for missing VRF participation requirements.
+    /// Retained legacy VRF-jail action; production rejects it.
     VrfJail(NposVrfJailAction),
     /// Slash a validator from consensus evidence.
     ConsensusSlash(NposConsensusSlashAction),
-    /// Mark a VRF epoch's penalties as applied.
+    /// Retained legacy VRF-penalty marker; production rejects it.
     MarkVrfPenaltiesApplied(NposMarkVrfPenaltiesAppliedAction),
     /// Mark a consensus evidence record's penalty as applied.
     MarkConsensusEvidenceApplied(NposMarkConsensusEvidenceAppliedAction),
@@ -779,7 +779,7 @@ pub struct FinalizedGlobalThresholdBeaconPulseV1 {
     pub pulse_id: [u8; 32],
 }
 
-/// Canonical authenticated VRF commitment retained in an epoch record.
+/// Canonical legacy VRF commitment retained for decode and historical fixtures.
 ///
 /// The signature is over the versioned Sumeragi `VrfCommit` preimage. Keeping the complete signed
 /// fields makes a persisted observation independently verifiable against the frozen chain id and
@@ -799,7 +799,7 @@ pub struct VrfCommitProof {
     /// Unsigned height at which this exact signed message was first admitted.
     pub observed_at_height: u64,
 }
-/// Canonical authenticated VRF reveal retained in an epoch record.
+/// Canonical legacy VRF reveal retained for decode and historical fixtures.
 ///
 /// The signature is over the versioned Sumeragi `VrfReveal` preimage, including the canonical VRF
 /// proof. The complete signed fields are deliberately retained instead of reconstructing evidence
@@ -820,7 +820,7 @@ pub struct VrfRevealProof {
     /// Unsigned height at which this exact signed message was first admitted.
     pub observed_at_height: u64,
 }
-/// Participation record for a validator within a VRF epoch.
+/// Retained legacy participation record for a validator within a VRF epoch.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VrfParticipantRecord {
@@ -834,14 +834,14 @@ pub struct VrfParticipantRecord {
     pub reveal: Option<[u8; 32]>,
     /// Authenticated commit message matching `signer` and `commitment`.
     ///
-    /// Older non-v2 records may omit this field; authoritative v2 validation
+    /// Older records may omit this field; historical strict-fixture validation
     /// requires it whenever `commitment` is present.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub commit_proof: Option<VrfCommitProof>,
     /// Authenticated reveal message matching `signer` and `reveal`.
     ///
-    /// Older non-v2 records may omit this field; authoritative v2 validation
+    /// Older records may omit this field; historical strict-fixture validation
     /// requires it whenever `reveal` is present.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -849,7 +849,7 @@ pub struct VrfParticipantRecord {
     /// Last block height at which this participant record was updated.
     pub last_updated_height: u64,
 }
-/// Late reveal emitted after the epoch reveal window.
+/// Retained legacy late-reveal record for historical VRF fixtures.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VrfLateRevealRecord {
@@ -867,7 +867,10 @@ pub struct VrfLateRevealRecord {
     /// Block height at which the late reveal was recorded.
     pub noted_at_height: u64,
 }
-/// Snapshot of VRF randomness state for a particular epoch.
+/// Retained legacy snapshot of the retired VRF epoch state.
+///
+/// Production consensus admits no new record and never uses one as randomness;
+/// finalized global threshold-beacon pulses are the live authority.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VrfEpochRecord {

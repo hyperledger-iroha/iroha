@@ -29,7 +29,9 @@ release qualified.
    block `H` takes effect at `H + 1`. Consequently an optional Parliament pulse
    or mandatory NPoS pulse produced from the parent state is verified against
    the key session active at its own height, not the successor pointer visible
-   after the block's transactions execute.
+   after the block's transactions execute. The retired consensus VRF
+   commit/reveal protocol and independent epoch-council records are neither
+   entropy sources nor fallbacks.
 4. The future pulse deterministically ranks primaries and alternates. Candidates
    accept or decline their own invitations under their transaction authority;
    after the fixed response window, Core derives and seals the roster. The
@@ -52,9 +54,9 @@ release qualified.
    nonempty and strictly increasing and requires
    `list.len == endorsements == quorum`. No manager can choose or finalize a
    finding. The Policy Jury, and a fresh disjoint Confirmation Jury when a
-   narrowly approved result requires one, use the private timed-OVN ballot. A
-   public finding is not a formal ballot and cannot replace a required private
-   jury result.
+   narrowly approved result requires one, must use the mandatory private
+   zero-knowledge timed-OVN ballot. A public finding is not a formal ballot and
+   cannot replace a required private jury result.
    After each endorsement, Core derives `eligible = original roster -
    authenticated absences` and `remaining = eligible - immutable
    endorsements`. If the strongest existing root plus every remaining seat is
@@ -139,7 +141,12 @@ Validation-fee policy and payout-lifecycle proposals additionally bind their
 canonical `proposal_operator` into the proposal fingerprint. Their protected
 registry authorization retains the complete Parliament certificate and its
 canonical `GovernanceCertificateId`; a standalone referendum tally is not a
-validation-fee authorization.
+validation-fee authorization. Both proposal kinds follow the same attempt,
+certification, exact-due-height enactment, and rollback-isolated terminal
+lifecycle above. The verified protected-registry projection binds the
+certification and enactment heights and requires
+`effective_from_height = enacted_at_height + 120,960`; it is not activated by a
+client finalization call or a public ballot.
 
 # Cryptographic claim boundary
 
@@ -205,6 +212,19 @@ rejects an unavailable classification once the authoritative slot exists, and
 bounds retries. Release qualification must still exercise selective withholding
 and repeated-retry bias; single-round uniformity is not sufficient evidence.
 
+Ballot presentation is a separate governance-security boundary. A July 2026
+observational DAO study reports associations between voting-power share and an
+author's selected choice, approval-oriented wording, and first-list position;
+the authors explicitly do not claim that those associations establish
+causation. Parliament removes caller-selected body order, derives all initially
+required bodies in one canonical simultaneous batch, and uses a fixed binary
+body ballot, so a proposal author cannot choose the body sequence or reorder
+ballot options. Those protocol rules do not eliminate interface framing,
+author cues, vote-visibility effects, or client rendering defects. Release
+qualification must therefore verify canonical rendering across clients and
+must not describe deterministic ordering or private opening as proof that
+human presentation bias is absent.
+
 Likewise, a replicated ledger is only the bulletin board. It does not by itself
 prove cast-as-intended, recorded-as-cast, tallied-as-recorded, client integrity,
 or ballot privacy. The V1 transcript therefore binds the exact proposal,
@@ -251,6 +271,9 @@ Research boundary reviewed through 2026-08-27:
   Beacons*](https://arxiv.org/abs/2604.04744), 6 April 2026.
 - Gaži, Quader, and Russell, [*Taming Iterative Grinding Attacks on
   Blockchain Beacons*](https://eprint.iacr.org/2025/1974), ASIACRYPT 2025.
+- Balietti, Saggese, and Strohmaier, [*Voting Biases in Decentralized
+  Autonomous Organization (DAO) Governance*](https://arxiv.org/abs/2607.09435),
+  10 July 2026.
 - Microsoft Research, [*ElectionGuard Specification
   2.1*](https://electionguard.vote/spec/).
 - Cortier, Debant, and Gaudry, [*Breaking Verifiability and Vote
@@ -280,6 +303,13 @@ mode, client finalization, or client enactment path.
   peers, including missing/invalid shares, restart, idempotent retransmission,
   mandatory NPoS boundary slots, optional Parliament demand slots, and key
   rotation.
+- Qualify canonical carrier publication and retirement on every nonproducer
+  follower. Cover an `author = false` live follower retiring a losing carrier
+  from the exact FIFO-only/no-Queue-owner state, plus strict cold-start replay
+  at the all-`ReleasePending` and partial-`Released` cuts. Require unchanged
+  Queue/FIFO journal bytes, no fabricated Queue owner, complete Kura/Queue
+  terminal cleanup, a still-live follower runner, and fail-before-mutation
+  rejection of missing or misordered FIFO evidence.
 - Qualify the implemented authenticated release-context read, bodyless local
   partial request, independently verifying multi-session custody/coordinator,
   canonical combine, ordinary `FinalizeOpenedBallot` submission tooling, and

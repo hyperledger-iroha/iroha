@@ -9,6 +9,8 @@ timed-OVN reservation admission or restore loses fail-atomic capacity checks, wh
 persisted attempt can exceed the authoritative framed-state bound, when a signed
 draft can claim a consensus-owned certificate outcome, or when the
 current specifications regress to the retired proposal-time JIT description.
+It also keeps the PR model run bound to archived copies of its exact inputs and
+to stable, source-identified result metadata.
 """
 
 from __future__ import annotations
@@ -1422,6 +1424,49 @@ def main() -> int:
                 f"{model_config_path}: {declaration!r} must appear exactly once; "
                 f"found {declaration_count}"
             )
+
+    workflow_path = ".github/workflows/pr.yml"
+    workflow = read(workflow_path)
+    formal_job = section(
+        workflow,
+        "  sumeragi_formal:\n",
+        "\n  nexus_cross_dataspace_localnet:\n",
+        workflow_path,
+    )
+    require_all(
+        workflow_path,
+        formal_job,
+        (
+            '"$invocation_root/artifacts/formal/sora_parliament/inputs"',
+            "SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR=%s",
+            'install -m 600 -- "$model_source" "$model_input"',
+            'install -m 600 -- "$config_source" "$config_input"',
+            '"schema": "iroha.sora_parliament.formal_run.v1"',
+            '"source_commit": source_commit',
+            '"jar_sha256": digest(jar_name)',
+            '"artifact_path": "inputs/SoraParliamentV1.tla"',
+            '"artifact_path": "inputs/SoraParliamentV1.cfg"',
+            '2>&1 | tee "$source_contract_log"',
+            '-config "$config_input"',
+            '"$model_input" 2>&1 | tee "$tlc_log"',
+            'printf \'%s\\n\' "$tlc_status" > "$tlc_status_path"',
+            "name: sora-parliament-formal-pr",
+            "path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/sora_parliament",
+        ),
+    )
+    for status_capture in (
+        'source_contract_status="${PIPESTATUS[0]}"',
+        'tlc_status="${PIPESTATUS[0]}"',
+    ):
+        if formal_job.count(status_capture) != 1:
+            raise RuntimeError(
+                f"{workflow_path}: Parliament formal job must contain exactly one "
+                f"{status_capture!r}"
+            )
+    if formal_job.count("name: sora-parliament-formal-pr") != 1:
+        raise RuntimeError(
+            f"{workflow_path}: Parliament formal artifact name must appear exactly once"
+        )
 
     for spec_path in ("specs/governance_pipeline.md", "specs/governance_api.md"):
         spec = read(spec_path)

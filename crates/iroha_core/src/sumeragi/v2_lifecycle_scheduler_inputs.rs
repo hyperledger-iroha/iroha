@@ -1594,7 +1594,10 @@ impl ProductionLifecycleOwnerV1 {
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
                 executor
-                    .release_live_lifecycle_validate_successor(ordinal)
+                    .release_live_lifecycle_validate_successor(
+                        ordinal,
+                        crate::sumeragi::v2_effects::LifecycleValidateRetryResolutionV1::AdvancedNoSuccessor,
+                    )
                     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 Ok(ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal })
             }
@@ -1633,7 +1636,10 @@ impl ProductionLifecycleOwnerV1 {
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
                 executor
-                    .release_live_lifecycle_validate_successor(ordinal)
+                    .release_live_lifecycle_validate_successor(
+                        ordinal,
+                        crate::sumeragi::v2_effects::LifecycleValidateRetryResolutionV1::AdvancedToSuccessor,
+                    )
                     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
                     parent_ordinal: ordinal,
@@ -1679,7 +1685,10 @@ impl ProductionLifecycleOwnerV1 {
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
                 executor
-                    .release_live_lifecycle_validate_successor(ordinal)
+                    .release_live_lifecycle_validate_successor(
+                        ordinal,
+                        crate::sumeragi::v2_effects::LifecycleValidateRetryResolutionV1::AdvancedToSuccessor,
+                    )
                     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
                     parent_ordinal: ordinal,
@@ -2780,6 +2789,17 @@ impl ProductionLifecycleOwnerV1 {
                 });
             }
         }
+        let (dispatch_key, round, subject, apply_is_authorized) = successor
+            .preliminary_retransmit_identity(attestation)
+            .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+        executor
+            .arm_live_lifecycle_validate_successor(
+                dispatch_key,
+                round,
+                subject,
+                apply_is_authorized,
+            )
+            .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
         let selected = self.dispatch_completion_requiring_ready_ordinal(
             services,
             executor,
@@ -2790,17 +2810,6 @@ impl ProductionLifecycleOwnerV1 {
             selected,
             ProductionCompletionDispatchV1::CapacityUnavailable { .. }
         ) {
-            let (dispatch_key, round, subject, apply_is_authorized) = successor
-                .preliminary_retransmit_identity(attestation)
-                .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
-            executor
-                .arm_live_lifecycle_validate_successor(
-                    dispatch_key,
-                    round,
-                    subject,
-                    apply_is_authorized,
-                )
-                .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
             return Ok(ReadyValidateSuccessorDispatchV1::CapacityUnavailable(
                 successor,
             ));
@@ -2813,17 +2822,6 @@ impl ProductionLifecycleOwnerV1 {
             if *selected_ordinal != ordinal {
                 return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
             }
-            let (dispatch_key, round, subject, apply_is_authorized) = successor
-                .preliminary_retransmit_identity(attestation)
-                .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
-            executor
-                .arm_live_lifecycle_validate_successor(
-                    dispatch_key,
-                    round,
-                    subject,
-                    apply_is_authorized,
-                )
-                .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
             let successor = successor
                 .retain_on_reducer_fence(*wait)
                 .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
@@ -2846,22 +2844,6 @@ impl ProductionLifecycleOwnerV1 {
         };
         if !exact {
             return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
-        }
-        if matches!(
-            selected,
-            ProductionCompletionDispatchV1::ValidateQueued { .. }
-        ) {
-            let (dispatch_key, round, subject, apply_is_authorized) = successor
-                .preliminary_retransmit_identity(attestation)
-                .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
-            executor
-                .arm_live_lifecycle_validate_successor(
-                    dispatch_key,
-                    round,
-                    subject,
-                    apply_is_authorized,
-                )
-                .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
         }
         Ok(ReadyValidateSuccessorDispatchV1::Resolved(selected))
     }

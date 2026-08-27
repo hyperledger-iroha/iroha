@@ -1908,7 +1908,7 @@ v2_apply_test!(replayed_mixed_commit_barrier_group_reopens_startup_gate, {
 v2_apply_test!(
     startup_reconciliation_rejects_partial_state_group_without_mutation,
     {
-        let fixture = ApplyFixture::new();
+        let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let producer = KeyPair::try_from_seed(vec![0xB8; 32], Algorithm::BlsNormal)
             .expect("derive partial-state autonomous producer");
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
@@ -1961,24 +1961,22 @@ v2_apply_test!(
     }
 );
 v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
-    let fixture = ApplyFixture::new();
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
     let producer = KeyPair::try_from_seed(vec![0xB9; 32], Algorithm::BlsNormal)
         .expect("derive strict-absence autonomous producer");
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
-    let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+    let queue = Arc::new(Queue::from_config(
+        QueueConfig::default(),
+        events_sender.clone(),
+    ));
     let journal_dir = tempfile::tempdir().expect("strict-absence journal directory");
+    let plan_path = journal_dir.path().join("queue-plans.norito");
+    let reservation_path = journal_dir.path().join("lane-reservations.norito");
     queue
-        .install_plan_journal(
-            journal_dir.path().join("queue-plans.norito"),
-            1024 * 1024,
-            true,
-        )
+        .install_plan_journal(&plan_path, 1024 * 1024, true)
         .expect("install strict-absence queue-plan journal");
     queue
-        .install_lane_reservation_journal(
-            journal_dir.path().join("lane-reservations.norito"),
-            1024 * 1024,
-        )
+        .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
         .expect("install strict-absence reservation journal");
     let (payload, mut expected_fifo) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
     let descriptor = &payload.origin_proposal.descriptor;
@@ -2013,7 +2011,7 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
             break;
         }
         let transaction = TransactionBuilder::new(
-            fixture.context.network_id,
+            *fixture.state.network_id_ref(),
             fixture.service.genesis_account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2021,6 +2019,9 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
             Level::INFO,
             format!("strict FIFO digest-order discriminator {index}"),
         )])
+        .with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        )
         .sign(fixture.genesis_key.private_key());
         expected_fifo.push(transaction.hash_as_entrypoint());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
@@ -2077,6 +2078,19 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
         .execute(&mut store)
         .expect("finalize canonical body omitting the strictly absent payload");
     let reserved_count = snapshot.ordered_records.len();
+    drop(queue);
+    let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+    let replay = queue
+        .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+        .expect("replay strict-absence reservation owners");
+    assert_eq!(replay.restored, reserved_count);
+    queue
+        .install_plan_journal(&plan_path, 1024 * 1024, true)
+        .expect("install replayed strict-absence QueuePlan journal");
+    queue
+        .replay_plan_journal(fixture.state.as_ref())
+        .expect("replay strict-absence QueuePlan payloads");
+    assert!(queue.lane_reservation_startup_reconciliation_pending());
     assert_eq!(
         reconcile_lane_reservation_ownership(
             fixture.state.as_ref(),
@@ -2310,7 +2324,7 @@ v2_apply_test!(
 v2_apply_test!(
     finalized_hash_only_carrier_plans_recovery_before_queue_mutation,
     {
-        let fixture = ApplyFixture::new();
+        let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let producer = KeyPair::try_from_seed(vec![0xBA; 32], Algorithm::BlsNormal)
             .expect("derive pruned-carrier autonomous producer");
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
@@ -2464,7 +2478,7 @@ v2_apply_test!(
     }
 );
 v2_apply_test!(canonical_exact_certified_autonomous_group_is_retained, {
-    let fixture = ApplyFixture::new();
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
     let mut genesis_store = fixture.reopen_body_store();
     fixture
         .execute(&mut genesis_store)
@@ -2567,7 +2581,7 @@ v2_apply_test!(canonical_exact_certified_autonomous_group_is_retained, {
     );
 });
 v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
-    let fixture = ApplyFixture::new();
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
     let mut genesis_store = fixture.reopen_body_store();
     fixture
         .execute(&mut genesis_store)
@@ -2589,7 +2603,7 @@ v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
         .expect("install current autonomous reservation journal");
     let (payload, _) = reserve_canonical_successor_autonomous_batch(&fixture, &queue, &context, 2);
     let unreserved_transaction = TransactionBuilder::new(
-        fixture.context.network_id,
+        *fixture.state.network_id_ref(),
         fixture.service.genesis_account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2597,6 +2611,9 @@ v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
         Level::INFO,
         "current recovery startup-gate probe".to_owned(),
     )])
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
     .sign(fixture.genesis_key.private_key());
     let unreserved_hash = unreserved_transaction.hash();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(unreserved_transaction));
@@ -2701,7 +2718,7 @@ v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
 v2_apply_test!(
     prior_height_canonical_uncertified_owner_requires_historical_recovery,
     {
-        let fixture = ApplyFixture::new();
+        let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let mut genesis_store = fixture.reopen_body_store();
         fixture
             .execute(&mut genesis_store)
@@ -2917,7 +2934,7 @@ v2_apply_test!(
 );
 include!("v2_apply_unsealed_01c_historical_recovery.rs");
 v2_apply_test!(pending_merge_split_group_is_rejected, {
-    let fixture = ApplyFixture::new();
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
     let producer = KeyPair::try_from_seed(vec![0xBB; 32], Algorithm::BlsNormal)
         .expect("derive pending-split autonomous producer");
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
@@ -2976,7 +2993,7 @@ v2_apply_test!(pending_merge_split_group_is_rejected, {
     ));
 });
 v2_apply_test!(committed_merge_split_carriers_are_rejected, {
-    let fixture = ApplyFixture::new();
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
     let producer = KeyPair::try_from_seed(vec![0xBC; 32], Algorithm::BlsNormal)
         .expect("derive committed-split autonomous producer");
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);

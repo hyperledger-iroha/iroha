@@ -152,6 +152,71 @@ def test_test_only_prebuilt_slice_mode_is_fully_retired() -> None:
     assert source.count("scripts/check_mobile_sdk_artifacts.sh") == 2
 
 
+def test_ci_handoff_never_enters_the_release_publication_corridor() -> None:
+    """The cold CI producer emits only a structurally validated candidate."""
+
+    source = _source()
+    validation = source.index(
+        '"$ROOT_DIR/scripts/validate_norito_bridge_xcframework.py"'
+    )
+    handoff_branch = source.index('if [[ "$CI_HANDOFF_ONLY" == "1" ]]', validation)
+    checker = source.index(
+        'bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh"',
+        handoff_branch,
+    )
+    candidate = source.index(
+        'echo "[+] Atomically staged uncertified CI handoff candidate:',
+        checker,
+    )
+    canonical_block = source.index(
+        'run_isolated_python - \\\n'
+        '  "$PUBLISH_XCFRAMEWORK" "$FINAL_XCFRAMEWORK"',
+        candidate,
+    )
+    canonical_publication = source.index(
+        'echo "[+] Atomically published XCFramework and canonical manifest:',
+        canonical_block,
+    )
+    handoff = source[handoff_branch:canonical_block]
+
+    assert "--ci-handoff-only cannot publish an archive or use dirty source" in source
+    assert "CI_HANDOFF_ONLY=0" in source
+    assert 'CI_HANDOFF_ONLY="${' not in source
+    assert "authenticated Kagemusha Swift producer" in source
+    assert "requires canonical release outputs to remain absent" in source
+    assert '${GITHUB_WORKFLOW:-}' in source
+    assert '${GITHUB_JOB:-}' in source
+    assert '${GITHUB_WORKSPACE:-}' in source
+    assert 'CI_HANDOFF_DIR="$OUT_DIR/NoritoBridge.ci-handoff"' in source
+    assert (
+        validation
+        < handoff_branch
+        < checker
+        < candidate
+        < canonical_block
+        < canonical_publication
+    )
+    assert 'assert_bridge_source_seal "pre-handoff artifact verification"' in handoff
+    assert 'assert_bridge_source_seal "pre-publication artifact verification"' in handoff
+    assert '"NoritoBridge.xcframework"' in handoff
+    assert '"NoritoBridge.artifacts.json"' in handoff
+    assert "RENAME_EXCL = 0x00000004" in handoff
+    assert 'PUBLISH_ROOT=""' in handoff
+    assert "exit 0" in handoff
+    assert "$FINAL_XCFRAMEWORK" not in handoff
+    assert "$FINAL_MANIFEST" not in handoff
+    assert source.count("scripts/check_mobile_sdk_artifacts.sh") == 2
+
+    workflow_users = [
+        workflow
+        for workflow in (ROOT / ".github" / "workflows").glob("*.yml")
+        if "--ci-handoff-only" in workflow.read_text(encoding="utf-8")
+    ]
+    assert workflow_users == [
+        ROOT / ".github" / "workflows" / "pr_kagemusha_payload_bench.yml"
+    ]
+
+
 def test_build_and_output_roots_are_canonical_disjoint_directories() -> None:
     source = _source()
     assert "canonical_writable_directory()" in source

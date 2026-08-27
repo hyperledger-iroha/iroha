@@ -211,6 +211,99 @@ def test_manifest_tracks_executable_mode(tmp_path: Path) -> None:
     assert os.access(script, os.X_OK)
 
 
+def test_windows_reader_normalizes_only_cross_api_ctime_and_execute_bits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows pathname/fd ctime and execute-bit gaps do not mask mutations."""
+
+    module = load_module()
+    payload = b"stable source bytes\n"
+    source = tmp_path / "source.bat"
+    source.write_bytes(payload)
+    source.chmod(0o755)
+    real_fstat = module.os.fstat
+
+    class ReportedStat:
+        def __init__(
+            self,
+            metadata: os.stat_result,
+            *,
+            ctime_delta: int = 1,
+            execute_bits: int = 0,
+            other_mode_delta: int = 0,
+        ) -> None:
+            self._metadata = metadata
+            self.st_ctime_ns = metadata.st_ctime_ns + ctime_delta
+            self.st_mode = (
+                ((metadata.st_mode & ~0o111) | execute_bits) ^ other_mode_delta
+            )
+
+        def __getattr__(self, name: str):
+            return getattr(self._metadata, name)
+
+    monkeypatch.setattr(module, "_windows_host_semantics", lambda: True)
+    monkeypatch.setattr(
+        module.os,
+        "fstat",
+        lambda descriptor: ReportedStat(real_fstat(descriptor)),
+    )
+    assert module._stable_file_sha256(
+        source,
+        maximum_size=len(payload),
+        label="workspace source",
+    ) == hashlib.sha256(payload).hexdigest()
+
+    monkeypatch.setattr(
+        module.os,
+        "fstat",
+        lambda descriptor: ReportedStat(
+            real_fstat(descriptor), other_mode_delta=stat.S_IWGRP
+        ),
+    )
+    with pytest.raises(module.SourceSealError, match="changed before it was opened"):
+        module._stable_file_sha256(
+            source,
+            maximum_size=len(payload),
+            label="workspace source",
+        )
+
+    observations = 0
+
+    def changed_fstat(descriptor: int) -> ReportedStat:
+        nonlocal observations
+        observations += 1
+        return ReportedStat(
+            real_fstat(descriptor),
+            ctime_delta=2 if observations == 2 else 1,
+        )
+
+    monkeypatch.setattr(module.os, "fstat", changed_fstat)
+    with pytest.raises(module.SourceSealError, match="changed while it was read"):
+        module._stable_file_sha256(
+            source,
+            maximum_size=len(payload),
+            label="workspace source",
+        )
+
+    observations = 0
+
+    def permission_changed_fstat(descriptor: int) -> ReportedStat:
+        nonlocal observations
+        observations += 1
+        return ReportedStat(
+            real_fstat(descriptor),
+            execute_bits=stat.S_IXGRP if observations == 2 else 0,
+        )
+
+    monkeypatch.setattr(module.os, "fstat", permission_changed_fstat)
+    with pytest.raises(module.SourceSealError, match="changed while it was read"):
+        module._stable_file_sha256(
+            source,
+            maximum_size=len(payload),
+            label="workspace source",
+        )
+
+
 def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -292,6 +385,23 @@ def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
     monkeypatch.setattr(module.os, "supports_dir_fd", frozenset())
     assert module.native_artifact_workspace_source_manifest(tmp_path) == strict
 
+    # Git for Windows can inherit these checkout policies from installation
+    # config, which the sealed read-only Git environment intentionally ignores.
+    # The authenticated index and raw bytes must therefore normalize Windows
+    # materialization even when local config is absent or contradictory.
+    subprocess.run(
+        ["git", "config", "--unset-all", "core.symlinks"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "core.filemode", "true"],
+        cwd=tmp_path,
+        check=True,
+    )
+    monkeypatch.setattr(module, "_windows_host_semantics", lambda: True)
+    assert module.native_artifact_workspace_source_manifest(tmp_path) == strict
+
     untracked = tmp_path / "untracked.rs"
     untracked.write_text("fn injected() {}\n", encoding="utf-8")
     with pytest.raises(module.DirtyReleaseSourceError, match="stage-zero index"):
@@ -322,6 +432,42 @@ def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
     subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
     with pytest.raises(module.DirtyReleaseSourceError, match="index is not HEAD"):
         module.native_artifact_workspace_source_manifest(tmp_path)
+
+
+def test_native_artifact_manifest_cli_uses_host_portable_entrypoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    """The native CI preflight exercises the same host-aware manifest path."""
+
+    module = load_module()
+    digest = "ab" * 32
+    observed_roots: list[Path] = []
+
+    def native_manifest(root: Path) -> str:
+        observed_roots.append(root)
+        return digest
+
+    monkeypatch.setattr(
+        module,
+        "native_artifact_workspace_source_manifest",
+        native_manifest,
+    )
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [
+            str(SCRIPT),
+            "--root",
+            str(tmp_path),
+            "--native-artifact-manifest",
+        ],
+    )
+
+    assert module.main() == 0
+    assert observed_roots == [tmp_path]
+    assert capsys.readouterr().out == f"{digest}\n"
 
 
 def test_source_seal_is_deterministic_and_round_trips_exact_closure(

@@ -475,6 +475,8 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             mut ready,
             store,
             coordinator,
+            successor,
+            retry_owner,
         } = owned;
         let context = ready.fixture.verified.context().clone();
         let committee = crate::sumeragi::v2_core::Committee::project_indices(
@@ -585,6 +587,10 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             lease,
             durable: _,
         } = ready;
+        let retry_key = match &fixture.effect {
+            AdapterEffect::ValidateBody { round, subject, .. } => (*round, *subject),
+            _ => unreachable!("Ready fixture retains one Validate effect"),
+        };
         let wal_before = std::fs::read(&wal_path)
             .unwrap_or_else(|error| panic!("{row:?}: read pre-dispatch WAL: {error}"));
         let now = std::time::Instant::now();
@@ -628,6 +634,24 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 local_validator,
                 2,
             );
+        let mut retry_installation = executor
+            .prepare_recovered_durable_validate_retry_install()
+            .unwrap_or_else(|error| {
+                panic!("{row:?}: prepare the live Validate retry owner: {error:?}")
+            });
+        retry_installation
+            .absorb(retry_owner)
+            .unwrap_or_else(|error| {
+                panic!("{row:?}: authenticate the live Validate retry owner: {error:?}")
+            });
+        retry_installation.commit().unwrap_or_else(|error| {
+            panic!("{row:?}: install the live Validate retry owner: {error:?}")
+        });
+        assert_eq!(
+            executor.validate_retry_lifecycle_ordinal_for_test(retry_key),
+            Some(Some(lease.ordinal())),
+            "{row:?}: the exact retry seal must own the Ready Validate row before dispatch"
+        );
         if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
             let keys = durable_store_keys(marker);
             let signer = usize::try_from(local_validator)
@@ -663,30 +687,18 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 .as_ref()
                 .expect("ValidatedApply retains its exact production fixture")
                 .0;
-            let validate_attestation = owner
-                .coordinator
-                .attest_ready_validate_demand(&owner.registry, lease.ordinal())
-                .expect("attest the exact pre-publication Validate carrier");
             executor
-                .arm_live_lifecycle_validate_successor(
-                    validate_attestation.dispatch_key(),
-                    commit_qc.proposal_round,
-                    commit_qc.subject,
-                    true,
+                .reconcile_recovered_validate_retry_decision_for_test(
+                    (
+                        commit_qc.round,
+                        commit_qc.proposal_round,
+                        commit_qc.subject,
+                        commit_qc.execution_commitment,
+                    ),
+                    false,
+                    &mut services,
                 )
-                .expect("restore the exact Validate successor before Decision import");
-            assert_eq!(
-                executor
-                    .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut services)
-                    .expect("import the adapter's exact durable Decision into the executor"),
-                (
-                    commit_qc.round,
-                    commit_qc.proposal_round,
-                    commit_qc.subject,
-                    commit_qc.execution_commitment,
-                ),
-                "{row:?}: executor protection must match the adapter's decided body"
-            );
+                .expect("import the adapter's exact durable Decision before successor dispatch");
         }
         let mut _queued_apply_ingress_guard = None;
         if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
@@ -707,6 +719,11 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     &[(queued_progress.clone(), semantic_origin)],
                     leader_wire_lifecycle_ordinals.clone(),
                 );
+            crate::sumeragi::v2_worker::tests::install_leader_wire_ingress_for_test(
+                &mut services,
+                std::sync::Arc::clone(&ingress),
+                &context,
+            );
             let ownership = ownerships
                 .pop()
                 .expect("one gated TimeoutVote retains runtime ownership");
@@ -734,9 +751,49 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 .expect("inspect the paired actor-global ordinal source")
                 .expect("Ready Validate successor ordinal remains representable")
         });
-        let dispatched = owner
-            .dispatch_completion_for_test(&mut services, &mut executor, 0)
-            .unwrap_or_else(|error| panic!("{row:?}: production Completion dispatch: {error:?}"));
+        if matches!(
+            row,
+            ProductionReadyValidateDispatchRow::ValidatedPersist
+                | ProductionReadyValidateDispatchRow::RejectedReport
+        ) {
+            let attestation = owner
+                .coordinator
+                .attest_ready_validate_demand(&owner.registry, lease.ordinal())
+                .expect("attest the published carrier before same-row refinement");
+            let (predecessor, round, subject, apply_is_authorized) = successor
+                .predecessor_retransmit_identity_for_test(attestation)
+                .expect("reconstruct the exact pre-publication sidecar carrier");
+            executor
+                .arm_live_lifecycle_validate_successor(
+                    predecessor,
+                    round,
+                    subject,
+                    apply_is_authorized,
+                )
+                .expect("arm the exact pre-publication sidecar carrier");
+        }
+        let (dispatched, mut retained_successor) = match owner
+            .dispatch_ready_validate_successor(&mut services, &mut executor, successor, 0)
+            .unwrap_or_else(|error| {
+                panic!("{row:?}: production Ready successor dispatch: {error:?}")
+            }) {
+            super::super::ReadyValidateSuccessorDispatchV1::Resolved(dispatch) => {
+                (dispatch, None)
+            }
+            super::super::ReadyValidateSuccessorDispatchV1::ReducerFencePending {
+                successor,
+                wait,
+            } => (
+                super::super::ProductionCompletionDispatchV1::ReducerFenceWait {
+                    ordinal: lease.ordinal(),
+                    wait,
+                },
+                Some(successor),
+            ),
+            super::super::ReadyValidateSuccessorDispatchV1::CapacityUnavailable(_) => {
+                panic!("{row:?}: Ready successor unexpectedly exhausted worker capacity")
+            }
+        };
         assert_eq!(
             dispatched,
             row.expected_dispatch(
@@ -832,25 +889,41 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     std::thread::yield_now();
                 }
 
+                let successor = retained_successor
+                    .take()
+                    .expect("local Busy retains its exact Ready successor token");
                 let next = owner
-                    .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                    .dispatch_ready_validate_successor(
+                        &mut services,
+                        &mut executor,
+                        successor,
+                        0,
+                    )
                     .unwrap_or_else(|error| {
                         panic!("{row:?}: retry the exact same-ordinal Validate: {error:?}")
                     });
                 match next {
-                    super::super::ProductionCompletionDispatchV1::ReducerFenceWait {
-                        ordinal,
+                    super::super::ReadyValidateSuccessorDispatchV1::ReducerFencePending {
+                        successor,
                         wait: next_wait,
                     } => {
-                        assert_eq!(ordinal, lease.ordinal(), "{row:?}");
                         assert_eq!(next_wait.source(), wait.source(), "{row:?}");
                         assert!(
                             next_wait.observed_generation() > wait.observed_generation(),
                             "{row:?}: a repeated Busy must bind a newly advanced fence"
                         );
+                        retained_successor = Some(successor);
                         wait = next_wait;
                     }
-                    resolved => break resolved,
+                    super::super::ReadyValidateSuccessorDispatchV1::Resolved(resolved) => {
+                        break resolved;
+                    }
+                    super::super::ReadyValidateSuccessorDispatchV1::CapacityUnavailable(
+                        successor,
+                    ) => {
+                        drop(successor);
+                        panic!("{row:?}: local Busy retry unexpectedly exhausted worker capacity")
+                    }
                 }
             };
             assert!(
@@ -875,6 +948,20 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             assert!(!settled_status.fail_closed, "{row:?}");
             assert!(!output_guard.restart_required(), "{row:?}");
         }
+        let expected_retry_ordinal = if row.is_busy()
+            && !matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy)
+        {
+            Some(Some(lease.ordinal()))
+        } else if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
+            None
+        } else {
+            Some(None)
+        };
+        assert_eq!(
+            executor.validate_retry_lifecycle_ordinal_for_test(retry_key),
+            expected_retry_ordinal,
+            "{row:?}: terminal dispatch must release only the exact Validate retry ordinal"
+        );
         if let Some(child_ordinal) = expected_successor_ordinal {
             assert_eq!(owner.coordinator.high_water(), child_ordinal, "{row:?}");
             assert!(

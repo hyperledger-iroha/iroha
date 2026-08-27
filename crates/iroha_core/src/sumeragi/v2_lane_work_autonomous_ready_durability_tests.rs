@@ -136,6 +136,9 @@ fn enqueue_autonomous_test_transactions(
                 Level::INFO,
                 format!("autonomous lane fixture {index}"),
             )])
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            )
             .sign(key.private_key());
             let accepted =
                 crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));

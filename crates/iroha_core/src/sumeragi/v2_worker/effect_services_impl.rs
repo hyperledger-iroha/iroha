@@ -722,8 +722,9 @@ impl V2EffectServices for ProductionV2Services {
 
 /// Recover the exact global round carried by one view-scoped v2 output.
 ///
-/// Height-only recovery requests and epoch-wide VRF traffic deliberately
-/// return `None`: a certified view does not supersede those owners.
+/// Height-only recovery requests and retired VRF wire variants return `None`.
+/// A certified view does not supersede recovery owners, and production emits
+/// no VRF owner. Global threshold-beacon partials remain exact-view traffic.
 fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRound> {
     let NetworkMessage::SumeragiBlock(envelope) = message else {
         return None;

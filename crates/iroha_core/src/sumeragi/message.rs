@@ -6,8 +6,8 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         consensus::{LaneBlockCertificateV1, LaneBlockProposalV1, LaneBlockQcV1},
         consensus_v2::{
-            ConsensusMessageV2, ExecutionCommitment, MAX_EXECUTED_BLOCK_WIRE_BYTES,
-            finality::V2FinalityArtifact,
+            ConsensusMessageV2, ConsensusMessageV2Payload, ExecutionCommitment,
+            MAX_EXECUTED_BLOCK_WIRE_BYTES, finality::V2FinalityArtifact,
         },
     },
     peer::PeerId,
@@ -83,11 +83,23 @@ impl BlockMessage {
     /// Validate a message before it enters a canonical live wire frame.
     pub(crate) fn ensure_live_outbound(&self) -> Result<(), ncore::Error> {
         match self {
-            Self::V2(message) => message.validate_version().map_err(|error| {
-                ncore::Error::Message(format!(
-                    "refusing to emit non-canonical Sumeragi v2 message: {error}"
-                ))
-            }),
+            Self::V2(message) => {
+                message.validate_version().map_err(|error| {
+                    ncore::Error::Message(format!(
+                        "refusing to emit non-canonical Sumeragi v2 message: {error}"
+                    ))
+                })?;
+                if matches!(
+                    &message.payload,
+                    ConsensusMessageV2Payload::VrfCommit(_)
+                        | ConsensusMessageV2Payload::VrfReveal(_)
+                ) {
+                    return Err(ncore::Error::Message(
+                        "refusing to emit retired Sumeragi consensus-VRF message".to_owned(),
+                    ));
+                }
+                Ok(())
+            }
             Self::KuraReplicaAdvert(advert) => advert.verify_keeper_signature().map_err(|error| {
                 ncore::Error::Message(format!(
                     "refusing to emit an invalid Kura replica advert: {error}"
@@ -175,8 +187,8 @@ impl BlockMessageWire {
     ///
     /// # Errors
     ///
-    /// Returns an error for a non-canonical v2 protocol version or an invalid
-    /// authenticated auxiliary message.
+    /// Returns an error for a non-canonical v2 protocol version, a retired
+    /// consensus-VRF tombstone, or an invalid authenticated auxiliary message.
     pub(crate) fn try_preencoded(message: Arc<BlockMessage>) -> Result<Self, ncore::Error> {
         let encoded = Arc::new(Self::try_encode_live_message(message.as_ref())?);
         Ok(Self {
@@ -650,6 +662,20 @@ mod tests {
         };
         (proposal, vote, qc)
     }
+    fn sample_v2_payload_chunk_message() -> BlockMessage {
+        use iroha_data_model::block::consensus_v2 as wire;
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                manifest_hash: HashOf::<wire::PayloadManifest>::from_untyped_unchecked(Hash::new(
+                    b"live-v2-payload-chunk",
+                )),
+                index: 0,
+                bytes: vec![0x71],
+                sender: 0,
+                signature: vec![0x72],
+            }),
+        ))
+    }
     fn sample_v2_vrf_message() -> BlockMessage {
         use iroha_data_model::block::consensus_v2 as wire;
         BlockMessage::V2(wire::ConsensusMessageV2::new(
@@ -662,7 +688,7 @@ mod tests {
         ))
     }
     fn retagged_block_message_frame(tag: u32) -> Vec<u8> {
-        let mut encoded = norito_core::to_bytes(&sample_v2_vrf_message())
+        let mut encoded = norito_core::to_bytes(&sample_v2_payload_chunk_message())
             .expect("encode canonical Sumeragi v2 fixture");
         let align = norito_core::archived_payload_align::<BlockMessage>();
         let padding = if align <= 1 {
@@ -780,7 +806,7 @@ mod tests {
                 "KuraReplicaAdvert",
                 BlockMessage::KuraReplicaAdvert(signed_kura_replica_advert_fixture()),
             ),
-            ("V2", sample_v2_vrf_message()),
+            ("V2", sample_v2_payload_chunk_message()),
             (
                 "LaneBlockProposal",
                 BlockMessage::LaneBlockProposal(lane_proposal),
@@ -798,7 +824,7 @@ mod tests {
     }
     #[test]
     fn block_message_wire_roundtrips_current_v2_payload() {
-        let msg = sample_v2_vrf_message();
+        let msg = sample_v2_payload_chunk_message();
         let encoded = BlockMessageWire::try_encode_live_message(&msg)
             .expect("encode current Sumeragi v2 message");
         let wire = <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&encoded)
@@ -808,6 +834,26 @@ mod tests {
         assert_eq!(wire.encoded_len(), Some(encoded.len()));
         assert!(matches!(wire.as_ref(), BlockMessage::V2(_)));
         assert_eq!(wire.encode(), encoded);
+    }
+    #[test]
+    fn legacy_vrf_tombstone_decodes_but_is_not_live_encodable() {
+        let message = sample_v2_vrf_message();
+        let raw =
+            norito_core::to_bytes(&message).expect("encode a raw historical consensus-VRF fixture");
+        let (decoded, consumed) =
+            <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&raw)
+                .expect("decode the retained consensus-VRF tombstone");
+        assert_eq!(consumed, raw.len());
+        assert!(matches!(
+            decoded.as_message(),
+            BlockMessage::V2(ConsensusMessageV2 {
+                payload: ConsensusMessageV2Payload::VrfCommit(_),
+                ..
+            })
+        ));
+        assert!(message.ensure_live_outbound().is_err());
+        assert!(BlockMessageWire::try_encode_live_message(&message).is_err());
+        assert!(norito_core::to_bytes(&decoded).is_err());
     }
     #[test]
     fn noncanonical_v2_protocol_version_is_not_live_encodable() {
@@ -861,7 +907,7 @@ mod tests {
             );
         }
         const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
-        let wrapped = sample_v2_vrf_message();
+        let wrapped = sample_v2_payload_chunk_message();
         let wrapped_encoded =
             BlockMessageWire::try_encode_live_message(&wrapped).expect("encode current v2 marker");
         assert!(wrapped_encoded.starts_with(&norito_core::MAGIC));

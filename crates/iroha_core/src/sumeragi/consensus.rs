@@ -19,9 +19,11 @@ pub use iroha_data_model::block::consensus::{
     CertPhase, ConsensusBlockHeader, ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence,
     ExecKv, ExecWitness, ExecWitnessMsg, Height, LaneBlockCertificateV1, LaneBlockDescriptorV1,
     LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1, LaneBlockVoteBodyV1,
-    NposGenesisParams, Proposal, Qc, QcAggregate, QcRef, QcVote, ValidatorIndex, View, VrfCommit,
-    VrfReveal, default_chain_order_hash,
+    NposGenesisParams, Proposal, Qc, QcAggregate, QcRef, QcVote, ValidatorIndex, View,
+    default_chain_order_hash,
 };
+#[cfg(test)]
+pub use iroha_data_model::block::consensus::{VrfCommit, VrfReveal};
 /// Live consensus protocol revision.
 pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
 /// Permissioned Sumeragi v2 handshake and signing-domain tag.
@@ -73,10 +75,12 @@ pub fn vote_preimage(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8
     out
 }
 /// Build the canonical preimage for a VRF commit signature under the given chain and mode tag.
+#[cfg(test)]
 pub fn vrf_commit_preimage(network_id: &NetworkId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
     vrf_commit_preimage_fields(network_id, mode_tag, c.epoch, c.signer, &c.commitment)
 }
 /// Build the canonical preimage for a versioned-v2 VRF commitment.
+#[cfg(test)]
 pub fn v2_vrf_commit_preimage(
     network_id: &NetworkId,
     mode_tag: &str,
@@ -90,6 +94,7 @@ pub fn v2_vrf_commit_preimage(
     out.extend_from_slice(&commit.commitment);
     out
 }
+#[cfg(test)]
 fn vrf_commit_preimage_fields(
     network_id: &NetworkId,
     mode_tag: &str,
@@ -106,10 +111,12 @@ fn vrf_commit_preimage_fields(
     out
 }
 /// Build the canonical preimage for a VRF reveal signature under the given chain and mode tag.
+#[cfg(test)]
 pub fn vrf_reveal_preimage(network_id: &NetworkId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
     vrf_reveal_preimage_fields(network_id, mode_tag, r.epoch, r.signer, &r.reveal)
 }
 /// Build the canonical preimage for a versioned-v2 VRF reveal.
+#[cfg(test)]
 pub fn v2_vrf_reveal_preimage(
     network_id: &NetworkId,
     mode_tag: &str,
@@ -126,6 +133,7 @@ pub fn v2_vrf_reveal_preimage(
     out.extend_from_slice(&reveal.vrf_proof);
     out
 }
+#[cfg(test)]
 fn vrf_reveal_preimage_fields(
     network_id: &NetworkId,
     mode_tag: &str,
@@ -150,10 +158,12 @@ pub mod bls_preimage {
         super::vote_preimage(network_id, mode_tag, v)
     }
     /// Build the canonical preimage for a VRF commit signature.
+    #[cfg(test)]
     pub fn vrf_commit(network_id: &NetworkId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
         super::vrf_commit_preimage(network_id, mode_tag, c)
     }
     /// Build the canonical preimage for a VRF reveal signature.
+    #[cfg(test)]
     pub fn vrf_reveal(network_id: &NetworkId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
         super::vrf_reveal_preimage(network_id, mode_tag, r)
     }

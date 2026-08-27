@@ -4829,8 +4829,8 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     // Consensus evidence is asynchronously enriched recovery data, not WSV data committed by
     // the block itself. Including it makes historical checkpoints depend on later peer input.
     world.remove("consensus_evidence");
-    // VRF epoch snapshots are maintained by consensus message handling outside
-    // block application. Kura replay verifies block-applied WSV data only.
+    // Retained legacy VRF epoch sidecars are not block-applied WSV data and
+    // remain excluded from canonical replay checkpoints.
     world.remove("vrf_epochs");
 }
 /// Canonical bytes for the committed WSV surface used by replay parity tests.

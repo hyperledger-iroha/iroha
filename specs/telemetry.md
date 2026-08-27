@@ -498,7 +498,11 @@ Sumeragi metrics
 - Queue health: `sumeragi_tx_queue_depth`/`sumeragi_tx_queue_capacity` gauge the live mempool size and effective ceiling, while `sumeragi_tx_queue_retained_bytes`/`sumeragi_tx_queue_max_retained_bytes` gauge retained queue memory. `sumeragi_tx_queue_saturated_by_count`, `sumeragi_tx_queue_saturated_by_bytes`, `sumeragi_tx_queue_saturated_by_age`, and `sumeragi_tx_queue_oldest_queued_age_ms` distinguish the pressure cause; `sumeragi_tx_queue_saturated` flips to `1` when any cause is active. Count or retained-byte saturation signals that redundant collector fan-out is temporarily suppressed.
 - Pending blocks: `sumeragi_pending_blocks_total` counts pending blocks tracked by the local node; `sumeragi_pending_blocks_blocking` isolates those that gate proposal/view-change progress; `sumeragi_commit_inflight_queue_depth` shows whether the commit pipeline is busy (0/1).
 - Proposal gaps: `sumeragi_proposal_gap_total` counts view-change rotations triggered because no proposal was observed before the cutoff.
-- VRF emission: `sumeragi_vrf_commits_emitted_total`, `sumeragi_vrf_reveals_emitted_total`, and `sumeragi_vrf_reveals_late_total` count how many commit/reveal messages this validator broadcast (including late reveals accepted after the window). Pair with `sumeragi_vrf_non_reveal_*` counters to monitor participation health at epoch boundaries.
+- Retired consensus-VRF series: `sumeragi_vrf_*` metrics are not registered or
+  exported. Production emits no VRF commit/reveal traffic, derives no VRF
+  participation penalty, and exposes no consensus-VRF randomness-health or
+  release signals. Current randomness is the finalized global threshold-beacon
+  pulse.
 - Collector fan-out: `sumeragi_redundant_sends_total` (aggregate), `sumeragi_redundant_sends_by_peer{peer="…"}`, and `sumeragi_redundant_sends_by_collector{idx="…"}` highlight redundant collector sends; investigate sustained spikes to locate congested collectors or unhealthy peers.
 - Collector targeting: `sumeragi_collectors_targeted_current` (gauge) tracks the in-flight collector count for the current block; `sumeragi_collectors_targeted_per_block` histogram (`*_bucket`) records how many collectors were targeted per committed block.
 - Signed DA availability: use `sumeragi_da_gate_block_total{reason="missing_local_data"}` for missing local payloads and the `sumeragi_da_manifest_*`/`sumeragi_da_spool_*` families for revision-4 manifest and chunk-spool handling. Retired global-RBC INIT/READY/DELIVER counters are not exported.
@@ -702,61 +706,17 @@ do not report an adaptive timer policy.
 Notes
 - All metrics have deterministic semantics across hardware. Parallel paths publish counters only after deterministic commit.
 - Extend dashboards with Torii endpoint metrics (`torii_*`) once wired; see roadmap for status.
-## Alerting — VRF Participation Drift
 
-Prometheus rules surfacing randomness degradation:
+## Retired consensus-VRF telemetry
 
-```
-alert: SumeragiVrfNoParticipation
-expr: increase(sumeragi_vrf_no_participation_total[140m]) > 0
-for: 1m
-labels:
-  severity: critical
-annotations:
-  summary: "Validator skipped VRF commit and reveal windows"
-  description: |
-    Non-participation penalties incremented (count={{ $value }}). Correlate the authenticated Sumeragi status roster with
-    `sumeragi_vrf_no_participation_by_signer` to identify the offline seat and stage reconfiguration or slashing if it cannot recover.
-    The retired `vrf-epoch`/`vrf-penalties` CLI commands and `/v1/sumeragi/vrf/*` routes are not recovery paths.
+Do not alert on `sumeragi_vrf_*`; those retired commit/reveal series are absent
+from the registry and export catalog. Production rejects legacy VRF ingress,
+emits no VRF frames, and rejects nonempty `vrf_epoch_seals`; the former rule
+group and Grafana panels have therefore been removed. Qualify randomness from
+authenticated height context and committed finalized threshold-beacon pulses,
+and qualify safety evidence through the generic Sumeragi-v2 evidence count/list
+and `sumeragi_evidence_records_total`.
 
-alert: SumeragiVrfNonReveal
-expr: increase(sumeragi_vrf_non_reveal_penalties_total[140m]) > 0
-labels:
-  severity: warning
-annotations:
-  summary: "Validator missed VRF reveal deadline"
-  description: |
-    Non-reveal penalties incremented (count={{ $value }}). Use `sumeragi_vrf_non_reveal_by_signer` labels to page the validator
-    and restore its authenticated consensus peer transport before the next window; operators cannot submit a reveal through Torii.
-
-alert: SumeragiVrfPayloadReject
-expr: increase(sumeragi_vrf_rejects_total_by_reason{reason!="late"}[5m]) > 0
-labels:
-  severity: warning
-annotations:
-  summary: "VRF payload rejected"
-  description: |
-    Instance {{ $labels.instance }} rejected a VRF payload for reason {{ $labels.reason }}. Confirm the validator uses the current
-    signed parameters, key, and peer session; payload production and retransmission remain inside the authenticated consensus protocol.
-
-alert: SumeragiVrfCommitStall
-expr: rate(sumeragi_vrf_commits_emitted_total[5m]) == 0 and increase(sumeragi_blocks_committed_total[5m]) > 0
-for: 10m
-labels:
-  severity: warning
-annotations:
-  summary: "Epoch commitments stalled while blocks continue"
-  description: |
-    No VRF commitments observed during an active epoch. Verify validators are online and inspect the authenticated
-    `/v1/sumeragi/status` response and its `vrf_penalty_epoch` field.
-```
-
-Adjust the 140 minute window to match the governed
-`SumeragiNposParameters.vrf` commit/reveal offsets and the signed cadence. Link
-alerts to the response checklist in
-`specs/sumeragi_randomness_evidence_runbook.md`.
-The sample rule group lives at `specs/references/prometheus.rules.sumeragi_vrf.yml`; include it from your Prometheus configuration (see `specs/references/prometheus.template.yml` for an example `rule_files` entry).
-Run `scripts/check_prometheus_rules.sh` to validate the rules locally. The helper invokes `promtool check rules` if Prometheus is installed, or falls back to `docker run --rm prom/prometheus …` when Docker is available.
 ## Alerting — Consensus Membership Mismatch
 
 

@@ -7,6 +7,7 @@ on:
       - ".github/workflows/promote_kagemusha_v4.yml"
       - "Cargo.lock"
       - "Cargo.toml"
+      - "ci/check_authenticated_tool_controller.sh"
       - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_kagemusha_*.sh"
       - "ci/check_kagemusha_production_readiness_source_contract.py"
@@ -734,6 +735,8 @@ on:
       - "python/iroha_torii_client/tests/sccp_test.py"
       - "python/iroha_torii_client/tests/test_client.py"
       - "artifacts/openapi/manifest.json"
+      - ".cargo/**"
+      - "codec/**"
       - "crates/iroha_crypto/**"
       - "crates/iroha_data_model/src/**"
       - "crates/iroha_data_model/Cargo.toml"
@@ -755,13 +758,20 @@ on:
       - "scripts/check_android_device_lab_slot.py"
       - "scripts/capture_android_attestation_status.py"
       - "scripts/android_attestation_certificate_profile.py"
+      - "scripts/archive_norito_xcframework.py"
       - "scripts/build_norito_xcframework.sh"
+      - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/check_swift_offline_device_attestation_fixture.py"
       - "scripts/tests/check_swift_offline_device_attestation_fixture_test.py"
       - "scripts/norito_bridge_source_seal.py"
+      - "scripts/exec_with_file_lock.py"
+      - "scripts/package_mobile_sdk_artifacts.sh"
+      - "scripts/render_norito_bridge_podspec.py"
       - "scripts/run_mobile_hermetic_command.py"
+      - "scripts/update_norito_bridge_swift_pins.py"
+      - "scripts/validate_norito_bridge_xcframework.py"
       - "scripts/build_kagemusha_candidate_android_native.sh"
       - "scripts/*kagemusha*.py"
       - "scripts/*kagemusha*.sh"
@@ -775,7 +785,9 @@ on:
       - "ci/check_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab_compile.sh"
       - "ci/check_kagemusha_jvm_native_bridge.sh"
+      - "rust-toolchain"
       - "rust-toolchain.toml"
+      - "vendor/**"
       - "scripts/tests/check_android_device_lab_slot_test.py"
       - "scripts/tests/capture_android_attestation_status_test.py"
       - "scripts/tests/android_attestation_certificate_profile_fixtures.py"
@@ -923,9 +935,11 @@ jobs:
       - run: "cargo test -p iroha --lib http_default::tests:: -- --nocapture"
 
   swift:
-    name: Swift lifecycle surface
+    name: Swift native artifact build
     runs-on: macos-14
     timeout-minutes: 360
+    outputs:
+      handoff_sha256: ${{ steps.apple-handoff.outputs.sha256 }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -943,6 +957,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           cache-on-failure: "true"
+          save-if: ${{ false }}
       - name: Prepare external Apple build and artifact roots
         shell: bash
         run: |
@@ -988,7 +1003,263 @@ jobs:
           echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
           echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
       - name: Build exact ABI-23 NoritoBridge XCFramework
-        run: scripts/build_norito_xcframework.sh
+        run: scripts/build_norito_xcframework.sh --ci-handoff-only
+      - name: Pack authenticated Apple artifact handoff
+        id: apple-handoff
+        shell: bash
+        run: |
+          artifact_root="$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.ci-handoff"
+          manifest="$artifact_root/NoritoBridge.artifacts.json"
+          handoff_dir="$RUNNER_TEMP/iroha-kagemusha-apple-handoff"
+          handoff_archive="$handoff_dir/NoritoBridge.xcframework.tar"
+          mkdir -p "$handoff_dir"
+          test ! -e "$handoff_archive"
+          [[ ! -e "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework" ]]
+          [[ ! -L "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework" ]]
+          [[ ! -e "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.artifacts.json" ]]
+          [[ ! -L "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.artifacts.json" ]]
+          [[ -d "$artifact_root" && ! -L "$artifact_root" ]]
+          [[ -d "$artifact_root/NoritoBridge.xcframework" ]]
+          [[ -L "$manifest" ]]
+          [[ "$(readlink "$manifest")" == "NoritoBridge.xcframework/NoritoBridge.artifacts.json" ]]
+          [[ -z "$(find "$artifact_root/NoritoBridge.xcframework" -type l -print -quit)" ]]
+          (
+            cd "$artifact_root"
+            COPYFILE_DISABLE=1 /usr/bin/tar -cf "$handoff_archive" \
+              NoritoBridge.xcframework NoritoBridge.artifacts.json
+          )
+          [[ -f "$handoff_archive" && ! -L "$handoff_archive" && -s "$handoff_archive" ]]
+          handoff_sha256="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import hashlib
+          import pathlib
+          import sys
+          with pathlib.Path(sys.argv[1]).open("rb") as handle:
+              print(hashlib.file_digest(handle, "sha256").hexdigest())
+          ' "$handoff_archive")"
+          [[ "$handoff_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "sha256=$handoff_sha256" >> "$GITHUB_OUTPUT"
+      - name: Upload authenticated Apple artifact handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kagemusha-apple-xcframework-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-handoff/NoritoBridge.xcframework.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+
+  swift_lifecycle:
+    name: Swift lifecycle surface
+    needs: swift
+    runs-on: macos-14
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - name: Prepare external Apple authentication and Swift roots
+        shell: bash
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-auth-build"
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-auth-cargo"
+          swift_scratch="$RUNNER_TEMP/iroha-kagemusha-apple-swift"
+          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target" "$swift_scratch"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+          echo "KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH=$swift_scratch" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
+      - name: Bind exact Rust source-authentication tools
+        shell: bash
+        run: |
+          rustup_source="$(command -v rustup)"
+          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
+          [[ "$rustup_source" == /* && -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
+          rustup_tools="$RUNNER_TEMP/iroha-kagemusha-apple-auth-tools"
+          mkdir -p "$rustup_tools"
+          chmod 0700 "$rustup_tools"
+          rustup_path="$rustup_tools/rustup"
+          test ! -e "$rustup_path"
+          /bin/cp "$rustup_source" "$rustup_path"
+          chmod 0700 "$rustup_path"
+          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
+          "$rustup_path" run 1.93.1 cargo fetch --locked
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
+      - name: Download authenticated Apple artifact handoff
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: kagemusha-apple-xcframework-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-handoff
+      - name: Restore authenticated Apple artifact handoff
+        shell: bash
+        run: |
+          "$MOBILE_SDK_PYTHON_BINARY" -I -S -B - \
+            "$RUNNER_TEMP/iroha-kagemusha-apple-handoff/NoritoBridge.xcframework.tar" \
+            "${{ needs.swift.outputs.handoff_sha256 }}" \
+            "$MOBILE_SDK_APPLE_ARTIFACT_DIR" "$GITHUB_WORKSPACE" <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import sys
+          import tarfile
+
+          archive_path = Path(sys.argv[1])
+          expected_digest = sys.argv[2]
+          destination = Path(sys.argv[3])
+          source_root = Path(sys.argv[4])
+          archive_root = "NoritoBridge.xcframework"
+          manifest_name = "NoritoBridge.artifacts.json"
+          manifest_target = f"{archive_root}/{manifest_name}"
+          if re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None:
+              raise SystemExit("handoff archive digest output is not canonical")
+          required = {
+              archive_root,
+              f"{archive_root}/Info.plist",
+              f"{archive_root}/{manifest_name}",
+              f"{archive_root}/ios-arm64/libNoritoBridge.a",
+              f"{archive_root}/ios-arm64_x86_64-simulator/libNoritoBridge.a",
+              f"{archive_root}/macos-arm64_x86_64/libNoritoBridge.a",
+              manifest_name,
+          }
+
+          def identity(metadata):
+              return (
+                  metadata.st_dev,
+                  metadata.st_ino,
+                  metadata.st_mode,
+                  metadata.st_size,
+                  metadata.st_mtime_ns,
+                  metadata.st_ctime_ns,
+                  metadata.st_nlink,
+              )
+
+          for path, label in (
+              (archive_path, "handoff archive"),
+              (destination, "Apple artifact destination"),
+              (source_root, "source root"),
+          ):
+              if not path.is_absolute() or path != Path(os.path.abspath(path)):
+                  raise SystemExit(f"{label} must be absolute and canonical")
+          source_root = source_root.resolve(strict=True)
+          if destination.resolve(strict=True) != destination:
+              raise SystemExit("Apple artifact destination must be canonical")
+          destination_metadata = destination.lstat()
+          if (
+              not stat.S_ISDIR(destination_metadata.st_mode)
+              or stat.S_ISLNK(destination_metadata.st_mode)
+              or destination == source_root
+              or source_root in destination.parents
+              or any(destination.iterdir())
+          ):
+              raise SystemExit("Apple artifact destination must be a fresh external directory")
+
+          named_before = archive_path.lstat()
+          if (
+              not stat.S_ISREG(named_before.st_mode)
+              or stat.S_ISLNK(named_before.st_mode)
+              or named_before.st_nlink != 1
+              or not 0 < named_before.st_size <= 8 * 1024 * 1024 * 1024
+          ):
+              raise SystemExit("handoff archive must be one bounded regular file")
+          with archive_path.open("rb") as handle:
+              opened = os.fstat(handle.fileno())
+              if identity(opened) != identity(named_before):
+                  raise SystemExit("handoff archive changed while it was opened")
+              digest_before = hashlib.file_digest(handle, "sha256").hexdigest()
+              if digest_before != expected_digest:
+                  raise SystemExit("handoff archive does not match the producer digest")
+              handle.seek(0)
+              with tarfile.open(fileobj=handle, mode="r:") as archive:
+                  members = archive.getmembers()
+                  if not 1 <= len(members) <= 4096:
+                      raise SystemExit("handoff archive entry count is not bounded")
+                  names = set()
+                  total_size = 0
+                  for member in members:
+                      if member.sparse is not None:
+                          raise SystemExit("handoff archive contains a sparse entry")
+                      raw_name = member.name.removesuffix("/")
+                      relative = PurePosixPath(raw_name)
+                      if (
+                          not raw_name
+                          or "\\" in raw_name
+                          or relative.is_absolute()
+                          or relative.as_posix() != raw_name
+                          or any(part in {"", ".", ".."} for part in relative.parts)
+                          or raw_name in names
+                      ):
+                          raise SystemExit("handoff archive contains a non-canonical path")
+                      names.add(raw_name)
+                      if raw_name == manifest_name:
+                          if not member.issym() or member.linkname != manifest_target:
+                              raise SystemExit("handoff archive manifest link is not canonical")
+                      elif raw_name == archive_root:
+                          if not member.isdir():
+                              raise SystemExit("handoff archive XCFramework root is not a directory")
+                      elif raw_name.startswith(f"{archive_root}/"):
+                          if not (member.isdir() or member.isfile()):
+                              raise SystemExit("handoff archive contains a linked or special XCFramework entry")
+                      else:
+                          raise SystemExit("handoff archive contains an unexpected top-level entry")
+                      if member.isfile():
+                          if not 0 <= member.size <= 2 * 1024 * 1024 * 1024:
+                              raise SystemExit("handoff archive entry size is not bounded")
+                          total_size += member.size
+                          if total_size > 8 * 1024 * 1024 * 1024:
+                              raise SystemExit("handoff archive payload size is not bounded")
+                  if not required <= names:
+                      raise SystemExit("handoff archive is missing required XCFramework entries")
+                  archive.extractall(path=destination, members=members, filter="data")
+              handle.seek(0)
+              digest_after = hashlib.file_digest(handle, "sha256").hexdigest()
+              opened_after = os.fstat(handle.fileno())
+          named_after = archive_path.lstat()
+          if (
+              digest_after != expected_digest
+              or identity(opened_after) != identity(opened)
+              or identity(named_after) != identity(opened)
+          ):
+              raise SystemExit("handoff archive changed while it was restored")
+
+          if {entry.name for entry in destination.iterdir()} != {
+              archive_root,
+              manifest_name,
+          }:
+              raise SystemExit("restored Apple artifact inventory is not exact")
+          manifest = destination / manifest_name
+          if not manifest.is_symlink() or os.readlink(manifest) != manifest_target:
+              raise SystemExit("restored Apple artifact manifest link is not canonical")
+          xcframework = destination / archive_root
+          for current_root, directories, files in os.walk(xcframework, followlinks=False):
+              current = Path(current_root)
+              for name in (*directories, *files):
+                  metadata = (current / name).lstat()
+                  if stat.S_ISLNK(metadata.st_mode):
+                      raise SystemExit("restored XCFramework contains an internal symbolic link")
+                  if not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
+                      raise SystemExit("restored XCFramework contains a special entry")
+                  if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1:
+                      raise SystemExit("restored XCFramework contains a hard-linked file")
+          PY
       - name: Authenticate Apple native artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
       - run: ci/check_kagemusha_recursive_spend_swift_sdk.sh

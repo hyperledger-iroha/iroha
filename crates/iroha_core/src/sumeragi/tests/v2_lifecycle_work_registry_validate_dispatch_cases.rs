@@ -1665,6 +1665,8 @@ struct OwnedReadyDurableValidateFixture {
     ready: ReadyDurableValidateFixture,
     store: V2BodyStore,
     coordinator: LifecycleCoordinator,
+    successor: ReadyValidateSuccessorV1,
+    retry_owner: RecoveredDurableValidateRetryOwnerV1,
 }
 
 #[cfg(feature = "bls")]
@@ -1730,26 +1732,76 @@ fn owned_ready_durable_validate_fixture_from_waiting_with_commitment(
         mut holder,
         dispatch,
     } = waiting;
-    let executed = match outcome {
+    let validate_ownership = fixture
+        .store_ownership
+        .rebind_as_inherited_adapter_effect(&fixture.effect)
+        .expect("carry exact fixture authority into the live Validate retry seal");
+    let validate_pending = validate_ownership
+        .exact_pending_adapter_effect_binding(&fixture.effect)
+        .expect("seal the exact live Validate retry binding");
+    let AdapterEffect::ValidateBody { round, subject, .. } = &fixture.effect else {
+        unreachable!("Ready Validate fixture retains one Validate effect")
+    };
+    let expected_decision = validated_commitment
+        .map(|commitment| (*round, *round, *subject, commitment));
+    let mut retry_owner = RecoveredDurableValidateRetryOwnerV1::for_test(
+        fixture.effect.clone(),
+        durable.clone(),
+        validate_pending,
+        fixture.lease.ordinal(),
+        expected_decision,
+    )
+    .expect("seal the exact pre-publication Validate retry owner");
+    let (executed, validated_receipt) = match outcome {
         ReadyDurableValidateFixtureOutcome::Validated => {
             let commitment = validated_commitment.unwrap_or_else(|| {
                 ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment()
             });
-            dispatch
-                .execute(&mut store, |_| Ok::<_, DetachedValidationError>(commitment))
-                .expect("execute successful Ready Validate fixture")
+            let validated_receipt = ValidatedBodyReceipt::for_test_with_commitment(
+                durable.clone(),
+                commitment,
+            );
+            (
+                dispatch
+                    .execute(&mut store, |_| Ok::<_, DetachedValidationError>(commitment))
+                    .expect("execute successful Ready Validate fixture"),
+                Some(validated_receipt),
+            )
         }
-        ReadyDurableValidateFixtureOutcome::Rejected => dispatch
-            .execute(&mut store, |_| {
-                Err::<wire::ExecutionCommitment, _>(DetachedValidationError::Invalid(
-                    "Ready Validate rejection diagnostic",
-                ))
-            })
-            .expect("execute rejected Ready Validate fixture"),
+        ReadyDurableValidateFixtureOutcome::Rejected => (
+            dispatch
+                .execute(&mut store, |_| {
+                    Err::<wire::ExecutionCommitment, _>(DetachedValidationError::Invalid(
+                        "Ready Validate rejection diagnostic",
+                    ))
+                })
+                .expect("execute rejected Ready Validate fixture"),
+            None,
+        ),
     };
-    let _publication = coordinator
+    if let Some(validated_receipt) = &validated_receipt {
+        assert!(
+            retry_owner.bind_validated_marker(
+                (validated_receipt.durable().round(), validated_receipt.durable().subject()),
+                validated_receipt,
+            ),
+            "seal the exact successful marker into the live Validate retry owner"
+        );
+    }
+    let publication = coordinator
         .complete_durable_validate_dispatch(&mut holder, executed)
         .expect("publish Ready Validate completion fixture");
+    let successor = match (outcome, publication) {
+        (
+            ReadyDurableValidateFixtureOutcome::Validated,
+            DurableValidateCompletionPublication::PublishedValidated(published),
+        ) => ReadyValidateSuccessorV1::from_validated(published),
+        (
+            ReadyDurableValidateFixtureOutcome::Rejected,
+            DurableValidateCompletionPublication::PublishedRejected(published),
+        ) => ReadyValidateSuccessorV1::from_rejected(published),
+        _ => panic!("Ready Validate fixture publication changed its requested outcome"),
+    };
     let replacement_digest = holder.registry_for_test().entries[&fixture.address].digest;
     let mut lease = fixture.lease.clone();
     assert_eq!(
@@ -1781,5 +1833,7 @@ fn owned_ready_durable_validate_fixture_from_waiting_with_commitment(
         },
         store,
         coordinator,
+        successor,
+        retry_owner,
     }
 }

@@ -45,8 +45,10 @@ use crate::{
             IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
             IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO,
             IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY, IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
             IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
             IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED,
             IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN,
@@ -227,9 +229,15 @@ fn kagemusha_active_receiver_decode_limits(wire_bytes: usize) -> norito::DecodeL
         iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1,
     )
     .expect("u32 casting-context bound fits usize");
+    // Norito accounts the decoded sequence elements separately from their
+    // compact wire representation. Reserve one bounded byte of bookkeeping
+    // headroom per protocol-permitted casting context so a valid short
+    // sidecar cannot exceed the payload-scaled estimate by a few bytes. The
+    // absolute 4 MiB allocation ceiling remains authoritative.
     let max_allocated_bytes = wire_bytes
         .saturating_mul(4)
         .saturating_add(64 * 1024)
+        .saturating_add(max_sequence_elements)
         .min(MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_ALLOCATED_BYTES);
     norito::DecodeLimits::new(
         max_sequence_elements,
@@ -30610,6 +30618,7 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
         finalize_release: bool,
+        release_mode: AutonomousLaneClaimReleaseAuthorizationMode,
     ) -> Result<()> {
         if !retirement.matches_payload(payload) {
             return Err(Self::invalid_lane_artifact_error(
@@ -30846,6 +30855,7 @@ impl Kura {
                         &claim.path,
                         &replacement,
                         finalize_release,
+                        release_mode,
                         prefix_before,
                     )
                     .map_err(|message| {
@@ -30978,6 +30988,7 @@ impl Kura {
             payload,
             retirement,
             false,
+            AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared,
         )
     }
     fn finalize_autonomous_lane_entrypoint_claim_release_locked(
@@ -30986,11 +30997,26 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
     ) -> Result<()> {
+        self.finalize_autonomous_lane_entrypoint_claim_release_with_mode_locked(
+            pending_canonical_bytes,
+            payload,
+            retirement,
+            AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared,
+        )
+    }
+    fn finalize_autonomous_lane_entrypoint_claim_release_with_mode_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        release_mode: AutonomousLaneClaimReleaseAuthorizationMode,
+    ) -> Result<()> {
         self.transition_autonomous_lane_entrypoint_claims_locked(
             pending_canonical_bytes,
             payload,
             retirement,
             true,
+            release_mode,
         )
     }
     fn require_autonomous_lane_entrypoint_claims_released_locked(
@@ -31646,6 +31672,211 @@ impl Kura {
             )
         })?;
         Ok((pending_prefix, released_prefix))
+    }
+    /// Persist the first exact `Released` claim of a two-entrypoint replica
+    /// release, modelling a crash before the second atomic replacement.
+    #[cfg(test)]
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn inject_autonomous_lane_first_released_claim_crash_cut_for_test(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+    ) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        payload
+            .validate(payload.network_id, payload.epoch)
+            .map_err(|error| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("invalid autonomous claim crash-cut payload: {error}"),
+                )
+            })?;
+        let [first_entrypoint_hash, second_entrypoint_hash] = payload.entrypoint_hashes.as_slice()
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous claim crash cut requires exactly two entrypoints",
+            ));
+        };
+        if first_entrypoint_hash == second_entrypoint_hash || !retirement.matches_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous claim crash cut has duplicate entrypoints or another retirement",
+            ));
+        }
+        let descriptor = &payload.origin_proposal.descriptor;
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let record = self
+            .read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+                payload.network_id,
+                payload.epoch,
+                Some(pending_canonical_bytes),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    attempt_path,
+                    "missing exact retired attempt for autonomous claim crash cut",
+                )
+            })?;
+        if record.artifact.executable_payload != *payload
+            || record.retirement.as_ref() != Some(retirement)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "autonomous claim crash cut changed its exact durable retirement",
+            ));
+        }
+        let current = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                descriptor.lane_block_height,
+                Some(pending_canonical_bytes),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous claim crash cut has no current lane-height attempt",
+                )
+            })?;
+        if current.artifact.executable_payload != *payload
+            || current.retirement.as_ref() != Some(retirement)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                current.view_state_path,
+                "autonomous claim crash cut attempt is not the current exact retirement",
+            ));
+        }
+        if self.autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)?
+            != (2, 0)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous claim crash cut requires the complete two-claim ReleasePending prefix",
+            ));
+        }
+        let retirement_hash = retirement.digest()?;
+        let claim_path = Self::autonomous_lane_entrypoint_claim_path(
+            &self.store_root,
+            &payload.network_id,
+            first_entrypoint_hash,
+        );
+        let pending = AutonomousLaneEntrypointClaimV1::release_pending_for_payload(
+            payload,
+            *first_entrypoint_hash,
+            retirement_hash,
+        );
+        let existing = Self::decode_autonomous_lane_entrypoint_claim(&claim_path)
+            .map_err(|message| Self::invalid_lane_artifact_error(claim_path.clone(), message))?;
+        if existing != pending
+            || !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &claim_path)
+            || !existing.owns_payload(payload)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                claim_path,
+                "autonomous claim crash cut found another first ReleasePending owner",
+            ));
+        }
+        let released = AutonomousLaneEntrypointClaimV1::released_for_payload(
+            payload,
+            *first_entrypoint_hash,
+            retirement_hash,
+        );
+        let bytes = norito::encode_canonical(&released).map_err(Error::NoritoFrame)?;
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                claim_path,
+                "autonomous claim crash-cut replacement exceeds its hard byte limit",
+            ));
+        }
+        let projection_context =
+            AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?;
+        let authorization = projection_context
+            .claim_transition_authorization(
+                &claim_path,
+                &released,
+                true,
+                AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo,
+                0,
+            )
+            .map_err(|message| Self::invalid_lane_artifact_error(claim_path.clone(), message))?;
+        let before_bytes = Self::file_len_or_zero(&claim_path)?;
+        let replacement_bytes = u64::try_from(bytes.len())?;
+        let capacity_path = self.store_root.join("blocks");
+        let mut capacity = AutonomousClaimMutationPeak::default();
+        capacity
+            .atomic_replace(before_bytes, replacement_bytes)
+            .map_err(|message| Self::invalid_lane_artifact_error(capacity_path.clone(), message))?;
+        let additional_peak_bytes = capacity
+            .additional_peak_bytes()
+            .map_err(|message| Self::invalid_lane_artifact_error(capacity_path.clone(), message))?;
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            additional_peak_bytes,
+            false,
+            false,
+            &capacity_path,
+        )?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let projection: ProductionInFlightFirstReleaseTransitionProjection = authorization
+            .consume_for_persistence(&claim_path, &released)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    claim_path.clone(),
+                    "autonomous claim crash-cut authority changed before persistence",
+                )
+            })?;
+        if projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED {
+            return Err(Self::invalid_lane_artifact_error(
+                claim_path,
+                "autonomous claim crash-cut authority names another transition",
+            ));
+        }
+        let checked =
+            check_production_in_flight_first_release_transition(projection).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    claim_path.clone(),
+                    "autonomous claim crash-cut persistence failed the composed transition gate",
+                )
+            })?;
+        if checked.into_projection() != projection {
+            return Err(Self::invalid_lane_artifact_error(
+                claim_path,
+                "checked autonomous claim crash-cut projection changed before persistence",
+            ));
+        }
+        self.write_atomic_synced_replace(&claim_path, &bytes)?;
+        let after_bytes = Self::file_len_or_zero(&claim_path)?;
+        self.update_disk_usage_delta(before_bytes, after_bytes);
+        accounting_mutation.finish();
+        if self.autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)?
+            != (2, 1)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                claim_path,
+                "autonomous claim crash cut did not persist exactly one Released prefix member",
+            ));
+        }
+        Ok(())
     }
 }
 include!("kura/autonomous_release_authority.rs");

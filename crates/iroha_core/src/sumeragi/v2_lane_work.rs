@@ -5992,14 +5992,18 @@ impl V2LaneWorkAdapter {
         let Some(persistence) = output_guard.begin_fail_stop_operation() else {
             return V2LaneIngressOutcome::Rejected;
         };
-        if self
+        if let Err(error) = self
             .kura
             .retain_pending_certified_merge_entry_for_locked_carrier(
                 self.context.height,
                 bundle.and_then(|bundle| bundle.merge_entry.as_ref()),
             )
-            .is_err()
         {
+            iroha_logger::error!(
+                %error,
+                height = self.context.height,
+                "canonical carrier failed pending merge-sidecar retention"
+            );
             return V2LaneIngressOutcome::Rejected;
         }
         let mut winning_unanchored = BTreeMap::new();
@@ -6008,6 +6012,10 @@ impl V2LaneWorkAdapter {
             let mut unanchored = payload.clone();
             unanchored.origin_proposal.payload_block_hint = None;
             if winning_unanchored.insert(key, unanchored).is_some() {
+                iroha_logger::error!(
+                    height = self.context.height,
+                    "canonical carrier contains duplicate autonomous lane slots"
+                );
                 return V2LaneIngressOutcome::Rejected;
             }
         }
@@ -6016,6 +6024,10 @@ impl V2LaneWorkAdapter {
                 .get(key)
                 .is_some_and(|pending| pending != payload)
         }) {
+            iroha_logger::error!(
+                height = self.context.height,
+                "canonical carrier conflicts with a pending autonomous lane owner"
+            );
             return V2LaneIngressOutcome::Rejected;
         }
         let losing_pending = self
@@ -6024,10 +6036,13 @@ impl V2LaneWorkAdapter {
             .filter(|(key, payload)| winning_unanchored.get(key) != Some(*payload))
             .map(|(_, payload)| payload.clone())
             .collect::<Vec<_>>();
-        if self
-            .retire_autonomous_payload_batch(&losing_pending)
-            .is_err()
-        {
+        if let Err(error) = self.retire_autonomous_payload_batch(&losing_pending) {
+            iroha_logger::error!(
+                %error,
+                height = self.context.height,
+                losing_payloads = losing_pending.len(),
+                "canonical carrier failed losing autonomous payload retirement"
+            );
             return V2LaneIngressOutcome::Rejected;
         }
         self.pending_autonomous_anchor_payloads.clear();
@@ -6035,7 +6050,15 @@ impl V2LaneWorkAdapter {
             let key = AutonomousLanePayloadKey::from(&payload.origin_proposal);
             match self.autonomous_payloads.get(&key) {
                 Some(existing) if existing == payload => {}
-                Some(_) => return V2LaneIngressOutcome::Rejected,
+                Some(_) => {
+                    iroha_logger::error!(
+                        height = self.context.height,
+                        lane = %payload.origin_proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = payload.origin_proposal.descriptor.lane_block_height,
+                        "canonical carrier conflicts with a retained autonomous payload"
+                    );
+                    return V2LaneIngressOutcome::Rejected;
+                }
                 None => {
                     self.autonomous_payload_views
                         .insert(key, payload.origin_proposal.descriptor.lane_block_view);
@@ -17783,6 +17806,27 @@ pub(super) mod tests {
             chain_id,
             network_id,
         ));
+        let mut npos_epoch_length = None;
+        if matches!(mode, wire::ConsensusMode::Npos) {
+            let parameters = iroha_data_model::parameter::system::SumeragiNposParameters::default();
+            parameters
+                .validate()
+                .expect("default lane-work NPoS parameters must be valid");
+            npos_epoch_length = Some(parameters.epoch_length_blocks().get());
+            let mut block = state.world.parameters.block();
+            block.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                parameters.into_custom_parameter(),
+            ));
+            block.commit();
+        }
+        let context_epoch = {
+            let world = state.world_view();
+            crate::sumeragi::epoch_for_height_from_world(&world, height, mode)
+                .expect("lane-work fixture has an authenticated epoch schedule")
+        };
+        let context_epoch_end_height = npos_epoch_length.map_or(u64::MAX, |epoch_length| {
+            context_epoch.saturating_add(1).saturating_mul(epoch_length)
+        });
         let validators = keys
             .iter()
             .map(|key| AccountId::new(key.public_key().clone()))
@@ -17833,8 +17877,8 @@ pub(super) mod tests {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height,
-            epoch: 4,
-            epoch_end_height: height.saturating_add(11),
+            epoch: context_epoch,
+            epoch_end_height: context_epoch_end_height,
             next_epoch_snapshot: None,
             mode,
             parent_commit_qc: (height > 1).then(|| wire::QuorumCertificate {
@@ -20670,7 +20714,28 @@ pub(super) mod tests {
     }
     #[test]
     fn direct_decision_retires_and_suppresses_merge_candidate_production() {
-        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let mut adapter = runner_handoff_losing_merge_fixture_for_test();
+        assert_eq!(
+            runner_handoff_losing_merge_counts_for_test(&adapter),
+            (1, 1)
+        );
+        let decided = wire::BlockSubject {
+            parent_block_hash: adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"decided carrier")),
+            payload_hash: Hash::new(b"decided carrier payload"),
+        };
+        adapter
+            .retain_merge_sidecars_for_global_view(0, None, Some(decided))
+            .expect("install direct Decision carrier state");
+        assert_eq!(
+            runner_handoff_losing_merge_counts_for_test(&adapter),
+            (0, 0)
+        );
+
         let candidate = merge_candidate_for_persistence_retry(&adapter, 0);
         let digest = crate::merge::merge_qc_message_digest(
             &adapter.context.network_id,
@@ -20683,30 +20748,6 @@ pub(super) mod tests {
             view: candidate.view,
             digest,
         };
-        let decided = wire::BlockSubject {
-            parent_block_hash: adapter
-                .context
-                .parent_commit_qc
-                .as_ref()
-                .map(|qc| qc.subject.block_hash),
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"decided carrier")),
-            payload_hash: Hash::new(b"decided carrier payload"),
-        };
-        adapter.merge_entries.insert(
-            key,
-            PendingMerge {
-                stage: PendingMergeStage::Collecting(candidate.clone()),
-                signatures: BTreeMap::new(),
-            },
-        );
-        adapter
-            .merge_claims
-            .insert((key.epoch_id, key.view, 0), digest);
-        adapter
-            .retain_merge_sidecars_for_global_view(0, None, Some(decided))
-            .expect("install direct Decision carrier state");
-        assert!(adapter.merge_entries.is_empty());
-        assert!(adapter.merge_claims.is_empty());
         adapter.merge_entries.insert(
             key,
             PendingMerge {
@@ -20721,6 +20762,41 @@ pub(super) mod tests {
             adapter.merge_entries.is_empty(),
             "no new merge candidate may survive after a durable Decision"
         );
+    }
+
+    /// Build one real losing merge candidate and its exact production claim.
+    pub(in crate::sumeragi) fn runner_handoff_losing_merge_fixture_for_test() -> V2LaneWorkAdapter {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let candidate = merge_candidate_for_persistence_retry(&adapter, 0);
+        let digest = crate::merge::merge_qc_message_digest(
+            &adapter.context.network_id,
+            &candidate,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            adapter.frozen_validator_set_hash(),
+        );
+        let key = MergeKey {
+            epoch_id: candidate.epoch_id,
+            view: candidate.view,
+            digest,
+        };
+        adapter.merge_entries.insert(
+            key,
+            PendingMerge {
+                stage: PendingMergeStage::Collecting(candidate),
+                signatures: BTreeMap::new(),
+            },
+        );
+        adapter
+            .merge_claims
+            .insert((key.epoch_id, key.view, 0), digest);
+        adapter
+    }
+
+    /// Count the exact losing merge entry and claim retained by the fixture.
+    pub(in crate::sumeragi) fn runner_handoff_losing_merge_counts_for_test(
+        adapter: &V2LaneWorkAdapter,
+    ) -> (usize, usize) {
+        (adapter.merge_entries.len(), adapter.merge_claims.len())
     }
     #[test]
     fn direct_decision_quiesces_losing_lane_and_retransmission_work() {

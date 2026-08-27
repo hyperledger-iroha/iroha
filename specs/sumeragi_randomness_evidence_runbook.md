@@ -2,169 +2,131 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Sumeragi Randomness & Evidence Runbook
+# Sumeragi Threshold-Beacon & Evidence Runbook
 
-This guide satisfies the Milestone A6 roadmap item that required refreshed
-operator procedures for VRF randomness and slashing evidence. Use it alongside
-{doc}`sumeragi` and {doc}`sumeragi_chaos_performance_runbook` whenever you stage
-a new validator build or capture readiness artefacts for governance.
+This runbook records the first-release operator boundary for consensus
+randomness and equivocation evidence. Use it with {doc}`sumeragi` and
+{doc}`sumeragi_chaos_performance_runbook` when qualifying a validator build or
+assembling release evidence.
 
+## Current protocol boundary
 
-For the first release, VRF penalties jail offenders after the governed activation
-lag. `SumeragiNposParameters.reconfig.slashing_delay_blocks` delays consensus
-slashing so governance can cancel it with `CancelConsensusEvidencePenalty`
-before it applies; this is governed chain state, not local `[sumeragi]` config.
+Production randomness comes only from a finalized global threshold-BLS pulse.
+The live producer binds each pulse to the exact network, active key session,
+frozen roster, pulse height, fixed round, and finalized parent anchor; verified
+partial shares are combined into one canonical public pulse.
 
-## Scope & prerequisites
+- For NPoS, the last committed pre-boundary block must contain the finalized
+  pulse used to derive the successor epoch's election seed. Missing or invalid
+  pulse effects reject that mandatory candidate.
+- Committed Parliament sortition and timed-ballot requests use the same
+  producer. Those demand slots remain optional for chain liveness so the
+  governance reducer can classify objective pulse absence and start a fresh
+  attempt.
+- Production emits and accepts no consensus `VrfCommit` or `VrfReveal`, creates
+  no VRF participant record, derives no VRF absence penalty, and rejects a
+  candidate carrying nonempty `vrf_epoch_seals`.
+
+Retained VRF wire variants and parameter names are compatibility tombstones or
+historical-test material. The `sumeragi_vrf_*` metric series are not registered
+or exported; operators must not restore them, the retired
+`/v1/sumeragi/vrf/*` routes, `vrf-epoch` or `vrf-penalties` CLI commands, VRF
+alerts, or VRF dashboard panels.
+
+## Prerequisites
 
 - `iroha_cli` configured for the target cluster (see `specs/cli.md`).
 - An allow-listed operator key in an absolute runtime-only mode-`0600` file.
-  For brevity, every `iroha ... ops sumeragi ...` command below assumes the
-  global `--operator-private-key-file /absolute/runtime/operator.key` option;
-  there is no account-key, token, environment, or TOML fallback.
-- `curl`/`jq` for scraping the Torii `/status` payload when preparing inputs.
-- Prometheus access (or snapshot exports) for the `sumeragi_vrf_*` metrics.
-- Awareness of the current epoch and roster so you can match CLI output to the
-  staking snapshot or governance manifest.
+  Each command below assumes the global
+  `--operator-private-key-file /absolute/runtime/operator.key` option.
+- Access to every validator's authenticated status, canonical committed block
+  archive, logs, and `/metrics` output.
+- The expected signed revision-4 height context, roster, network identifier,
+  and active threshold-beacon key session for the cut under review.
 
-## 1. Confirm mode selection and epoch context
+## 1. Capture consensus and pulse state
 
-1. Run `iroha --output-format text ops sumeragi status` to prove that the signed
-   revision-4 height context selected NPoS and to record its context fingerprint,
-   committee, and epoch. Use `ops sumeragi params` only to inspect governed NPoS
-   election/reconfiguration records; it is not a mutable local mode selector.
-2. Inspect the runtime view:
-
-   ```bash
-   iroha --output-format text ops sumeragi status
-   ```
-
-   The status output records authoritative leader/view and durable consensus
-   state. The legacy `vrf-epoch` and `vrf-penalties` CLI commands are retired,
-   as are all `/v1/sumeragi/vrf/*` HTTP routes. They do not provide an
-   alternative snapshot or mutation path; use `/metrics` separately for
-   node-local participation observations.
-3. Capture the epoch number you intend to audit:
-
-   ```bash
-   EPOCH=$(curl -s "$TORII/status" | jq '.sumeragi.epoch.height // 0')
-   printf "auditing epoch %s\n" "$EPOCH"
-   ```
-
-   Store the value for the status and telemetry captures below.
-
-## 2. Capture current VRF participation evidence
-
-Capture the authenticated Sumeragi status from every validator and export the
-matching Prometheus series for the epoch under review:
+Capture authenticated status from every validator:
 
 ```bash
-iroha ops sumeragi status > artifacts/sumeragi_status_epoch_${EPOCH}.json
+iroha --output-format text ops sumeragi status
 ```
 
-The persisted epoch record remains consensus-internal; first-release Torii does
-not expose its participant/reveal corpus. Do not restore or script the retired
-`vrf-epoch`/`vrf-penalties` commands or the former epoch/penalties GET routes.
-Correlate the status fingerprint, signed height context, current roster, and
-epoch with the bounded `sumeragi_vrf_*` counters exported by each validator.
+For each required pulse slot, archive the canonical block and its consensus
+effects. Check that all validators agree on the height context and finalized
+parent, and that the stored pulse names the exact pulse height, network, active
+session, roster/transcript commitments, and fixed protocol round. For an NPoS
+boundary, also retain the successor context showing the seed derived from that
+pre-boundary pulse. A local log or partial-share capture is supporting
+transport evidence; it is not a substitute for the committed finalized pulse.
 
-## 3. Monitor VRF telemetry and alerts
+For a Parliament demand slot, retain the committed request/attempt state and
+either its exact finalized pulse or the reducer transition that classified the
+slot unavailable. A later pulse cannot repair a slot already terminally
+classified unavailable, and a retry must use its newly committed attempt and
+future pulse height.
 
-Prometheus exposes the counters required by the roadmap:
+## 2. Capture canonical equivocation evidence
 
-- `sumeragi_vrf_commits_emitted_total`
-- `sumeragi_vrf_reveals_emitted_total`
-- `sumeragi_vrf_reveals_late_total`
-- `sumeragi_vrf_non_reveal_penalties_total`
-- `sumeragi_vrf_non_reveal_by_signer{idx="<roster-index>"}`
-- `sumeragi_vrf_no_participation_total`
-- `sumeragi_vrf_no_participation_by_signer{idx="<roster-index>"}`
-- `sumeragi_vrf_rejects_total_by_reason{reason="..."}`
-
-Example PromQL for the weekly report:
-
-```promql
-increase(sumeragi_vrf_non_reveal_by_signer[1w]) > 0
-```
-
-During readiness drills confirm that:
-
-- `sumeragi_vrf_commits_emitted_total` and `..._reveals_emitted_total` increase
-  for every block inside the commit/reveal windows.
-- Late-reveal scenarios trigger `sumeragi_vrf_reveals_late_total`; correlate
-  that counter with the non-reveal and reject counters on the same validator.
-- `sumeragi_vrf_no_participation_total` spikes only when you intentionally
-  withhold commits during chaos testing.
-
-The Grafana overview (`specs/grafana_sumeragi_overview.json`) includes
-panels for each counter; capture screenshots after every run and attach them to
-the artefact bundle referenced in {doc}`sumeragi_chaos_performance_runbook`.
-
-## 4. Evidence observation and streaming
-
-Slashing evidence is admitted through the authenticated consensus peer path and
-exposed read-only by Torii. Use the CLI helpers to demonstrate parity with the HTTP endpoints documented in
-{doc}`torii/sumeragi_evidence_app_api`:
+Evidence is read-only through Torii and the CLI. Mutation is admitted only by
+the authenticated consensus peer path and canonical signed-block evidence
+batches.
 
 ```bash
-# Count and list persisted evidence
 iroha --output-format text ops sumeragi evidence count
-iroha --output-format text ops sumeragi evidence list --limit 5
-
-# Show JSON for audits
-iroha ops sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
+iroha --output-format text ops sumeragi evidence list --limit 100
 ```
 
-Verify that the reported `total` matches the Grafana widget fed by
-`sumeragi_evidence_records_total`, and confirm that records older than
-`SumeragiNposParameters.reconfig.evidence_horizon_blocks` are rejected. Alert drills must
-produce evidence through the authenticated peer protocol; Torii and the CLI do
-not provide an evidence-injection path.
+Record the corresponding `sumeragi_evidence_records_total` observation and, if
+event consumers are in scope, capture the filtered `/v1/events/sse` stream
+described in {doc}`torii/sumeragi_evidence_app_api`. The CLI count, list, and
+SSE projection must identify the same canonical Sumeragi-v2 equivocation
+records. Torii, CLI, MCP, and SDK surfaces provide no evidence-injection or
+rebroadcast operation.
 
-Monitor `/v1/events/sse` with a filtered stream to prove SDKs see the same data:
-reuse the Python one-liner from {doc}`torii/sumeragi_evidence_app_api` to build
-the filter and capture the raw `data:` frames. The SSE payloads should echo the
-evidence kind and signer that appeared in the CLI output.
+Governed `SumeragiNposParameters.reconfig.evidence_horizon_blocks` bounds
+admission age. A penalty may consume only self-contained evidence admitted by
+a prior committed block; `slashing_delay_blocks` leaves the governed
+cancellation window. A node-local pending observation cannot authorize a
+slash.
 
-## 5. Evidence packaging and reporting
+## 3. Release evidence checklist
 
-For every rehearsal or release candidate:
+For every rehearsal or release candidate, retain:
 
-1. Store each validator's `sumeragi_status_epoch_*.json` and the
-   `evidence_snapshot.json` under the run’s artifact directory (the same root
-   used by the chaos/performance scripts).
-2. Record the Prometheus query results or snapshot exports for the counters
-   listed above.
-3. Attach the SSE capture and alert acknowledgements to the artefact README.
-4. Update `status.md` and
-   `specs/project_tracker/npos_sumeragi_phase_a.md` with the artifact
-   paths plus the epoch number you inspected.
+1. each validator's authenticated Sumeragi status and signed height context;
+2. each required or requested pulse slot's canonical block/effect and the
+   active public key-session record used to verify it;
+3. threshold-share transport logs for missing-share, invalid-share,
+   retransmission, view-change, and restart scenarios, without exporting secret
+   shares;
+4. the evidence count/list and any SSE capture used to check read-surface
+   parity; and
+5. the exact build revision, network identifier, roster, and artifact paths in
+   the run-local evidence README.
 
-Following this checklist keeps VRF randomness proofs and slashing evidence
-auditable during the NPoS rollout and gives governance reviewers a deterministic
-trail back to the captured metrics and CLI snapshots.
+Do not describe a flat legacy VRF counter as healthy beacon operation. The
+current release has no dedicated public beacon metric family, so release proof
+must remain anchored in authenticated context and committed pulse state.
 
-## 6. Troubleshooting signals
+## 4. Troubleshooting
 
-- **Mode or roster mismatch** — Compare the authoritative Sumeragi status and
-  signed genesis/governed height context with the intended consensus mode,
-  revision-4 `3f + 1` roster, and VRF seed. Correct the signed chain input (or
-  governed chain state), restart the validator, and re-run the validation flow
-  described in {doc}`sumeragi`. Legacy `consensus_mode` or collector fields in
-  compatibility output are not runtime authority.
-- **Missing commits or reveals** — A flat `sumeragi_vrf_commits_emitted_total`
-  or `sumeragi_vrf_reveals_emitted_total` time series means the authenticated
-  peer path is not broadcasting VRF frames. Check the validator logs for
-  `handle_vrf_*` errors, restore peer connectivity, and let the validator
-  rebroadcast the frame through consensus.
-- **Unexpected penalties** — When `sumeragi_vrf_no_participation_total` spikes,
-  correlate the `*_by_signer{idx=...}` series with the signed roster and
-  authenticated consensus-ingress logs. Penalties that do not align with chaos
-  drills indicate a validator producer, key, or peer-connectivity fault; fix the
-  offending peer before rerunning the test. Torii is not a VRF ingress path.
-- **Evidence ingestion stalls** — When `sumeragi_evidence_records_total`
-  plateaus while chaos tests emit faults, run `iroha ops sumeragi evidence count`
-  on multiple validators and confirm `/v1/sumeragi/evidence/count` matches the
-  CLI output. Any divergence means SSE/webhook consumers may also be stale, so
-  compare authenticated peer-ingress logs and repair the diverging validator.
-  Evidence cannot be injected through Torii.
+- **Mandatory NPoS pulse missing** — Check that the key session is active at
+  the pulse height, its roster matches the frozen height context, local runtime
+  custody owns the correct seat, and authenticated
+  `GlobalBeaconPartialSignature` traffic reaches threshold. Do not bypass the
+  candidate failure or substitute a local seed.
+- **Pulse rejected** — Compare network, session, roster/transcript, height,
+  fixed round, and finalized parent anchor before investigating cryptography.
+  A stale key or foreign-chain pulse must fail closed.
+- **Parliament demand pulse absent** — Preserve the exact request and deadline
+  state, allow the reducer to classify that attempt objectively, and verify the
+  retry commits a new attempt with a strictly future pulse height. Do not reuse
+  a late pulse or caller-supplied entropy.
+- **Legacy VRF frames or alerts appear** — Treat them as a retired sender,
+  fixture, or deployment artifact. Production ingress rejects the frames and
+  no VRF telemetry threshold is a recovery procedure.
+- **Evidence views diverge** — Compare authenticated peer-ingress logs,
+  canonical evidence admissions, CLI count/list, and SSE output on multiple
+  validators. Repair the diverging node from canonical state; do not inject
+  evidence through Torii.

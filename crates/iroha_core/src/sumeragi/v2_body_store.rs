@@ -24,7 +24,9 @@ use super::{
     v2_apply::{V2ApplyError, V2ApplyService, VerifiedRecoveredFinalitySubject},
     v2_effects::{BodyStoreTask, EffectWorkId},
     v2_lifecycle_coordinator::{
-        AuthenticatedRecoveredLifecycleOutputV1, AuthenticatedRecoveredWalDecisionFetchProjection,
+        AuthenticatedRecoveredLifecycleOutputV1,
+        AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+        AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLedgerParent, LifecycleContext,
         RecoveredDecisionApplyReplayLineageV1, TerminalValidateNoSuccessorClaim,
     },
@@ -845,6 +847,33 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
         true
     }
 
+    /// Select exactly one successful marker authenticated by the ledger claim.
+    ///
+    /// Rejections are deliberately outside this selector: a released Apply can
+    /// be recovered only from a durable successful execution commitment.
+    /// Selection remains rollback-safe and one-shot within this catalog cut.
+    pub(super) fn select_exact_successful_terminal_validate(
+        &mut self,
+        claim: &TerminalValidateNoSuccessorClaim,
+    ) -> bool {
+        let mut exact_key = None;
+        for (key, validated) in &self.validated {
+            if claim.matches_validated_receipt(validated) && exact_key.replace(*key).is_some() {
+                return false;
+            }
+        }
+        let Some(key) = exact_key else {
+            return false;
+        };
+        let validated = self
+            .validated
+            .remove(&key)
+            .expect("an exact successful catalog match remains unselected");
+        let displaced = self.selected_validated.insert(key, validated);
+        debug_assert!(displaced.is_none());
+        true
+    }
+
     /// Select the sole revalidated rejection marker named by one cold report row.
     ///
     /// The output carrier retains the private manifest/frame/rejection binding;
@@ -882,6 +911,35 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
         self.restore_unselected();
         self.selected_validated.clear();
         self.selected_rejected.clear();
+    }
+    /// Commit all selected outcomes and transfer one exact success into a
+    /// move-only released-Validate authority.
+    ///
+    /// The named claim must already have crossed
+    /// [`Self::select_exact_successful_terminal_validate`]. Zero or multiple
+    /// selected matches fail closed; dropping the cut then restores every
+    /// detached marker.
+    pub(super) fn commit_selected_with_released_validate(
+        mut self,
+        claim: TerminalValidateNoSuccessorClaim,
+    ) -> Option<AuthenticatedRecoveredReleasedValidateNoSuccessorV1> {
+        let mut exact_key = None;
+        for (key, validated) in &self.selected_validated {
+            if claim.matches_validated_receipt(validated) && exact_key.replace(*key).is_some() {
+                return None;
+            }
+        }
+        let key = exact_key?;
+        let validated = self.selected_validated.get(&key)?.clone();
+        let authority =
+            AuthenticatedRecoveredReleasedValidateNoSuccessorV1::from_consumed_body_store_success(
+                claim, validated,
+            )?;
+        self.selected_validated.remove(&key);
+        self.restore_unselected();
+        self.selected_validated.clear();
+        self.selected_rejected.clear();
+        Some(authority)
     }
     fn restore_unselected(&mut self) {
         for (key, validated) in std::mem::take(&mut self.validated) {

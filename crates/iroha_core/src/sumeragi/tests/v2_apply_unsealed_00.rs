@@ -386,14 +386,14 @@ impl ApplyFixture {
     fn new_with_lane_lifecycle() -> Self {
         Self::new_with_options(false, false, true, false)
     }
-    fn new_with_native_lane_lifecycle() -> Self {
-        Self::new_with_options(false, false, true, true)
-    }
     fn new_for_production_recovered_decision_apply() -> Self {
         Self::new_with_options_and_network(false, false, false, false, true)
     }
     fn new_for_production_recovered_decision_apply_with_lane_lifecycle() -> Self {
         Self::new_with_options_and_network(false, false, true, false, true)
+    }
+    fn new_for_production_recovered_decision_apply_with_native_lane_lifecycle() -> Self {
+        Self::new_with_options_and_network(false, false, true, true, true)
     }
     fn new_for_kagemusha_runtime_projection() -> Self {
         Self::new_with_options_and_network_and_kagemusha(
@@ -2147,6 +2147,11 @@ fn reserve_autonomous_crash_batch(
     queue: &Arc<Queue>,
     producer: &KeyPair,
 ) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
+    assert_eq!(
+        &fixture.context.network_id,
+        fixture.state.network_id_ref(),
+        "strict autonomous QueuePlan fixtures must sign and persist the State network identity"
+    );
     let transactions = (0_u8..4)
         .map(|index| {
             TransactionBuilder::new(
@@ -2158,6 +2163,9 @@ fn reserve_autonomous_crash_batch(
                 Level::INFO,
                 format!("autonomous reservation crash boundary {index}"),
             )])
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            )
             .sign(fixture.genesis_key.private_key())
         })
         .collect::<Vec<_>>();
@@ -2235,6 +2243,25 @@ fn reserve_autonomous_crash_batch(
             .expect("durably enqueue autonomous crash reservation transaction");
         install_fixture_queue_plan_registry_value(fixture.state.as_ref(), &binding);
     }
+    let network_id = fixture.context.network_id;
+    let epoch = {
+        let world = fixture.state.world_view();
+        crate::sumeragi::epoch_for_height_from_world(
+            &world,
+            proposal.descriptor.proposal_height,
+            fixture.context.mode,
+        )
+        .expect("fixture has a valid committed epoch schedule")
+    };
+    let (reservation_owner_hash, proposal_identity_hash) =
+        super::super::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
+            network_id,
+            fixture.context.id(),
+            epoch,
+            &proposal,
+            &validator_set[0],
+        )
+        .expect("derive height-bound autonomous crash reservation identity");
     let scope = LaneQueueReservationScopeV1 {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
@@ -2242,8 +2269,8 @@ fn reserve_autonomous_crash_batch(
         proposal_height: proposal.descriptor.proposal_height,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
-        reservation_owner_hash: Hash::new(b"v2 autonomous crash reservation owner"),
-        proposal_identity_hash: proposal.proposal_hash,
+        reservation_owner_hash,
+        proposal_identity_hash,
     };
     let reserved = queue
         .reserve_transactions_for_lane(
@@ -2269,16 +2296,6 @@ fn reserve_autonomous_crash_batch(
         .iter()
         .map(|reserved| reserved.routing_plan().clone())
         .collect::<Vec<_>>();
-    let network_id = fixture.context.network_id;
-    let epoch = {
-        let world = fixture.state.world_view();
-        crate::sumeragi::epoch_for_height_from_world(
-            &world,
-            proposal.descriptor.proposal_height,
-            fixture.context.mode,
-        )
-        .expect("fixture has a valid committed epoch schedule")
-    };
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
         network_id,
         epoch,
@@ -2292,6 +2309,30 @@ fn reserve_autonomous_crash_batch(
     )
     .expect("build exact autonomous crash payload");
     (payload, expected_fifo)
+}
+
+fn install_autonomous_crash_live_cursor(
+    fixture: &ApplyFixture,
+    payload: &LaneExecutablePayloadV1,
+    producer: &KeyPair,
+) -> LaneQueueReservationGroupBindingV1 {
+    let local_peer = PeerId::new(producer.public_key().clone());
+    fixture
+        .kura
+        .bind_local_peer_id(local_peer.clone())
+        .expect("bind autonomous crash lifecycle actor");
+    let generation = fixture
+        .kura
+        .claim_autonomous_lifecycle_process_generation(payload.network_id, &local_peer)
+        .expect("claim autonomous crash lifecycle generation");
+    install_live_lifecycle_cursor_for_apply_test(
+        fixture.kura.as_ref(),
+        &generation,
+        payload,
+        fixture.context.id(),
+        &local_peer,
+        producer,
+    )
 }
 fn fixture_validator_keys() -> Vec<KeyPair> {
     let mut keys = (1_u8..=4)
@@ -2431,6 +2472,11 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
 ) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
     assert_eq!(fixture.state.committed_height(), 1);
     assert_eq!(context.height, 2);
+    assert_eq!(
+        &context.network_id,
+        fixture.state.network_id_ref(),
+        "strict canonical successor QueuePlan fixtures must sign and persist the State network identity"
+    );
     assert!((1..=16).contains(&count));
     install_fixture_validator_authority(
         fixture.state.as_ref(),
@@ -2444,7 +2490,10 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
                 fixture.service.genesis_account.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_instructions(instructions(index));
+            .with_instructions(instructions(index))
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            );
             let nonce = u32::try_from(index)
                 .ok()
                 .and_then(|value| value.checked_add(1))

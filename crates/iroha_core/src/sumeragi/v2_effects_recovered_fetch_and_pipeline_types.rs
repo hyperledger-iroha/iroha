@@ -868,6 +868,19 @@ struct LiveLifecycleValidateSuccessorOwnerV1 {
     apply_is_authorized: bool,
 }
 impl LiveLifecycleValidateSuccessorOwnerV1 {
+    /// Return whether a freshly attested carrier is the sole legal physical
+    /// refinement of this same logical Validate row.
+    fn can_refine_to(&self, candidate: &Self) -> bool {
+        self.dispatch_key != candidate.dispatch_key
+            && self.apply_is_authorized
+            && self.dispatch_key.owner() == candidate.dispatch_key.owner()
+            && self.dispatch_key.lifecycle_ordinal()
+                == candidate.dispatch_key.lifecycle_ordinal()
+            && self.dispatch_key.slot() == candidate.dispatch_key.slot()
+            && self.round == candidate.round
+            && self.subject == candidate.subject
+    }
+
     fn exactly_matches_apply(
         &self,
         subject: wire::BlockSubject,

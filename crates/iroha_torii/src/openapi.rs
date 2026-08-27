@@ -4906,6 +4906,12 @@ mod tests {
                 "retired Sumeragi VRF path remains in the canonical full-profile document: {retired_path}"
             );
         }
+        assert!(
+            paths
+                .keys()
+                .all(|path| !path.starts_with("/v1/sumeragi/vrf/")),
+            "canonical full-profile document must not expose any retired Sumeragi VRF path"
+        );
         let compiled_paths = generate_spec()
             .get("paths")
             .and_then(Value::as_object)
@@ -4923,10 +4929,14 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("canonical schemas section");
-        for retired_schema in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
+        for retired_schema in [
+            "SumeragiVrfCommitRequest",
+            "SumeragiVrfRevealRequest",
+            "SumeragiVrfPenaltiesReport",
+        ] {
             assert!(
                 !schemas.contains_key(retired_schema),
-                "retired Sumeragi VRF request schema remains documented: {retired_schema}"
+                "retired Sumeragi VRF schema remains documented: {retired_schema}"
             );
         }
     }

@@ -313,15 +313,23 @@ RecoverReservationSnapshot ==
 
 (***************************************************************************
 Direct abort/orphan release is a real journal action outside the ordered
-four-stage lane release. It ends with ordinary FIFO ownership and may not
-masquerade as a Commit cleanup or ordered-release transition. The V1 operation
-inventory contains no lane-wide removal action.
+four-stage lane release. The same physical FIFO state is authenticated by a
+strict retired non-producer replica only after the complete ReleasePending
+prefix; that branch never fabricates the producer's Queue reservation owner.
+Both branches end with ordinary FIFO ownership and may not masquerade as a
+Commit cleanup. The V1 operation inventory contains no lane-wide removal
+action.
 ***************************************************************************)
 ReleaseReservationDirect ==
   /\ queue.plan = "SelectedConjunction"
-  /\ queue.reservation = "Live"
-  /\ decision.laneCommitOwner = "None"
-  /\ decision.releaseOwner = "None"
+  /\ ((queue.reservation = "Live"
+       /\ decision.laneCommitOwner = "None"
+       /\ decision.releaseOwner = "None")
+      \/ (queue.reservation \in {"Live", "DirectReleased"}
+          /\ release.kuraRetired
+          /\ (queue.reservation = "DirectReleased" => release.fifoRestored)
+          /\ release.pendingPrefix = queue.selectedCount
+          /\ decision.releaseOwner \in (Validators \ {Producer})))
   /\ queue' = [queue EXCEPT !.reservation = "DirectReleased"]
   /\ release' = [release EXCEPT !.fifoRestored = TRUE]
   /\ UNCHANGED <<ownership, payloadBinding, carrier, session, history, decision>>
@@ -500,6 +508,11 @@ AdvanceReleasedPrefix ==
   /\ release.releasedPrefix < queue.selectedCount
   /\ ((queue.reservation = "ReleasePrepared"
        /\ release.pendingPrefix = queue.selectedCount)
+      \/ (queue.reservation = "DirectReleased"
+          /\ release.kuraRetired
+          /\ release.fifoRestored
+          /\ release.pendingPrefix = queue.selectedCount
+          /\ decision.releaseOwner \in (Validators \ {Producer}))
       \/ Mode = "ReleasedClaimsBeforePrepare")
   /\ release' = [release EXCEPT !.releasedPrefix = @ + 1]
   /\ history' = [history EXCEPT !.releasedHighWater = @ + 1]
@@ -743,7 +756,11 @@ MLReleaseStageOrder ==
        /\ release.kuraRetired
        /\ release.pendingPrefix = queue.selectedCount
   /\ release.releasedPrefix > 0 =>
-       /\ queue.reservation \in PreparedReleaseStates
+       /\ (queue.reservation \in PreparedReleaseStates
+           \/ (queue.reservation = "DirectReleased"
+               /\ release.kuraRetired
+               /\ release.fifoRestored
+               /\ decision.releaseOwner \in (Validators \ {Producer})))
        /\ release.pendingPrefix = queue.selectedCount
   /\ queue.reservation \in CompletedReleaseStates =>
        release.releasedPrefix = queue.selectedCount
@@ -753,6 +770,9 @@ MLReleaseStageOrder ==
        release.fifoRestored
   /\ queue.reservation = "DirectReleased" =>
        release.fifoRestored
+  /\ queue.reservation = "DirectReleased" /\ release.kuraRetired =>
+       /\ release.pendingPrefix = queue.selectedCount
+       /\ decision.releaseOwner \in (Validators \ {Producer})
 
 MLQueuePlanV1SelectedConjunctionBound4096 ==
   /\ queue.selectedCount <= 4096

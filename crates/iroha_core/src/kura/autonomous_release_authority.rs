@@ -123,6 +123,260 @@ impl Kura {
             )
             .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))
     }
+    /// Authenticate a retired non-producer replica before Queue proves exact
+    /// FIFO-only ownership for its ordered group.
+    ///
+    /// This path is read-only. It reopens the exact durable retirement and
+    /// current lane-height attempt, verifies the locally signed lifecycle
+    /// cursor against the current Kura process record, and requires that the
+    /// signed local actor differ from the frozen producer. Producers receive
+    /// `None` and continue through the ordinary prepared-Queue corridor.
+    pub(crate) fn authorize_autonomous_nonqueue_replica_claim_release(
+        &self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+    ) -> Result<Option<AutonomousNonQueueReplicaClaimReleaseAuthorization>> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
+            || retirement.network_id != expected_network_id
+            || retirement.epoch != expected_epoch
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "non-Queue replica release authorization has an unsupported chain context",
+            ));
+        }
+        let entry = self.lane_storage_entry(retirement.lane_id)?;
+        let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            retirement.lane_block_height,
+            retirement.proposal_height,
+        );
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let record = self
+            .read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                retirement.lane_id,
+                retirement.lane_block_height,
+                retirement.proposal_height,
+                expected_network_id,
+                expected_epoch,
+                None,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    attempt_path,
+                    "missing exact autonomous attempt for non-Queue replica release",
+                )
+            })?;
+        let payload = &record.artifact.executable_payload;
+        if record.retirement.as_ref() != Some(retirement) || !retirement.matches_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "non-Queue replica release differs from its exact durable retirement",
+            ));
+        }
+        let Some(local_peer) = self.local_peer_id.get() else {
+            return Ok(None);
+        };
+        if local_peer == &payload.producer {
+            return Ok(None);
+        }
+        let current = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                retirement.lane_block_height,
+                None,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "non-Queue replica release has no current lane-height attempt",
+                )
+            })?;
+        if current.artifact.executable_payload != *payload {
+            return Err(Self::invalid_lane_artifact_error(
+                current.view_state_path,
+                "non-Queue replica release attempt is no longer current",
+            ));
+        }
+        let cursor =
+            self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(&entry, payload)?;
+        let context =
+            AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?;
+        let binding = cursor.binding();
+        let (_, signed_actor) = binding.local_validator_identity();
+        if signed_actor != context.actor
+            || binding.producer_actor_projection() != context.producer
+            || signed_actor == context.producer
+            || binding.reservation_group_binding() != context.reservation_group
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "non-Queue replica release cursor changed its exact actor or reservation binding",
+            ));
+        }
+        let (pending_prefix, released_prefix) =
+            self.autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)?;
+        if pending_prefix != context.reservation_group.reservation_count {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "non-Queue replica release lacks the full durable ReleasePending prefix",
+            ));
+        }
+        let fifo_projection = context
+            .replica_fifo_ownership_projection(released_prefix)
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+            })?;
+        Ok(Some(AutonomousNonQueueReplicaClaimReleaseAuthorization {
+            store_root: self.store_root.clone(),
+            release_barrier: retirement.queue_release_barrier()?,
+            fifo_projection,
+            retirement: retirement.clone(),
+            cursor,
+        }))
+    }
+    /// Consume Queue's exact FIFO-only proof and release this replica's Kura
+    /// claims without manufacturing a Queue reservation owner.
+    ///
+    /// Queue's proof retains an exact-hash durability transition for the whole
+    /// ordered group. This method deliberately keeps that proof alive while it
+    /// revalidates the retired attempt and signed cursor and while every
+    /// crash-resumable `ReleasePending -> Released` replacement is written,
+    /// then returns the same move-only proof so the caller can retain the fence
+    /// through terminal Queue evidence and Kura completion.
+    pub(crate) fn finalize_autonomous_nonqueue_replica_claim_release<'queue>(
+        &self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        authorization: crate::queue::DurableAutonomousNonQueueReplicaFifoAuthorization<'queue>,
+    ) -> Result<crate::queue::DurableAutonomousNonQueueReplicaFifoAuthorization<'queue>> {
+        let barrier = retirement.queue_release_barrier()?;
+        let kura_authorization =
+            authorization
+                .authorization_for_kura(&barrier)
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "non-Queue replica FIFO authority names another retirement barrier",
+                    )
+                })?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
+            || retirement.network_id != expected_network_id
+            || retirement.epoch != expected_epoch
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "non-Queue replica claim finalization has an unsupported chain context",
+            ));
+        }
+        let entry = self.lane_storage_entry(retirement.lane_id)?;
+        let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            retirement.lane_block_height,
+            retirement.proposal_height,
+        );
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let record = self
+            .read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                retirement.lane_id,
+                retirement.lane_block_height,
+                retirement.proposal_height,
+                expected_network_id,
+                expected_epoch,
+                Some(pending_canonical_bytes),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    attempt_path,
+                    "missing exact autonomous attempt for non-Queue replica claim finalization",
+                )
+            })?;
+        let payload = &record.artifact.executable_payload;
+        if record.retirement.as_ref() != Some(retirement) || !retirement.matches_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "non-Queue replica claim finalization changed its durable retirement",
+            ));
+        }
+        let current = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                retirement.lane_block_height,
+                Some(pending_canonical_bytes),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "non-Queue replica claim finalization has no current lane-height attempt",
+                )
+            })?;
+        if current.artifact.executable_payload != *payload {
+            return Err(Self::invalid_lane_artifact_error(
+                current.view_state_path,
+                "non-Queue replica claim finalization attempt is no longer current",
+            ));
+        }
+        let cursor =
+            self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(&entry, payload)?;
+        let context =
+            AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?;
+        let binding = cursor.binding();
+        let (_, signed_actor) = binding.local_validator_identity();
+        if !kura_authorization.matches_exact_durable_source(
+            &self.store_root,
+            retirement,
+            &cursor,
+        )
+            || signed_actor != context.actor
+            || binding.producer_actor_projection() != context.producer
+            || signed_actor == context.producer
+            || binding.reservation_group_binding() != context.reservation_group
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "non-Queue replica FIFO proof changed its signed durable release source",
+            ));
+        }
+        let (pending_prefix, _) =
+            self.autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)?;
+        if pending_prefix != context.reservation_group.reservation_count {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "non-Queue replica claim finalization lacks the full ReleasePending prefix",
+            ));
+        }
+        self.finalize_autonomous_lane_entrypoint_claim_release_with_mode_locked(
+            pending_canonical_bytes,
+            payload,
+            retirement,
+            AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo,
+        )?;
+        self.require_autonomous_lane_entrypoint_claims_released_locked(payload, retirement)?;
+        Ok(authorization)
+    }
     /// Authenticate Queue's exact prepared-release boundary from durable Kura evidence.
     ///
     /// This reopens the exact historical attempt, verifies its retirement,

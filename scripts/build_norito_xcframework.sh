@@ -112,6 +112,7 @@ run_python312_clean() {
 #   scripts/build_norito_xcframework.sh --archive-output /absolute/NoritoBridge.xcframework.zip
 #   scripts/build_norito_xcframework.sh --privacy-production-enabled
 #   scripts/build_norito_xcframework.sh --privacy-production-enabled --allow-dirty-source
+#   scripts/build_norito_xcframework.sh --ci-handoff-only
 #
 # NORITO_BRIDGE_OUT_DIR and NORITO_BRIDGE_BUILD_DIR are mandatory external
 # cache roots. The first-release owner never creates build or artifact output
@@ -343,6 +344,7 @@ BRIDGE_VERSION=""
 ARCHIVE_OUTPUT=""
 PRIVACY_PRODUCTION_ENABLED=0
 ALLOW_DIRTY_SOURCE=0
+CI_HANDOFF_ONLY=0
 CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -378,14 +380,53 @@ while [[ $# -gt 0 ]]; do
     --allow-dirty-source)
       ALLOW_DIRTY_SOURCE=1
       ;;
+    --ci-handoff-only)
+      CI_HANDOFF_ONLY=1
+      ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source]" >&2
+      echo "    Usage: $0 [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source] [--ci-handoff-only]" >&2
       exit 1
       ;;
   esac
   shift
 done
+
+CI_HANDOFF_DIR="$OUT_DIR/NoritoBridge.ci-handoff"
+if [[ "$CI_HANDOFF_ONLY" == "1" ]]; then
+  if [[ -n "$ARCHIVE_OUTPUT" || "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+    echo "[-] --ci-handoff-only cannot publish an archive or use dirty source" >&2
+    exit 1
+  fi
+  if [[ "${CI:-}" != "true" \
+      || "${GITHUB_ACTIONS:-}" != "true" \
+      || "${GITHUB_WORKFLOW:-}" != "Kagemusha first-release contract" \
+      || "${GITHUB_JOB:-}" != "swift" \
+      || "${GITHUB_WORKSPACE:-}" != "$ROOT_DIR" \
+      || "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1" ]]; then
+    echo "[-] --ci-handoff-only is restricted to the authenticated Kagemusha Swift producer" >&2
+    exit 1
+  fi
+  case "${GITHUB_EVENT_NAME:-}" in
+    pull_request | workflow_dispatch) ;;
+    *)
+      echo "[-] --ci-handoff-only requires a pull_request or workflow_dispatch event" >&2
+      exit 1
+      ;;
+  esac
+  if [[ -e "$CI_HANDOFF_DIR" || -L "$CI_HANDOFF_DIR" ]]; then
+    echo "[-] CI handoff candidate must not already exist: $CI_HANDOFF_DIR" >&2
+    exit 1
+  fi
+  for canonical_output in \
+    "$OUT_DIR/NoritoBridge.xcframework" \
+    "$OUT_DIR/NoritoBridge.artifacts.json"; do
+    if [[ -e "$canonical_output" || -L "$canonical_output" ]]; then
+      echo "[-] --ci-handoff-only requires canonical release outputs to remain absent" >&2
+      exit 1
+    fi
+  done
+fi
 
 if [[ -n "$ARCHIVE_OUTPUT" ]]; then
   ARCHIVE_OUTPUT="$(run_python312_clean - \
@@ -1749,25 +1790,91 @@ run_isolated_python \
 
 assert_bridge_source_seal "staged artifact validation"
 
-if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
-  MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
-    MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
-    MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
-    MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
-    MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
-    bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+if [[ "$CI_HANDOFF_ONLY" == "1" ]]; then
+  echo "[+] Deferring the full Apple SDK certification to the digest-authenticated CI consumer" >&2
+  assert_bridge_source_seal "pre-handoff artifact verification"
 else
-  MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
-    MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
-    MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
-    MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
-    bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
-fi
+  if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+    MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
+      MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
+      MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
+      MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
+      MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
+      bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+  else
+    MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
+      MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
+      MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
+      MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
+      bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+  fi
 
-assert_bridge_source_seal "pre-publication artifact verification"
+  assert_bridge_source_seal "pre-publication artifact verification"
+fi
 
 echo "[+] Removing task-owned staging intermediates before publication" >&2
 rm -rf "$STAGE_DIR"
+
+if [[ "$CI_HANDOFF_ONLY" == "1" ]]; then
+  rm -f "$PUBLISH_PROSPECTIVE_LOADER"
+  run_isolated_python - "$PUBLISH_ROOT" "$CI_HANDOFF_DIR" <<'PY'
+import ctypes
+import os
+from pathlib import Path
+import stat
+import sys
+
+
+RENAME_EXCL = 0x00000004
+libc = ctypes.CDLL(None, use_errno=True)
+staged = Path(sys.argv[1])
+handoff = Path(sys.argv[2])
+expected_entries = {
+    "NoritoBridge.xcframework",
+    "NoritoBridge.artifacts.json",
+}
+if (
+    staged.parent != handoff.parent
+    or not staged.name.startswith(".NoritoBridge.publish.")
+    or staged.is_symlink()
+    or not staged.is_dir()
+    or {entry.name for entry in staged.iterdir()} != expected_entries
+):
+    raise SystemExit("CI handoff candidate staging root is not exact")
+manifest = staged / "NoritoBridge.artifacts.json"
+if (
+    not manifest.is_symlink()
+    or os.readlink(manifest)
+    != "NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+):
+    raise SystemExit("CI handoff candidate manifest link is not canonical")
+try:
+    handoff.lstat()
+except FileNotFoundError:
+    pass
+else:
+    raise SystemExit("CI handoff candidate destination already exists")
+if not hasattr(libc, "renamex_np"):
+    raise SystemExit("CI handoff candidate requires macOS exclusive rename support")
+renamex_np = libc.renamex_np
+renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+renamex_np.restype = ctypes.c_int
+if renamex_np(os.fsencode(staged), os.fsencode(handoff), RENAME_EXCL) != 0:
+    error = ctypes.get_errno()
+    raise OSError(error, os.strerror(error), f"{staged} -> {handoff}")
+metadata = handoff.lstat()
+if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+    raise SystemExit("published CI handoff candidate is not a regular directory")
+descriptor = os.open(handoff.parent, os.O_RDONLY)
+try:
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+PY
+  PUBLISH_ROOT=""
+  echo "[+] Atomically staged uncertified CI handoff candidate: $CI_HANDOFF_DIR" >&2
+  exit 0
+fi
 
 run_isolated_python - \
   "$PUBLISH_XCFRAMEWORK" "$FINAL_XCFRAMEWORK" "$FINAL_MANIFEST" \

@@ -337,6 +337,22 @@ fn apply_barriers_reconcile_only_current_serve_owners_before_direct_recovery() {
         "an Apply barrier may inherit a capacity wait but cannot admit fresh ordinary ingress"
     );
 
+    let handoff = source_region(
+        run_inner,
+        "pub(in crate::sumeragi) fn settle_apply_barrier_runner_decision_handoff(",
+        "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",
+    );
+    assert_source_tokens_in_order(
+        handoff,
+        &[
+            "executor.reconcile_pending_runner_decision_cleanup(services)?",
+            "let directive = executor.local_proposal_directive()?",
+            "local_proposal\n        .state\n        .reconcile(LocalProposalOwner::from(directive))",
+            "lane_work.retain_merge_sidecars_for_global_view(",
+            "executor.acknowledge_runner_decision_cleanup(",
+        ],
+    );
+
     let turn_driver = include_str!("v2_lifecycle_turn_driver.rs");
     let reconcile = source_region(
         turn_driver,

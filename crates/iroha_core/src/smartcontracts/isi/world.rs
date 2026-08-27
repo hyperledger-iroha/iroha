@@ -19669,7 +19669,7 @@ pub mod isi {
                             ballot_attempt_id,
                             registration_root,
                             3,
-                            32,
+                            34,
                         )
                         .expect("close deterministic ballot registration");
                     attempt

@@ -43,8 +43,9 @@ use super::{
         durable_validate_payload_is_exact,
     },
     open::{
-        AuthenticatedLifecycleRecoveryCut, CompleteTipServeRetirementReconciliationV1,
-        LifecycleOpenError, LifecycleRecoveryAssemblyError,
+        AuthenticatedLifecycleRecoveryCut, AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+        CompleteTipServeRetirementReconciliationV1, LifecycleOpenError,
+        LifecycleRecoveryAssemblyError,
     },
     projection,
 };
@@ -1285,6 +1286,12 @@ impl LifecycleLedgerRecordV1 {
     /// Return the authenticated reconstruction source.
     pub(super) const fn reconstruction_source(&self) -> LifecycleDigest {
         LifecycleDigest::new(self.reconstruction_source)
+    }
+    /// Hash the complete canonical row, including its replay envelope.
+    pub(super) fn exact_row_identity(&self) -> LifecycleDigest {
+        let mut preimage = Vec::from(&b"iroha:sumeragi:v2:lifecycle-ledger-row:v1"[..]);
+        preimage.extend_from_slice(&self.encode());
+        LifecycleDigest::new(*Hash::new(preimage).as_ref())
     }
     pub(super) fn durable_payload(&self) -> Option<DurablePayloadReference> {
         self.key()
@@ -3901,29 +3908,51 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered Decision Apply LedgerV1 open failed",
                 )
             })?;
-        let fetch_is_present = predecessor
-            .records
-            .iter()
-            .any(|record| projection.fetch().names_record(record));
-        let staged_predecessor = if fetch_is_present {
-            predecessor.clone()
-        } else {
-            predecessor
-                .stage_authenticated_wal_decision_fetch(projection.fetch())
-                .map_err(|_error| {
-                    ProductionRecoveredDecisionApplyStartupErrorV1::new(
-                        "recovered Decision Apply Fetch parent is not exact",
-                    )
-                })?
-                .0
-        };
-        let (successor, _apply_ordinal, _changed) = staged_predecessor
-            .stage_recovered_decision_apply(projection.as_ref())
+        let startup_shape = predecessor
+            .classify_recovered_decision_apply_startup(projection.as_ref())
             .map_err(|_error| {
                 ProductionRecoveredDecisionApplyStartupErrorV1::new(
-                    "recovered Decision Apply four-row durable lineage is not exact",
+                    "recovered Decision Apply durable startup shape is ambiguous",
                 )
             })?;
+        let successor = match startup_shape {
+            RecoveredDecisionApplyStartupShapeV1::FullChain => {
+                let fetch_is_present = predecessor
+                    .records
+                    .iter()
+                    .any(|record| projection.fetch().names_record(record));
+                let staged_predecessor = if fetch_is_present {
+                    predecessor.clone()
+                } else {
+                    predecessor
+                        .stage_authenticated_wal_decision_fetch(projection.fetch())
+                        .map_err(|_error| {
+                            ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                                "recovered Decision Apply Fetch parent is not exact",
+                            )
+                        })?
+                        .0
+                };
+                staged_predecessor
+                    .stage_recovered_decision_apply(projection.as_ref())
+                    .map_err(|_error| {
+                        ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                            "recovered Decision Apply four-row durable lineage is not exact",
+                        )
+                    })?
+                    .0
+            }
+            RecoveredDecisionApplyStartupShapeV1::ReleasedTerminal => {
+                predecessor
+                    .stage_recovered_released_decision_apply(projection.as_ref())
+                    .map_err(|_error| {
+                        ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                            "released recovered Decision Apply standalone lineage is not exact",
+                        )
+                    })?
+                    .0
+            }
+        };
         let body_pipeline = successor
             .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
             .map_err(|_error| {
@@ -3931,13 +3960,26 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered Decision Apply body-pipeline census authentication failed",
                 )
             })?;
-        let (recovery, body_pipeline) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_decision_apply_and_body_pipeline_startup(
-            successor.clone(),
-            serve_payloads,
-            &mut body_store,
-            projection.as_ref(),
-            body_pipeline,
-        )
+        let (mut recovery, body_pipeline) = match startup_shape {
+            RecoveredDecisionApplyStartupShapeV1::FullChain => {
+                AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_decision_apply_and_body_pipeline_startup(
+                    successor.clone(),
+                    serve_payloads,
+                    &mut body_store,
+                    projection.as_ref(),
+                    body_pipeline,
+                )
+            }
+            RecoveredDecisionApplyStartupShapeV1::ReleasedTerminal => {
+                AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_released_decision_apply_and_body_pipeline_startup(
+                    successor.clone(),
+                    serve_payloads,
+                    &mut body_store,
+                    projection.as_ref(),
+                    body_pipeline,
+                )
+            }
+        }
         .map_err(|_error| {
             ProductionRecoveredDecisionApplyStartupErrorV1::new(
                 "recovered Decision Apply storage census assembly failed",
@@ -3967,10 +4009,24 @@ impl ProductionLifecycleOwnerV1 {
             )
         })?;
         let mut registry = LifecycleWorkRegistryHolder::empty();
-        let (adapter_startup, mut installed) = registry
-            .registry_mut()
-            .install_recovered_decision_apply(&verified, &successor, projection, effects)
-            .map_err(|error| ProductionRecoveredDecisionApplyStartupErrorV1::new(error.reason()))?;
+        let (adapter_startup, mut installed) = match startup_shape {
+            RecoveredDecisionApplyStartupShapeV1::FullChain => registry
+                .registry_mut()
+                .install_recovered_decision_apply(&verified, &successor, projection, effects),
+            RecoveredDecisionApplyStartupShapeV1::ReleasedTerminal => {
+                let released = recovery.take_released_validate_authority().ok_or_else(|| {
+                    ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                        "released recovered Decision Apply lost terminal authority",
+                    )
+                })?;
+                registry
+                    .registry_mut()
+                    .install_recovered_released_decision_apply(
+                        &verified, &successor, projection, effects, released,
+                    )
+            }
+        }
+        .map_err(|error| ProductionRecoveredDecisionApplyStartupErrorV1::new(error.reason()))?;
         let (body_pipeline, adapter_startup) = body_pipeline
             .replay_adapter_startup(adapter_startup)
             .map_err(ProductionRecoveredDecisionApplyStartupErrorV1::new)?;
@@ -4262,10 +4318,66 @@ trait RecoveredDecisionApplyStageProjectionV1 {
     fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1;
 }
 
+/// Durable startup shape for one recovered Decision Apply projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RecoveredDecisionApplyStartupShapeV1 {
+    /// The current Decision owns the ordinary Fetch/Store/Validate/Apply chain.
+    FullChain,
+    /// An older Validate is already an immutable no-successor tombstone, so
+    /// the current Decision owns only an independent Apply row.
+    ReleasedTerminal,
+}
+
+/// Narrow comparison surface for staging a recovered Decision Apply after an
+/// older Validate terminalized without a successor.
+trait RecoveredDecisionReleasedApplyStageProjectionV1 {
+    fn belongs_to_context(&self, context: LifecycleContext) -> bool;
+    fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool;
+    fn names_terminal_validate_record(
+        &self,
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+    ) -> bool;
+    fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1;
+}
+
 /// Borrowed comparison-only projection of one installed recovered Apply carrier.
 struct RecoveredDecisionApplyCarrierLedgerProjectionV1<'a> {
     fetch: &'a AuthenticatedRecoveredWalDecisionFetchProjection,
     lineage: &'a RecoveredDecisionApplyCandidateLineageV1,
+}
+
+/// Borrowed comparison-only projection of a recovered standalone Apply and
+/// its older released Validate tombstone.
+struct RecoveredReleasedDecisionApplyCarrierLedgerProjectionV1<'a> {
+    fetch: &'a AuthenticatedRecoveredWalDecisionFetchProjection,
+    lineage: &'a RecoveredDecisionApplyCandidateLineageV1,
+    released: &'a AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+}
+
+impl RecoveredDecisionReleasedApplyStageProjectionV1
+    for RecoveredReleasedDecisionApplyCarrierLedgerProjectionV1<'_>
+{
+    fn belongs_to_context(&self, context: LifecycleContext) -> bool {
+        self.fetch.belongs_to_context(context) && self.released.belongs_to_context(context)
+    }
+
+    fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch.names_record(record)
+    }
+
+    fn names_terminal_validate_record(
+        &self,
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        self.released.belongs_to_context(context)
+            && self.released.exactly_matches_ledger_record(record)
+    }
+
+    fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
+        self.lineage
+    }
 }
 
 impl RecoveredDecisionApplyStageProjectionV1
@@ -4316,6 +4428,47 @@ impl RecoveredDecisionApplyStageProjectionV1
     ) -> bool {
         self.fetch()
             .exactly_matches_advanced_apply_parent(fetch, store_ordinal)
+    }
+    fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
+        self.lineage()
+    }
+}
+
+impl RecoveredDecisionReleasedApplyStageProjectionV1
+    for crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1
+{
+    fn belongs_to_context(&self, context: LifecycleContext) -> bool {
+        self.fetch().belongs_to_context(context)
+    }
+    fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch().names_record(record)
+    }
+    fn names_terminal_validate_record(
+        &self,
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        let Some(key) = record.key() else {
+            return false;
+        };
+        let Some(stage) = record.stage() else {
+            return false;
+        };
+        let Some(payload) = record.durable_payload() else {
+            return false;
+        };
+        record.work_class() == Some(LifecycleWorkClass::Validate)
+            && record.terminal() == Some(Some(TerminalOutcome::Advanced))
+            && record.continuation() == Some(DurableContinuation::AdvancedNoSuccessor)
+            && super::projection::recovered_validate_no_successor_validated_receipt_is_authenticated(
+                context,
+                key,
+                record.owner().causal_root(),
+                record.reconstruction_source(),
+                stage,
+                payload,
+                self.validated_receipt(),
+            )
     }
     fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
         self.lineage()

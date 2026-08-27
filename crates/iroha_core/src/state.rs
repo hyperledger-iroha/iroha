@@ -4571,7 +4571,7 @@ pub struct World {
     /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
     #[norito(skip)]
     pub(crate) global_beacon_pulse_slots: Storage<(iroha_data_model::NetworkId, u64), [u8; 32]>,
-    /// VRF epoch randomness and participation records keyed by epoch index.
+    /// Retained legacy VRF epoch records keyed by epoch index.
     pub(crate) vrf_epochs: Storage<u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Placeholder buffer of events pending publication to external subscribers.
     /// Included for formal correctness, although used only below the block level.
@@ -5298,7 +5298,7 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) global_beacon_pulse_slots:
         StorageBlock<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
-    /// VRF epoch randomness and participation records keyed by epoch index.
+    /// Retained legacy VRF epoch records keyed by epoch index.
     pub(crate) vrf_epochs: StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Latest lane merge-hint roots observed via the merge ledger during this block.
     pub(crate) merge_hint_roots: CellBlock<'world, Vec<Hash>>,
@@ -5310,7 +5310,7 @@ pub struct WorldBlock<'world> {
 }
 #[cfg(test)]
 impl<'world> WorldBlock<'world> {
-    /// Mutable access to VRF epoch randomness and participation records.
+    /// Mutable access to retained legacy VRF epoch records in tests.
     pub fn vrf_epochs_mut(
         &mut self,
     ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
@@ -8674,7 +8674,7 @@ pub struct WorldView<'world> {
     /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
     pub(crate) global_beacon_pulse_slots:
         StorageView<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
-    /// VRF epoch randomness and participation records keyed by epoch index.
+    /// Retained legacy VRF epoch records keyed by epoch index.
     pub(crate) vrf_epochs: StorageView<'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
 }
 /// Verifying-key binding enforced for a ZK asset operation.
@@ -19045,7 +19045,7 @@ macro_rules! world_ro_accessors {
             /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
             storage global_beacon_pulse_slots:
                 (iroha_data_model::NetworkId, u64) => [u8; 32];
-            /// VRF epoch randomness and participation records (read-only) keyed by epoch index.
+            /// Retained legacy VRF epoch records (read-only) keyed by epoch index.
             storage vrf_epochs: u64 => iroha_data_model::consensus::VrfEpochRecord;
         );
     };

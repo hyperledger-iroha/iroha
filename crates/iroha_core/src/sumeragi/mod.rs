@@ -484,7 +484,6 @@ mod epoch_schedule_tests {
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
 pub mod da;
-pub mod epoch_report;
 pub(crate) mod evidence;
 pub(crate) mod exec;
 pub(crate) mod lane_planner;

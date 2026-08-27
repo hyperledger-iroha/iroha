@@ -3497,8 +3497,8 @@ pub(crate) mod tests {
             ));
         }
 
-        let mut reducer = V2GlobalBeaconLifecycle::open(&context, &state, None, None)
-            .expect("open optional verifier after key rotation");
+        let mut reducer = V2GlobalBeaconLifecycle::open(&context, &state, Some(0), None)
+            .expect("open signerless validator reducer after key rotation");
         reducer.begin_round(0).expect("open routing view");
         let mut absent = NposConsensusEffects::default();
         reducer
@@ -3664,8 +3664,8 @@ pub(crate) mod tests {
                 producer.take_outbound().pop().expect("local pulse share"),
             ));
         }
-        let mut reducer = V2GlobalBeaconLifecycle::open(&context, &state, None, None)
-            .expect("open exact pre-transaction pulse reducer");
+        let mut reducer = V2GlobalBeaconLifecycle::open(&context, &state, Some(0), None)
+            .expect("open exact signerless validator reducer");
         reducer.begin_round(0).expect("open pulse routing view");
         for (index, message) in messages.into_iter().enumerate() {
             reducer

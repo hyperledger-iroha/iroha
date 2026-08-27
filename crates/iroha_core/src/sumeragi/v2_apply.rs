@@ -676,10 +676,18 @@ fn finalize_committed_block_merge_reservations(
 /// work and startup reconciliation:
 ///
 /// 1. Kura persists the exact slot retirement and `ReleasePending` claims.
-/// 2. Queue persists the exact ordered barrier while reservations remain live.
-/// 3. Kura changes the exact claims to `Released`.
-/// 4. Kura persists a terminal-outcome Pending record for the exact release.
-/// 5. Queue completes ownership transfer, restores FIFO order, and forgets the
+/// 2. A strict non-producer replica with no local reservation owner first
+///    obtains Queue's read-only proof that the exact group is already ordinary
+///    FIFO-owned; its exact-hash fence remains live while Kura releases only
+///    that replica's claims and until Queue mints terminal evidence. Producers
+///    skip this step.
+/// 3. Queue persists the exact ordered barrier while producer reservations
+///    remain live, or authenticates FIFO-only terminal absence after replica
+///    claims are already `Released`.
+/// 4. Kura changes the exact producer claims to `Released`, or stutters over
+///    the replica's already-released claims.
+/// 5. Kura persists a terminal-outcome Pending record for the exact release.
+/// 6. Queue completes ownership transfer, restores FIFO order, and forgets the
 ///    replay barrier, then Kura consumes Queue's positive terminal evidence.
 pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
     kura: &Kura,
@@ -690,6 +698,24 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
 ) -> Result<usize, V2ReservationLifecycleError> {
     kura.persist_autonomous_lane_slot_retirement(retirement, expected_network_id, expected_epoch)?;
     let barrier = retirement.queue_release_barrier()?;
+    let replica_fifo_authorization = if let Some(replica_authorization) =
+        kura.authorize_autonomous_nonqueue_replica_claim_release(
+            retirement,
+            expected_network_id,
+            expected_epoch,
+        )?
+    {
+        let fifo_authorization =
+            queue.authenticate_autonomous_nonqueue_replica_fifo_ownership(replica_authorization)?;
+        Some(kura.finalize_autonomous_nonqueue_replica_claim_release(
+            retirement,
+            expected_network_id,
+            expected_epoch,
+            fifo_authorization,
+        )?)
+    } else {
+        None
+    };
     let preparation_authorization = kura.authorize_autonomous_lane_queue_release_preparation(
         retirement,
         expected_network_id,
@@ -713,14 +739,26 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
             expected_network_id,
             expected_epoch,
         )?;
-    let completion = queue.finalize_lane_reservation_release_barrier_with_authorization(
-        &barrier,
-        finalization_authorization,
-        source_outcome_authorization,
-    )?;
+    let completion = if let Some(replica_fifo_authorization) =
+        replica_fifo_authorization.as_ref()
+    {
+        queue.finalize_lane_reservation_release_barrier_with_replica_fifo_authorization(
+            &barrier,
+            finalization_authorization,
+            source_outcome_authorization,
+            replica_fifo_authorization,
+        )?
+    } else {
+        queue.finalize_lane_reservation_release_barrier_with_authorization(
+            &barrier,
+            finalization_authorization,
+            source_outcome_authorization,
+        )?
+    };
     let finalized_reservations = completion.finalized_reservations();
     let (_, terminal_evidence) = completion.into_parts();
     kura.complete_autonomous_lifecycle_release_terminal_outcome(terminal_evidence)?;
+    drop(replica_fifo_authorization);
     Ok(finalized_reservations)
 }
 include!("v2_apply/autonomous_recovery_types.rs");

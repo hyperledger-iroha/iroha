@@ -44677,47 +44677,6 @@
         ],
         "type": "object"
       },
-      "SumeragiVrfPenaltiesReport": {
-        "additionalProperties": false,
-        "properties": {
-          "committed_no_reveal": {
-            "items": {
-              "format": "uint32",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
-          },
-          "epoch": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "no_participation": {
-            "items": {
-              "format": "uint32",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
-          },
-          "roster_len": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "epoch",
-          "roster_len",
-          "committed_no_reveal",
-          "no_participation"
-        ],
-        "type": "object"
-      },
       "TairaPublicResetMutationBinding": {
         "additionalProperties": false,
         "properties": {
@@ -92226,77 +92185,6 @@
           "Sumeragi"
         ],
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/vrf/epoch/{epoch}": {
-      "get": {
-        "description": "Fetch VRF epoch data.",
-        "parameters": [
-          {
-            "description": "Epoch identifier.",
-            "in": "path",
-            "name": "epoch",
-            "required": true,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch VRF epoch data.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
-    "/v1/sumeragi/vrf/penalties/{epoch}": {
-      "get": {
-        "description": "Fetch the authoritative finalized VRF penalty report for an epoch from persisted consensus state.",
-        "parameters": [
-          {
-            "description": "Epoch identifier.",
-            "in": "path",
-            "name": "epoch",
-            "required": true,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SumeragiVrfPenaltiesReport"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "404": {
-            "description": "No finalized authoritative epoch report exists for the requested epoch."
-          }
-        },
-        "summary": "Fetch an authoritative VRF penalty report.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/telemetry/live": {

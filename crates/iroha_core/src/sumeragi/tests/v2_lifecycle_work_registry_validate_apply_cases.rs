@@ -883,8 +883,11 @@ fn ready_validate_apply_actor_global_child_fixture(
         .attest_ready_validate_demand(&holder, lease.ordinal())
         .expect("attest exact Ready Validate predecessor before publication");
     assert!(!live_validate_attestation.requires_io_dispatch());
-    let live_validate_dispatch_key = live_validate_attestation.dispatch_key();
-    assert!(live_validate_dispatch_key.matches_consensus_round(&round));
+    assert!(
+        live_validate_attestation
+            .dispatch_key()
+            .matches_consensus_round(&round)
+    );
     coordinator.ready_index.remove(&lease.ordinal());
     coordinator
         .records
@@ -1025,7 +1028,6 @@ fn ready_validate_apply_actor_global_child_fixture(
             adapter,
             startup,
             cleanup,
-            live_validate_dispatch_key,
             _directory.path(),
         );
         return;
@@ -1131,12 +1133,14 @@ fn ready_validate_apply_actor_global_child_fixture(
             live_started_at,
         )
         .expect("arm exact live Apply clocks after service construction");
-    executor
-        .arm_live_lifecycle_validate_successor(live_validate_dispatch_key, round, subject, true)
-        .expect("restore exact published Validate predecessor owner before runtime import");
+    assert_eq!(
+        executor.validate_retry_lifecycle_ordinal_for_test((round, subject)),
+        None,
+        "cold Apply child must not reconstruct a terminal Validate parent"
+    );
     assert_eq!(
         executor
-            .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut services)
+            .reconcile_ownerless_reopened_decision_for_lifecycle_apply_lineage_test(&mut services)
             .expect("reconcile exact live Apply Decision into the executor"),
         (
             decision.round,
@@ -1560,7 +1564,6 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     live_adapter: crate::sumeragi::v2::SumeragiV2Adapter,
     live_startup: Vec<AdapterEffect>,
     live_cleanup: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
-    live_validate_dispatch_key: LifecycleValidateDispatchKeyV1,
     live_body_root: &std::path::Path,
 ) {
     let live_runtime = crate::sumeragi::v2_runtime::SerializedV2Runtime::new(
@@ -1586,6 +1589,11 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     let recovered_validate_retry_census = live_holder
         .project_recovered_durable_validate_retry_census(live_coordinator, replayed_decision)
         .expect("project empty recovered Validate census beside live Apply");
+    assert_eq!(
+        recovered_validate_retry_census.len_for_test(),
+        0,
+        "terminal Validate parent cannot enter the cold Apply retry census"
+    );
     let live_output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut live_executor, live_body_store) =
         crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
@@ -1616,18 +1624,20 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
             live_started_at,
         )
         .expect("arm exact live Apply lineage clocks after service construction");
-    live_executor
-        .arm_live_lifecycle_validate_successor(
-            live_validate_dispatch_key,
-            live_cleanup.certificate().proposal_round,
-            live_cleanup.subject(),
-            true,
-        )
-        .expect("restore exact published Validate predecessor owner before lineage import");
     let live_certificate = live_cleanup.certificate();
     assert_eq!(
+        live_executor.validate_retry_lifecycle_ordinal_for_test((
+            live_certificate.proposal_round,
+            live_cleanup.subject(),
+        )),
+        None,
+        "cold lineage executor must not reconstruct a terminal Validate parent"
+    );
+    assert_eq!(
         live_executor
-            .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut live_services)
+            .reconcile_ownerless_reopened_decision_for_lifecycle_apply_lineage_test(
+                &mut live_services,
+            )
             .expect("reconcile exact live Apply Decision into the lineage executor"),
         (
             live_certificate.round,

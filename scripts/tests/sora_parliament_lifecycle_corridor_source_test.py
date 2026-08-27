@@ -199,6 +199,45 @@ def validate_optional_parliament_pulse_progression(source: str) -> None:
             retired_tick not in test,
             f"demanded Parliament pulse regained racing tick `{retired_tick}`",
         )
+    for marker in (
+        "!status.restart_required",
+        "!restarted_status.restart_required",
+    ):
+        require(
+            marker in test,
+            f"Parliament lifecycle test lost non-fail-stopped status proof `{marker}`",
+        )
+
+
+def validate_public_finding_impossible_quorum_retry(source: str) -> None:
+    """Require the real four-peer early-NoResult and governance-retry corridor."""
+
+    _, test = parliament_lifecycle_test(source)
+    require(
+        "exercise_public_finding_impossible_quorum_retry(" in test,
+        "Parliament lifecycle test lost the impossible-quorum retry invocation",
+    )
+    helper = re.search(
+        r"(?ms)^async fn exercise_public_finding_impossible_quorum_retry\(.*?^\}\n"
+        rf"(?=\n{re.escape(PARLIAMENT_NETWORK_TEST_ATTRIBUTE)}\n"
+        rf"fn {PARLIAMENT_LIFECYCLE_TEST_NAME}\(\))",
+        source,
+    )
+    require(helper is not None, "impossible-quorum retry helper is absent")
+    helper_source = helper.group(0)
+    for marker in (
+        "network.ensure_blocks(sortition_pulse_height).await?;",
+        "ParliamentLifecycleTransitionV1::RecordAttemptAbsence(",
+        "failed_height < public_finding_deadline",
+        "BodyInstanceStatusV1::NoResult",
+        "ParliamentNoResultKindV1::PublicFindingQuorumUnreachable",
+        "client.get_gov_contract_json(contract_address).is_err()",
+        "attempt_sequence: 1",
+        "GovernanceStageV1::Qualification",
+        "peer_rejected.state_payload_hex",
+        "peer_retry.state_payload_hex",
+    ):
+        require(marker in helper_source, f"impossible-quorum retry corridor lost `{marker}`")
 
 
 def mandatory_npos_test(source: str) -> tuple[re.Match[str], str]:
@@ -353,6 +392,7 @@ def validate_mandatory_npos_boundary(source: str) -> None:
         SUCCESSOR_PROGRESSION,
         "assert_eq!(status.height_context.epoch, successor_epoch);",
         SUCCESSOR_SEED_EQUALITY,
+        "!status.restart_required",
     )
     for marker in required:
         require(marker in test, f"mandatory NPoS beacon test lost `{marker}`")
@@ -403,6 +443,7 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         "let predecessor_height = pulse_height - 1;",
         "unexpected_pulse_height.is_err()",
         "peer.is_running()",
+        "!status.restart_required",
         "assert_eq!(status.last_committed_height, predecessor_height);",
         "assert_eq!(status.height, pulse_height);",
     )
@@ -514,6 +555,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         validate_required_bounded_soranet_pow(corridor)
         validate_consensus_sized_test_stacks(corridor)
         validate_optional_parliament_pulse_progression(corridor)
+        validate_public_finding_impossible_quorum_retry(corridor)
         validate_beacon_mode_profiles(corridor)
         validate_mandatory_npos_boundary(corridor)
         validate_fail_closed_npos_boundary(corridor)
@@ -598,10 +640,30 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
     );
     network.ensure_blocks(release_height).await?;''',
             ),
+            "enacted peer fail-stop status omitted": mutate_parliament_lifecycle_test(
+                corridor, "!status.restart_required", "true"
+            ),
+            "restarted peer fail-stop status omitted": mutate_parliament_lifecycle_test(
+                corridor, "!restarted_status.restart_required", "true"
+            ),
         }
         for label, mutated in mutations.items():
             with self.subTest(label=label), self.assertRaises(ContractError):
                 validate_optional_parliament_pulse_progression(mutated)
+
+    def test_public_finding_impossible_quorum_retry_rejects_mutations(self) -> None:
+        corridor = CORRIDOR.read_text(encoding="utf-8")
+        for marker in (
+            "exercise_public_finding_impossible_quorum_retry(",
+            "failed_height < public_finding_deadline",
+            "ParliamentNoResultKindV1::PublicFindingQuorumUnreachable",
+            "attempt_sequence: 1",
+            "peer_retry.state_payload_hex",
+        ):
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_public_finding_impossible_quorum_retry(
+                    corridor.replace(marker, "", 1)
+                )
 
     def test_mandatory_npos_boundary_rejects_adversarial_mutations(self) -> None:
         corridor = CORRIDOR.read_text(encoding="utf-8")
@@ -655,6 +717,9 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             ),
             "missing threshold assertion": mutate_mandatory_npos_test(
                 corridor, "assert_eq!(beacon_record.session.threshold, 2);"
+            ),
+            "successor fail-stop status omitted": mutate_mandatory_npos_test(
+                corridor, "!status.restart_required", "true"
             ),
         }
         for label, mutated in mutations.items():
@@ -725,6 +790,11 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "validator liveness omitted": mutate_fail_closed_npos_test(
                 corridor,
                 "peer.is_running()",
+                "true",
+            ),
+            "validator fail-stop status omitted": mutate_fail_closed_npos_test(
+                corridor,
+                "!status.restart_required",
                 "true",
             ),
             "stalled height omitted": mutate_fail_closed_npos_test(

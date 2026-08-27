@@ -4363,6 +4363,16 @@ macro_rules! production_in_flight_first_release_state_body {
             && (release.pending_prefix == 0u64
                 || (release.kura_retired && decision.release_owner != 0u128))
             && if queue.reservation_state
+                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)
+                && release.kura_retired
+            {
+                release.fifo_restored
+                    && release.pending_prefix == queue.selected_count
+                    && decision.release_owner != state.producer
+            } else {
+                true
+            }
+            && if queue.reservation_state
                 == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED)
                 || queue.reservation_state
                     == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED)
@@ -4385,6 +4395,10 @@ macro_rules! production_in_flight_first_release_state_body {
                     || queue.reservation_state
                         == refinement_tag_value!(
                             IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN
+                        )
+                    || queue.reservation_state
+                        == refinement_tag_value!(
+                            IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED
                         ))
                     && release.pending_prefix == queue.selected_count))
             && if queue.reservation_state
@@ -4962,14 +4976,24 @@ macro_rules! production_in_flight_first_release_transition_body {
             } else if projection.action
                 == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED)
             {
-                projection.actor == 0u128
-                    && projection.target == 0u128
+                projection.target == 0u128
                     && before.decision.release_owner != 0u128
                     && before.release.released_prefix < before.queue.selected_count
-                    && before.queue.reservation_state
-                        == refinement_tag_value!(
-                            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED
-                        )
+                    && ((projection.actor == 0u128
+                        && before.queue.reservation_state
+                            == refinement_tag_value!(
+                                IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED
+                            ))
+                        || (in_flight_first_release_single_validator_body!(
+                            projection.actor,
+                            validator_mask
+                        ) && before.queue.reservation_state
+                            == refinement_tag_value!(
+                                IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED
+                            )
+                            && before.release.fifo_restored
+                            && projection.actor == before.decision.release_owner
+                            && projection.actor != before.producer))
                     && before.release.pending_prefix == before.queue.selected_count
                     && after.release.kura_retired == before.release.kura_retired
                     && after.release.pending_prefix == before.release.pending_prefix
@@ -5078,14 +5102,30 @@ macro_rules! production_in_flight_first_release_transition_body {
             } else if projection.action
                 == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT)
             {
-                projection.actor == 0u128
-                    && projection.target == 0u128
+                projection.target == 0u128
                     && before.queue.plan_state
                         == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED)
-                    && before.queue.reservation_state
-                        == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE)
-                    && before.decision.lane_commit_owner == 0u128
-                    && before.decision.release_owner == 0u128
+                    && ((projection.actor == 0u128
+                        && before.queue.reservation_state
+                            == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE)
+                        && before.decision.lane_commit_owner == 0u128
+                        && before.decision.release_owner == 0u128)
+                        || (in_flight_first_release_single_validator_body!(
+                            projection.actor,
+                            validator_mask
+                        ) && projection.actor == before.decision.release_owner
+                            && projection.actor != before.producer
+                            && before.release.kura_retired
+                            && before.release.pending_prefix == before.queue.selected_count
+                            && (before.queue.reservation_state
+                                == refinement_tag_value!(
+                                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE
+                                )
+                                || (before.queue.reservation_state
+                                    == refinement_tag_value!(
+                                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED
+                                    )
+                                    && before.release.fifo_restored))))
                     && after.queue.plan_state == before.queue.plan_state
                     && after.queue.selected_count == before.queue.selected_count
                     && after.queue.reservation_state
@@ -8253,6 +8293,143 @@ pub(crate) const fn production_in_flight_first_release_witness_binding_kernel(
     production_in_flight_first_release_witness_binding_body!(projection, witness)
 }
 include!("refinement/post_carrier_transition.rs");
+#[cfg(test)]
+mod nonqueue_replica_release_refinement_tests {
+    use super::*;
+
+    fn replica_fifo_state(released_prefix: u64) -> ProductionInFlightFirstReleaseStateProjection {
+        let binding_a = CanonicalIdentityProjection::from_bytes(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CANONICAL_PAYLOAD,
+            [0x71; 32],
+        );
+        ProductionInFlightFirstReleaseStateProjection {
+            validator_count: 3,
+            producer: 1,
+            producer_selected_owner: 1,
+            replicated_carrier_owners: 6,
+            payload_binding_a: 3,
+            binding_a,
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count: 2,
+                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection {
+                kura_active: 3,
+                ..ProductionInFlightFirstReleaseCarrierProjection::default()
+            },
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: 3,
+                producer_alive: true,
+                ..ProductionInFlightFirstReleaseSessionProjection::default()
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
+                pending_high_water: 2,
+                released_high_water: released_prefix,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision: ProductionInFlightFirstReleaseDecisionProjection {
+                release_scope: binding_a,
+                release_owner: 2,
+                ..ProductionInFlightFirstReleaseDecisionProjection::default()
+            },
+            release: ProductionInFlightFirstReleaseReleaseProjection {
+                kura_retired: true,
+                pending_prefix: 2,
+                released_prefix,
+                fifo_restored: true,
+            },
+        }
+    }
+
+    #[test]
+    fn replica_fifo_released_prefix_requires_exact_nonproducer_release_owner() {
+        let mut live = replica_fifo_state(0);
+        live.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE;
+        live.release.fifo_restored = false;
+        assert!(production_in_flight_first_release_state_kernel(live));
+        let before = replica_fifo_state(0);
+        let direct = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
+            actor: 2,
+            target: 0,
+            before: live,
+            after: before,
+        };
+        assert!(production_in_flight_first_release_transition_kernel(direct));
+        for actor in [0, live.producer, 4] {
+            assert!(!production_in_flight_first_release_transition_kernel(
+                ProductionInFlightFirstReleaseTransitionProjection { actor, ..direct }
+            ));
+        }
+        let after = replica_fifo_state(1);
+        assert!(production_in_flight_first_release_state_kernel(before));
+        let accepted = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED,
+            actor: 2,
+            target: 0,
+            before,
+            after,
+        };
+        assert!(production_in_flight_first_release_transition_kernel(
+            accepted
+        ));
+        for actor in [0, before.producer, 4] {
+            assert!(!production_in_flight_first_release_transition_kernel(
+                ProductionInFlightFirstReleaseTransitionProjection { actor, ..accepted }
+            ));
+        }
+        let mut producer_owned = before;
+        producer_owned.decision.release_owner = producer_owned.producer;
+        assert!(!production_in_flight_first_release_state_kernel(
+            producer_owned
+        ));
+        let resumed_fifo_proof = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
+            actor: 2,
+            target: 0,
+            before: after,
+            after,
+        };
+        assert!(production_in_flight_first_release_transition_kernel(
+            resumed_fifo_proof
+        ));
+        assert!(
+            crate::sumeragi::v2_core::check_production_in_flight_first_release_replay_step_v1(
+                resumed_fifo_proof,
+                crate::sumeragi::v2_core::ProductionInFlightFirstReleaseReplayStepV1::ComposedNext,
+            )
+            .is_none(),
+            "an unchanged replica FIFO proof must not masquerade as a state-changing step",
+        );
+        assert!(
+            crate::sumeragi::v2_core::check_production_in_flight_first_release_replay_step_v1(
+                resumed_fifo_proof,
+                crate::sumeragi::v2_core::ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter,
+            )
+            .is_some(),
+            "an exact already-proved nonproducer FIFO release must pass its explicit stutter class",
+        );
+        assert!(
+            crate::sumeragi::v2_core::check_production_in_flight_first_release_transition(
+                resumed_fifo_proof,
+            )
+            .is_some(),
+            "the production wrapper must classify a resumed replica FIFO proof",
+        );
+        assert!(
+            crate::sumeragi::v2_core::check_production_in_flight_first_release_replay_step_v1(
+                direct,
+                crate::sumeragi::v2_core::ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter,
+            )
+            .is_none(),
+            "a state-changing first FIFO proof must not pass the stutter class",
+        );
+    }
+}
 #[cfg(test)]
 include!("refinement_constructor_test_helpers.rs");
 include!("refinement/transition_gate_tail.rs");

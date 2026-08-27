@@ -1,7 +1,7 @@
 v2_apply_test!(
     canonical_overlap_detects_same_transaction_under_substituted_key,
     {
-        let fixture = ApplyFixture::new();
+        let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let producer = KeyPair::try_from_seed(vec![0xBD; 32], Algorithm::BlsNormal)
             .expect("derive canonical-overlap autonomous producer");
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
@@ -59,7 +59,8 @@ v2_apply_test!(
             "kura_released",
             "queue_completion_forgotten",
         ] {
-            let fixture = ApplyFixture::new();
+            let fixture =
+                ApplyFixture::new_for_production_recovered_decision_apply_with_lane_lifecycle();
             let producer = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::BlsNormal)
                 .expect("derive autonomous crash producer");
             let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
@@ -92,6 +93,15 @@ v2_apply_test!(
                 .kura
                 .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
                 .expect("persist autonomous crash payload");
+            let lifecycle_group =
+                install_autonomous_crash_live_cursor(&fixture, &payload, &producer);
+            assert_eq!(
+                lifecycle_group,
+                lane_queue_reservation_group_binding_from_ordered_keys(
+                    payload.reservation_keys.iter(),
+                )
+                .expect("bind autonomous crash lifecycle reservation group"),
+            );
             let mut global_body_store = fixture.reopen_body_store();
             fixture
                 .execute(&mut global_body_store)
@@ -470,7 +480,8 @@ v2_apply_test!(
 v2_apply_test!(
     autonomous_release_rejects_missing_queue_owner_while_kura_claims_are_pending,
     {
-        let fixture = ApplyFixture::new();
+        let fixture =
+            ApplyFixture::new_for_production_recovered_decision_apply_with_lane_lifecycle();
         let producer = KeyPair::try_from_seed(vec![0xB8; 32], Algorithm::BlsNormal)
             .expect("derive missing-Queue-owner producer");
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
@@ -504,6 +515,13 @@ v2_apply_test!(
             .kura
             .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
             .expect("persist missing-Queue-owner payload");
+        let lifecycle_group =
+            install_autonomous_crash_live_cursor(&fixture, &payload, &producer);
+        assert_eq!(
+            lifecycle_group,
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .expect("bind missing-Queue-owner lifecycle reservation group"),
+        );
         let mut global_body_store = fixture.reopen_body_store();
         fixture
             .execute(&mut global_body_store)

@@ -375,6 +375,31 @@ fn in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_q
         }
     }
 }
+#[test]
+fn in_flight_first_release_queue_plan_selection_accepts_dynamic_committees() {
+    for validator_count in [1_u8, 3, 4, 128] {
+        let before = in_flight_first_release_initial_state_with_validator_count(validator_count);
+        let mut after = before;
+        after.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
+        after.queue.selected_count = 2;
+        after.history.ever_queue_plan_v1 = true;
+        assert!(
+            production_in_flight_first_release_state_kernel(after),
+            "{validator_count}-validator selected QueuePlan state must remain valid: {after:?}",
+        );
+        let projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1,
+            actor: 0,
+            target: 0,
+            before,
+            after,
+        };
+        assert!(
+            production_in_flight_first_release_transition_kernel(projection),
+            "{validator_count}-validator QueuePlan selection must pass: {projection:?}",
+        );
+    }
+}
 fn checked_in_flight_first_release_step(
     action: u8,
     actor: u128,

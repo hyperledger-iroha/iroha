@@ -23,8 +23,8 @@ use iroha::{
             BodyElectionAttemptId, BodyInstanceId, BodyInstanceStatusV1, ContractAbiHash,
             ContractCodeHash, DeliberationPhaseV1, DeployContractProposal, GovernanceAttemptId,
             GovernanceAttemptStatusV1, GovernanceStageV1, ParliamentAggregateOutcomeV1,
-            ParliamentBody, ProposalKind, SortitionRequestV1, TleSessionId,
-            parliament_ballot_participant_hash_v1, parliament_candidate_root_v1,
+            ParliamentBody, ParliamentNoResultKindV1, ProposalKind, SortitionRequestV1,
+            TleSessionId, parliament_ballot_participant_hash_v1, parliament_candidate_root_v1,
         },
         isi::{
             InstructionBox, Log,
@@ -39,11 +39,11 @@ use iroha::{
                 ParliamentEndorsePublicFindingV1, ParliamentFinalizeOpenedBallotV1,
                 ParliamentFreezeBallotSurvivorsV1, ParliamentFreezeTimedOvnCorpusV1,
                 ParliamentInvitationDecisionV1, ParliamentLifecycleTransitionV1,
-                ParliamentRecordInvitationResponseV1, ParliamentRegisterBallotAttemptV1,
-                ParliamentRegisterBallotParticipantV1, ParliamentRegisterSortitionRequestV1,
-                ParliamentSealBodyRosterV1, ParliamentSortitionRequestRegistrationV1,
-                ParliamentTleFinalReleaseSignatureV1, ProposeDeployContract, RegisterCitizen,
-                SubmitParliamentLifecycleTransitionV1,
+                ParliamentRecordAttemptAbsenceV1, ParliamentRecordInvitationResponseV1,
+                ParliamentRegisterBallotAttemptV1, ParliamentRegisterBallotParticipantV1,
+                ParliamentRegisterSortitionRequestV1, ParliamentSealBodyRosterV1,
+                ParliamentSortitionRequestRegistrationV1, ParliamentTleFinalReleaseSignatureV1,
+                ProposeDeployContract, RegisterCitizen, SubmitParliamentLifecycleTransitionV1,
             },
             smart_contract_code::{
                 FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
@@ -129,6 +129,8 @@ const FAIL_CLOSED_BEACON_SIGNER_MODES: [ParliamentBeaconSignerMode; VALIDATOR_CO
     ParliamentBeaconSignerMode::Invalid,
 ];
 const CONTRACT_ADDRESS: &str = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+const NO_RESULT_RETRY_CONTRACT_ADDRESS: &str =
+    "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
 
 fn fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -565,6 +567,314 @@ fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
         .ok_or_else(|| eyre!("peer does not retain finalized block {height}"))
 }
 
+async fn exercise_public_finding_impossible_quorum_retry(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    citizens: &[AccountId],
+    citizen_keys: &[KeyPair],
+    contract_address: &ContractAddress,
+    code_hash: ContractCodeHash,
+    abi_hash: ContractAbiHash,
+    logical_beacon: BeaconSessionId,
+) -> Result<()> {
+    let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: contract_address.clone(),
+        code_hash,
+        abi_hash,
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    });
+    let create = CreateParliamentGovernanceAttemptV1 {
+        proposal: proposal.clone(),
+        attempt_sequence: 0,
+    };
+    let attempt_id = create.governance_attempt_id();
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash,
+                abi_hash,
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            InstructionBox::from(create),
+        ],
+        fee(),
+    )?;
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::CompleteQualification,
+    )?;
+
+    let expected_bodies = [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::OversightCommittee,
+        ParliamentBody::PolicyJury,
+    ];
+    let request_height = current_height(client)? + 1;
+    let sortition_pulse_height = request_height + 4;
+    let mut election_ids = BTreeMap::new();
+    let mut request_ids = Vec::new();
+    let mut registrations = Vec::new();
+    for body in expected_bodies {
+        let election_id = BodyElectionAttemptId::derive_v1(attempt_id, body, 0);
+        let request = SortitionRequestV1::try_new_canonical(
+            attempt_id,
+            election_id,
+            body,
+            parliament_candidate_root_v1(attempt_id, body, citizens),
+            u32::try_from(citizens.len())?,
+            BODY_SEATS,
+            request_height,
+            sortition_pulse_height,
+            logical_beacon,
+            None,
+        )
+        .map_err(|error| eyre!("construct no-result sortition request: {error}"))?;
+        election_ids.insert(body, election_id);
+        request_ids.push(request.id);
+        registrations.push(ParliamentSortitionRequestRegistrationV1 {
+            sequence: 0,
+            request,
+        });
+    }
+    request_ids.sort_unstable();
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+            ParliamentRegisterSortitionRequestV1 {
+                requests: registrations,
+            },
+        ),
+    )?;
+    assert_eq!(current_height(client)?, request_height);
+    advance_to_predecessor(
+        client,
+        sortition_pulse_height,
+        "no-result retry sortition pulse",
+    )?;
+    network.ensure_blocks(sortition_pulse_height).await?;
+    let pulses = network
+        .peers()
+        .iter()
+        .map(|peer| pulse_at(&peer.client(), sortition_pulse_height))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(pulses.windows(2).all(|pair| pair[0] == pair[1]));
+    let pulse = &pulses[0];
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(
+            ParliamentConsumeSortitionPulseBatchV1 {
+                request_ids,
+                beacon_session_id: logical_beacon,
+                pulse_height: sortition_pulse_height,
+                pulse_id: BeaconPulseId::new(pulse.pulse_id),
+            },
+        ),
+    )?;
+
+    submit_transitions(
+        client,
+        attempt_id,
+        expected_bodies.into_iter().map(|body| {
+            ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(
+                ParliamentBeginInvitationAcceptanceV1 {
+                    election_attempt_id: election_ids[&body],
+                },
+            )
+        }),
+    )?;
+    let invitation_state = read_attempt(client, attempt_id)?;
+    let invitation_close_height = expected_bodies
+        .into_iter()
+        .map(|body| {
+            invitation_state
+                .election(&election_ids[&body])
+                .and_then(|election| election.invitation_close_height())
+                .expect("no-result invitation deadline is frozen")
+        })
+        .reduce(|left, right| {
+            assert_eq!(left, right);
+            left
+        })
+        .expect("the no-result attempt requires Parliament bodies");
+    let mut invitations_by_member =
+        BTreeMap::<AccountId, Vec<(ParliamentBody, BodyElectionAttemptId)>>::new();
+    for body in expected_bodies {
+        let election = invitation_state
+            .election(&election_ids[&body])
+            .expect("no-result body election");
+        for assignment in election.primary_assignments() {
+            invitations_by_member
+                .entry(assignment.member.clone())
+                .or_default()
+                .push((body, election_ids[&body]));
+        }
+    }
+    for (member, invitations) in invitations_by_member {
+        submit_transitions(
+            &client_for(client, &member, citizen_keys),
+            attempt_id,
+            invitations.into_iter().map(|(body, election_attempt_id)| {
+                ParliamentLifecycleTransitionV1::RecordInvitationResponse(
+                    ParliamentRecordInvitationResponseV1 {
+                        election_attempt_id,
+                        body,
+                        decision: ParliamentInvitationDecisionV1::Accept,
+                    },
+                )
+            }),
+        )?;
+    }
+    assert!(current_height(client)? <= invitation_close_height);
+    let roster_seal_height = invitation_close_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("no-result roster-seal height overflow"))?;
+    advance_to_predecessor(client, roster_seal_height, "no-result retry roster sealing")?;
+    submit_transitions(
+        client,
+        attempt_id,
+        expected_bodies.into_iter().map(|body| {
+            ParliamentLifecycleTransitionV1::SealBodyRoster(ParliamentSealBodyRosterV1 {
+                election_attempt_id: election_ids[&body],
+            })
+        }),
+    )?;
+
+    let rules_body_id = read_attempt(client, attempt_id)?
+        .sealed_body_for_role(ParliamentBody::RulesCommittee)
+        .expect("no-result Rules Committee is sealed")
+        .instance()
+        .id;
+    submit_transitions(
+        client,
+        attempt_id,
+        [
+            DeliberationPhaseV1::Orientation,
+            DeliberationPhaseV1::Evidence,
+            DeliberationPhaseV1::Questions,
+            DeliberationPhaseV1::Responses,
+            DeliberationPhaseV1::Deliberation,
+            DeliberationPhaseV1::Reflection,
+        ]
+        .into_iter()
+        .map(|target| {
+            ParliamentLifecycleTransitionV1::AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1 {
+                body_instance_id: rules_body_id,
+                target,
+            })
+        }),
+    )?;
+    let reflecting = read_attempt(client, attempt_id)?;
+    let rules = reflecting
+        .body(&rules_body_id)
+        .expect("reflecting no-result Rules Committee");
+    let public_finding_deadline = rules
+        .public_finding_deadline_height()
+        .expect("no-result public-finding deadline is frozen");
+    let absent_assignments = rules.assignments()[..2].to_vec();
+    for (index, assignment) in absent_assignments.iter().enumerate() {
+        submit_transition(
+            &client_for(client, &assignment.member, citizen_keys),
+            attempt_id,
+            ParliamentLifecycleTransitionV1::RecordAttemptAbsence(
+                ParliamentRecordAttemptAbsenceV1 {
+                    body_instance_id: rules_body_id,
+                    assignment_id: assignment.assignment_id,
+                },
+            ),
+        )?;
+        let observed = read_attempt(client, attempt_id)?;
+        let observed_rules = observed
+            .body(&rules_body_id)
+            .expect("no-result Rules Committee survives projection");
+        assert_eq!(observed_rules.excluded_assignments().len(), index + 1);
+        if index == 0 {
+            assert_eq!(observed.attempt().status, GovernanceAttemptStatusV1::Active);
+            assert_eq!(
+                observed_rules.instance().status,
+                BodyInstanceStatusV1::Deliberating(DeliberationPhaseV1::Reflection),
+            );
+        }
+    }
+    let failed_height = current_height(client)?;
+    assert!(
+        failed_height < public_finding_deadline,
+        "objective quorum impossibility must terminate before the frozen deadline",
+    );
+    let rejected = read_attempt(client, attempt_id)?;
+    let rejected_rules = rejected
+        .body(&rules_body_id)
+        .expect("rejected Rules Committee remains auditable");
+    assert_eq!(
+        rejected.attempt().status,
+        GovernanceAttemptStatusV1::Rejected,
+    );
+    assert_eq!(
+        rejected_rules.instance().status,
+        BodyInstanceStatusV1::NoResult
+    );
+    assert_eq!(
+        rejected_rules.public_finding_no_result_kind(),
+        Some(ParliamentNoResultKindV1::PublicFindingQuorumUnreachable),
+    );
+    assert_eq!(
+        rejected_rules.public_finding_no_result_height(),
+        Some(failed_height),
+    );
+    assert!(
+        client.get_gov_contract_json(contract_address).is_err(),
+        "a no-result Parliament attempt must not apply its governed effect",
+    );
+
+    let retry = CreateParliamentGovernanceAttemptV1 {
+        proposal,
+        attempt_sequence: 1,
+    };
+    let retry_id = retry.governance_attempt_id();
+    client.submit_blocking(retry, fee())?;
+    let retry_height = current_height(client)?;
+    network.ensure_blocks(retry_height).await?;
+    let retry_state = read_attempt(client, retry_id)?;
+    assert_eq!(retry_state.attempt().sequence, 1);
+    assert_eq!(
+        retry_state.attempt().status,
+        GovernanceAttemptStatusV1::Active
+    );
+    assert_eq!(
+        retry_state.attempt().stage,
+        GovernanceStageV1::Qualification
+    );
+
+    let rejected_response = client.get_parliament_attempt(attempt_id)?;
+    let retry_response = client.get_parliament_attempt(retry_id)?;
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        let peer_rejected = peer_client.get_parliament_attempt(attempt_id)?;
+        let peer_retry = peer_client.get_parliament_attempt(retry_id)?;
+        assert_eq!(
+            peer_rejected.state_payload_hex,
+            rejected_response.state_payload_hex
+        );
+        assert_eq!(
+            peer_retry.state_payload_hex,
+            retry_response.state_payload_hex
+        );
+        assert!(
+            peer_client.get_gov_contract_json(contract_address).is_err(),
+            "every validator must preserve no-result effect isolation",
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn() -> Result<()> {
     let name = stringify!(four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn);
@@ -594,6 +904,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     let citizen_keys = citizen_keys();
     let citizens = citizen_accounts(&citizen_keys);
     let contract_address = ContractAddress::from_str(CONTRACT_ADDRESS)?;
+    let no_result_retry_contract_address =
+        ContractAddress::from_str(NO_RESULT_RETRY_CONTRACT_ADDRESS)?;
     let mut builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
@@ -677,6 +989,12 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanProposeContractDeployment {
                 contract_address: contract_address.clone(),
+            }),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanProposeContractDeployment {
+                contract_address: no_result_retry_contract_address.clone(),
             }),
             ALICE_ID.clone(),
         ));
@@ -1671,6 +1989,14 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         peer_client
             .get_gov_contract_json(&contract_address)
             .wrap_err("every validator must expose the consensus-enacted contract")?;
+        let status = peer_client.get_sumeragi_status()?;
+        status
+            .validate()
+            .map_err(|error| eyre!("invalid enacted Parliament peer status: {error}"))?;
+        assert!(
+            !status.restart_required,
+            "an enacted Parliament validator must not be live-but-fail-stopped",
+        );
     }
 
     let restart_index = network.peers().len() - 1;
@@ -1707,6 +2033,25 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         .client()
         .get_gov_contract_json(&contract_address)
         .wrap_err("normal restart must restore the consensus-enacted contract")?;
+    let restarted_status = restart_peer.client().get_sumeragi_status()?;
+    restarted_status
+        .validate()
+        .map_err(|error| eyre!("invalid restarted Parliament peer status: {error}"))?;
+    assert!(
+        !restarted_status.restart_required,
+        "normal restart must restore a live non-fail-stopped consensus reducer",
+    );
+    exercise_public_finding_impossible_quorum_retry(
+        &network,
+        &client,
+        &citizens,
+        &citizen_keys,
+        &no_result_retry_contract_address,
+        code_hash,
+        abi_hash,
+        logical_beacon,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1881,6 +2226,10 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         status
             .validate()
             .map_err(|error| eyre!("invalid successor NPoS status: {error}"))?;
+        assert!(
+            !status.restart_required,
+            "a successful mandatory beacon transition must not fail-stop a validator",
+        );
         assert!(status.last_committed_height >= boundary_height + 1);
         assert_eq!(status.height_context.epoch, successor_epoch);
         assert_eq!(status.height_context.epoch_seed, successor_seed);
@@ -2033,6 +2382,10 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         status
             .validate()
             .map_err(|error| eyre!("invalid fail-closed NPoS status: {error}"))?;
+        assert!(
+            !status.restart_required,
+            "below-threshold beacon liveness must stall without fail-stopping consensus",
+        );
         assert_eq!(status.last_committed_height, predecessor_height);
         assert_eq!(status.height, pulse_height);
     }
@@ -2097,6 +2450,12 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         concat!("combine_partial_", "releases"),
         concat!("FinalizeOpened", "Ballot"),
         concat!("GovernanceAttemptStatusV1::", "Enacted"),
+        concat!("exercise_public_finding_", "impossible_quorum_retry"),
+        concat!(
+            "ParliamentNoResultKindV1::",
+            "PublicFindingQuorumUnreachable"
+        ),
+        concat!("attempt_sequence:", " 1"),
         concat!("shutdown_if_", "started"),
         concat!("start_", "checked"),
     ] {

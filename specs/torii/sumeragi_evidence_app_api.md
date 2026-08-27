@@ -97,9 +97,12 @@ All former `/v1/sumeragi/vrf/*` HTTP routes are retired. In particular,
 `/v1/sumeragi/vrf/commit`, `/v1/sumeragi/vrf/reveal`,
 `/v1/sumeragi/vrf/epoch/{epoch}`, and
 `/v1/sumeragi/vrf/penalties/{epoch}` return `404 Not Found`; the corresponding
-operator CLI snapshot commands are also retired. The active `VrfCommit` and
-`VrfReveal` messages remain part of the authenticated consensus peer protocol,
-not a Torii mutation or snapshot surface.
+operator CLI snapshot commands are also retired. The `VrfCommit`/`VrfReveal`
+producer is retired as well: production emits neither message,
+rejects both at the consensus tombstone boundary, and rejects nonempty legacy
+VRF epoch effects. Finalized global threshold-beacon pulses are the sole live
+consensus-randomness path; retained VRF wire types and fixtures are not an
+operational protocol.
 
 ## Proof & Pipeline SSE (`GET /v1/events/sse`)
 

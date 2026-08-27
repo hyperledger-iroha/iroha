@@ -2465,7 +2465,10 @@ pub struct CommitCertificateResponseSignaturePayload {
     /// Current authenticated network identity serving the artifact.
     pub responder: PeerId,
 }
-/// Authenticated `NPoS` randomness commitment for one frozen epoch roster.
+/// Retained legacy `NPoS` randomness-commitment wire type.
+///
+/// Production decodes this tombstone variant only to reject it; it remains for
+/// canonical wire compatibility and historical regression fixtures.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -2479,7 +2482,10 @@ pub struct VrfCommit {
     /// Signature over the canonical `NPoS` `VRF`-commit preimage.
     pub bls_sig: Vec<u8>,
 }
-/// Authenticated `NPoS` randomness reveal for one frozen epoch roster.
+/// Retained legacy `NPoS` randomness-reveal wire type.
+///
+/// Production decodes this tombstone variant only to reject it; it remains for
+/// canonical wire compatibility and historical regression fixtures.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -2536,7 +2542,9 @@ impl GlobalBeaconPartialSignature {
         Ok(())
     }
 }
-/// Payload variants accepted by the Sumeragi v2 network envelope.
+/// Payload variants decoded by the Sumeragi v2 network envelope.
+///
+/// Runtime admission rejects the retained legacy VRF variants below.
 #[expect(
     clippy::large_enum_variant,
     reason = "consensus variants retain their canonical V1 Norito payloads inline; introducing indirection would change the signed wire representation"
@@ -2572,9 +2580,9 @@ pub enum ConsensusMessageV2Payload {
     CommitCertificateRequest(CommitCertificateRequest),
     /// Response carrying the active height context's durable `CommitQC`.
     CommitCertificateResponse(CommitCertificateResponse),
-    /// `NPoS` epoch-randomness commitment.
+    /// Retired `NPoS` epoch-randomness commitment tombstone.
     VrfCommit(VrfCommit),
-    /// `NPoS` epoch-randomness reveal.
+    /// Retired `NPoS` epoch-randomness reveal tombstone.
     VrfReveal(VrfReveal),
     /// Adaptive global threshold-beacon share for one exact height and view.
     GlobalBeaconPartialSignature(GlobalBeaconPartialSignature),

@@ -1518,6 +1518,31 @@ pub(crate) struct LifecycleValidateDispatchKeyV1 {
     digest: LifecycleDigest,
 }
 impl LifecycleValidateDispatchKeyV1 {
+    /// Construct an exact Validate key for focused ownership tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+        causal_root: LifecycleDigest,
+        first_admission_ordinal: u128,
+        ordinal: u128,
+        slot_index: u16,
+        digest: LifecycleDigest,
+    ) -> Option<Self> {
+        let owner = OwnerId::new(CausalRoot::new(causal_root), first_admission_ordinal);
+        let slot =
+            PhysicalSlotId::for_capacity(LifecycleWorkClass::Validate.capacity_class(), slot_index);
+        let mut context_digest = [0_u8; 32];
+        context_digest.copy_from_slice(context.id().0.as_ref());
+        Self::from_recovered_validate_registration(
+            LifecycleDigest::new(context_digest),
+            context.height,
+            owner,
+            ordinal,
+            slot,
+            digest,
+        )
+    }
+
     /// Reconstruct the immutable key stored by an authenticated Validate
     /// sidecar registration. Registry and coordinator joins must still attest
     /// every returned field before the key can regain execution authority.

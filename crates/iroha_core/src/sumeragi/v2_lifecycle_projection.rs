@@ -26,7 +26,7 @@ use crate::sumeragi::{
     v2::{AdapterEffect, SignRequest, VerifiedHeightContext},
     v2_body_store::{
         AuthenticatedGenesisBodyStoreFrameV1, BodyValidationRejectionIdentity, DurableBodyReceipt,
-        DurableBodyValidationOutcome, V2BodyStore, V2BodyStoreError,
+        DurableBodyValidationOutcome, V2BodyStore, V2BodyStoreError, ValidatedBodyReceipt,
     },
     v2_certified_serve_payload_store::{
         AuthenticatedRecoveredCertifiedServePayload,
@@ -2831,25 +2831,78 @@ pub(super) fn recovered_validate_no_successor_ledger_identity_is_authenticated(
     outcome: &DurableBodyValidationOutcome,
 ) -> bool {
     let durable = outcome.durable_body();
+    let durable_identity_is_exact =
+        recovered_validate_no_successor_durable_identity_is_authenticated(
+            context,
+            key,
+            causal_root,
+            reconstruction_source,
+            stage,
+            payload,
+            durable,
+        );
+    durable_identity_is_exact
+        && match (
+            outcome.validated_receipt(),
+            outcome.rejection_identity(),
+            outcome.missing_merge_sidecar(),
+        ) {
+            (Some(receipt), None, None) => {
+                recovered_validate_no_successor_validated_receipt_is_authenticated(
+                    context,
+                    key,
+                    causal_root,
+                    reconstruction_source,
+                    stage,
+                    payload,
+                    receipt,
+                )
+            }
+            (None, Some(BodyValidationRejectionIdentity::Rejected), None) => true,
+            _ => false,
+        }
+}
+/// Authenticate one successful body receipt against a terminal Validate parent.
+///
+/// Unlike the aggregate outcome predicate, this function cannot accept a
+/// deterministic rejection. Cold released-Apply recovery uses this narrower
+/// join so an `AdvancedNoSuccessor` tombstone authorizes Apply only when its
+/// exact durable body marker records successful deterministic execution.
+pub(super) fn recovered_validate_no_successor_validated_receipt_is_authenticated(
+    context: LifecycleContext,
+    key: LifecycleKey,
+    causal_root: CausalRoot,
+    reconstruction_source: LifecycleDigest,
+    stage: LifecycleStage,
+    payload: DurablePayloadReference,
+    receipt: &ValidatedBodyReceipt,
+) -> bool {
+    recovered_validate_no_successor_durable_identity_is_authenticated(
+        context,
+        key,
+        causal_root,
+        reconstruction_source,
+        stage,
+        payload,
+        receipt.durable(),
+    ) && key
+        .execution_commitment()
+        .is_none_or(|commitment| commitment == execution_commitment(receipt.execution_commitment()))
+}
+fn recovered_validate_no_successor_durable_identity_is_authenticated(
+    context: LifecycleContext,
+    key: LifecycleKey,
+    causal_root: CausalRoot,
+    reconstruction_source: LifecycleDigest,
+    stage: LifecycleStage,
+    payload: DurablePayloadReference,
+    durable: &DurableBodyReceipt,
+) -> bool {
     let expected_payload =
         durable_body_frame_reference(context, durable).map(DurablePayloadReference::BodyFrame);
     let expected_context = digest_from_bytes(durable.context_id().0.as_ref());
     let expected_proposal_round = LifecycleRound::new(durable.round().height, durable.round().view);
     let expected_subject = block_subject(durable.subject());
-    let outcome_is_exact = match (
-        outcome.validated_receipt(),
-        outcome.rejection_identity(),
-        outcome.missing_merge_sidecar(),
-    ) {
-        (Some(receipt), None, None) => {
-            receipt.durable() == durable
-                && key.execution_commitment().is_none_or(|commitment| {
-                    commitment == execution_commitment(receipt.execution_commitment())
-                })
-        }
-        (None, Some(BodyValidationRejectionIdentity::Rejected), None) => true,
-        _ => false,
-    };
     context.id() == expected_context
         && context.height() == durable.round().height
         && durable.round().context_id == durable.context_id()
@@ -2862,7 +2915,6 @@ pub(super) fn recovered_validate_no_successor_ledger_identity_is_authenticated(
         && stage.kind() == LifecycleStageKind::ValidateBody
         && stage.predecessor_scope() == PredecessorScope::Independent
         && Some(payload) == expected_payload
-        && outcome_is_exact
 }
 /// Authenticate a terminal Validate candidate including its transient physical episode.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -3093,6 +3145,33 @@ mod wait_source_tests {
         assert!(recovered_validate_no_successor_is_authenticated(
             context, &candidate, &validated,
         ));
+        let validated_receipt = validated
+            .validated_receipt()
+            .expect("validated outcome retains its successful receipt");
+        assert!(
+            recovered_validate_no_successor_validated_receipt_is_authenticated(
+                context,
+                candidate.key,
+                candidate.causal_root,
+                candidate.reconstruction_source,
+                candidate.stage,
+                candidate.payload,
+                validated_receipt,
+            )
+        );
+        let mut wrong_commitment = candidate.clone();
+        wrong_commitment.key.execution_commitment = Some(LifecycleDigest::new([0x74; 32]));
+        assert!(
+            !recovered_validate_no_successor_validated_receipt_is_authenticated(
+                context,
+                wrong_commitment.key,
+                wrong_commitment.causal_root,
+                wrong_commitment.reconstruction_source,
+                wrong_commitment.stage,
+                wrong_commitment.payload,
+                validated_receipt,
+            )
+        );
         let rejected =
             crate::sumeragi::v2_body_store::DurableBodyValidationOutcome::rejected_for_test(
                 durable,

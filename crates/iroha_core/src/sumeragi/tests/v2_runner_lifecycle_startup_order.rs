@@ -159,6 +159,7 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
 }
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(deferred_terminal_completion_requires_two_exact_stage_proofs_and_ordered_pending_coverage);
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(planner_covered_pending_attempts_are_exposed_for_pairing_but_skipped_for_recovery);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed);
 #[test]
 fn local_producer_queue_custody_is_preflighted_before_cursor_mutation() {
     let source = include_str!("../v2_lifecycle_recovery.rs");

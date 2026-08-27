@@ -633,7 +633,7 @@ close the internal blockers below:
   timeout envelope, then prove the empty queue leaves total and non-empty block
   heights stable; empty blocks are not a liveness mechanism.
 - Treat Sumeragi Validate/replay production wiring as complete and keep the
-  remaining gate evidence-driven. The source-contract harness covers all 50
+  remaining gate evidence-driven. The source-contract harness covers all 54
   named cases, and the specialized live-WAL mint census is exactly four sealed
   replay authorities and three frame-bound pending owners. Capture fresh
   focused, Core, static, formal, and relevant workspace results from the frozen

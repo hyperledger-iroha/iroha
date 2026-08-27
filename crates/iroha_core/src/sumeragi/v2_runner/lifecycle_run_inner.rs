@@ -1,6 +1,7 @@
 //! Non-PendingKura process-height ownership for the production lifecycle runner.
 
 use super::*;
+use crate::sumeragi::v2_effects::V2EffectServices;
 use crate::sumeragi::v2_lifecycle_coordinator::{
     ActivatedProductionLifecycleV1, LaunchedProductionLifecycleV1,
     LaunchedRecoveredCompleteTipSuccessorLifecycleV1, ProductionLifecycleFinalizationOutcomeV1,
@@ -662,11 +663,13 @@ pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_for_test(
 /// ordinary ingress.
 pub(in crate::sumeragi) fn settle_apply_barrier_runner_decision_handoff(
     executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    services: &mut impl V2EffectServices,
     local_proposal: &mut ProductionLifecycleLocalProposalStateV1,
     lane_work: &mut V2LaneWorkAdapter,
     output_guard: &ConsensusOutputGuard,
     _permit: &LifecycleDecidedLaneRecoveryPermitV1,
 ) -> Result<(), V2RunnerError> {
+    executor.reconcile_pending_runner_decision_cleanup(services)?;
     let directive = executor.local_proposal_directive()?;
     let Some(decided_subject) = directive.decided_subject() else {
         output_guard.close_admission_for_restart();
@@ -802,6 +805,7 @@ fn run_lifecycle_active_height(
                         // before servicing its certified lane/output seam.
                         settle_apply_barrier_runner_decision_handoff(
                             executor,
+                            services,
                             local_proposal,
                             &mut lane_work,
                             output_guard.as_ref(),

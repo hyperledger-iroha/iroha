@@ -1,5 +1,12 @@
 % NPoS Sumeragi Phase A Tracker Stub (Dec 2025)
 
+> **Archived milestone record:** The rows below preserve the retired 2025
+> consensus-VRF/global-RBC plan and its historical completion notes; they are
+> not first-release protocol or release evidence. Current NPoS randomness uses
+> finalized global threshold-BLS pulses, and revision-4 DA uses signed RS16
+> manifests/chunks. See `specs/sumeragi_v2.md` and
+> `specs/sumeragi_randomness_evidence_runbook.md`.
+
 Dispatched 2025-12-03 — Sequencing table circulated to `@sumeragi-core`, `@telemetry-ops`, `@torii-sdk`, `@governance`, `@qa-consensus`, `@performance-lab`, and `@operator-docs` for confirmation. Owners should reply on the shared tracker thread (#npos-phase-a-sync) with acceptance updates or dependency risks.
 
 | Ticket ID | Milestone | Summary | Owners | Dependencies | Target exit | Notes |

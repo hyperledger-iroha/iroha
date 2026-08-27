@@ -1618,6 +1618,45 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
                 "autonomous lifecycle payload remained cursorless after bootstrap recovery"
                     .to_owned()
             })?;
+            let binding = cursor.binding();
+            let (_, local_actor) = binding.local_validator_identity();
+            if local_actor != binding.producer_actor_projection() {
+                let descriptor = &payload.origin_proposal.descriptor;
+                if let Some(retired_attempt) = kura
+                    .read_autonomous_lane_retired_attempt(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                        descriptor.proposal_height,
+                        payload.network_id,
+                        payload.epoch,
+                    )
+                    .map_err(|error| {
+                        lifecycle_error("retired replica attempt read failed", error)
+                    })?
+                {
+                    let expected_retirement =
+                        crate::kura::AutonomousLaneSlotRetirementV1::from_payload(payload);
+                    if retired_attempt.artifact.executable_payload != *payload
+                        || retired_attempt.retirement != expected_retirement
+                    {
+                        return Err(
+                            "autonomous lifecycle retired replica attempt changed its exact payload or retirement"
+                                .to_owned(),
+                        );
+                    }
+                    super::v2_apply::retire_autonomous_lane_slot_and_release_reservations(
+                        kura,
+                        queue,
+                        &retired_attempt.retirement,
+                        payload.network_id,
+                        payload.epoch,
+                    )
+                    .map_err(|error| {
+                        lifecycle_error("retired replica release completion failed", error)
+                    })?;
+                    continue;
+                }
+            }
             require_local_producer_queue_owner(payload, cursor, &current_queue_groups)?;
             if recover_one_attempt(
                 kura,
@@ -1625,7 +1664,7 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
                 key_pair,
                 local_peer,
                 payload,
-                cursor.binding(),
+                binding,
             )? {
                 recovered_attempts = recovered_attempts.saturating_add(1);
             }

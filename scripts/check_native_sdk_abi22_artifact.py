@@ -64,6 +64,7 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 TARGET_RE = re.compile(r"[a-z0-9][a-z0-9._+-]{0,127}")
 SDK_VALUES = frozenset({"c-jni", "csharp", "node", "python"})
 EXACT_PRIVACY_C_EXPORT_SDKS = frozenset({"c-jni", "csharp"})
+_BINARY_OPEN_FLAG = getattr(os, "O_BINARY", 0)
 
 APPROVED_PRIVACY_C_EXPORTS = (
     "iroha_privacy_compiled_profile_catalog_v1",
@@ -114,6 +115,12 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
 
 class ArtifactContractError(RuntimeError):
     """Raised when native SDK artifact evidence is incomplete or stale."""
+
+
+def _windows_host_semantics() -> bool:
+    """Return whether pathname and descriptor ctime values are incomparable."""
+
+    return os.name == "nt"
 
 
 def fail(message: str) -> NoReturn:
@@ -180,8 +187,10 @@ def workspace_source_manifest_sha256(root: Path) -> str:
     try:
         digest = workspace_source_manifest(root)
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        detail = str(error).strip()
         raise ArtifactContractError(
             "native artifact workspace source manifest could not be authenticated"
+            + (f": {detail}" if detail else "")
         ) from error
     if SHA256_RE.fullmatch(digest) is None or digest == "0" * 64:
         fail("native artifact workspace source manifest SHA-256 is not canonical")
@@ -205,7 +214,12 @@ def stable_artifact_identity(path: Path) -> tuple[str, int]:
     ):
         fail("native artifact must be one non-empty regular file with one hard link")
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | _BINARY_OPEN_FLAG
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
@@ -267,7 +281,12 @@ def stable_bounded_file_bytes(
     ):
         fail(f"{label} must be one bounded regular file with one hard link")
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | _BINARY_OPEN_FLAG
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
@@ -288,25 +307,39 @@ def stable_bounded_file_bytes(
     finally:
         os.close(descriptor)
 
-    def identity(metadata: os.stat_result) -> tuple[int, ...]:
-        return (
+    def identity(
+        metadata: os.stat_result,
+        *,
+        compare_ctime: bool = True,
+    ) -> tuple[int, ...]:
+        stable = (
             metadata.st_dev,
             metadata.st_ino,
             metadata.st_mode,
             metadata.st_size,
             metadata.st_mtime_ns,
-            metadata.st_ctime_ns,
             metadata.st_nlink,
         )
+        return (*stable, metadata.st_ctime_ns) if compare_ctime else stable
 
     try:
         current = path.lstat()
     except OSError as error:
         raise ArtifactContractError(f"{label} changed while it was read") from error
-    opened_identity = identity(opened)
+    descriptor_changed = identity(opened) != identity(after)
+    pathname_changed = identity(before) != identity(current)
+    compare_path_ctime = not _windows_host_semantics()
+    cross_api_changed = identity(
+        before,
+        compare_ctime=compare_path_ctime,
+    ) != identity(
+        opened,
+        compare_ctime=compare_path_ctime,
+    )
     if (
-        opened_identity != identity(after)
-        or opened_identity != identity(current)
+        descriptor_changed
+        or pathname_changed
+        or cross_api_changed
         or not stat.S_ISREG(opened.st_mode)
         or stat.S_ISLNK(opened.st_mode)
         or opened.st_nlink != 1
@@ -329,12 +362,12 @@ def _symbol_tool_commands(path: Path) -> tuple[tuple[str, tuple[str, ...], str],
                 "macho-lines",
             ),
         )
-    if os.name == "nt":
+    if _windows_host_semantics():
         return (
             (
-                "llvm-nm",
-                ("--defined-only", "--extern-only", "-j", rendered),
-                "lines",
+                "llvm-readobj",
+                ("--coff-exports", rendered),
+                "llvm-coff-exports",
             ),
             ("dumpbin", ("/nologo", "/exports", rendered), "dumpbin"),
         )
@@ -358,6 +391,14 @@ def _parse_symbol_tool_output(raw: bytes, output_format: str) -> tuple[str, ...]
             if match is None:
                 continue
             encoded = match.group(1)
+        elif output_format == "llvm-coff-exports":
+            encoded = line.strip()
+            prefix = b"Name: "
+            if not encoded.startswith(prefix):
+                continue
+            encoded = encoded[len(prefix) :]
+            if not encoded:
+                fail("native artifact exported-symbol inventory is malformed")
         else:
             encoded = line.strip()
             if not encoded:
@@ -401,7 +442,10 @@ def inspect_exported_symbols(path: Path, *, required: bool) -> tuple[str, ...] |
             detail = result.stderr.decode("utf-8", errors="replace").strip()[:1024]
             failures.append(f"{tool}: {detail or f'exit {result.returncode}'}")
             continue
-        return _parse_symbol_tool_output(result.stdout, output_format)
+        symbols = _parse_symbol_tool_output(result.stdout, output_format)
+        if symbols:
+            return symbols
+        failures.append(f"{tool}: no exported symbols")
     if required:
         detail = "; ".join(failures[:2])
         fail(
@@ -824,6 +868,7 @@ def _exclusive_write(path: Path, payload: bytes) -> None:
         os.O_CREAT
         | os.O_EXCL
         | os.O_WRONLY
+        | _BINARY_OPEN_FLAG
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
@@ -958,6 +1003,7 @@ def stage_unique_artifact(
 
     read_flags = (
         os.O_RDONLY
+        | _BINARY_OPEN_FLAG
         | getattr(os, "O_CLOEXEC", 0)
         | os.O_NOFOLLOW
     )
@@ -965,6 +1011,7 @@ def stage_unique_artifact(
         os.O_CREAT
         | os.O_EXCL
         | os.O_WRONLY
+        | _BINARY_OPEN_FLAG
         | getattr(os, "O_CLOEXEC", 0)
         | os.O_NOFOLLOW
     )
@@ -1108,6 +1155,7 @@ def _exclusive_write_at(directory: int, name: str, payload: bytes) -> None:
         os.O_CREAT
         | os.O_EXCL
         | os.O_WRONLY
+        | _BINARY_OPEN_FLAG
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )

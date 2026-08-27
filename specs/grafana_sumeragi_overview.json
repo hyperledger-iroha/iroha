@@ -3,7 +3,7 @@
   "title": "Sumeragi Consensus Overview",
   "timezone": "",
   "editable": false,
-  "version": 1,
+  "version": 2,
   "panels": [
     {
       "type": "timeseries",
@@ -63,44 +63,6 @@
         {
           "expr": "sumeragi_block_created_proposal_mismatch_total",
           "legendFormat": "block_created_proposal_mismatch_total"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "VRF Penalties (epoch window)",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
-      "targets": [
-        {
-          "expr": "increase(sumeragi_vrf_non_reveal_penalties_total[140m])",
-          "legendFormat": "non_reveal_penalties"
-        },
-        {
-          "expr": "increase(sumeragi_vrf_no_participation_total[140m])",
-          "legendFormat": "no_participation_penalties"
-        },
-        {
-          "expr": "increase(sumeragi_vrf_reveals_late_total[140m])",
-          "legendFormat": "late_reveals"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "VRF Counters",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
-      "targets": [
-        {
-          "expr": "sumeragi_vrf_non_reveal_penalties_total",
-          "legendFormat": "non_reveal_penalties_total"
-        },
-        {
-          "expr": "sumeragi_vrf_no_participation_total",
-          "legendFormat": "no_participation_total"
-        },
-        {
-          "expr": "sumeragi_vrf_reveals_late_total",
-          "legendFormat": "late_reveals_total"
         }
       ]
     }
