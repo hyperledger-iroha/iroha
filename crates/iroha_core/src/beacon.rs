@@ -23,6 +23,8 @@ use iroha_crypto::{
 use iroha_crypto::{HashOf, threshold_bls::DasRenDealerSecret};
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use iroha_data_model::block::BlockHeader;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::consensus::GlobalThresholdBeaconDkgConstantProofV1;
 use iroha_data_model::{
     NetworkId,
     consensus::{
