@@ -554,11 +554,6 @@ impl Actor {
         pow: &mut SoranetPow,
         update: &SoranetHandshakePowUpdate,
     ) -> Result<(), String> {
-        if matches!(update.required, Some(false)) {
-            return Err(
-                "SoraNet PoW admission is mandatory in the first-release policy".to_string(),
-            );
-        }
         if let Some(difficulty) = update.difficulty {
             if difficulty == 0 {
                 return Err(
@@ -599,12 +594,6 @@ impl Actor {
             }
         }
         if let Some(puzzle_update) = &update.puzzle {
-            if matches!(puzzle_update.enabled, Some(false)) {
-                return Err(
-                    "SoraNet Argon2 puzzle admission is mandatory in the first-release policy"
-                        .to_string(),
-                );
-            }
             if let Some(memory) = puzzle_update.memory_kib
                 && !(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
                     ..=iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB)
@@ -733,7 +722,6 @@ mod tests {
             lanes: Option<u32>,
         ) -> SoranetHandshakePowUpdate {
             SoranetHandshakePowUpdate {
-                required: Some(true),
                 difficulty,
                 max_future_skew_secs: Some(999),
                 min_ticket_ttl_secs: None,
@@ -741,7 +729,6 @@ mod tests {
                 outbound_mint_capacity: None,
                 inbound_verify_capacity: None,
                 puzzle: Some(SoranetHandshakePuzzleUpdate {
-                    enabled: Some(true),
                     memory_kib,
                     time_cost,
                     lanes,
@@ -1772,6 +1759,8 @@ mod tests {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
                 parliament_quorum_bps:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
+                parliament_sortition_pulse_delay_blocks:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
                 parliament_invitation_phase_blocks:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
                 parliament_public_finding_phase_blocks:
@@ -2128,7 +2117,6 @@ mod tests {
                 sig_id: Some(7),
                 resume_hash_hex: Some(ResumeHashDirective::Set(resume_hex.clone())),
                 pow: Some(SoranetHandshakePowUpdate {
-                    required: Some(true),
                     difficulty: Some(6),
                     max_future_skew_secs: Some(1200),
                     min_ticket_ttl_secs: Some(90),
@@ -2136,7 +2124,6 @@ mod tests {
                     outbound_mint_capacity: None,
                     inbound_verify_capacity: None,
                     puzzle: Some(SoranetHandshakePuzzleUpdate {
-                        enabled: Some(true),
                         memory_kib: Some(131_072),
                         time_cost: Some(3),
                         lanes: Some(2),
@@ -2179,12 +2166,11 @@ mod tests {
         assert_eq!(handshake.kem_id, 3);
         assert_eq!(handshake.sig_id, 7);
         assert_eq!(handshake.resume_hash_hex, Some(resume_hex.clone()));
-        assert!(handshake.pow.required);
         assert_eq!(handshake.pow.difficulty, 6);
         assert_eq!(handshake.pow.max_future_skew_secs, 1200);
         assert_eq!(handshake.pow.min_ticket_ttl_secs, 90);
         assert_eq!(handshake.pow.ticket_ttl_secs, 240);
-        let puzzle = handshake.pow.puzzle.expect("puzzle summary present");
+        let puzzle = handshake.pow.puzzle;
         assert_eq!(puzzle.memory_kib, 131_072);
         assert_eq!(puzzle.time_cost, 3);
         assert_eq!(puzzle.lanes, 2);
@@ -2212,95 +2198,6 @@ mod tests {
         .expect("resume hash clear should succeed");
         let dto = kiso.get_dto().await.expect("fetch updated dto");
         assert_eq!(dto.network.soranet_handshake.resume_hash_hex, None);
-        let dto_default = kiso
-            .get_dto()
-            .await
-            .expect("fetch dto before puzzle update");
-        assert!(
-            dto_default.network.soranet_handshake.pow.puzzle.is_some(),
-            "puzzle gate should be enabled by default"
-        );
-        let err = kiso
-            .update_with_dto(ConfigUpdateDTO {
-                logger: LoggerDTO {
-                    level: Level::INFO,
-                    filter: None,
-                },
-                network_acl: None,
-                network: None,
-                soranet_handshake: Some(SoranetHandshakeUpdate {
-                    descriptor_commit_hex: None,
-                    client_capabilities_hex: None,
-                    relay_capabilities_hex: None,
-                    kem_id: None,
-                    sig_id: None,
-                    resume_hash_hex: None,
-                    pow: Some(SoranetHandshakePowUpdate {
-                        required: Some(false),
-                        difficulty: None,
-                        max_future_skew_secs: None,
-                        min_ticket_ttl_secs: None,
-                        ticket_ttl_secs: None,
-                        outbound_mint_capacity: None,
-                        inbound_verify_capacity: None,
-                        puzzle: None,
-                    }),
-                }),
-                transport: None,
-                compute_pricing: None,
-            })
-            .await
-            .expect_err("PoW disable should be rejected");
-        assert!(
-            err.to_string().contains("PoW admission is mandatory"),
-            "unexpected error: {err}"
-        );
-        let err = kiso
-            .update_with_dto(ConfigUpdateDTO {
-                logger: LoggerDTO {
-                    level: Level::INFO,
-                    filter: None,
-                },
-                network_acl: None,
-                network: None,
-                soranet_handshake: Some(SoranetHandshakeUpdate {
-                    descriptor_commit_hex: None,
-                    client_capabilities_hex: None,
-                    relay_capabilities_hex: None,
-                    kem_id: None,
-                    sig_id: None,
-                    resume_hash_hex: None,
-                    pow: Some(SoranetHandshakePowUpdate {
-                        required: None,
-                        difficulty: None,
-                        max_future_skew_secs: None,
-                        min_ticket_ttl_secs: None,
-                        ticket_ttl_secs: None,
-                        outbound_mint_capacity: None,
-                        inbound_verify_capacity: None,
-                        puzzle: Some(SoranetHandshakePuzzleUpdate {
-                            enabled: Some(false),
-                            memory_kib: None,
-                            time_cost: None,
-                            lanes: None,
-                        }),
-                    }),
-                }),
-                transport: None,
-                compute_pricing: None,
-            })
-            .await
-            .expect_err("puzzle disable should be rejected");
-        assert!(
-            err.to_string()
-                .contains("Argon2 puzzle admission is mandatory"),
-            "unexpected error: {err}"
-        );
-        let dto = kiso.get_dto().await.expect("fetch post-rejection dto");
-        assert!(
-            dto.network.soranet_handshake.pow.puzzle.is_some(),
-            "rejected update must not disable the puzzle gate"
-        );
         runtime.await.expect("runtime responder task");
     }
     #[tokio::test]
@@ -2320,7 +2217,6 @@ mod tests {
                 .expect("Kiso request should remain active");
         });
         let updated_pow = SoranetHandshakePowUpdate {
-            required: Some(true),
             difficulty: Some(9),
             max_future_skew_secs: Some(30),
             min_ticket_ttl_secs: Some(15),
@@ -2328,7 +2224,6 @@ mod tests {
             outbound_mint_capacity: None,
             inbound_verify_capacity: None,
             puzzle: Some(SoranetHandshakePuzzleUpdate {
-                enabled: Some(true),
                 memory_kib: Some(32 * 1024),
                 time_cost: Some(1),
                 lanes: Some(2),
@@ -2415,7 +2310,6 @@ mod tests {
                 sig_id: None,
                 resume_hash_hex: None,
                 pow: Some(SoranetHandshakePowUpdate {
-                    required: None,
                     difficulty: Some(difficulty),
                     max_future_skew_secs: None,
                     min_ticket_ttl_secs: None,

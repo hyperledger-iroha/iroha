@@ -304,6 +304,7 @@ const SOURCE_CONTRACT_ASSET: &str = include_str!("source_contracts_v1.txt");
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum SourceId {
     Adapter,
+    Apply,
     Authority,
     BodyPipeline,
     BodyPipelineTests,
@@ -313,10 +314,15 @@ enum SourceId {
     ConcreteAdmission,
     Coordinator,
     CoordinatorSupport,
+    V2Core,
     Effects,
     FairIngress,
+    FormalFirstRelease,
     IngressPosition,
     KuraTerminalOutcomes,
+    Kura,
+    KuraMergeSupport,
+    KuraReleaseAuthority,
     LaneWork,
     Launch,
     Ledger,
@@ -326,6 +332,8 @@ enum SourceId {
     PendingLifecycle,
     Preactivation,
     Projection,
+    Queue,
+    Refinement,
     Registry,
     RegistryRecovery,
     RegistryRecoveryImpl,
@@ -350,6 +358,7 @@ impl SourceId {
     fn parse(value: &str) -> Option<Self> {
         Some(match value {
             "adapter" => Self::Adapter,
+            "apply" => Self::Apply,
             "authority" => Self::Authority,
             "body_pipeline" => Self::BodyPipeline,
             "body_pipeline_tests" => Self::BodyPipelineTests,
@@ -359,10 +368,15 @@ impl SourceId {
             "concrete_admission" => Self::ConcreteAdmission,
             "coordinator" => Self::Coordinator,
             "coordinator_support" => Self::CoordinatorSupport,
+            "v2_core" => Self::V2Core,
             "effects" => Self::Effects,
             "fair_ingress" => Self::FairIngress,
+            "formal_first_release" => Self::FormalFirstRelease,
             "ingress_position" => Self::IngressPosition,
             "kura_terminal_outcomes" => Self::KuraTerminalOutcomes,
+            "kura" => Self::Kura,
+            "kura_merge_support" => Self::KuraMergeSupport,
+            "kura_release_authority" => Self::KuraReleaseAuthority,
             "lane_work" => Self::LaneWork,
             "launch" => Self::Launch,
             "ledger" => Self::Ledger,
@@ -372,6 +386,8 @@ impl SourceId {
             "pending_lifecycle" => Self::PendingLifecycle,
             "preactivation" => Self::Preactivation,
             "projection" => Self::Projection,
+            "queue" => Self::Queue,
+            "refinement" => Self::Refinement,
             "registry" => Self::Registry,
             "registry_recovery" => Self::RegistryRecovery,
             "registry_recovery_impl" => Self::RegistryRecoveryImpl,
@@ -398,6 +414,7 @@ impl SourceId {
 fn source(id: SourceId) -> String {
     match id {
         SourceId::Adapter => reviewed_v2_adapter_source_for_test().to_owned(),
+        SourceId::Apply => include_str!("v2_apply.rs").to_owned(),
         SourceId::Authority => include_str!("v2_lifecycle_authority.rs").to_owned(),
         SourceId::BodyPipeline => {
             include_str!("v2_lifecycle_body_pipeline_transition.rs").to_owned()
@@ -419,11 +436,23 @@ fn source(id: SourceId) -> String {
         SourceId::CoordinatorSupport => {
             include_str!("v2_lifecycle_coordinator_support.rs").to_owned()
         }
+        SourceId::V2Core => include_str!("v2_core.rs").to_owned(),
         SourceId::Effects => reviewed_v2_effects_source_for_test().to_owned(),
         SourceId::FairIngress => include_str!("mod.rs").to_owned(),
+        SourceId::FormalFirstRelease => {
+            include_str!("../../../../formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla")
+                .to_owned()
+        }
         SourceId::IngressPosition => include_str!("v2_lifecycle_ingress_position.rs").to_owned(),
         SourceId::KuraTerminalOutcomes => {
             include_str!("../kura/autonomous_lifecycle_terminal_outcomes.rs").to_owned()
+        }
+        SourceId::Kura => include_str!("../kura.rs").to_owned(),
+        SourceId::KuraMergeSupport => {
+            include_str!("../kura/autonomous_merge_bundle_support.rs").to_owned()
+        }
+        SourceId::KuraReleaseAuthority => {
+            include_str!("../kura/autonomous_release_authority.rs").to_owned()
         }
         SourceId::LaneWork => include_str!("v2_lane_work.rs").to_owned(),
         SourceId::Launch => include_str!("v2_lifecycle_launch.rs").to_owned(),
@@ -438,6 +467,8 @@ fn source(id: SourceId) -> String {
         SourceId::PendingLifecycle => include_str!("v2_lifecycle_pending_kura.rs").to_owned(),
         SourceId::Preactivation => include_str!("v2_lifecycle_preactivation.rs").to_owned(),
         SourceId::Projection => include_str!("v2_lifecycle_projection.rs").to_owned(),
+        SourceId::Queue => include_str!("../queue.rs").to_owned(),
+        SourceId::Refinement => include_str!("v2_core/refinement.rs").to_owned(),
         SourceId::Registry => reviewed_lifecycle_work_registry_source_for_test().to_owned(),
         SourceId::RegistryRecovery => {
             include_str!("v2_lifecycle_work_registry_validate_recovery.rs").to_owned()
@@ -715,9 +746,9 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
             _ => return Err(format!("invalid source contract asset line {line_number}")),
         }
     }
-    if current.is_some() || cases.len() != 53 {
+    if current.is_some() || cases.len() != 54 {
         return Err(format!(
-            "source contract asset must contain exactly 53 closed cases"
+            "source contract asset must contain exactly 54 closed cases"
         ));
     }
     Ok(cases)
@@ -856,7 +887,7 @@ fn source_contract_case_ids_are_unique() {
         cases.iter().all(|case| ids.insert(case.id.as_str())),
         "source contract case IDs must be unique"
     );
-    assert_eq!(ids.len(), 53, "source contract inventory drifted");
+    assert_eq!(ids.len(), 54, "source contract inventory drifted");
     for id in ids {
         run_source_contract(id);
     }

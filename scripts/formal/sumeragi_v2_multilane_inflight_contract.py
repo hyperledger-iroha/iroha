@@ -102,9 +102,14 @@ INFLIGHT_COMPOSED_TLA_ALIGNMENT_TOKENS = (
     "RecoverReservationSnapshot ==\n  UNCHANGED vars",
     "ReleaseReservationDirect ==\n"
     "  /\\ queue.plan = \"SelectedConjunction\"\n"
-    "  /\\ queue.reservation = \"Live\"\n"
-    "  /\\ decision.laneCommitOwner = \"None\"\n"
-    "  /\\ decision.releaseOwner = \"None\"\n"
+    "  /\\ ((queue.reservation = \"Live\"\n"
+    "       /\\ decision.laneCommitOwner = \"None\"\n"
+    "       /\\ decision.releaseOwner = \"None\")",
+    "      \\/ (queue.reservation \\in {\"Live\", \"DirectReleased\"}\n"
+    "          /\\ release.kuraRetired\n"
+    "          /\\ (queue.reservation = \"DirectReleased\" => release.fifoRestored)\n"
+    "          /\\ release.pendingPrefix = queue.selectedCount\n"
+    "          /\\ decision.releaseOwner \\in (Validators \\ {Producer})))\n"
     "  /\\ queue' = [queue EXCEPT !.reservation = \"DirectReleased\"]\n"
     "  /\\ release' = [release EXCEPT !.fifoRestored = TRUE]",
     "  \\/ \\E p \\in Validators \\ {Producer}: FanoutFromProducer(p)\n"
@@ -2457,8 +2462,16 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "self.reservation_group.reservation_count",
             "canonical_lane_queue_reservation_group_identity_projection(",
             "replacement.retirement_hash() != Some(self.retirement_hash)",
+            "let (action, actor, before, after) = if finalize_release",
+            "match release_mode",
+            "AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared",
+            "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo",
+            "if self.actor == self.producer",
+            "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
+            "self.actor,",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
+            "actor,",
             "check_production_in_flight_first_release_transition(projection)",
             "Ok(AutonomousLaneEntrypointClaimTransitionAuthorization {",
             "path: path.to_path_buf()",
@@ -2750,7 +2763,18 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         (
             "AutonomousLaneQueueReleaseFinalizationAuthorization",
             "LaneQueueReleaseFinalizationGate::from_authorization",
-            "finalize_lane_reservation_release_barrier_inner(barrier, gate)",
+            "finalize_lane_reservation_release_barrier_inner(barrier, gate, false)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::finalize_lane_reservation_release_barrier_with_replica_fifo_authorization",
+        (
+            "DurableAutonomousNonQueueReplicaFifoAuthorization",
+            "replica_fifo_authorization.covers_queue_barrier(self, barrier)",
+            "LaneQueueReleaseFinalizationGate::from_authorization",
+            "finalize_lane_reservation_release_barrier_inner(barrier, gate, true)",
         ),
     ),
     (
@@ -3755,10 +3779,18 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
             "let selected_count = self.reservation_group.reservation_count;",
             "let binding_a =",
             "if replacement.retirement_hash() != Some(self.retirement_hash)",
-            "let (action, before, after) = if finalize_release",
+            "let (action, actor, before, after) = if finalize_release",
+            "let (reservation_state, fifo_restored, actor) = match release_mode",
+            "AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared",
+            "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo",
+            "if self.actor == self.producer",
+            "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
+            "true,",
+            "self.actor,",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
             "let projection = ProductionInFlightFirstReleaseTransitionProjection {",
+            "actor,",
             "check_production_in_flight_first_release_transition(projection)",
             "Ok(AutonomousLaneEntrypointClaimTransitionAuthorization {",
             "projection,",

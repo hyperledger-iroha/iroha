@@ -2192,6 +2192,8 @@ pub struct Governance {
     pub parliament_alternate_size: Option<usize>,
     /// Quorum requirement for council approvals (basis points, ceil-divided).
     pub parliament_quorum_bps: u16,
+    /// Exact future-beacon delay frozen into Parliament sortition requests.
+    pub parliament_sortition_pulse_delay_blocks: u64,
     /// Consensus block-height span for immutable Parliament invitation responses.
     pub parliament_invitation_phase_blocks: u64,
     /// Consensus block-height span for public-finding endorsements after Reflection begins.
@@ -2294,6 +2296,8 @@ impl_default!(Governance => {
             .expect("valid default governance asset id"),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
+            parliament_sortition_pulse_delay_blocks:
+                defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
             parliament_invitation_phase_blocks:
                 defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
             parliament_public_finding_phase_blocks:
@@ -4037,6 +4041,10 @@ pub fn execution_policy_digest_v1(
     policy.push(
         "governance.parliament_quorum_bps",
         &governance.parliament_quorum_bps,
+    );
+    policy.push(
+        "governance.parliament_sortition_pulse_delay_blocks",
+        &governance.parliament_sortition_pulse_delay_blocks,
     );
     policy.push(
         "governance.parliament_invitation_phase_blocks",

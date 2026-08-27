@@ -1634,7 +1634,10 @@ impl ProductionLifecycleOwnerV1 {
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
                 executor
-                    .release_live_lifecycle_validate_successor(ordinal)
+                    .release_live_lifecycle_validate_successor(
+                        ordinal,
+                        crate::sumeragi::v2_effects::LifecycleValidateRetryResolutionV1::AdvancedNoSuccessor,
+                    )
                     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 Ok(ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal })
             }
@@ -1673,7 +1676,10 @@ impl ProductionLifecycleOwnerV1 {
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
                 executor
-                    .release_live_lifecycle_validate_successor(ordinal)
+                    .release_live_lifecycle_validate_successor(
+                        ordinal,
+                        crate::sumeragi::v2_effects::LifecycleValidateRetryResolutionV1::AdvancedToSuccessor,
+                    )
                     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
                     parent_ordinal: ordinal,
@@ -1719,7 +1725,10 @@ impl ProductionLifecycleOwnerV1 {
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
                 executor
-                    .release_live_lifecycle_validate_successor(ordinal)
+                    .release_live_lifecycle_validate_successor(
+                        ordinal,
+                        crate::sumeragi::v2_effects::LifecycleValidateRetryResolutionV1::AdvancedToSuccessor,
+                    )
                     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
                     parent_ordinal: ordinal,

@@ -1318,6 +1318,99 @@ fn exact_empty_stutter_publishes_an_absent_frame_once() {
     assert_eq!(reopened, empty);
 }
 #[test]
+fn ordinary_successor_preserves_terminal_validate_no_successor_record_bytes() {
+    let root = tempfile::tempdir().expect("temporary directory");
+    let (mut tombstone, _) = validate_apply_pair();
+    tombstone.continuation =
+        PersistedDurableContinuationV1::from_schema(DurableContinuation::AdvancedNoSuccessor);
+    let tombstone_bytes = tombstone.encode();
+    let current = LifecycleLedgerV1::new(
+        context(),
+        1,
+        vec![tombstone.clone()],
+        BTreeMap::new(),
+    )
+    .expect("terminal Validate/no-successor ledger");
+    let successor = LifecycleLedgerV1::new(
+        context(),
+        2,
+        vec![tombstone.clone(), unrelated_timeout_record(2)],
+        BTreeMap::new(),
+    )
+    .expect("ordinary append preserving the Validate tombstone");
+    let (store, empty) =
+        LifecycleLedgerStoreV1::open(root.path(), context()).expect("open ledger store");
+    assert!(empty.records().is_empty());
+    store.persist(&current).expect("persist tombstone frame");
+
+    store
+        .persist_exact_ordinary_successor(&current, &successor)
+        .expect("append an unrelated ordinary row");
+
+    let loaded = store.load().expect("reload ordinary successor");
+    assert_eq!(loaded, successor);
+    assert_eq!(loaded.records()[0].encode(), tombstone_bytes);
+    assert_eq!(
+        loaded.records()[0].terminal(),
+        Some(Some(TerminalOutcome::Advanced))
+    );
+    assert_eq!(
+        loaded.records()[0].continuation(),
+        Some(DurableContinuation::AdvancedNoSuccessor)
+    );
+}
+#[test]
+fn ordinary_successor_rejects_terminal_validate_rewrite_without_touching_frame() {
+    let root = tempfile::tempdir().expect("temporary directory");
+    let (mut tombstone, _) = validate_apply_pair();
+    tombstone.continuation =
+        PersistedDurableContinuationV1::from_schema(DurableContinuation::AdvancedNoSuccessor);
+    let tombstone_bytes = tombstone.encode();
+    let current = LifecycleLedgerV1::new(
+        context(),
+        1,
+        vec![tombstone],
+        BTreeMap::new(),
+    )
+    .expect("terminal Validate/no-successor ledger");
+    let (rewritten_validate, apply) = validate_apply_pair();
+    let rewritten = LifecycleLedgerV1::new(
+        context(),
+        2,
+        vec![rewritten_validate, apply],
+        BTreeMap::new(),
+    )
+    .expect("individually valid Validate-to-Apply ledger");
+    let (store, empty) =
+        LifecycleLedgerStoreV1::open(root.path(), context()).expect("open ledger store");
+    assert!(empty.records().is_empty());
+    store.persist(&current).expect("persist tombstone frame");
+    let frame_path = root.path().join(LEDGER_FILE);
+    let frame_before = fs::read(&frame_path).expect("read tombstone frame");
+
+    let error = store
+        .persist_exact_ordinary_successor(&current, &rewritten)
+        .expect_err("ordinary publication must not upgrade the terminal tombstone");
+
+    assert!(matches!(
+        error,
+        LifecycleLedgerError::InvalidLedger(detail)
+            if detail.contains("terminal Validate/no-successor tombstone")
+    ));
+    assert_eq!(
+        fs::read(&frame_path).expect("read rejected successor frame"),
+        frame_before,
+        "rejection must happen before atomic frame replacement"
+    );
+    let loaded = store.load().expect("reload rejected successor predecessor");
+    assert_eq!(loaded, current);
+    assert_eq!(loaded.records()[0].encode(), tombstone_bytes);
+    assert_eq!(
+        loaded.records()[0].continuation(),
+        Some(DurableContinuation::AdvancedNoSuccessor)
+    );
+}
+#[test]
 fn store_roundtrip_rejects_corrupt_and_foreign_frames() {
     let root = tempfile::tempdir().expect("temporary directory");
     let (store, empty) =

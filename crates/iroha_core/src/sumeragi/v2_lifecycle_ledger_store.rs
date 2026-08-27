@@ -315,6 +315,41 @@ impl LifecycleLedgerStoreV1 {
         }
         self.persist(successor)
     }
+    /// Persist one ordinary coordinator successor without rewriting a sealed
+    /// Validate/no-successor tombstone.
+    ///
+    /// Specialized recovery and all-row retirement use their own authenticated
+    /// publication corridors. Ordinary live publication is append-only with
+    /// respect to an `AdvancedNoSuccessor` record: the complete encoded record,
+    /// including its owner, replay authority, payload, and continuation, must
+    /// remain byte-for-byte unchanged in every later frame.
+    fn persist_exact_ordinary_successor(
+        &self,
+        current: &LifecycleLedgerV1,
+        successor: &LifecycleLedgerV1,
+    ) -> Result<(), LifecycleLedgerError> {
+        let preserves_terminal_validate_tombstones = current.records().iter().all(|record| {
+            if record.work_class() != Some(LifecycleWorkClass::Validate)
+                || record.terminal() != Some(Some(TerminalOutcome::Advanced))
+                || record.continuation() != Some(DurableContinuation::AdvancedNoSuccessor)
+            {
+                return true;
+            }
+            successor
+                .records()
+                .binary_search_by_key(&record.ordinal(), LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| successor.records().get(index))
+                == Some(record)
+        });
+        if !preserves_terminal_validate_tombstones {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "ordinary lifecycle successor rewrote a terminal Validate/no-successor tombstone"
+                    .to_owned(),
+            ));
+        }
+        self.persist_exact_successor(current, successor)
+    }
     /// Reload and authenticate one already-fsynced WAL repair as an exact
     /// repaired-pair stutter.
     ///
@@ -736,7 +771,9 @@ impl LifecycleCoordinator {
         let Some(store) = self.ledger_store.as_ref() else {
             return Ok(());
         };
-        store.persist(&LifecycleLedgerV1::from_coordinator(self)?)
+        let current = store.load()?;
+        let successor = LifecycleLedgerV1::from_coordinator(self)?;
+        store.persist_exact_ordinary_successor(&current, &successor)
     }
     /// Fsync this staged projection, then release its shared ordinal range.
     pub(super) fn persist_durable_projection_with_ordinal_reservation(
@@ -799,7 +836,7 @@ impl LifecycleCoordinator {
         }
         let current = LifecycleLedgerV1::from_coordinator(self)?;
         let successor = LifecycleLedgerV1::from_coordinator(staged)?;
-        store.persist_exact_successor(&current, &successor)
+        store.persist_exact_ordinary_successor(&current, &successor)
     }
     /// Fsync one all-row finalized successor against this exact live owner.
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn persist_exact_finalization_successor(

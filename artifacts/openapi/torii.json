@@ -10062,7 +10062,7 @@
         "properties": {
           "attempt_sequence": {
             "format": "uint32",
-            "maximum": 4294967295,
+            "maximum": 16,
             "minimum": 0,
             "type": "integer"
           },
@@ -11928,6 +11928,19 @@
               "reason"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "const": "SortitionRetriesExhausted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -12188,30 +12201,37 @@
       "GovernanceParliamentRegisterSortitionRequestPayloadV1": {
         "additionalProperties": false,
         "properties": {
-          "candidate_snapshot": {
+          "requests": {
             "items": {
-              "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+              "$ref": "#/components/schemas/GovernanceParliamentSortitionRequestRegistrationV1"
             },
-            "maxItems": 1000,
+            "maxItems": 10,
             "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
+            "type": "array"
+          }
+        },
+        "required": [
+          "requests"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentSortitionRequestRegistrationV1": {
+        "additionalProperties": false,
+        "properties": {
           "request": {
             "$ref": "#/components/schemas/JsonValue",
             "description": "Exact immutable SortitionRequestV1."
           },
           "sequence": {
             "format": "uint32",
-            "maximum": 4294967295,
+            "maximum": 16,
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
           "sequence",
-          "request",
-          "candidate_snapshot"
+          "request"
         ],
         "type": "object"
       },
@@ -59421,178 +59441,6 @@
           ]
         },
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/gov/enact": {
-      "post": {
-        "description": "Enact an approved referendum and receive draft instructions for local signing.",
-        "parameters": [
-          {
-            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
-            "in": "header",
-            "name": "X-Iroha-Witness",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GovernanceEnactRequestV1"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical authentication headers selecting the private response.",
-                "required": true,
-                "schema": {
-                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
-          }
-        ],
-        "summary": "Enact a referendum.",
-        "tags": [
-          "Governance"
-        ],
-        "x-iroha-canonical-auth-v1": {
-          "body_hash_bound": true,
-          "exact_request_target": true,
-          "modes": [
-            {
-              "forbidden_headers": [
-                "X-Iroha-Witness"
-              ],
-              "kind": "single_signature",
-              "required_headers": [
-                "X-Iroha-Account",
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ]
-            },
-            {
-              "forbidden_headers": [
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ],
-              "kind": "multisig_witness",
-              "optional_headers": [
-                "X-Iroha-Account"
-              ],
-              "required_headers": [
-                "X-Iroha-Witness"
-              ]
-            }
-          ]
-        },
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/gov/finalize": {
-      "post": {
-        "description": "Finalize referendum tally and status and receive draft instructions for local signing.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GovernanceFinalizeRequestV1"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Finalize a referendum.",
-        "tags": [
-          "Governance"
-        ],
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/locks/{rid}": {

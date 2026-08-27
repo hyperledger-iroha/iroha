@@ -966,7 +966,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn optional_consensus_signer_binding_is_all_or_nothing_and_preserves_inventory_digest() {
+    fn optional_consensus_signer_binding_is_all_or_nothing_and_inventory_bound() {
         let slot = IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner;
         let mut bindings = Vec::new();
 
@@ -993,6 +993,7 @@ mod tests {
         for incomplete in [
             (None, Some(7), Some(inventory_digest)),
             (Some(handle), None, Some(inventory_digest)),
+            (Some(handle), Some(7), None),
             (Some(handle), Some(0), Some(inventory_digest)),
             (Some(handle), Some(7), Some([0; 32])),
         ] {

@@ -847,6 +847,40 @@ impl RecoveredDecisionApplyStageProjectionV1 for RecoveredDecisionStageProjectio
     }
 }
 
+/// Structural stand-in for the cold released-Validate projection. It binds one
+/// historical no-successor tombstone to the current recovered Decision lineage
+/// without retaining any operation authority.
+struct RecoveredReleasedDecisionStageProjectionFixture {
+    context: LifecycleContext,
+    live_fetch: LifecycleLedgerRecordV1,
+    released_terminal: LifecycleLedgerRecordV1,
+    lineage: RecoveredDecisionApplyCandidateLineageV1,
+}
+
+impl RecoveredDecisionReleasedApplyStageProjectionV1
+    for RecoveredReleasedDecisionStageProjectionFixture
+{
+    fn belongs_to_context(&self, context: LifecycleContext) -> bool {
+        self.context == context
+    }
+
+    fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        record.key() == self.live_fetch.key()
+    }
+
+    fn names_terminal_validate_record(
+        &self,
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        context == self.context && record == &self.released_terminal
+    }
+
+    fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
+        &self.lineage
+    }
+}
+
 fn recovered_decision_store_crash_prefix_fixture(
     fixture: &RecoveryFixture,
 ) -> (LifecycleLedgerV1, RecoveredDecisionStageProjectionFixture) {
@@ -1003,6 +1037,61 @@ fn recovered_decision_store_crash_prefix_fixture(
             validate_crash_prefix,
         },
     )
+}
+
+fn recovered_released_decision_apply_fixture(
+    fixture: &RecoveryFixture,
+) -> (
+    LifecycleLedgerV1,
+    RecoveredReleasedDecisionStageProjectionFixture,
+) {
+    let (_, ordinary) = recovered_decision_store_crash_prefix_fixture(fixture);
+    let RecoveredDecisionStageProjectionFixture {
+        context,
+        live_fetch,
+        lineage,
+        collision_validate,
+        ..
+    } = ordinary;
+    let terminal_root = CausalRoot::new(LifecycleDigest::new(
+        *Hash::new(b"historical released recovered Decision Validate owner").as_ref(),
+    ));
+    let terminal_owner = OwnerId::new(terminal_root, 1);
+    let released_terminal = LifecycleLedgerRecordV1::new(
+        collision_validate
+            .key()
+            .expect("released fixture retains one Validate key"),
+        terminal_owner,
+        1,
+        collision_validate
+            .work_class()
+            .expect("released fixture retains one Validate work class"),
+        collision_validate
+            .stage()
+            .expect("released fixture retains one Validate stage"),
+        Some(TerminalOutcome::Advanced),
+        terminal_root.digest(),
+        collision_validate
+            .durable_payload()
+            .expect("released fixture retains one body frame"),
+        collision_validate.replay_authority,
+        DurableContinuation::AdvancedNoSuccessor,
+    )
+    .expect("construct historical released Validate tombstone");
+    assert_eq!(
+        released_terminal.work_class(),
+        Some(LifecycleWorkClass::Validate)
+    );
+    let ledger =
+        LifecycleLedgerV1::new(context, 1, vec![released_terminal.clone()], BTreeMap::new())
+            .expect("construct released-Validate cold recovery prefix");
+    let projection = RecoveredReleasedDecisionStageProjectionFixture {
+        context,
+        live_fetch,
+        released_terminal,
+        lineage,
+    };
+    (ledger, projection)
 }
 
 fn terminal_decision_chain_fixture(
@@ -1574,6 +1663,193 @@ fn recovered_decision_apply_predecessor_oracle_follows_non_adjacent_validate_con
         None,
         "a substituted Apply ordinal cannot authenticate predecessor retirement"
     );
+}
+
+#[test]
+fn recovered_released_decision_apply_classifies_only_the_released_shape() {
+    let fixture = RecoveryFixture::new("decision-released-classification", 0x36);
+    let (released, projection) = recovered_released_decision_apply_fixture(&fixture);
+
+    assert_eq!(
+        released
+            .classify_recovered_decision_apply_startup_projection(&projection)
+            .expect("classify one exact released Validate tombstone"),
+        RecoveredDecisionApplyStartupShapeV1::ReleasedTerminal
+    );
+
+    let ordinary = LifecycleLedgerV1::new(
+        released.context(),
+        projection.live_fetch.ordinal(),
+        vec![projection.live_fetch.clone()],
+        BTreeMap::new(),
+    )
+    .expect("construct ordinary current-Fetch startup shape");
+    assert_eq!(
+        ordinary
+            .classify_recovered_decision_apply_startup_projection(&projection)
+            .expect("classify the retained current Fetch"),
+        RecoveredDecisionApplyStartupShapeV1::FullChain
+    );
+}
+
+#[test]
+fn recovered_released_decision_apply_appends_only_a_distinct_owned_apply() {
+    let fixture = RecoveryFixture::new("decision-released-standalone-apply", 0x38);
+    let (prefix, projection) = recovered_released_decision_apply_fixture(&fixture);
+    let terminal_bytes = projection.released_terminal.encode();
+
+    let (successor, apply_ordinal, changed) = prefix
+        .stage_recovered_released_decision_apply_projection(&projection)
+        .expect("stage one standalone recovered Decision Apply");
+
+    assert!(changed);
+    assert_eq!(apply_ordinal, 2);
+    assert_eq!(successor.high_water(), apply_ordinal);
+    assert_eq!(successor.records().len(), 2);
+    let terminal = &successor.records()[0];
+    let apply = &successor.records()[1];
+    assert_eq!(terminal, &projection.released_terminal);
+    assert_eq!(
+        terminal.encode(),
+        terminal_bytes,
+        "standalone Apply staging must retain every tombstone byte"
+    );
+    assert_eq!(
+        terminal.continuation(),
+        Some(DurableContinuation::AdvancedNoSuccessor)
+    );
+    assert_eq!(terminal.terminal(), Some(Some(TerminalOutcome::Advanced)));
+    assert!(
+        projection
+            .lineage
+            .exactly_matches_standalone_apply_record(successor.context(), apply)
+    );
+    assert_eq!(apply.work_class(), Some(LifecycleWorkClass::Apply));
+    assert_eq!(apply.terminal(), Some(None));
+    assert_eq!(apply.continuation(), Some(DurableContinuation::None));
+    assert_ne!(terminal.owner(), apply.owner());
+    assert_ne!(
+        terminal.owner().causal_root(),
+        apply.owner().causal_root(),
+        "the historical Validate owner cannot own the current Apply"
+    );
+    assert_eq!(
+        apply.owner().first_admission_ordinal(),
+        apply.ordinal(),
+        "the standalone Apply must start its own owner lineage"
+    );
+    assert_eq!(
+        successor
+            .records()
+            .iter()
+            .filter(|record| record.work_class() == Some(LifecycleWorkClass::Fetch))
+            .count(),
+        0,
+        "released recovery must not fabricate a current Fetch"
+    );
+    assert_eq!(
+        successor
+            .records()
+            .iter()
+            .filter(|record| record.work_class() == Some(LifecycleWorkClass::Store))
+            .count(),
+        0,
+        "released recovery must not fabricate a current Store"
+    );
+    assert_eq!(
+        successor
+            .records()
+            .iter()
+            .filter(|record| record.work_class() == Some(LifecycleWorkClass::Validate))
+            .count(),
+        1,
+        "only the historical Validate tombstone may remain"
+    );
+}
+
+#[test]
+fn recovered_released_decision_apply_exact_replay_is_a_stutter() {
+    let fixture = RecoveryFixture::new("decision-released-exact-stutter", 0x3A);
+    let (prefix, projection) = recovered_released_decision_apply_fixture(&fixture);
+    let (successor, apply_ordinal, changed) = prefix
+        .stage_recovered_released_decision_apply_projection(&projection)
+        .expect("stage the initial standalone recovered Decision Apply");
+    assert!(changed);
+    let successor_bytes = successor.encode();
+
+    let (stutter, stutter_ordinal, stutter_changed) = successor
+        .stage_recovered_released_decision_apply_projection(&projection)
+        .expect("coalesce the exact standalone Apply replay");
+
+    assert!(!stutter_changed);
+    assert_eq!(stutter_ordinal, apply_ordinal);
+    assert_eq!(stutter, successor);
+    assert_eq!(
+        stutter.encode(),
+        successor_bytes,
+        "an exact replay must not change any durable ledger byte"
+    );
+    assert_eq!(
+        stutter
+            .classify_recovered_decision_apply_startup_projection(&projection)
+            .expect("classify the coalesced standalone Apply"),
+        RecoveredDecisionApplyStartupShapeV1::ReleasedTerminal
+    );
+}
+
+#[test]
+fn complete_tip_terminalizes_and_coalesces_a_released_standalone_apply() {
+    let fixture = RecoveryFixture::new("complete-tip-released-standalone-apply", 0x3C);
+    let (prefix, projection) = recovered_released_decision_apply_fixture(&fixture);
+    let (live, apply_ordinal, changed) = prefix
+        .stage_recovered_released_decision_apply_projection(&projection)
+        .expect("stage the live standalone Apply crash window");
+    assert!(changed);
+    let released_terminal_bytes = projection.released_terminal.encode();
+    let (_, finality_projection) = terminal_decision_chain_fixture_with_seed(&fixture, 0xD7);
+    let complete_tip = complete_tip_for_terminal_decision(&fixture, &finality_projection);
+
+    let (terminalized, terminalized_changed, evidence) = live
+        .stage_complete_tip_terminal_apply_recovery(&complete_tip, None)
+        .expect("terminalize the exact released standalone Apply");
+
+    assert!(terminalized_changed);
+    assert!(matches!(
+        evidence,
+        CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(ordinal)
+            if ordinal == apply_ordinal
+    ));
+    assert_eq!(
+        terminalized.records()[0].encode(),
+        released_terminal_bytes,
+        "CompleteTip recovery must not rewrite the released Validate tombstone"
+    );
+    let apply = terminalized
+        .records()
+        .iter()
+        .find(|record| record.ordinal() == apply_ordinal)
+        .expect("retain the standalone Apply row");
+    assert_eq!(apply.owner().first_admission_ordinal(), apply_ordinal);
+    assert_eq!(apply.terminal(), Some(Some(TerminalOutcome::Advanced)));
+    assert_eq!(
+        terminalized
+            .authenticate_complete_tip_terminal_apply(&complete_tip)
+            .expect("authenticate the released-terminal CompleteTip join"),
+        apply_ordinal
+    );
+    let terminalized_bytes = terminalized.encode();
+
+    let (stutter, stutter_changed, stutter_evidence) = terminalized
+        .stage_complete_tip_terminal_apply_recovery(&complete_tip, None)
+        .expect("coalesce the already-terminal standalone Apply");
+    assert!(!stutter_changed);
+    assert!(matches!(
+        stutter_evidence,
+        CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(ordinal)
+            if ordinal == apply_ordinal
+    ));
+    assert_eq!(stutter, terminalized);
+    assert_eq!(stutter.encode(), terminalized_bytes);
 }
 
 #[test]

@@ -2590,6 +2590,11 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS"
     )]
     pub parliament_quorum_bps: u16,
+    /// Exact nonzero delay from a committed Parliament sortition request to its beacon pulse.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS"
+    )]
+    pub parliament_sortition_pulse_delay_blocks: u64,
     /// Consensus block-height span for immutable primary and alternate invitation responses.
     #[config(
         default = "crate::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS"
@@ -2722,6 +2727,8 @@ impl Default for Governance {
             ),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
+            parliament_sortition_pulse_delay_blocks:
+                defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
             parliament_invitation_phase_blocks:
                 defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
             parliament_public_finding_phase_blocks:
@@ -2764,6 +2771,10 @@ impl Governance {
         assert!(
             (1..=10_000).contains(&self.parliament_quorum_bps),
             "parliament_quorum_bps must be within 1..=10_000 (basis points)"
+        );
+        assert!(
+            self.parliament_sortition_pulse_delay_blocks > 0,
+            "parliament_sortition_pulse_delay_blocks must be non-zero"
         );
         assert!(
             self.parliament_invitation_phase_blocks > 0,
@@ -2926,6 +2937,7 @@ impl Governance {
                 .expect("invalid parliament eligibility asset id"),
             parliament_alternate_size: self.parliament_alternate_size,
             parliament_quorum_bps: self.parliament_quorum_bps,
+            parliament_sortition_pulse_delay_blocks: self.parliament_sortition_pulse_delay_blocks,
             parliament_invitation_phase_blocks: self.parliament_invitation_phase_blocks,
             parliament_public_finding_phase_blocks: self.parliament_public_finding_phase_blocks,
             parliament_timed_ovn,
@@ -2951,6 +2963,36 @@ impl Governance {
 mod governance_tests {
     use super::*;
     use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+    #[test]
+    fn parliament_sortition_pulse_delay_is_file_configured_nonzero_and_defaults_to_four() {
+        let table: toml::Table = toml::from_str("parliament_sortition_pulse_delay_blocks = 7")
+            .expect("parse Parliament sortition delay TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with sortition delay")
+            .parse();
+        assert_eq!(parsed.parliament_sortition_pulse_delay_blocks, 7);
+
+        assert_eq!(
+            Governance::default()
+                .parse()
+                .parliament_sortition_pulse_delay_blocks,
+            defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS
+        );
+        assert_eq!(
+            defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
+            4
+        );
+
+        let mut invalid = Governance::default();
+        invalid.parliament_sortition_pulse_delay_blocks = 0;
+        assert!(
+            std::panic::catch_unwind(|| invalid.parse()).is_err(),
+            "zero sortition delay must fail before an attempt can be created"
+        );
+    }
 
     #[test]
     fn parliament_invitation_window_is_file_configured_and_nonzero() {

@@ -20102,7 +20102,7 @@ impl Client {
             && !content_type.eq_ignore_ascii_case(APPLICATION_JSON_UTF8)
         {
             return Err(eyre!(
-                "node capabilities response must contain canonical JSON"
+                "node capabilities response must contain canonical JSON; received `{content_type}`"
             ));
         }
         norito::json::from_slice(resp.body()).wrap_err("failed to decode node capabilities JSON")

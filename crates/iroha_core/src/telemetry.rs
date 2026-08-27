@@ -556,6 +556,7 @@ fn parliament_no_result_label(
         Kind::BallotCommitmentDeadlineExpired => "ballot_commitment_deadline_expired",
         Kind::BallotReleasePulseUnavailable => "ballot_release_pulse_unavailable",
         Kind::BallotOpeningDeadlineExpired => "ballot_opening_deadline_expired",
+        Kind::SortitionRetriesExhausted => "sortition_retries_exhausted",
     }
 }
 #[cfg(feature = "telemetry")]
@@ -580,6 +581,7 @@ fn parliament_no_result_matches_transition(
         | NoResult::BallotCommitmentDeadlineExpired
         | NoResult::BallotReleasePulseUnavailable
         | NoResult::BallotOpeningDeadlineExpired => transition == Transition::FailBallotNoResult,
+        NoResult::SortitionRetriesExhausted => transition == Transition::FailBodyElectionNoRoster,
     }
 }
 #[cfg(feature = "telemetry")]
@@ -10943,6 +10945,10 @@ mod tests {
             Some(NoResult::PublicFindingDeadlineExpired),
         );
         telemetry.record_committed_parliament_transition(
+            Transition::FailBodyElectionNoRoster,
+            Some(NoResult::SortitionRetriesExhausted),
+        );
+        telemetry.record_committed_parliament_transition(
             Transition::CompleteQualification,
             Some(NoResult::PublicFindingDeadlineExpired),
         );
@@ -10982,6 +10988,13 @@ mod tests {
                 .get(),
             1,
             "an incompatible transition must not increment the valid deadline outcome again"
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_no_result_total
+                .with_label_values(&["sortition_retries_exhausted"])
+                .get(),
+            1
         );
 
         let exposition = metrics.try_to_string().expect("encode metrics exposition");

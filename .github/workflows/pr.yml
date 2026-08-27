@@ -476,6 +476,8 @@ jobs:
             "$invocation_root/target" \
             "$invocation_root/artifacts" \
             "$invocation_root/artifacts/formal" \
+            "$invocation_root/artifacts/formal/sora_parliament" \
+            "$invocation_root/artifacts/formal/sora_parliament/inputs" \
             "$invocation_root/artifacts/formal/sumeragi_v2" \
             "$invocation_root/tmp" \
             "$invocation_root/tools" \
@@ -492,6 +494,7 @@ jobs:
             printf 'CARGO_TARGET_DIR=%s\n' "$invocation_root/target"
             printf 'IROHA_RELEASE_ARTIFACT_ROOT=%s\n' "$invocation_root/artifacts"
             printf 'IROHA_RELEASE_CANCEL_REQUEST_PATH=%s\n' "$invocation_root/cancel-request.json"
+            printf 'SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/formal/sora_parliament"
             printf 'SUMERAGI_V2_FORMAL_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/formal/sumeragi_v2"
             printf 'TMPDIR=%s\n' "$invocation_root/tmp"
             printf 'TLAPM_INSTALL_ROOT=%s\n' "$invocation_root/tools/tlapm"
@@ -527,6 +530,196 @@ jobs:
             >> "$GITHUB_PATH"
       - name: Sumeragi v2 TLAPS, bounded TLC, and production Verus gates
         run: bash ci/check_sumeragi_formal.sh
+      - name: SORA Parliament source contract and bounded TLC model
+        run: |
+          set -euo pipefail
+
+          readonly model_source="formal/sora_parliament/SoraParliamentV1.tla"
+          readonly config_source="formal/sora_parliament/SoraParliamentV1.cfg"
+          readonly model_input="$SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR/inputs/SoraParliamentV1.tla"
+          readonly config_input="$SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR/inputs/SoraParliamentV1.cfg"
+          readonly metadata="$SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR/run-metadata.json"
+          readonly source_contract_log="$SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR/source-contract.log"
+          readonly source_contract_status_path="$SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR/source-contract-exit-status.txt"
+          readonly tlc_log="$SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR/tlc.log"
+          readonly tlc_status_path="$SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR/tlc-exit-status.txt"
+
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          install -m 600 -- "$model_source" "$model_input"
+          install -m 600 -- "$config_source" "$config_input"
+          set +e
+          python3 scripts/formal/check_sora_parliament_source_contract.py \
+            2>&1 | tee "$source_contract_log"
+          source_contract_status="${PIPESTATUS[0]}"
+          java -cp "$TLA2TOOLS_JAR" tlc2.TLC \
+            -config "$config_input" \
+            "$model_input" 2>&1 | tee "$tlc_log"
+          tlc_status="${PIPESTATUS[0]}"
+          set -e
+          printf '%s\n' "$source_contract_status" > "$source_contract_status_path"
+          printf '%s\n' "$tlc_status" > "$tlc_status_path"
+
+          python3 -I -S - \
+            "$metadata" "$GITHUB_SHA" "$TLA2TOOLS_JAR" \
+            "$model_input" "$config_input" \
+            "$source_contract_log" "$source_contract_status_path" \
+            "$tlc_log" "$tlc_status_path" \
+            "$source_contract_status" "$tlc_status" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          (
+              metadata_name,
+              source_commit,
+              jar_name,
+              model_name,
+              config_name,
+              source_contract_log_name,
+              source_contract_status_name,
+              tlc_log_name,
+              tlc_status_name,
+              source_contract_status,
+              tlc_status,
+          ) = sys.argv[1:]
+
+          def digest(path: str) -> str:
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+          def evidence(path: str, artifact_path: str) -> dict[str, object]:
+              item = Path(path)
+              return {
+                  "artifact_path": artifact_path,
+                  "sha256": digest(path),
+                  "size_bytes": item.stat().st_size,
+              }
+
+          source_status = int(source_contract_status)
+          model_status = int(tlc_status)
+          source_status_evidence = evidence(
+              source_contract_status_name, "source-contract-exit-status.txt"
+          )
+          source_status_evidence["exit_status"] = source_status
+          model_status_evidence = evidence(tlc_status_name, "tlc-exit-status.txt")
+          model_status_evidence["exit_status"] = model_status
+          document = {
+              "schema": "iroha.sora_parliament.formal_run.v2",
+              "source_commit": source_commit,
+              "successful": source_status == 0 and model_status == 0,
+              "tool": {
+                  "name": "TLC",
+                  "tla2tools_version": "1.7.4",
+                  "jar_sha256": digest(jar_name),
+              },
+              "inputs": {
+                  "model": {
+                      "source_path": "formal/sora_parliament/SoraParliamentV1.tla",
+                      **evidence(model_name, "inputs/SoraParliamentV1.tla"),
+                  },
+                  "config": {
+                      "source_path": "formal/sora_parliament/SoraParliamentV1.cfg",
+                      **evidence(config_name, "inputs/SoraParliamentV1.cfg"),
+                  },
+              },
+              "commands": {
+                  "source_contract": [
+                      "python3",
+                      "scripts/formal/check_sora_parliament_source_contract.py",
+                  ],
+                  "model_checker": [
+                      "java",
+                      "-cp",
+                      "<tla2tools.jar>",
+                      "tlc2.TLC",
+                      "-config",
+                      "inputs/SoraParliamentV1.cfg",
+                      "inputs/SoraParliamentV1.tla",
+                  ],
+              },
+              "outputs": {
+                  "source_contract_log": evidence(
+                      source_contract_log_name, "source-contract.log"
+                  ),
+                  "source_contract_exit_status": source_status_evidence,
+                  "tlc_log": evidence(tlc_log_name, "tlc.log"),
+                  "tlc_exit_status": model_status_evidence,
+              },
+          }
+          path = Path(metadata_name)
+          path.write_text(
+              json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          path.chmod(0o600)
+          PY
+
+          if ((source_contract_status != 0)); then
+            exit "$source_contract_status"
+          fi
+          exit "$tlc_status"
+      - name: Validate SORA Parliament formal evidence closure
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          readonly evidence_dir="$SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR"
+          readonly required_files=(
+            "inputs/SoraParliamentV1.tla"
+            "inputs/SoraParliamentV1.cfg"
+            "run-metadata.json"
+            "source-contract.log"
+            "source-contract-exit-status.txt"
+            "tlc.log"
+            "tlc-exit-status.txt"
+          )
+          for relative_path in "${required_files[@]}"; do
+            test -f "$evidence_dir/$relative_path"
+          done
+          python3 -I -S - "$evidence_dir/run-metadata.json" "$GITHUB_SHA" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          metadata_path = Path(sys.argv[1])
+          expected_commit = sys.argv[2]
+          root = metadata_path.parent
+          document = json.loads(metadata_path.read_text(encoding="utf-8"))
+          if document.get("schema") != "iroha.sora_parliament.formal_run.v2":
+              raise SystemExit("unexpected SORA Parliament formal evidence schema")
+          if document.get("source_commit") != expected_commit:
+              raise SystemExit("formal evidence source commit does not match checkout")
+
+          def verify(entry: object) -> None:
+              if not isinstance(entry, dict):
+                  raise SystemExit("formal evidence entry is not an object")
+              artifact_path = entry.get("artifact_path")
+              if not isinstance(artifact_path, str):
+                  raise SystemExit("formal evidence entry lacks artifact_path")
+              path = root / artifact_path
+              payload = path.read_bytes()
+              if entry.get("size_bytes") != len(payload):
+                  raise SystemExit(f"formal evidence size mismatch: {artifact_path}")
+              if entry.get("sha256") != hashlib.sha256(payload).hexdigest():
+                  raise SystemExit(f"formal evidence digest mismatch: {artifact_path}")
+
+          for item in document["inputs"].values():
+              verify(item)
+          for name, item in document["outputs"].items():
+              verify(item)
+              if name.endswith("exit_status"):
+                  status_path = root / item["artifact_path"]
+                  if item.get("exit_status") != int(status_path.read_text().strip()):
+                      raise SystemExit(
+                          f"formal evidence status mismatch: {item['artifact_path']}"
+                      )
+          expected_success = all(
+              document["outputs"][name]["exit_status"] == 0
+              for name in ("source_contract_exit_status", "tlc_exit_status")
+          )
+          if document.get("successful") is not expected_success:
+              raise SystemExit("formal evidence success classification is inconsistent")
+          PY
       - name: Upload Sumeragi v2 formal logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -534,6 +727,13 @@ jobs:
           name: sumeragi-v2-formal-pr
           path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/sumeragi_v2
           if-no-files-found: ignore
+      - name: Upload SORA Parliament formal evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sora-parliament-formal-pr
+          path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/sora_parliament
+          if-no-files-found: error
 
   nexus_cross_dataspace_localnet:
     runs-on: [self-hosted, Linux, iroha2]
@@ -560,8 +760,63 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/sora-parliament-lifecycle
+      SORA_PARLIAMENT_ALERT_EVIDENCE_DIR: target/sora-parliament-alert-evidence
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install checksum-pinned Prometheus LTS promtool
+        shell: bash
+        run: |
+          set -euo pipefail
+          readonly version="3.13.2"
+          readonly runner_temp="${RUNNER_TEMP:?RUNNER_TEMP is required}"
+          readonly install_root="$runner_temp/promtool-$version"
+          readonly promtool_bin="$install_root/promtool"
+          if [[ ! -x "$promtool_bin" ]]; then
+            readonly download_dir="$(mktemp -d "$runner_temp/promtool-download.XXXXXX")"
+            trap 'rm -rf -- "$download_dir"' EXIT
+            readonly archive="$download_dir/prometheus-$version.linux-amd64.tar.gz"
+            curl --fail --location --proto '=https' --tlsv1.2 \
+              --output "$archive" \
+              "https://github.com/prometheus/prometheus/releases/download/v$version/prometheus-$version.linux-amd64.tar.gz"
+            printf '%s  %s\n' \
+              "0e8c4d46101bd025ea8265e377d2caabc57f488fc1be1c367f37db69ea41be6f" \
+              "$archive" | sha256sum --check --strict -
+            tar --extract --gzip --file "$archive" --directory "$download_dir"
+            install -d -m 755 -- "$install_root"
+            install -m 755 -- \
+              "$download_dir/prometheus-$version.linux-amd64/promtool" \
+              "$promtool_bin"
+          fi
+          "$promtool_bin" --version
+          printf '%s\n' "$install_root" >> "$GITHUB_PATH"
+      - name: Validate Parliament alert rules and deterministic fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 -- "$SORA_PARLIAMENT_ALERT_EVIDENCE_DIR"
+          promtool --version 2>&1 | tee \
+            "$SORA_PARLIAMENT_ALERT_EVIDENCE_DIR/promtool-version.log"
+          scripts/check_prometheus_rules.sh \
+            dashboards/alerts/sora_parliament_rules.yml 2>&1 | tee \
+            "$SORA_PARLIAMENT_ALERT_EVIDENCE_DIR/check-rules.log"
+          scripts/check_prometheus_rules.sh --test \
+            dashboards/alerts/tests/sora_parliament_rules.test.yml 2>&1 | tee \
+            "$SORA_PARLIAMENT_ALERT_EVIDENCE_DIR/test-rules.log"
+          sha256sum \
+            "$(command -v promtool)" \
+            dashboards/alerts/sora_parliament_rules.yml \
+            dashboards/alerts/tests/sora_parliament_rules.test.yml \
+            "$SORA_PARLIAMENT_ALERT_EVIDENCE_DIR/promtool-version.log" \
+            "$SORA_PARLIAMENT_ALERT_EVIDENCE_DIR/check-rules.log" \
+            "$SORA_PARLIAMENT_ALERT_EVIDENCE_DIR/test-rules.log" \
+            > "$SORA_PARLIAMENT_ALERT_EVIDENCE_DIR/SHA256SUMS"
+      - name: Upload Parliament alert-rule evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sora-parliament-alert-rules
+          path: ${{ env.SORA_PARLIAMENT_ALERT_EVIDENCE_DIR }}
+          if-no-files-found: error
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"

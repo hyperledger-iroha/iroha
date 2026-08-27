@@ -95,11 +95,12 @@ HTTP, CLI, MCP, and SDK surfaces are read-only.
 `POST /v1/sumeragi/evidence` therefore returns `405 Method Not Allowed`.
 All former `/v1/sumeragi/vrf/*` HTTP routes are retired. In particular,
 `/v1/sumeragi/vrf/commit`, `/v1/sumeragi/vrf/reveal`,
-`/v1/sumeragi/vrf/epoch/{epoch}`, and
-`/v1/sumeragi/vrf/penalties/{epoch}` return `404 Not Found`; the corresponding
+ `/v1/sumeragi/vrf/epoch/{epoch}`, and
+ `/v1/sumeragi/vrf/penalties/{epoch}` return `404 Not Found`; the corresponding
 operator CLI snapshot commands are also retired. The `VrfCommit` and
-`VrfReveal` peer messages are retired as well; randomness uses the canonical
-global threshold-beacon protocol.
+`VrfReveal` peer messages do not exist in the first-release wire enum, so such
+frames fail exact decoding. Randomness uses the canonical global
+threshold-beacon protocol.
 
 ## Proof & Pipeline SSE (`GET /v1/events/sse`)
 

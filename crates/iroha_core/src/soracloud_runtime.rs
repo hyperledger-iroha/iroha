@@ -1721,6 +1721,9 @@ mod tests {
         };
         world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
         world
+            .global_beacon_pulse_slots
+            .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+        world
     }
     #[test]
     fn local_read_debug_output_redacts_request_and_response_payloads() {

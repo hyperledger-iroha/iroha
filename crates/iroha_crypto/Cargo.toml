@@ -170,6 +170,11 @@ harness = false
 name = "ed25519_hotpaths"
 harness = false
 
+[[bench]]
+name = "parliament_crypto"
+harness = false
+required-features = ["bls"]
+
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
 [[test]]

@@ -114,10 +114,12 @@ pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v
 mod parliament_timed_ovn_ffi;
 pub use parliament_timed_ovn_ffi::{
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
+    CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1,
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1,
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1,
     connect_norito_parliament_timed_ovn_ballot_from_proof_v1,
     connect_norito_parliament_timed_ovn_registration_from_proof_v1,
+    connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1,
     connect_norito_parliament_timed_ovn_verify_casting_proof_v1,
 };
 mod connect_approval_ffi;

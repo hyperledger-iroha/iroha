@@ -25,21 +25,37 @@
   ],
   "limits": {
     "attempt_state_bytes": 16777216,
+    "governance_attempt_sequence_max": 16,
     "timed_ovn_registration_record_bytes": 3624,
     "timed_ovn_ballot_record_bytes": 2858,
     "timed_ovn_ballot_chunk_max_records": 32,
     "timed_ovn_corpus_entries": 1000,
+    "timed_ovn_casting_proof_request_bytes": 52,
     "timed_ovn_casting_proof_response_bytes": 8388608,
-    "timed_ovn_casting_proof_finality_entries": 64
+    "timed_ovn_casting_proof_finality_entries": 64,
+    "timed_ovn_casting_proof_page_result_bytes": 41
   },
   "timed_ovn_native_wallet": {
     "bridge_abi": 23,
     "sole_input_schema": "ParliamentTimedOvnCastingProofResponseV1",
     "request_norito_schema": "iroha.torii.v1.parliament.timed_ovn_casting_proof.request",
     "response_norito_schema": "iroha.torii.v1.parliament.timed_ovn_casting_proof.response",
+    "casting_proof_request_schema_hash_hex": "adccf322a5fcf43040e20bea238f55f3",
+    "casting_proof_response_schema_hash_hex": "46d29299272433b1299646bee722bd11",
+    "casting_proof_request_version": 1,
+    "casting_proof_request_flags": 2,
+    "casting_proof_request_payload_alignment": 8,
+    "casting_proof_request_padding_bytes": 0,
+    "casting_proof_request_golden": {
+      "trusted_checkpoint_height": 17,
+      "payload_hex": "020100081100000000000000",
+      "frame_hex": "4e5254300000adccf322a5fcf43040e20bea238f55f3000c00000000000000dfab61022cefc29f02020100081100000000000000",
+      "frame_bytes": 52
+    },
     "route": "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof",
     "required_external_trust_anchor": ["network_id", "trusted_checkpoint_height", "trusted_checkpoint_context_id", "expected_ballot_attempt_id"],
-    "verification_order": ["canonical_response", "terminal_page", "checkpoint_finality_chain", "fixed_ordinary_write_witness", "casting_context_membership", "canonical_core_archive", "core_archive_replay", "exact_compact_binding", "seed_access"],
+    "verification_order": ["canonical_response", "checkpoint_finality_chain", "page_shape", "checkpoint_promotion", "terminal_fixed_ordinary_write_witness_if_present", "terminal_casting_context_membership_if_present", "terminal_canonical_core_archive_if_present", "terminal_core_archive_replay_if_present", "terminal_exact_compact_binding_if_present", "seed_access_terminal_only"],
+    "intermediate_page_secret_access": "forbidden",
     "archive_only_wallet_input": "forbidden"
   },
   "public_transitions": [
@@ -81,8 +97,27 @@
     {"norito_index": 3, "json_tag": "BallotSurvivorDeadlineExpired"},
     {"norito_index": 4, "json_tag": "BallotCommitmentDeadlineExpired"},
     {"norito_index": 5, "json_tag": "BallotReleasePulseUnavailable"},
-    {"norito_index": 6, "json_tag": "BallotOpeningDeadlineExpired"}
+    {"norito_index": 6, "json_tag": "BallotOpeningDeadlineExpired"},
+    {"norito_index": 7, "json_tag": "SortitionRetriesExhausted"}
   ],
+  "canonical_body_order": [
+    "rules-committee",
+    "agenda-council",
+    "interest-panel",
+    "review-panel",
+    "coordination-council",
+    "mpc-committee",
+    "fma-committee",
+    "oversight-committee",
+    "policy-jury",
+    "confirmation-jury"
+  ],
+  "attempt_read_body_presentation": {
+    "required_body_order": "ordered body names from required_bodies",
+    "body_state_order": "same order as required_body_order",
+    "certificate_body_order": "same order as required_body_order when a certificate is present; otherwise empty",
+    "subset_rule": "strictly increasing subset of canonical_body_order"
+  },
   "attempt_read_body_state": {
     "json_fields": [
       "body",

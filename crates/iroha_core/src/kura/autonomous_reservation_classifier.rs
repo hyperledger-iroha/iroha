@@ -270,7 +270,9 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         let metadata = self
             .regular_sidecar_metadata(path, parent)?
             .ok_or(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)?;
-        if metadata.len() == 0 || metadata.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX) {
+        if metadata.file.len() == 0
+            || metadata.file.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX)
+        {
             return Err(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded);
         }
         *scanned_entries = scanned_entries
@@ -280,7 +282,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             return Err(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded);
         }
         *decoded_bytes = decoded_bytes
-            .checked_add(metadata.len())
+            .checked_add(metadata.file.len())
             .ok_or(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded)?;
         if *decoded_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
             return Err(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded);

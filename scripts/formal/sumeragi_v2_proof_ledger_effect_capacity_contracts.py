@@ -1023,10 +1023,10 @@ Ok(self.pending_work() == 0
     && self.retained_effect_batch.is_none()
     && self.parked_effect_batch.is_none()
     && self.finality_completion.is_none()
-    && queued_ingress_is_allowed
+    && self.runtime.queued_commands() == 0
     && self.runtime.lifecycle_decision_apply_dispatch_available())
 """,
-        "lifecycle Apply dispatch must freeze every executor mutation owner and the runtime barrier",
+        "lifecycle Apply dispatch must freeze every executor mutation owner and drain runtime ingress",
         errors,
     )
 
@@ -1126,7 +1126,7 @@ if self.pending_work() != 0
     || self.parked_effect_batch.is_some()
     || !pending_recovery_is_exact
     || self.finality_completion.is_some()
-    || (recovered_requires_empty_ingress && self.runtime.queued_commands() != 0)
+    || self.runtime.queued_commands() != 0
     || !lineage_owner_is_exact
 {
 """,

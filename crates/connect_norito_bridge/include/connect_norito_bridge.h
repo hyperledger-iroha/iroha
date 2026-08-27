@@ -35,6 +35,7 @@ extern "C" {
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1 32
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1 32
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1 8388608
+#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1 41
 
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL 2
@@ -196,6 +197,24 @@ int32_t connect_norito_validation_fee_current_policy_proof_verify_v1(
     unsigned long* out_projection_json_len);
 
 // ---------------- Parliament timed-OVN wallet operations ----------------
+
+// Authenticates one bounded proof page against independently configured
+// network/checkpoint/ballot anchors. The caller-owned output must contain
+// exactly 41 bytes: big-endian u64 evaluated height, 32-byte evaluated context
+// id, and canonical 0/1 more-available. Intermediate pages promote only the
+// checkpoint; terminal pages also replay and bind the complete Core archive.
+int32_t connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1(
+    const uint8_t* proof_response_norito,
+    unsigned long proof_response_norito_len,
+    const uint8_t* network_id,
+    unsigned long network_id_len,
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id,
+    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* expected_ballot_attempt_id,
+    unsigned long expected_ballot_attempt_id_len,
+    uint8_t* out_page_result,
+    unsigned long out_page_result_len);
 
 // Authenticates a terminal proof response against independently configured
 // network/checkpoint/ballot anchors, then canonical-decodes and replay-validates

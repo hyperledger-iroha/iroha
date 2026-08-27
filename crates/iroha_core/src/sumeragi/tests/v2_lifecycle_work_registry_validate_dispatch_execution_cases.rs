@@ -1485,7 +1485,7 @@ fn direct_cached_validate_successor_releases_retry_ordinal_fixture() {
     let validate_ordinal = fixture.lease.ordinal();
     assert_eq!(
         executor.validate_retry_lifecycle_ordinal_for_test(key),
-        Some(validate_ordinal),
+        Some(Some(validate_ordinal)),
         "direct cached Validate open binds its exact retry authority"
     );
     assert_eq!(

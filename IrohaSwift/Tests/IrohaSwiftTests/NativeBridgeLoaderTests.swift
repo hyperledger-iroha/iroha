@@ -24,6 +24,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertEqual(
             NoritoBridgeLoader.parliamentTimedOvnWalletRequiredSymbols,
             [
+                "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
                 "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
                 "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
                 "connect_norito_parliament_timed_ovn_ballot_from_proof_v1"
@@ -36,6 +37,46 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertEqual(ParliamentTimedOvnBallotChoiceV1.nay.rawValue, 1)
         XCTAssertEqual(ParliamentTimedOvnBallotChoiceV1.abstain.rawValue, 2)
         XCTAssertEqual(NativeBridgeError.fromStatus(-505), .parliamentTimedOvnWallet)
+        XCTAssertEqual(
+            NoritoNativeBridge.parliamentTimedOvnCastingProofPageVerificationBytes,
+            41
+        )
+        let verification = try? ParliamentTimedOvnCastingProofPageVerificationV1(
+            evaluatedBlockHeight: 70,
+            evaluatedContextID: Data(repeating: 0x22, count: 32),
+            moreAvailable: true
+        )
+        XCTAssertEqual(verification?.evaluatedBlockHeight, 70)
+        XCTAssertEqual(verification?.evaluatedContextID, Data(repeating: 0x22, count: 32))
+        XCTAssertEqual(verification?.moreAvailable, true)
+        XCTAssertThrowsError(
+            try ParliamentTimedOvnCastingProofPageVerificationV1(
+                evaluatedBlockHeight: 0,
+                evaluatedContextID: Data(repeating: 0x22, count: 32),
+                moreAvailable: false
+            )
+        )
+        var encoded = Data(repeating: 0, count: 41)
+        encoded[7] = 70
+        encoded.replaceSubrange(8..<40, with: Data(repeating: 0x22, count: 32))
+        encoded[40] = 1
+        XCTAssertEqual(
+            try? NoritoNativeBridge.decodeParliamentTimedOvnCastingProofPageVerificationV1(
+                encoded
+            ),
+            verification
+        )
+        XCTAssertThrowsError(
+            try NoritoNativeBridge.decodeParliamentTimedOvnCastingProofPageVerificationV1(
+                Data(encoded.dropLast())
+            )
+        )
+        encoded[40] = 2
+        XCTAssertThrowsError(
+            try NoritoNativeBridge.decodeParliamentTimedOvnCastingProofPageVerificationV1(
+                encoded
+            )
+        )
     }
 
     func testParliamentTimedOvnTrustAnchorSnapshotsInputsAndArchiveOnlySurfaceIsGone() throws {

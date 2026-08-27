@@ -1020,10 +1020,16 @@ impl GovernanceAttemptV1 {
 /// The bound accommodates the largest permitted Confirmation Jury while
 /// keeping ballot and certificate resource limits finite.
 pub const MAX_PARLIAMENT_BODY_TARGET_SEATS_V1: u32 = 1_000;
+/// Hard protocol ceiling for end-to-end governance retries after sequence zero.
+pub const MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1: u32 = 16;
+/// Hard protocol ceiling for future-pulse body-election retries after sequence zero.
+pub const MAX_PARLIAMENT_SORTITION_RETRIES_V1: u32 = 16;
 /// Hard protocol ceiling for private-ballot retries after the initial attempt.
 pub const MAX_PARLIAMENT_BALLOT_RETRIES_V1: u32 = 16;
 /// Hard protocol ceiling for registration, survivor, and ballot corpora.
 pub const MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1: u32 = 1_000;
+/// Hard protocol ceiling for one canonical framed Parliament attempt state.
+pub const MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1: usize = 16 * 1024 * 1024;
 
 #[derive(Encode)]
 struct ParliamentCandidateRootPreimageV1 {
@@ -1740,6 +1746,9 @@ pub enum ParliamentNoResultKindV1 {
     /// The private-ballot aggregate missed its immutable opening deadline.
     #[codec(index = 6)]
     BallotOpeningDeadlineExpired,
+    /// The current body exhausted its bounded future-pulse sortition retries.
+    #[codec(index = 7)]
+    SortitionRetriesExhausted,
 }
 
 impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {

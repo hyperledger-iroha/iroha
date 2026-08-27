@@ -110,6 +110,28 @@ import {
   createToriiGovernanceNormalizers,
   VERIFYING_KEY_PRIVATE_KEY_FIELDS,
 } from "./toriiGovernanceNormalizers.js";
+import {
+  PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,
+  PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+  PARLIAMENT_TRANSITION_DRAFT_PATH_V1,
+  buildParliamentAttemptDraftRequestV1,
+  buildParliamentTransitionDraftRequestV1,
+  encodeParliamentTimedOvnCastingProofRequestV1,
+  normalizeParliamentAttemptDraftResponseV1,
+  normalizeParliamentAttemptReadResponseV1,
+  normalizeParliamentTimedOvnCastingContextResponseV1,
+  normalizeParliamentTlePartialReleaseShareV1,
+  normalizeParliamentTleReleaseContextResponseV1,
+  normalizeParliamentTransitionDraftResponseV1,
+  parliamentAttemptReadPathV1,
+  parliamentTimedOvnCastingContextReadPathV1,
+  parliamentTimedOvnCastingProofPathV1,
+  parliamentTlePartialReleasePathV1,
+  parliamentTleReleaseContextReadPathV1,
+  validateParliamentTimedOvnCastingProofResponseFrameV1,
+} from "./parliamentApiV1.js";
 import { createSubscriptionResponseNormalizers } from "./subscriptionResponses.js";
 import {
   decodeExactSoracloudJsonResponse,
@@ -7552,6 +7574,60 @@ export class ToriiClient {
       { signal },
     );
     return normalizeParliamentTimedOvnCastingContextResponseV1(payload, ballotAttemptId);
+  }
+
+  /** Transport one bounded finality-bound casting-proof page for native verification. */
+  async getParliamentTimedOvnCastingProofPageV1(
+    ballotAttemptId,
+    trustedCheckpointHeight,
+    options,
+  ) {
+    const context = "getParliamentTimedOvnCastingProofPageV1";
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const path = parliamentTimedOvnCastingProofPathV1(ballotAttemptId);
+    const body = encodeParliamentTimedOvnCastingProofRequestV1(trustedCheckpointHeight);
+    const response = await this._request("POST", path, {
+      headers: {
+        "Content-Type": APPLICATION_NORITO,
+        Accept: APPLICATION_NORITO,
+        "Accept-Encoding": "identity",
+      },
+      body,
+      canonicalAuth,
+      disableRetries: true,
+      redirect: "error",
+      signal,
+    });
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+      responseLabel: `${context} response`,
+      signal,
+    });
+
+    let contentType;
+    let contentEncoding;
+    try {
+      contentType = this._getHeader(response, "content-type");
+      contentEncoding = this._getHeader(response, "content-encoding");
+    } catch (error) {
+      cancelResponseBodyBestEffort(response, `${context} rejected unreadable headers`);
+      throw error;
+    }
+    if (contentType !== APPLICATION_NORITO) {
+      cancelResponseBodyBestEffort(response, `${context} rejected non-Norito bytes`);
+      throw new TypeError(`${context} must use exactly ${APPLICATION_NORITO}`);
+    }
+    if (contentEncoding !== null && contentEncoding.toLowerCase() !== "identity") {
+      cancelResponseBodyBestEffort(response, `${context} rejected transformed bytes`);
+      throw new TypeError(`${context} Content-Encoding must be identity`);
+    }
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+      context,
+      { signal },
+    );
+    return validateParliamentTimedOvnCastingProofResponseFrameV1(bytes);
   }
 
   /** Fetch one Core-authorized bounded public Parliament TLE release context. */

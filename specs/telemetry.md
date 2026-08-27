@@ -199,12 +199,14 @@ Public operator guidance and escalation procedures are maintained at
   Parliament reducer transitions and automatic execution outcomes grouped by
   the closed `ParliamentLifecycleTransitionKindV1` vocabulary.
 - `governance_parliament_no_result_total{class}` (counter): only Core-derived
-  terminal no-result outcomes, grouped by the seven closed
+  terminal no-result outcomes, grouped by the eight closed
   `ParliamentNoResultKindV1` classes. Public findings use
   `public_finding_quorum_unreachable` or `public_finding_deadline_expired`;
   private ballots use `ballot_registration_deadline_expired`,
   `ballot_survivor_deadline_expired`, `ballot_commitment_deadline_expired`,
   `ballot_release_pulse_unavailable`, or `ballot_opening_deadline_expired`.
+  Exhausted deterministic body-election retries use
+  `sortition_retries_exhausted`.
   A class attached to an incompatible transition kind is ignored by telemetry.
 - `governance_parliament_attempts_by_status{status}` and
   `governance_parliament_attempts_by_stage{stage}` (gauges): aggregate committed
@@ -498,6 +500,11 @@ Sumeragi metrics
 - Queue health: `sumeragi_tx_queue_depth`/`sumeragi_tx_queue_capacity` gauge the live mempool size and effective ceiling, while `sumeragi_tx_queue_retained_bytes`/`sumeragi_tx_queue_max_retained_bytes` gauge retained queue memory. `sumeragi_tx_queue_saturated_by_count`, `sumeragi_tx_queue_saturated_by_bytes`, `sumeragi_tx_queue_saturated_by_age`, and `sumeragi_tx_queue_oldest_queued_age_ms` distinguish the pressure cause; `sumeragi_tx_queue_saturated` flips to `1` when any cause is active. Count or retained-byte saturation signals that redundant collector fan-out is temporarily suppressed.
 - Pending blocks: `sumeragi_pending_blocks_total` counts pending blocks tracked by the local node; `sumeragi_pending_blocks_blocking` isolates those that gate proposal/view-change progress; `sumeragi_commit_inflight_queue_depth` shows whether the commit pipeline is busy (0/1).
 - Proposal gaps: `sumeragi_proposal_gap_total` counts view-change rotations triggered because no proposal was observed before the cutoff.
+- Retired consensus-VRF series: `sumeragi_vrf_*` metrics are not registered or
+  exported. Production emits no VRF commit/reveal traffic, derives no VRF
+  participation penalty, and exposes no consensus-VRF randomness-health or
+  release signals. Current randomness is the finalized global threshold-beacon
+  pulse.
 - Collector fan-out: `sumeragi_redundant_sends_total` (aggregate), `sumeragi_redundant_sends_by_peer{peer="…"}`, and `sumeragi_redundant_sends_by_collector{idx="…"}` highlight redundant collector sends; investigate sustained spikes to locate congested collectors or unhealthy peers.
 - Collector targeting: `sumeragi_collectors_targeted_current` (gauge) tracks the in-flight collector count for the current block; `sumeragi_collectors_targeted_per_block` histogram (`*_bucket`) records how many collectors were targeted per committed block.
 - Signed DA availability: use `sumeragi_da_gate_block_total{reason="missing_local_data"}` for missing local payloads and the `sumeragi_da_manifest_*`/`sumeragi_da_spool_*` families for revision-4 manifest and chunk-spool handling. Retired global-RBC INIT/READY/DELIVER counters are not exported.
@@ -701,6 +708,7 @@ do not report an adaptive timer policy.
 Notes
 - All metrics have deterministic semantics across hardware. Parallel paths publish counters only after deterministic commit.
 - Extend dashboards with Torii endpoint metrics (`torii_*`) once wired; see roadmap for status.
+
 ## Alerting — Threshold-Beacon Progress
 
 First-release Sumeragi has no VRF commit/reveal messages or VRF penalty counters. Monitor the

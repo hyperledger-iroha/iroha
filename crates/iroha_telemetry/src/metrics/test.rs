@@ -243,6 +243,14 @@ fn catalog_retires_global_rbc_metrics_and_keeps_signed_da_metrics() {
     }
 }
 #[test]
+fn catalog_retires_consensus_vrf_metrics() {
+    let catalog = include_str!("catalog_v2.tsv");
+    assert!(
+        !catalog.contains("sumeragi_vrf_"),
+        "retired consensus-VRF metrics must not remain in the public catalog"
+    );
+}
+#[test]
 fn records_alias_cache_metrics() {
     let metrics = Metrics::default();
     metrics.record_sorafs_alias_cache("success", "fresh", 42.0);

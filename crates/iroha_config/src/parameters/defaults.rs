@@ -4150,6 +4150,8 @@ pub mod governance {
     pub const PARLIAMENT_ALTERNATE_SIZE: Option<usize> = None;
     /// Default council quorum requirement expressed in basis points (ceil-divided).
     pub const PARLIAMENT_QUORUM_BPS: u16 = 6_667;
+    /// Exact number of blocks between a Parliament sortition request and its beacon pulse.
+    pub const PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS: u64 = 4;
     /// Consensus block-height span during which selected primaries and alternates may respond.
     pub const PARLIAMENT_INVITATION_PHASE_BLOCKS: u64 = 3_600;
     /// Consensus block-height span for public-finding endorsements after Reflection begins.

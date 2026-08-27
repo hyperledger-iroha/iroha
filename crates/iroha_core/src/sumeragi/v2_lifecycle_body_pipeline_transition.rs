@@ -2681,5 +2681,191 @@ impl<'coordinator, 'registry, 'adapter>
         Ok(())
     }
 }
+
+/// Read-only readiness of the standalone released-Validate Apply transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ReleasedValidateApplyPublicationPreflightV1 {
+    /// Capacity and the actor-global ordinal lane are available now.
+    Ready,
+    /// A live lease or Effect-capacity owner must settle first.
+    Deferred,
+}
+
+/// Closed failure after the adapter's Decision-WAL Apply seal is prepared.
+///
+/// Every variant is restart-only: the WAL and body receipts are already
+/// durable, while the move-only process-local seal may have crossed a
+/// one-shot projection boundary.
+#[derive(Debug)]
+pub(in crate::sumeragi) enum ReleasedValidateApplyPublicationErrorV1 {
+    /// The completed WAL Apply could not project its exact candidate.
+    Projection(AdapterEffectAdmissionError),
+    /// Logical reduction did not freshly admit one standalone Apply.
+    Admission(AdmissionDecision),
+    /// The staged coordinator or LedgerV1 shape was not exact.
+    InvalidStagedShape,
+    /// The concrete registry rejected the released-terminal carrier.
+    Registry(super::work_registry::RegistryError),
+    /// Exact LedgerV1 publication failed and the coordinator is faulted.
+    Durability,
+}
+impl core::fmt::Display for ReleasedValidateApplyPublicationErrorV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Projection(error) => write!(formatter, "candidate projection: {error:?}"),
+            Self::Admission(decision) => write!(formatter, "logical admission: {decision:?}"),
+            Self::InvalidStagedShape => formatter.write_str("invalid staged publication shape"),
+            Self::Registry(error) => write!(formatter, "registry reservation: {error:?}"),
+            Self::Durability => formatter.write_str("LedgerV1 durability failure"),
+        }
+    }
+}
+
+impl super::ProductionLifecycleOwnerV1 {
+    /// Check retryable owner/capacity conditions before consuming the
+    /// adapter's one-shot Decision-WAL Apply seal.
+    pub(in crate::sumeragi) fn preflight_released_validate_apply_publication(
+        &self,
+    ) -> Result<ReleasedValidateApplyPublicationPreflightV1, &'static str> {
+        let coordinator = &self.coordinator;
+        if coordinator.fault.is_some()
+            || coordinator.ledger_store.is_none()
+            || coordinator.lifecycle_ordinal_authority.is_none()
+            || coordinator.high_water == u128::MAX
+        {
+            return Err("released-Validate Apply owner is not durably publishable");
+        }
+        let effect_used = coordinator.capacity_used[&CapacityClass::Effect];
+        let effect_limit = coordinator.capacity_geometry.limit(CapacityClass::Effect);
+        if coordinator.active_lease.is_some()
+            || effect_used >= effect_limit
+            || !super::schema::has_lifecycle_record_capacity(coordinator.records.len(), 1)
+        {
+            return Ok(ReleasedValidateApplyPublicationPreflightV1::Deferred);
+        }
+        Ok(ReleasedValidateApplyPublicationPreflightV1::Ready)
+    }
+
+    /// Publish one fresh Ready Apply under the current Decision WAL owner.
+    ///
+    /// The historical Validate remains byte-for-byte terminal with
+    /// `AdvancedNoSuccessor`. All semantic, coordinator, registry, and adapter
+    /// checks precede the exact LedgerV1 fsync; the tail is infallible swaps.
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn publish_released_validate_apply(
+        &mut self,
+        prepared: crate::sumeragi::v2::PreparedReleasedLifecycleValidatedApplyV1<'_>,
+    ) -> Result<
+        (
+            u128,
+            super::work_registry::LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+        ),
+        ReleasedValidateApplyPublicationErrorV1,
+    > {
+        let Self {
+            verified,
+            coordinator,
+            registry,
+            ..
+        } = self;
+        let candidate = prepared
+            .project_apply_candidate(&SealedValidateApplyProjectionPermit::new(), verified)
+            .map_err(ReleasedValidateApplyPublicationErrorV1::Projection)?;
+        if candidate.work_class != LifecycleWorkClass::Apply
+            || candidate.stage.kind() != LifecycleStageKind::ApplyDecision
+            || candidate.stage.predecessor_scope() != PredecessorScope::Independent
+            || candidate.initial_state != InitialLifecycleState::Ready
+            || !matches!(candidate.payload, DurablePayloadReference::BodyFrame(_))
+        {
+            return Err(ReleasedValidateApplyPublicationErrorV1::InvalidStagedShape);
+        }
+        let records_before = coordinator.records.len();
+        let durable_records_before = coordinator.durable_records.len();
+        let mut staged = coordinator.stage_durable_transaction();
+        let (decision, ordinal_reservation) = staged
+            .reduce_admit_with_durable_ordinals(AdmissionRequest::Candidate(candidate.clone()));
+        let AdmissionDecision::Admitted {
+            owner,
+            ordinal,
+            producer_turn_ordinal: None,
+        } = decision
+        else {
+            return Err(ReleasedValidateApplyPublicationErrorV1::Admission(decision));
+        };
+        let Some(ordinal_reservation) = ordinal_reservation else {
+            return Err(ReleasedValidateApplyPublicationErrorV1::InvalidStagedShape);
+        };
+        let Some(record) = staged.records.get(&ordinal) else {
+            return Err(ReleasedValidateApplyPublicationErrorV1::InvalidStagedShape);
+        };
+        let Some((&slot, &digest)) = record.physical_slots.iter().next() else {
+            return Err(ReleasedValidateApplyPublicationErrorV1::InvalidStagedShape);
+        };
+        let Some(address) = super::work_registry::ConcreteWorkAddress::new(owner, ordinal, slot)
+        else {
+            return Err(ReleasedValidateApplyPublicationErrorV1::InvalidStagedShape);
+        };
+        let record_is_exact = record.physical_slots.len() == 1
+            && record.owner == owner
+            && record.ordinal == ordinal
+            && record.key == candidate.key
+            && record.work_class == LifecycleWorkClass::Apply
+            && record.stage == candidate.stage
+            && record.state == LifecycleState::Ready
+            && staged.active_lease.is_none()
+            && staged.ready_index.contains(&ordinal)
+            && staged.high_water == ordinal
+            && staged.records.len() == records_before.saturating_add(1)
+            && staged.durable_records.len() == durable_records_before.saturating_add(1)
+            && staged.key_index.get(&candidate.key) == Some(&ordinal)
+            && staged.owner_index.get(&candidate.causal_root) == Some(&owner)
+            && staged
+                .durable_records
+                .get(&ordinal)
+                .is_some_and(|metadata| {
+                    metadata.matches_admission(&candidate)
+                        && metadata.continuation == DurableContinuation::None
+                });
+        if !record_is_exact {
+            return Err(ReleasedValidateApplyPublicationErrorV1::InvalidStagedShape);
+        }
+        let prepared = prepared
+            .prepare_registry_work(
+                super::work_registry::LiveValidateApplyWorkProjectionPermit::new(candidate.clone()),
+            )
+            .map_err(|_| ReleasedValidateApplyPublicationErrorV1::InvalidStagedShape)?;
+        if !prepared.registry_work_matches(owner, ordinal, slot, digest) {
+            return Err(ReleasedValidateApplyPublicationErrorV1::InvalidStagedShape);
+        }
+        let mut prepared = prepared;
+        let Some((registry_work, terminal)) = prepared.take_registry_parts() else {
+            return Err(ReleasedValidateApplyPublicationErrorV1::InvalidStagedShape);
+        };
+        let staged_ledger = super::ledger::LifecycleLedgerV1::from_coordinator(&staged)
+            .map_err(|_| ReleasedValidateApplyPublicationErrorV1::InvalidStagedShape)?;
+        let reservation = registry
+            .prepare_released_validate_apply_reservation(
+                registry_work,
+                terminal,
+                address,
+                digest,
+                &staged,
+                &staged_ledger,
+            )
+            .map_err(ReleasedValidateApplyPublicationErrorV1::Registry)?;
+        if coordinator
+            .persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)
+            .is_err()
+        {
+            coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
+            return Err(ReleasedValidateApplyPublicationErrorV1::Durability);
+        }
+        let reconciliation = reservation.install_after_ledger_fsync();
+        *coordinator = staged;
+        prepared.commit_after_lifecycle_publication();
+        Ok((ordinal, reconciliation))
+    }
+}
+
 include!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
 include!("v2_lifecycle_body_pipeline_transition_tests.rs");

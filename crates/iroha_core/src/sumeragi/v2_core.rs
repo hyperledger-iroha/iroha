@@ -84,7 +84,6 @@ pub(crate) use refinement::{
     IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER,
     IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT,
     IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY,
-    IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE,
     IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
     IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER,
     IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO,
@@ -95,18 +94,19 @@ pub(crate) use refinement::{
     IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN,
     IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED,
     IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED, IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
-    IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT,
-    IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED,
     IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED,
     IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN,
-    IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED, IN_FLIGHT_RESERVATION_ACTION_COMMIT,
-    IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE, IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT,
-    IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE, IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,
-    IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT, IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,
-    IN_FLIGHT_RESERVATION_ACTION_RESERVE, IN_FLIGHT_RESERVATION_STATE_ABSENT,
-    IN_FLIGHT_RESERVATION_STATE_COMMITTED, IN_FLIGHT_RESERVATION_STATE_LIVE,
-    IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED, IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED,
-    LEADER_WIRE_ADMISSION_COALESCE, LEADER_WIRE_ADMISSION_INSERT, LEADER_WIRE_ADMISSION_REACTIVATE,
+    IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED,
+    IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT,
+    IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED,
+    IN_FLIGHT_RESERVATION_ACTION_COMMIT, IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE,
+    IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT, IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,
+    IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE, IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,
+    IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT, IN_FLIGHT_RESERVATION_ACTION_RESERVE,
+    IN_FLIGHT_RESERVATION_STATE_ABSENT, IN_FLIGHT_RESERVATION_STATE_COMMITTED,
+    IN_FLIGHT_RESERVATION_STATE_LIVE, IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED,
+    IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED, LEADER_WIRE_ADMISSION_COALESCE,
+    LEADER_WIRE_ADMISSION_INSERT, LEADER_WIRE_ADMISSION_REACTIVATE,
     LEADER_WIRE_ADMISSION_REPLACE_TERMINAL, LEADER_WIRE_LIFECYCLE_ABSENT,
     LEADER_WIRE_LIFECYCLE_DORMANT, LEADER_WIRE_LIFECYCLE_INGRESS, LEADER_WIRE_LIFECYCLE_RUNTIME,
     LEADER_WIRE_LIFECYCLE_TERMINAL, LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL,
@@ -154,8 +154,8 @@ pub(crate) use refinement::{
     check_production_decision_recovery_transition, check_production_effect_to_candidate_transition,
     check_production_historical_body_pipeline_transition,
     check_production_historical_certificate_transition,
-    check_production_in_flight_reservation_transition,
     check_production_in_flight_first_release_observe_replica_queue_release_transition,
+    check_production_in_flight_reservation_transition,
     check_production_ingress_reservation_materialization_transition,
     check_production_ingress_transition, check_production_leader_wire_admission_transition,
     check_production_recovered_successor_transition,
@@ -186,16 +186,18 @@ pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION: 
 /// advancing this identity fails the source-bound formal preflight.
 pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256:
     ProductionDigest256Projection = ProductionDigest256Projection {
-    word0: 0x9b9b_abea_9e01_8b44,
-    word1: 0xfb73_9f96_b269_0f17,
-    word2: 0xe1f8_d08a_a23a_38f4,
-    word3: 0x2a16_ecef_1e85_8f7d,
+    word0: 0x2518_68a6_cc66_0bd6,
+    word1: 0x1e6f_b4e0_0592_3b04,
+    word2: 0xb529_3995_6821_3ffd,
+    word3: 0x03e2_1fda_4686_67d2,
 };
 /// Explicit classification accepted by the production trace replay reducer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProductionInFlightFirstReleaseReplayStepV1 {
     /// A state-changing member of the composed first-release `Next` relation.
     ComposedNext,
+    /// A strict non-producer replica re-authenticating an already-proved FIFO-only direct release.
+    ReleaseReservationDirectProofStutter,
     /// Reservation snapshot reconstruction which changes no abstract fact.
     RecoverReservationSnapshotStutter,
     /// Post-carrier receipt/index repair which changes no abstract fact.
@@ -307,7 +309,7 @@ pub(crate) fn authenticate_production_in_flight_first_release_transition_witness
 }
 /// Replay one classified trace step through the sole composed production relation.
 ///
-/// The reducer rejects both named stutters unless the caller classifies them
+/// The reducer rejects all named stutters unless the caller classifies them
 /// explicitly. Every other accepted step must change the abstract state and be
 /// a member of the same composed `Next` relation used by the production gates
 /// and the Verus instantiation.
@@ -321,6 +323,10 @@ pub(crate) fn check_production_in_flight_first_release_replay_step_v1(
             projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT
                 && projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER
                 && projection.before != projection.after
+        }
+        ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter => {
+            projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT
+                && projection.before == projection.after
         }
         ProductionInFlightFirstReleaseReplayStepV1::RecoverReservationSnapshotStutter => {
             projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT
@@ -345,6 +351,11 @@ pub(crate) fn check_production_in_flight_first_release_transition(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
 ) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
     let classification = match projection.action {
+        IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT
+            if projection.before == projection.after =>
+        {
+            ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter
+        }
         IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT => {
             ProductionInFlightFirstReleaseReplayStepV1::RecoverReservationSnapshotStutter
         }

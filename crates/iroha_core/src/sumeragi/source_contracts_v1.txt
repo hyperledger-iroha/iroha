@@ -1092,11 +1092,14 @@ required|executor|self.pending_live_wal_sign_admission.is_none()|height finish o
 required|executor|usize::from(self.pending_live_wal_sign_admission.is_some())|bounded pending work omitted live Sign admission debt
 required|executor|pending_signatures: self\n                .pending_signatures\n                .len()\n                .saturating_add(usize::from(self.pending_live_wal_sign_admission.is_some()))|status omitted live Sign admission debt
 required|executor|pending_outputs: self.pending_lifecycle_output_admissions.len()|status omitted lifecycle output admission debt
-required|executor|if matches!(&owned.effect, AdapterEffect::Apply { .. })|retained Apply omitted the lifecycle-admission settlement barrier
+required|executor|fn decision_apply_dispatch_barrier_is_occupied(&self) -> bool|executor omitted the centralized lifecycle-admission settlement barrier
 required|executor|!self.pending_durable_validate_admissions.is_empty()|retained Apply could overtake durable Validate admission
+required|executor|self.pending_released_lifecycle_validate_apply.is_some()|retained Apply could overtake released-Validate Apply publication
 required|executor|self.pending_live_wal_sign_admission.is_some()|retained Apply could overtake live WAL Sign admission
 required|executor|!self.pending_lifecycle_output_admissions.is_empty()|retained Apply could overtake signed-output admission
-order|executor|5|if matches!(&owned.effect, AdapterEffect::Apply { .. })|!self.pending_durable_validate_admissions.is_empty()|self.pending_live_wal_sign_admission.is_some()|!self.pending_lifecycle_output_admissions.is_empty()|let pending_work_producer = Self::pending_work_producer(&owned.effect)|Apply must remain FIFO-retained until every move-only lifecycle admission owner settles
+required|executor|let released_validation_will_apply = match &owned.effect|released terminal Validate omitted the same Apply-dispatch barrier
+required|executor|&& self.decision_apply_dispatch_barrier_is_occupied()|retained Apply stopped consulting the centralized lifecycle-admission barrier
+order|executor|7|fn decision_apply_dispatch_barrier_is_occupied(&self) -> bool|!self.pending_durable_validate_admissions.is_empty()|self.pending_released_lifecycle_validate_apply.is_some()|self.pending_live_wal_sign_admission.is_some()|!self.pending_lifecycle_output_admissions.is_empty()|&& self.decision_apply_dispatch_barrier_is_occupied()|let pending_work_producer = Self::pending_work_producer(&owned.effect)|Apply and released terminal Validate must remain FIFO-retained until every move-only lifecycle admission owner settles
 order|executor|5|.take_live_proposal_intent_wal_sign(&effects)|self.retain_effect_batch_at_frontier(effects, ownership, frontier)|handoff.join_local_proposal(replay)|self.pending_live_wal_sign_admission = Some(pending)|.drain_retained_effect_batch(services, true)|the post-fsync Sign must leave the generic retained batch before generic effect dispatch
 required|settlement|pub(in crate::sumeragi) fn settle_live_wal_sign_admission(|production owner omitted atomic live Sign settlement
 required|registry|ConcreteLifecycleWorkKind::DurableLiveWalSign|registry omitted the dedicated live WAL Sign carrier
@@ -1153,7 +1156,7 @@ region|authenticated_genesis_token|registry|at|impl PreparedAuthenticatedGenesis
 region|reconciliation_frontier|effects|at|pub(crate) struct RuntimeReconciliationFrontier {|before|/// Closed body-owner retirement predicate shared by pre-dispatch filtering and
 region|owned_effect_sidecar|effects|at|struct OwnedAdapterEffect {|before|struct LocalProposalIntentProjection {
 region|sidecar_capture|effects|at|let highest_prepare_retention = (index == 0|before|        if retained.is_empty() {
-region|sidecar_guard|effects|at|if highest_prepare_retention.is_some()|before|        let mut pending_kura_successor = None;
+region|sidecar_guard|effects|at|if highest_prepare_retention.is_some()|before|        let mut validated_apply_successor = None;
 region|highest_prepare_preflight|effects|at|fn preflight_highest_prepare_frontier(|before|/// Reject a malformed reducer frontier before consuming its move-only
 region|batch_frontier_preflight|effects|at|fn preflight_effect_batch_frontier(|before|/// Retire only not-yet-dispatched ordinary work which the reducer's new
 region|view_cleanup|effects|at|fn install_view<S: V2EffectServices>(|before|fn ensure_pending_slot(&self)
@@ -1472,10 +1475,14 @@ required|retry_marker_finalization|executor published Store marker lost its immu
 required|published_validate_marker|store_terminal: PublishedLifecycleStoreTerminalRetrySealV1|published Validate marker lost its mandatory Store predecessor
 forbidden|published_validate_marker|store_terminal: Option<PublishedLifecycleStoreTerminalRetrySealV1>|published Validate marker must not make its Store predecessor optional
 required|published_validate_marker|PublishedLifecycleStoreTerminalRetrySealV1::seal_exact(|published Validate marker stopped constructing its exact Store predecessor
+required|published_validate_marker|published_effect: AdapterEffect|published Validate marker lost its immutable physical effect
+required|published_validate_marker|published_pending: PendingRuntimeEffectFingerprintV1|published Validate marker lost its immutable physical pending identity
+required|published_validate_marker|published_statement: RuntimeCandidateSemanticStatement|published Validate marker lost its immutable physical statement
+required|published_validate_marker|terminal_no_successor_ordinal: Option<u128>|published Validate marker lost its terminal no-successor locator
 required|published_validate_marker|store_terminal: self.store_terminal.clone()|Validate authority refinement stopped retaining the exact Store predecessor
 required|published_validate_marker|fn project_store_retry(|published Validate marker lost its closed Store retry projection
-required|published_validate_marker|.exactly_precedes_validate_marker(&self.effect, self.statement)|published Validate marker stopped checking its retained Store predecessor
-required|published_validate_marker|incoming_statement.body_stage_authority_relation_to(self.statement)|published Store stutter stopped proving that Validate authority dominates the incoming Store
+required|published_validate_marker|.exactly_precedes_validate_marker(&self.latest_effect, self.latest_statement)|published Validate marker stopped checking its retained Store predecessor
+required|published_validate_marker|incoming_statement.body_stage_authority_relation_to(self.latest_statement)|published Store stutter stopped proving that Validate authority dominates the incoming Store
 required|published_validate_marker|published lifecycle Store retry outran its published Validate authority|stronger Store authority must fail closed instead of being silently discarded
 required|published_validate_retry_projection|incoming_tag != incumbent_tag && !incoming_tag.strictly_advances(*incumbent_tag)|published Validate retry stopped rejecting tag regression
 required|published_validate_retry_projection|incoming_round != incumbent_round|published Validate retry stopped binding the exact proposal round
@@ -1533,13 +1540,15 @@ required|published_store_stutter|continue;|published Store retry stopped before 
 forbidden|published_store_stutter|plan_body_pipeline_candidate_terminal|published Store retry must stutter before runtime terminal-owner comparison
 order|retention_preplan|4|if let AdapterEffect::StoreBody { round, subject, .. } = effect\n                && let Some(marker) =\n                    retained_published_validate_retry_markers.get|.project_store_retry(receipt, effect, evidence)|retain_effect.push(false);\n                continue;|.plan_body_pipeline_candidate_terminal(effect, evidence)|published Store marker proof and stutter must precede generic runtime terminal planning
 required|published_validate_stutter|.project_retry(effect, evidence)|published Validate stutter bypassed its monotonic exact-body authority projection
+required|published_validate_stutter|let incoming_is_commit = evidence|published Validate retry stopped classifying its exact current Commit authority
+required|published_validate_stutter|if !marker.owns_live_lifecycle_row() && incoming_is_commit|released terminal Validate stopped reaching its cached-result Apply transaction
 required|published_validate_stutter|RuntimeCandidateAdmissionDisposition::CoalescedRetry|published Validate retry stopped requiring an exact one-to-one stutter
 required|published_validate_stutter|production_adapter_effect_candidate_trace_projection(|published Validate retry stopped refining the reviewed candidate trace
 required|published_validate_stutter|check_production_effect_to_candidate_transition(|published Validate retry stopped checking its candidate refinement
-required|published_validate_stutter|retained_published_validate_retry_markers.insert(key, projected)|published Validate retry stopped committing its monotonic inert marker overlay
+required|published_validate_stutter|retained_published_validate_retry_markers.insert(key, projected.clone())|published Validate retry stopped committing its monotonic inert marker overlay
 required|published_validate_stutter|retain_effect.push(false);|published Validate retry regained executor dispatch
 required|published_validate_stutter|continue;|published Validate retry reached later lifecycle or terminal planning
-order|published_validate_stutter|7|.project_retry(effect, evidence)|RuntimeCandidateAdmissionDisposition::CoalescedRetry|production_adapter_effect_candidate_trace_projection(|check_production_effect_to_candidate_transition(|retained_published_validate_retry_markers.insert(key, projected)|retain_effect.push(false);|continue;|published Validate retry must prove exact monotonic refinement and terminate inertly
+order|published_validate_stutter|7|.project_retry(effect, evidence)|retained_published_validate_retry_markers.insert(key, projected.clone())|RuntimeCandidateAdmissionDisposition::CoalescedRetry|production_adapter_effect_candidate_trace_projection(|check_production_effect_to_candidate_transition(|retain_effect.push(false);|continue;|published Validate retry must publish its monotonic overlay before only non-Decision retries terminate inertly
 forbidden|published_validate_stutter|install_pending_durable_validate_admission|published Validate retry re-entered lifecycle admission
 forbidden|published_validate_stutter|enqueue_|published Validate retry performed service I/O
 forbidden|published_validate_stutter|AdapterEffect::Apply|published Validate retry synthesized an Apply effect
@@ -1559,9 +1568,9 @@ required|historical_store_completion_projection|if !projected.validates()|histor
 forbidden|historical_store_completion_projection|rebind_as_inherited_adapter_effect|historical Store completion must not mint a live capability at the published marker tag
 forbidden|historical_store_completion_projection|RuntimeEffectOwnership::fresh|historical Store completion must remain comparison-only
 order|historical_store_completion_projection|5|marker_tag.strictly_advances(*task_tag)|.exact_pending_adapter_effect_binding(effect)|.body_stage_authority_relation_to(task_statement)|if !projected.validates()|Ok(projected)|historical completion must prove time, task identity, authority, and marker integrity before projection
-required|historical_validate_store_completion_projection|.exactly_precedes_validate_marker(&self.effect, self.statement)|historical Store completion stopped authenticating the immutable Validate successor
+required|historical_validate_store_completion_projection|.exactly_precedes_validate_marker(&self.latest_effect, self.latest_statement)|historical Store completion stopped authenticating the immutable Validate successor
 required|historical_validate_store_completion_projection|.project_historical_store_completion(|historical Store completion bypassed its sealed Store predecessor
-required|historical_validate_store_completion_projection|.body_stage_authority_relation_to(self.statement)|historical Store completion stopped proving that Validate authority dominates it
+required|historical_validate_store_completion_projection|.body_stage_authority_relation_to(self.latest_statement)|historical Store completion stopped proving that Validate authority dominates it
 required|historical_validate_store_completion_projection|Some(RuntimeFetchAuthorityRelation::Same \p RuntimeFetchAuthorityRelation::Upgrade)|historical Store completion stopped requiring published Validate authority to equal or dominate its projected Store authority
 required|historical_validate_store_completion_projection|published lifecycle Store completion outran its published Validate authority|historical Store authority must fail closed when stronger than Validate
 forbidden|historical_validate_store_completion_projection|rebind_as_inherited_adapter_effect|published Validate comparison must not mint executable Store ownership
@@ -3258,10 +3267,12 @@ end
 case|terminal_validate_outcome_catalog_cut_is_opaque_and_move_only
 region|implementation|body_store|after|impl RecoveredTerminalValidateOutcomeCatalogCut<'_>|before|impl Drop for RecoveredTerminalValidateOutcomeCatalogCut<'_>
 region|whole|body_store|begin|-|end|-
-count|implementation|pub(super) fn |3|terminal outcome catalog cut must expose exactly three methods
+count|implementation|pub(super) fn |5|terminal outcome catalog cut must expose exactly five closed methods
 required|implementation|fn select_exact_terminal_validate(|terminal outcome catalog cut lost exact selection
+required|implementation|fn select_exact_successful_terminal_validate(|terminal outcome catalog cut lost success-only released-Validate selection
 required|implementation|fn select_exact_invalid_body_report(|terminal outcome catalog cut lost exact invalid-body-report selection
 required|implementation|fn commit_selected(mut self)|terminal outcome catalog cut lost consuming commit
+required|implementation|fn commit_selected_with_released_validate(|terminal outcome catalog cut lost consuming released-Validate commit
 forbidden|implementation|pub(super) fn receipt|catalog cut must not expose {forbidden}
 forbidden|implementation|pub(super) fn outcome|catalog cut must not expose {forbidden}
 forbidden|implementation|pub(super) fn validated|catalog cut must not expose {forbidden}
@@ -3410,9 +3421,11 @@ region|callers|worker|begin|-|end|-
 region|callers|runtime|begin|-|before|\n#[cfg(test)]\npub(in crate::sumeragi) mod tests {
 region|callers|coordinator|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|scheduler_inputs|begin|-|end|-
-region|publication|body_pipeline|last|pub(super) fn persist_and_publish(|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
-region|post_fsync|body_pipeline|last|*coordinator = staged|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
-region|exact_fsync|body_pipeline|last|pub(super) fn persist_and_publish(|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
+region|publication|body_pipeline|last|pub(super) fn persist_and_publish(|before|/// Read-only readiness of the standalone released-Validate Apply transaction.
+region|post_fsync|body_pipeline|last|*coordinator = staged|before|/// Read-only readiness of the standalone released-Validate Apply transaction.
+region|exact_fsync|body_pipeline|last|pub(super) fn persist_and_publish(|before|/// Read-only readiness of the standalone released-Validate Apply transaction.
+region|released_apply|body_pipeline|at|pub(in crate::sumeragi) fn publish_released_validate_apply(|before|include!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
+region|released_apply_post_fsync|body_pipeline|at|let reconciliation = reservation.install_after_ledger_fsync();|before|Ok((ordinal, reconciliation))
 region|ledger_production|ledger|begin|-|before|pub(crate) mod tests {
 order|authorized|3|stage_durable_transaction|reduce_settle_body_parent_for_continuation|reduce_admit|the same-class Effect branch must stage first, release capacity, then admit its child
 required|authorized|candidate.replay_authority_is_exact(coordinator.active_context)|authorized transition core omitted {required}
@@ -3544,6 +3557,13 @@ forbidden|post_fsync|publish_status|post-fsync publication acquired fallible wor
 forbidden|post_fsync|persist_durable_projection|post-fsync publication acquired fallible work through {forbidden}
 forbidden|post_fsync|persist_exact_staged_successor|post-fsync publication acquired fallible work through {forbidden}
 count|exact_fsync|.persist_exact_staged_successor_with_ordinal_reservation(|1|the sealed live Validate-to-Sign transaction must be the sole reservation-aware exact-fsync caller
+required|released_apply|candidate.stage.predecessor_scope() != PredecessorScope::Independent|released-Validate Apply stopped requiring an independent predecessor scope
+required|released_apply|candidate.initial_state != InitialLifecycleState::Ready|released-Validate Apply stopped requiring a fresh Ready row
+required|released_apply|prepare_released_validate_apply_reservation(|released-Validate Apply lost its closed registry reservation
+order|released_apply|8|project_apply_candidate(|stage_durable_transaction()|reduce_admit_with_durable_ordinals(|prepare_released_validate_apply_reservation(|persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)|install_after_ledger_fsync()|*coordinator = staged|commit_after_lifecycle_publication()|released-Validate Apply must preflight adapter, coordinator, registry, and LedgerV1 before its infallible post-fsync commits
+forbidden|released_apply_post_fsync|?|released-Validate Apply post-fsync tail acquired fallible work
+forbidden|released_apply_post_fsync|return Err|released-Validate Apply post-fsync tail acquired fallible work
+forbidden|released_apply_post_fsync|persist_exact|released-Validate Apply post-fsync tail attempted a second persistence
 count|ledger_production|.persist_exact_successor(|9|the same staged transaction helper must be the sole exact-store successor caller
 end
 case|production_scheduler_factory_has_no_raw_rank_mint
@@ -3809,7 +3829,7 @@ required|publication|Kind::RejectedBusy|rejected Busy outcome lost its reducer-f
 count|publication|.persist_and_publish()|4|each non-Busy Validate outcome family must use one sealed persistence/publication transaction
 required|publication|park_validate_on_reducer_fence(lease, wait)|Busy Validate must remain durably recoverable and retry only after its exact reducer fence
 count|sealed_publication|pub(super) fn persist_and_publish(|4|Validate terminal, report, Apply, and Sign each require one consuming sealed transaction
-count|sealed_publication|persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)|3|every successor-producing Validate publication family must fsync and commit its shared ordinal reservation
+count|sealed_publication|persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)|4|the three linked Validate successors and released-Validate standalone Apply must each fsync and commit their shared ordinal reservation
 count|sealed_publication|persist_exact_staged_successor(&staged)|1|the successor-free Validate publication family must fsync its exact staged LedgerV1 cut
 forbidden|body_pipeline|atomic-publication gap|completed Validate branches must not retain the former publication blocker
 forbidden|effects|RetainedCertifiedBodyResponse|the retired ordinary response carrier returned
@@ -4586,7 +4606,7 @@ order|validate_child|8|recovery.stage() != PendingKuraApplyRecoveryStage::Determ
 required|validate_child|commit_pending_kura_validated_apply(marker, &effect, &ownership)|pending-Kura Validate omitted the direct adapter commit
 required|validate_child|restore_deferred_validated_marker(marker)|pending-Kura precommit failure did not restore marker ownership
 required|consume_child|if let Some(stage) = recovery_transition {|pending-Kura child dispatch omitted the outer stage commit
-order|consume_child|4|result?|if let Some(stage) = recovery_transition {|.stage = stage|if let Some(successor) = pending_kura_successor|pending-Kura child dispatch did not commit the outer Apply stage before recursion
+order|consume_child|4|result?|if let Some(stage) = recovery_transition {|.stage = stage|if let Some(successor) = validated_apply_successor|pending-Kura child dispatch did not commit the outer Apply stage before recursion
 required|consume_child|PendingKuraApplySuccessorExecutorPermitV1::new()|pending-Kura child dispatch omitted its private permit
 required|consume_child|self.consume_one(effect, ownership, None, services)|pending-Kura child dispatch omitted its bounded local continuation
 required|consume_child|EffectExecutorError::Contract(format!(|pending-Kura postcommit child failure did not fail stop
@@ -4600,4 +4620,104 @@ forbidden|retired_carrier|RecoveredPendingKuraApplyCarrierPermitV1|pending-Kura 
 forbidden|retired_carrier|apply_carrier|pending-Kura retained the retired recovered-Apply carrier slot
 forbidden|retired_carrier|retains_decision_fetch_for_test|pending-Kura retained the retired Decision-Fetch compatibility probe
 forbidden|replay_verify|recovered_apply_ordinal|pending-Kura replay retained the retired recovered-Apply ordinal shortcut
+end
+case|nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed
+region|token|kura_merge_support|at|pub(crate) struct AutonomousNonQueueReplicaClaimReleaseAuthorization {|before|/// Formal reservation source used for one ordered Released-prefix advance.
+region|mint|kura_release_authority|at|pub(crate) fn authorize_autonomous_nonqueue_replica_claim_release(|before|/// Consume Queue's exact FIFO-only proof
+region|claim_finalize|kura_release_authority|at|pub(crate) fn finalize_autonomous_nonqueue_replica_claim_release|before|/// Authenticate Queue's exact prepared-release boundary
+region|queue_token|queue|at|pub(crate) struct DurableAutonomousNonQueueReplicaFifoAuthorization|before|impl DurableLaneQueueReleaseBarrierAuthorization
+region|queue_auth|queue|at|pub(crate) fn authenticate_autonomous_nonqueue_replica_fifo_ownership|before|    #[cfg(test)]
+region|queue_terminal|queue|at|pub(crate) fn finalize_lane_reservation_release_barrier_with_replica_fifo_authorization|before|    /// Reauthenticate an already-forgotten release
+region|fifo_proof|queue|at|fn release_barrier_has_exact_fifo_ownership_locked(|before|    /// Remove a hash set from FIFO
+region|wrapper|apply|at|pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(|before|include!("v2_apply/autonomous_recovery_types.rs");
+region|direct_transition|refinement|at|== refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT)|before|IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY
+region|released_transition|refinement|at|== refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED)|before|IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE
+region|formal_direct|formal_first_release|at|ReleaseReservationDirect ==|before|After `Recover` clears one local crash marker
+region|formal_released|formal_first_release|at|AdvanceReleasedPrefix ==|before|CompleteReservationRelease ==
+region|startup|lifecycle_recovery|at|let mut recovered_attempts = 0_usize;|before|if !queue\n        .revalidate_lane_reservation_startup_reconciliation_receipt
+region|replay_enum|v2_core|at|pub(crate) enum ProductionInFlightFirstReleaseReplayStepV1 {|before|fn append_first_release_identity_v1(
+region|replay_reducer|v2_core|at|pub(crate) fn check_production_in_flight_first_release_replay_step_v1(|before|/// Check and witness any of the 27 first-release production actions.
+region|replay_wrapper|v2_core|at|pub(crate) fn check_production_in_flight_first_release_transition(|before|fn witness_derived_first_release_transition(
+region|legacy_guard|queue|begin|-|end|-
+required|token|store_root: PathBuf|replica Kura authority lost its source-instance binding
+required|token|release_barrier: LaneQueueReservationReleaseBarrierV1|replica Kura authority lost its exact Queue barrier
+required|token|fifo_projection: ProductionInFlightFirstReleaseTransitionProjection|replica Kura authority lost its checked direct-release projection
+required|token|retirement: AutonomousLaneSlotRetirementV1|replica Kura authority lost its exact retirement
+required|token|cursor: AutonomousLifecycleCursorV1|replica Kura authority lost its signed cursor
+forbidden|token|derive(Clone|replica Kura authority became clonable
+forbidden|token|Encode|replica Kura authority became persistable
+forbidden|token|Decode|replica Kura authority became decodable
+forbidden|token|fn into_parts(|replica Kura authority exposed a parts API
+required|mint|read_autonomous_lane_block_attempt_record_locked(|replica authority mint stopped reopening its exact attempt
+required|mint|record.retirement.as_ref() != Some(retirement)|replica authority mint stopped matching its exact retirement
+required|mint|current.artifact.executable_payload != *payload|replica authority mint stopped proving the current attempt
+required|mint|read_autonomous_lifecycle_cursor_for_terminal_outcome_locked|replica authority mint stopped verifying the signed current cursor
+required|mint|local_peer == &payload.producer|producer exclusion disappeared from the replica corridor
+required|mint|signed_actor == context.producer|signed producer exclusion disappeared from the replica corridor
+required|mint|pending_prefix != context.reservation_group.reservation_count|replica authority mint stopped requiring the complete pending prefix
+required|mint|replica_fifo_ownership_projection(released_prefix)|replica authority mint stopped binding its checked FIFO transition
+order|mint|7|read_autonomous_lane_block_attempt_record_locked(|record.retirement.as_ref() != Some(retirement)|read_current_autonomous_lane_block_record_self_context_locked(|read_autonomous_lifecycle_cursor_for_terminal_outcome_locked|autonomous_lane_entrypoint_claim_release_progress_locked|replica_fifo_ownership_projection(released_prefix)|Ok(Some(AutonomousNonQueueReplicaClaimReleaseAuthorization {|replica authority mint lost exact read-before-mint ordering
+required|claim_finalize|authorization_for_kura(&barrier)|Kura finalization stopped borrowing the live Queue fence
+required|claim_finalize|matches_exact_durable_source(|Kura finalization stopped revalidating its source-bound authority
+required|claim_finalize|AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo|Kura finalization returned to the producer-prepared formal mode
+required|claim_finalize|require_autonomous_lane_entrypoint_claims_released_locked|Kura finalization stopped proving the complete released prefix
+required|claim_finalize|Ok(authorization)|Kura finalization stopped returning the same move-only fence
+order|claim_finalize|6|authorization_for_kura(&barrier)|read_autonomous_lane_block_attempt_record_locked(|matches_exact_durable_source(|finalize_autonomous_lane_entrypoint_claim_release_with_mode_locked(|require_autonomous_lane_entrypoint_claims_released_locked|Ok(authorization)|Kura finalization no longer keeps the proof live through exact claim mutation
+required|queue_token|_durability_transition: QueueDurabilityTransition|replica Queue proof lost its exact-hash fence
+required|queue_token|covers_reservation_keys(queue, &barrier.ordered_keys)|replica Queue proof stopped covering the complete barrier on the same Queue
+forbidden|queue_token|derive(Clone|replica Queue proof became clonable
+forbidden|queue_token|Encode|replica Queue proof became persistable
+forbidden|queue_token|Decode|replica Queue proof became decodable
+required|queue_auth|self.lane_reservation_transition_lock.lock()|replica Queue proof omitted the reservation transition lock
+required|queue_auth|self.push_remove_lock.lock()|replica Queue proof omitted the global FIFO mutation lock
+required|queue_auth|authenticate_release_queue_fifo_ownership_locked|replica Queue proof omitted exact physical FIFO authentication
+required|queue_auth|check_production_in_flight_first_release_transition(projection)|replica Queue proof omitted its checked direct-release transition
+required|queue_auth|begin_durability_transition_locked(|replica Queue proof omitted its exact-hash removal fence
+order|queue_auth|6|self.lane_reservation_transition_lock.lock()|self.push_remove_lock.lock()|authenticate_release_queue_fifo_ownership_locked|check_production_in_flight_first_release_transition(projection)|begin_durability_transition_locked(|Ok(DurableAutonomousNonQueueReplicaFifoAuthorization {|replica Queue proof lost lock-proof-fence ordering
+required|fifo_proof|previous_global_fifo_ordinal|replica FIFO proof stopped checking global physical order
+required|fifo_proof|previous >= order.ordinal|replica FIFO proof stopped rejecting global ordinal inversion
+required|fifo_proof|global_selection_owners.contains_key(&hash)|replica FIFO proof stopped rejecting ordinary selection ownership
+required|fifo_proof|active_durability_transitions.contains(&hash)|replica FIFO proof stopped rejecting another exact-hash transition
+required|fifo_proof|self.removed_hashes.contains_key(&hash)|replica FIFO proof stopped rejecting removal ownership
+required|fifo_proof|claim.enqueue_timestamp_ms|replica FIFO proof stopped joining durable QueuePlan timestamps
+required|fifo_proof|previous >= fifo_order.ordinal|replica FIFO proof stopped checking barrier order
+required|queue_terminal|covers_queue_barrier(self, barrier)|terminal release stopped proving the same Queue and barrier fence
+required|queue_terminal|finalize_lane_reservation_release_barrier_inner(barrier, gate, true)|terminal release stopped retaining its own active transition through evidence
+required|wrapper|replica_fifo_authorization.as_ref()|wrapper stopped retaining the replica fence across the terminal sequence
+order|wrapper|11|persist_autonomous_lane_slot_retirement|authorize_autonomous_nonqueue_replica_claim_release|authenticate_autonomous_nonqueue_replica_fifo_ownership|finalize_autonomous_nonqueue_replica_claim_release|authorize_autonomous_lane_queue_release_preparation|prepare_lane_reservation_release_barrier_with_authorization|finalize_autonomous_lane_slot_release_with_authorization|persist_autonomous_lifecycle_release_terminal_outcome_pending|finalize_lane_reservation_release_barrier_with_replica_fifo_authorization|complete_autonomous_lifecycle_release_terminal_outcome|drop(replica_fifo_authorization)|replica release lost retirement-proof-claims-pending-terminal ordering
+required|direct_transition|projection.actor == before.decision.release_owner|direct replica transition stopped binding the exact release owner
+required|direct_transition|projection.actor != before.producer|direct replica transition admitted the producer
+required|direct_transition|before.release.pending_prefix == before.queue.selected_count|direct replica transition skipped the complete pending prefix
+required|direct_transition|IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED|direct replica transition lost FIFO-only state
+required|released_transition|projection.actor == before.decision.release_owner|replica Released transition stopped binding the exact release owner
+required|released_transition|projection.actor != before.producer|replica Released transition admitted the producer
+required|released_transition|before.release.fifo_restored|replica Released transition stopped requiring FIFO proof
+required|formal_direct|decision.releaseOwner \\in (Validators \\ {Producer})|TLA direct release omitted strict replica ownership
+required|formal_direct|release.pendingPrefix = queue.selectedCount|TLA direct release omitted the complete pending prefix
+required|formal_released|queue.reservation = "DirectReleased"|TLA Released prefix omitted the FIFO-only replica state
+required|formal_released|release.fifoRestored|TLA Released prefix omitted FIFO restoration
+required|startup|local_actor != binding.producer_actor_projection()|startup replica seam admitted the producer
+required|startup|read_autonomous_lane_retired_attempt(|startup replica seam stopped requiring a durable retirement
+required|startup|retired_attempt.artifact.executable_payload != *payload|startup replica seam stopped matching the exact payload
+required|startup|retired_attempt.retirement != expected_retirement|startup replica seam stopped matching the derived retirement
+required|startup|retire_autonomous_lane_slot_and_release_reservations(|startup replica seam stopped using the shared release corridor
+required|startup|continue;|startup replica seam fell through into producer recovery
+order|startup|6|local_actor != binding.producer_actor_projection()|read_autonomous_lane_retired_attempt(|retired_attempt.artifact.executable_payload != *payload|retired_attempt.retirement != expected_retirement|retire_autonomous_lane_slot_and_release_reservations(|continue;|startup replica recovery lost exact retire-before-release-before-skip ordering
+required|replay_enum|ComposedNext|production replay classification lost the ordinary state-changing class
+required|replay_enum|ReleaseReservationDirectProofStutter|production replay classification lost the resumed replica FIFO-proof stutter
+required|replay_enum|RecoverReservationSnapshotStutter|production replay classification lost snapshot stutter
+required|replay_enum|RepairPostCarrierEvidenceStutter|production replay classification lost repair stutter
+count|replay_enum|ReleaseReservationDirectProofStutter|1|production replay classification changed the exact resumed direct-release stutter inventory
+required|replay_reducer|ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter => {\n            projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT\n                && projection.before == projection.after\n        }|production replay reducer lost the exact direct-action/equal-state resumed replica FIFO-proof arm
+required|replay_reducer|projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT|production replay reducer accepted another action as a direct-release proof stutter
+required|replay_reducer|projection.before == projection.after|production replay reducer accepted a state-changing direct-release proof as stutter
+required|replay_reducer|refinement::check_production_in_flight_first_release_transition(projection)?|production replay reducer bypassed the shared composed transition gate
+required|replay_reducer|authenticate_production_in_flight_first_release_transition_witness_v1(projection, witness)|production replay reducer bypassed exact witness authentication
+order|replay_reducer|3|ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter => {|projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT|projection.before == projection.after|resumed direct-release replay lost exact class-action-stutter ordering
+required|replay_wrapper|IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT\n            if projection.before == projection.after =>\n        {\n            ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter\n        }|production wrapper lost the exact direct-action/equal-state resumed FIFO-proof classification arm
+required|replay_wrapper|ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter|production wrapper stopped selecting the explicit resumed direct-release stutter
+required|replay_wrapper|_ => ProductionInFlightFirstReleaseReplayStepV1::ComposedNext|production wrapper stopped defaulting state-changing actions to composed Next
+required|replay_wrapper|check_production_in_flight_first_release_replay_step_v1(projection, classification)|production wrapper bypassed the classified replay reducer
+order|replay_wrapper|4|IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT|projection.before == projection.after|ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter|check_production_in_flight_first_release_replay_step_v1(projection, classification)|production wrapper lost direct-action-before-stutter-before-reducer ordering
+required|legacy_guard|missing Queue release ownership cannot authorize pending Kura claims|generic Queue missing-owner rejection disappeared
 end

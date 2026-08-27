@@ -78,6 +78,44 @@ pub(crate) struct DeferredPendingKuraValidatedMarkerV1 {
     certificate: crate::sumeragi::v2::wire::QuorumCertificate,
 }
 
+/// Move-only fsynced validation marker released by a terminal live lifecycle row.
+///
+/// The physical Validate already completed and its registry row no longer owns
+/// an ordinal. A later durable Decision may consume this marker only through
+/// the exact live adapter transition below; no parts accessor can turn the
+/// cached receipt into independent validation or Apply authority.
+#[must_use = "a released lifecycle validation marker must enter its exact live Decision transition"]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DeferredReleasedLifecycleValidatedMarkerV1 {
+    tag: crate::sumeragi::v2::reducer::EventTag,
+    round: crate::sumeragi::v2::wire::ConsensusRound,
+    subject: crate::sumeragi::v2::wire::BlockSubject,
+    manifest_hash: iroha_crypto::HashOf<crate::sumeragi::v2::wire::PayloadManifest>,
+    durable: crate::sumeragi::v2_body_store::DurableBodyReceipt,
+    validated: crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+    certificate: crate::sumeragi::v2::wire::QuorumCertificate,
+    predecessor: AdapterEffect,
+    validate_pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
+    terminal: ReleasedLifecycleValidateTerminalProofV1,
+}
+
+/// Process-local proof that one physical Validate row durably terminalized
+/// without a successor before the current Decision was available.
+///
+/// The original effect fingerprint and ordinal never authorize execution.
+/// They exist only so the lifecycle owner can join the later WAL-backed Apply
+/// to the exact `AdvancedNoSuccessor` ledger tombstone and cached receipt.
+#[must_use = "a released Validate terminal proof must remain inside its lifecycle Apply carrier"]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(Clone))]
+pub(in crate::sumeragi) struct ReleasedLifecycleValidateTerminalProofV1 {
+    ordinal: u128,
+    effect: AdapterEffect,
+    pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectFingerprintV1,
+    statement: crate::sumeragi::v2_runtime::RuntimeCandidateSemanticStatement,
+    durable: crate::sumeragi::v2_body_store::DurableBodyReceipt,
+}
+
 /// Staged pending-Kura validation plus its predecessor-derived Apply owner.
 ///
 /// The marker and adapter borrow are inseparable. Dropping this value is inert;
@@ -88,6 +126,22 @@ pub(in crate::sumeragi) struct PreparedPendingKuraValidatedApplyV1<'a> {
     prepared: super::PreparedDirectValidationSucceededApply<'a>,
     child_ownership: crate::sumeragi::v2_runtime::RuntimeEffectOwnership,
     _marker: DeferredPendingKuraValidatedMarkerV1,
+}
+
+/// Staged live cached-validation transition plus its predecessor-derived Apply owner.
+///
+/// The released marker remains inseparable from the drop-inert adapter preview.
+/// Only the consuming commit may update reducer/registry state and release the
+/// exact Apply child.
+#[must_use = "a prepared released lifecycle validation must commit its exact Apply successor"]
+pub(in crate::sumeragi) struct PreparedReleasedLifecycleValidatedApplyV1<'a> {
+    prepared: super::PreparedDirectValidationSucceededApply<'a>,
+    persisted_apply:
+        Option<crate::sumeragi::v2_lifecycle_coordinator::SealedLiveWalPersistedEffectV1>,
+    registry_work:
+        Option<crate::sumeragi::v2_lifecycle_coordinator::PreparedLiveValidateApplyRegistryWork>,
+    terminal: Option<ReleasedLifecycleValidateTerminalProofV1>,
+    validated: crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
 }
 
 /// Opaque move-only Apply child emitted by the deferred validation commit.
@@ -665,6 +719,278 @@ impl DeferredPendingKuraValidatedMarkerV1 {
     }
 }
 
+impl DeferredReleasedLifecycleValidatedMarkerV1 {
+    /// Return the exact decided body key retained by this publication owner.
+    pub(in crate::sumeragi) const fn key(
+        &self,
+    ) -> (
+        crate::sumeragi::v2::wire::ConsensusRound,
+        crate::sumeragi::v2::wire::BlockSubject,
+    ) {
+        (self.round, self.subject)
+    }
+
+    /// Recheck a retransmit without exposing the move-only current binding.
+    pub(in crate::sumeragi) fn exactly_matches_retry(
+        &self,
+        effect: &AdapterEffect,
+        ownership: &crate::sumeragi::v2_runtime::RuntimeEffectOwnership,
+    ) -> bool {
+        self.predecessor == *effect
+            && ownership
+                .exact_pending_adapter_effect_binding(effect)
+                .ok()
+                .as_ref()
+                == Some(&self.validate_pending)
+    }
+
+    /// Build one exact marker for direct adapter transaction tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        tag: crate::sumeragi::v2::reducer::EventTag,
+        manifest: &crate::sumeragi::v2::wire::PayloadManifest,
+        durable: &crate::sumeragi::v2_body_store::DurableBodyReceipt,
+        validated: &crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+        certificate: &crate::sumeragi::v2::wire::QuorumCertificate,
+        predecessor: AdapterEffect,
+        validate_pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
+        terminal_ordinal: u128,
+    ) -> Option<Self> {
+        let terminal_pending =
+            validate_pending.published_validate_retry_fingerprint(&predecessor)?;
+        let terminal_statement = validate_pending.candidate_statement()?;
+        Self::seal_exact(
+            crate::sumeragi::v2_effects::ReleasedLifecycleValidatedMarkerSealPermitV1::for_test(),
+            tag,
+            manifest.round,
+            manifest.subject,
+            iroha_crypto::HashOf::new(manifest),
+            durable.clone(),
+            validated.clone(),
+            certificate.clone(),
+            predecessor.clone(),
+            validate_pending,
+            terminal_ordinal,
+            predecessor,
+            terminal_pending,
+            terminal_statement,
+        )
+    }
+
+    /// Seal the exact catalog, terminal marker, and current Commit-owned Validate.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn seal_exact(
+        _permit: crate::sumeragi::v2_effects::ReleasedLifecycleValidatedMarkerSealPermitV1,
+        tag: crate::sumeragi::v2::reducer::EventTag,
+        round: crate::sumeragi::v2::wire::ConsensusRound,
+        subject: crate::sumeragi::v2::wire::BlockSubject,
+        manifest_hash: iroha_crypto::HashOf<crate::sumeragi::v2::wire::PayloadManifest>,
+        durable: crate::sumeragi::v2_body_store::DurableBodyReceipt,
+        validated: crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+        certificate: crate::sumeragi::v2::wire::QuorumCertificate,
+        predecessor: AdapterEffect,
+        validate_pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
+        terminal_ordinal: u128,
+        terminal_effect: AdapterEffect,
+        terminal_pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectFingerprintV1,
+        terminal_statement: crate::sumeragi::v2_runtime::RuntimeCandidateSemanticStatement,
+    ) -> Option<Self> {
+        let predecessor_statement = validate_pending.candidate_statement()?;
+        let terminal = ReleasedLifecycleValidateTerminalProofV1 {
+            ordinal: terminal_ordinal,
+            effect: terminal_effect,
+            pending: terminal_pending,
+            statement: terminal_statement,
+            durable: durable.clone(),
+        };
+        (terminal_ordinal != 0
+            && tag.height() == round.height
+            && durable.context_id() == round.context_id
+            && durable.round() == round
+            && durable.subject() == subject
+            && durable.manifest_hash() == manifest_hash
+            && validated.durable() == &durable
+            && certificate.phase == crate::sumeragi::v2::wire::GlobalPhase::Commit
+            && certificate.proposal_round == round
+            && certificate.subject == subject
+            && certificate.execution_commitment == validated.execution_commitment()
+            && matches!(
+                &predecessor,
+                AdapterEffect::ValidateBody {
+                    tag: predecessor_tag,
+                    round: predecessor_round,
+                    subject: predecessor_subject,
+                } if *predecessor_tag == tag
+                    && *predecessor_round == round
+                    && *predecessor_subject == subject
+            )
+            && validate_pending.exactly_binds_adapter_effect(&predecessor)
+            && predecessor_statement.phase()
+                == Some(crate::sumeragi::v2::wire::GlobalPhase::Commit)
+            && predecessor_statement.proposal_round() == round
+            && predecessor_statement.subject() == Some(subject)
+            && predecessor_statement.execution_commitment()
+                == Some(validated.execution_commitment())
+            && terminal.validates_internal())
+        .then_some(Self {
+            tag,
+            round,
+            subject,
+            manifest_hash,
+            durable,
+            validated,
+            certificate,
+            predecessor,
+            validate_pending,
+            terminal,
+        })
+    }
+
+    /// Stage one exact live successful-validation preview and its Apply owner.
+    ///
+    /// Failure returns the marker unchanged. The adapter preview is drop-inert,
+    /// so no reducer, registry, or execution state changes before commit.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_apply<'a>(
+        self,
+        adapter: &'a mut super::SumeragiV2Adapter,
+    ) -> Result<PreparedReleasedLifecycleValidatedApplyV1<'a>, (Self, AdapterError)> {
+        let predecessor = &self.predecessor;
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = predecessor
+        else {
+            return Err((self, AdapterError::ReleasedLifecycleValidatedApplyMismatch));
+        };
+        if *tag != self.tag
+            || *round != self.round
+            || *subject != self.subject
+            || self.durable.context_id() != adapter.wire_context.id()
+            || self.durable.round() != self.round
+            || self.durable.subject() != self.subject
+            || self.durable.manifest_hash() != self.manifest_hash
+            || self.validated.durable() != &self.durable
+            || self.certificate.validate(&adapter.wire_context).is_err()
+            || !self
+                .validate_pending
+                .exactly_binds_adapter_effect(predecessor)
+            || !self.terminal.validates_internal()
+        {
+            return Err((self, AdapterError::ReleasedLifecycleValidatedApplyMismatch));
+        }
+        let prepared = match adapter.prepare_direct_validation_succeeded(
+            self.tag,
+            self.round,
+            self.subject,
+            &self.validated,
+        ) {
+            Ok(super::DirectValidationSucceededPreparation::Apply(prepared)) => prepared,
+            Ok(other) => {
+                drop(other);
+                return Err((self, AdapterError::ReleasedLifecycleValidatedApplyMismatch));
+            }
+            Err(error) => return Err((self, error)),
+        };
+        let apply_effect = prepared.apply_effect().clone();
+        if !matches!(
+            &apply_effect,
+            AdapterEffect::Apply {
+                subject,
+                certificate,
+                ..
+            } if *subject == self.subject && certificate == &self.certificate
+        ) {
+            drop(prepared);
+            return Err((self, AdapterError::ReleasedLifecycleValidatedApplyMismatch));
+        }
+        let Some(child_pending) = self
+            .validate_pending
+            .project_validate_apply_successor(predecessor, &apply_effect)
+        else {
+            drop(prepared);
+            return Err((self, AdapterError::ReleasedLifecycleValidatedApplyMismatch));
+        };
+        let Some(persisted_apply) = prepared._adapter.pending_live_decision_apply.take() else {
+            drop(prepared);
+            return Err((self, AdapterError::ReleasedLifecycleValidatedApplyMismatch));
+        };
+        let persisted_apply = match persisted_apply.complete_exact_apply(
+            predecessor,
+            &self.validate_pending,
+            child_pending,
+            &self.durable,
+        ) {
+            Ok(persisted) => persisted,
+            Err((persisted, _child_pending)) => {
+                prepared._adapter.pending_live_decision_apply = Some(persisted);
+                drop(prepared);
+                return Err((self, AdapterError::ReleasedLifecycleValidatedApplyMismatch));
+            }
+        };
+        let Self {
+            validated,
+            terminal,
+            ..
+        } = self;
+        Ok(PreparedReleasedLifecycleValidatedApplyV1 {
+            prepared,
+            persisted_apply: Some(persisted_apply),
+            registry_work: None,
+            terminal: Some(terminal),
+            validated,
+        })
+    }
+}
+
+impl ReleasedLifecycleValidateTerminalProofV1 {
+    fn validates_internal(&self) -> bool {
+        let AdapterEffect::ValidateBody { round, subject, .. } = &self.effect else {
+            return false;
+        };
+        self.ordinal != 0
+            && self.pending.exactly_binds_adapter_effect(&self.effect)
+            && self.pending.candidate_statement() == Some(self.statement)
+            && self.durable.round() == *round
+            && self.durable.subject() == *subject
+            && self.statement.context_id() == round.context_id
+            && self.statement.proposal_round() == *round
+            && self.statement.subject() == Some(*subject)
+    }
+
+    /// Return the exact terminal ledger ordinal.
+    pub(in crate::sumeragi) const fn ordinal(&self) -> u128 {
+        self.ordinal
+    }
+
+    /// Borrow the exact durable receipt authenticated by the terminal row.
+    pub(in crate::sumeragi) const fn durable(
+        &self,
+    ) -> &crate::sumeragi::v2_body_store::DurableBodyReceipt {
+        &self.durable
+    }
+
+    /// Borrow the immutable original Validate effect fingerprint.
+    pub(in crate::sumeragi) const fn effect(&self) -> &AdapterEffect {
+        &self.effect
+    }
+
+    /// Borrow the comparison-only pending identity of the terminal row.
+    pub(in crate::sumeragi) const fn pending(
+        &self,
+    ) -> &crate::sumeragi::v2_runtime::PendingRuntimeEffectFingerprintV1 {
+        &self.pending
+    }
+
+    /// Return the terminal row's immutable semantic statement.
+    pub(in crate::sumeragi) const fn statement(
+        &self,
+    ) -> crate::sumeragi::v2_runtime::RuntimeCandidateSemanticStatement {
+        self.statement
+    }
+}
+
 impl PreparedPendingKuraValidatedApplyV1<'_> {
     /// Commit the staged reducer validation and release its exact owned Apply.
     pub(in crate::sumeragi) fn commit(self) -> PendingKuraValidatedApplySuccessorV1 {
@@ -700,6 +1026,142 @@ impl PreparedPendingKuraValidatedApplyV1<'_> {
             effect: apply_effect,
             ownership: child_ownership,
         }
+    }
+}
+
+impl PreparedReleasedLifecycleValidatedApplyV1<'_> {
+    /// Recheck the opaque staged WAL/adapter join without publishing it.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn validates_staged_apply_for_test(
+        &self,
+        certificate: &crate::sumeragi::v2::wire::QuorumCertificate,
+        receipt: &crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+    ) -> bool {
+        self.registry_work.is_none()
+            && self.terminal.is_some()
+            && self.validated == *receipt
+            && self
+                .persisted_apply
+                .as_ref()
+                .is_some_and(|persisted| persisted.exactly_binds_completed_apply(receipt.durable()))
+            && matches!(
+                self.prepared.apply_effect(),
+                AdapterEffect::Apply {
+                    subject,
+                    certificate: staged,
+                    ..
+                } if *subject == receipt.durable().subject() && staged == certificate
+            )
+    }
+
+    /// Project the exact BodyFrame-bound live-WAL Apply candidate.
+    pub(in crate::sumeragi) fn project_apply_candidate(
+        &self,
+        permit: &crate::sumeragi::v2_lifecycle_coordinator::SealedValidateApplyProjectionPermit,
+        verified: &crate::sumeragi::v2::VerifiedHeightContext,
+    ) -> Result<
+        crate::sumeragi::v2_lifecycle_coordinator::CandidateAdmission,
+        crate::sumeragi::v2_lifecycle_coordinator::AdapterEffectAdmissionError,
+    > {
+        self.persisted_apply
+            .as_ref()
+            .ok_or(
+                crate::sumeragi::v2_lifecycle_coordinator::AdapterEffectAdmissionError::InvalidCarrier,
+            )?
+            .project_sealed_validate_apply_candidate(permit, verified, self.validated.durable())
+    }
+
+    /// Consume the completed WAL seal into the dedicated live Apply work.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_registry_work(
+        mut self,
+        permit: crate::sumeragi::v2_lifecycle_coordinator::LiveValidateApplyWorkProjectionPermit,
+    ) -> Result<Self, Self> {
+        if self.registry_work.is_some() {
+            return Err(self);
+        }
+        let persisted = self
+            .persisted_apply
+            .take()
+            .expect("released Validate Apply retains one completed WAL seal");
+        match persisted.into_live_validate_apply_work(permit, &self.validated) {
+            Ok(work) => {
+                self.registry_work = Some(work);
+                Ok(self)
+            }
+            Err(persisted) => {
+                self.persisted_apply = Some(persisted);
+                Err(self)
+            }
+        }
+    }
+
+    /// Compare the prepared child against coordinator-selected coordinates.
+    pub(in crate::sumeragi) fn registry_work_matches(
+        &self,
+        owner: crate::sumeragi::v2_lifecycle_coordinator::OwnerId,
+        ordinal: u128,
+        slot: crate::sumeragi::v2_lifecycle_coordinator::PhysicalSlotId,
+        digest: crate::sumeragi::v2_lifecycle_coordinator::LifecycleDigest,
+    ) -> bool {
+        self.persisted_apply.is_none()
+            && self
+                .registry_work
+                .as_ref()
+                .is_some_and(|work| work.validates_publication(owner, ordinal, slot, digest))
+    }
+
+    /// Detach the prevalidated registry work and terminal proof together.
+    pub(in crate::sumeragi) fn take_registry_parts(
+        &mut self,
+    ) -> Option<(
+        crate::sumeragi::v2_lifecycle_coordinator::PreparedLiveValidateApplyRegistryWork,
+        ReleasedLifecycleValidateTerminalProofV1,
+    )> {
+        let work = self.registry_work.take()?;
+        let terminal = self
+            .terminal
+            .take()
+            .expect("released Apply registry work retains its terminal Validate proof");
+        Some((work, terminal))
+    }
+
+    /// Commit the staged adapter validation only after lifecycle LedgerV1 and
+    /// the dedicated Apply carrier are both published.
+    pub(in crate::sumeragi) fn commit_after_lifecycle_publication(self) {
+        let Self {
+            prepared,
+            persisted_apply,
+            registry_work,
+            terminal,
+            validated: _,
+        } = self;
+        assert!(persisted_apply.is_none());
+        assert!(registry_work.is_none());
+        assert!(terminal.is_none());
+        let super::PreparedDirectValidationSucceededApply {
+            _adapter: adapter,
+            next_reducer,
+            next_registry,
+            event,
+            core_effect,
+            apply_effect,
+            next_fence_generation,
+        } = prepared;
+        let _ = apply_effect;
+        adapter.reducer = next_reducer;
+        adapter.registry = next_registry;
+        adapter.reducer_fence_generation = next_fence_generation;
+        adapter.record_reducer_outcome(
+            &event,
+            crate::sumeragi::v2::reducer::StepDisposition::Applied,
+            core::slice::from_ref(&core_effect),
+        );
+        adapter.log_body_progress(
+            &event,
+            crate::sumeragi::v2::reducer::StepDisposition::Applied,
+            1,
+        );
     }
 }
 

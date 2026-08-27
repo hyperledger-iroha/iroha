@@ -814,6 +814,17 @@ fn forgotten_release_requires_exact_fifo_membership_and_relative_order() {
     );
     let first = keys[0].entrypoint_hash;
     let second = keys[1].entrypoint_hash;
+    let assert_aggregate_fifo_rejection =
+        |failure: Result<(), LaneQueueReservationError>| {
+            assert!(
+                matches!(
+                    &failure,
+                    Err(LaneQueueReservationError::InvalidIdentity(message))
+                        if message.contains("lacks exact ordinary FIFO ownership")
+                ),
+                "unexpected forgotten-release rejection: {failure:?}"
+            );
+        };
     {
         let _queue_guard = queue.push_remove_lock.lock();
         assert_eq!(
@@ -821,34 +832,33 @@ fn forgotten_release_requires_exact_fifo_membership_and_relative_order() {
             1
         );
     }
-    for failure in [
+    assert_aggregate_fifo_rejection(
         queue
             .prepare_lane_reservation_release_barrier(&barrier)
             .map(drop),
-        queue
-            .finalize_lane_reservation_release_barrier(&barrier)
-            .map(drop),
-    ] {
-        assert!(matches!(
-            failure,
-            Err(LaneQueueReservationError::InvalidIdentity(ref message))
-                if message.contains("lacks exact ordinary FIFO ownership")
-        ));
-    }
+    );
+    assert!(matches!(
+        queue.finalize_lane_reservation_release_barrier(&barrier),
+        Err(LaneQueueReservationError::ReconciliationDurableClaimMismatch {
+            hash,
+            ref reason,
+        }) if hash == first
+            && reason.contains("released FIFO metadata differs from its durable QueuePlan claim")
+    ));
     {
         let _queue_guard = queue.push_remove_lock.lock();
         queue.replace_fifo_locked(&[second, first]);
     }
-    assert!(matches!(
-        queue.prepare_lane_reservation_release_barrier(&barrier),
-        Err(LaneQueueReservationError::InvalidIdentity(ref message))
-            if message.contains("lacks exact ordinary FIFO ownership")
-    ));
-    assert!(matches!(
-        queue.finalize_lane_reservation_release_barrier(&barrier),
-        Err(LaneQueueReservationError::InvalidIdentity(ref message))
-            if message.contains("lacks exact ordinary FIFO ownership")
-    ));
+    assert_aggregate_fifo_rejection(
+        queue
+            .prepare_lane_reservation_release_barrier(&barrier)
+            .map(drop),
+    );
+    assert_aggregate_fifo_rejection(
+        queue
+            .finalize_lane_reservation_release_barrier(&barrier)
+            .map(drop),
+    );
     {
         let _queue_guard = queue.push_remove_lock.lock();
         queue.replace_fifo_locked(&[first, second]);
@@ -865,12 +875,14 @@ fn forgotten_release_requires_exact_fifo_membership_and_relative_order() {
             .expect("exact terminal FIFO release retry is a stutter"),
         0
     );
-    let original_plan = queue
-        .routing_plans
-        .get(&first)
-        .expect("forgotten release retains its exact routing plan")
-        .clone();
-    assert!(queue.remove_routing_plan_for_test(first));
+    let unrelated = accepted_queue_plan_tx_by_someone(&time_source);
+    let unrelated_hash = unrelated.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
+    {
+        let _queue_guard = queue.push_remove_lock.lock();
+        assert_eq!(queue.fifo_snapshot_locked(), vec![first, second, unrelated_hash]);
+        queue.replace_fifo_locked(&[unrelated_hash, first, second]);
+    }
     for failure in [
         queue
             .prepare_lane_reservation_release_barrier(&barrier)
@@ -879,25 +891,39 @@ fn forgotten_release_requires_exact_fifo_membership_and_relative_order() {
             .finalize_lane_reservation_release_barrier(&barrier)
             .map(drop),
     ] {
-        assert!(matches!(
-            failure,
-            Err(LaneQueueReservationError::InvalidIdentity(ref message))
-                if message.contains("lacks exact ordinary FIFO ownership")
-        ));
+        assert_aggregate_fifo_rejection(failure);
     }
+    {
+        let _queue_guard = queue.push_remove_lock.lock();
+        queue.replace_fifo_locked(&[first, second, unrelated_hash]);
+    }
+    let original_plan = queue
+        .routing_plans
+        .get(&first)
+        .expect("forgotten release retains its exact routing plan")
+        .clone();
+    assert!(queue.remove_routing_plan_for_test(first));
+    assert_aggregate_fifo_rejection(
+        queue
+            .prepare_lane_reservation_release_barrier(&barrier)
+            .map(drop),
+    );
+    assert!(matches!(
+        queue.finalize_lane_reservation_release_barrier(&barrier),
+        Err(LaneQueueReservationError::Conflict { hash }) if hash == first
+    ));
     let substituted_route = RoutingDecision::new(LaneId::new(99), DataSpaceId::new(99));
     queue
         .routing_plans
         .insert(first, RoutingPlan::single(substituted_route));
-    assert!(matches!(
-        queue.prepare_lane_reservation_release_barrier(&barrier),
-        Err(LaneQueueReservationError::InvalidIdentity(ref message))
-            if message.contains("lacks exact ordinary FIFO ownership")
-    ));
+    assert_aggregate_fifo_rejection(
+        queue
+            .prepare_lane_reservation_release_barrier(&barrier)
+            .map(drop),
+    );
     assert!(matches!(
         queue.finalize_lane_reservation_release_barrier(&barrier),
-        Err(LaneQueueReservationError::InvalidIdentity(ref message))
-            if message.contains("lacks exact ordinary FIFO ownership")
+        Err(LaneQueueReservationError::Conflict { hash }) if hash == first
     ));
     queue.routing_plans.insert(first, original_plan);
 }

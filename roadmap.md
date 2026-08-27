@@ -278,8 +278,11 @@ Completed history lives in [`status.md`](./status.md).
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
   peers. Include optional Parliament demand batches, mandatory NPoS boundary
-  slots, missing/invalid shares, restart and idempotent retransmission, and key
-  rotation. The certified lifecycle now compare-and-sets the expected active
+  slots, missing/invalid shares, selective withholding, repeated-retry bias and
+  domain separation, restart and idempotent retransmission, and key rotation.
+  Measure the remaining selection advantage across the bounded retry sequence;
+  single-round uniformity is not sufficient evidence. The certified lifecycle
+  now compare-and-sets the expected active
   predecessor and makes a block-`H` global key change effective at `H + 1`;
   qualification must prove that optional and mandatory pulses authorized by
   the parent state are resolved by the session active at the pulse height and
@@ -309,16 +312,20 @@ Completed history lives in [`status.md`](./status.md).
   material and never a continuing authorization. Qualify the separate app-signed
   casting-proof route and exact ABI 23 proof-only C/JNI wallet surface. The native
   verifier must continue to consume an explicit immutable raw-network/checkpoint/
-  context/ballot trust anchor, reject nonterminal proof pages, verify finality,
+  context/ballot trust anchor, authenticate strictly advancing nonterminal pages
+  for durable checkpoint promotion without seed access, verify terminal finality,
   the fixed witness, and membership, replay-validate the embedded archive, and
-  exact-match its rederived compact binding before keystore seed access. Preserve
+  exact-match its rederived compact binding before any seed-bearing operation.
+  Preserve
   removal of every archive-only wallet export. Qualify Core's exact half-open
   phase-window and nonmonotone-schedule rejection, the generation-bound Android
   seed handles, and the Swift/Kotlin/Java immutable no-default trust-anchor APIs.
   Keep the aligned served OpenAPI and JavaScript/Kotlin/Java/Swift projections
   strict, including negative tests for malformed proofs, fake chains, wrong
-  network/context/ballot anchors, intermediate pages, archive substitution, and
-  binding tampering. Cargo-qualify the bounded proof decoder and
+  network/context/ballot anchors, non-advancing intermediate pages, intermediate
+  pages at terminal seed-bearing entry points, archive substitution, and binding
+  tampering, plus a positive multi-page checkpoint-promotion path. Cargo-qualify
+  the bounded proof decoder and
   multi-registration native ballot path before treating the corridor as
   operational. Rebuild and execute same-source ABI-23 Swift XCFramework and
   Android native artifacts rather than treating parse, JVM-descriptor, or
@@ -723,7 +730,7 @@ close the internal blockers below:
   timeout envelope, then prove the empty queue leaves total and non-empty block
   heights stable; empty blocks are not a liveness mechanism.
 - Treat Sumeragi Validate/replay production wiring as complete and keep the
-  remaining gate evidence-driven. The source-contract harness covers all 50
+  remaining gate evidence-driven. The source-contract harness covers all 54
   named cases, and the specialized live-WAL mint census is exactly four sealed
   replay authorities and three frame-bound pending owners. Capture fresh
   focused, Core, static, formal, and relevant workspace results from the frozen

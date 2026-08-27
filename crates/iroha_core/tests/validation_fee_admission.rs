@@ -34,7 +34,10 @@ use iroha_data_model::{
         TleKeySessionId, TleSessionId, ValidationFeePayoutLifecycleProposal,
         ValidationFeePolicyProposal, parliament_candidate_root_v1,
     },
-    isi::{SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry},
+    isi::{
+        SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
+        governance::ParliamentSortitionRequestRegistrationV1,
+    },
     nexus::DataSpaceId,
     parameter::Parameter,
     prelude::*,
@@ -542,7 +545,7 @@ fn complete_parliament_body_for_authorization(
                     ballot_attempt_id,
                     registration_root,
                     3,
-                    32,
+                    34,
                 )
                 .expect("close deterministic ballot registration");
             attempt
@@ -632,6 +635,7 @@ fn test_parliament_authorization(
             status: GovernanceAttemptStatusV1::Active,
         },
         TEST_PARLIAMENT_POLICY_VERSION,
+        10,
         proposal_kind.effect_preimage_hash_v1(),
         expected_head,
         requirements.clone(),
@@ -644,6 +648,7 @@ fn test_parliament_authorization(
     let candidate_count = u32::try_from(candidates.len()).expect("candidate count fits u32");
     let sortition_session = BeaconSessionId::new(parliament_test_root(0xB0));
     let mut request_ids = Vec::with_capacity(requirements.len());
+    let mut registrations = Vec::with_capacity(requirements.len());
     for requirement in &requirements {
         let election_attempt_id =
             BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0);
@@ -661,10 +666,14 @@ fn test_parliament_authorization(
         )
         .expect("construct deterministic sortition request");
         request_ids.push(request.id);
-        attempt
-            .register_sortition_request(governance_attempt_id, 0, request, candidates.clone())
-            .expect("register deterministic sortition request");
+        registrations.push(ParliamentSortitionRequestRegistrationV1 {
+            sequence: 0,
+            request,
+        });
     }
+    attempt
+        .register_sortition_request_batch(governance_attempt_id, registrations, candidates.clone())
+        .expect("register deterministic sortition request batch");
     request_ids.sort_unstable();
     let sortition_pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));
     attempt

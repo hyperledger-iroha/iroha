@@ -13,6 +13,7 @@ import static org.junit.Assert.assertTrue;
 import java.io.File;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.HashMap;
@@ -23,6 +24,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import org.hyperledger.iroha.android.client.ParliamentApiV1;
 import org.junit.Test;
 
 public final class ParliamentTimedOvnWalletV1Tests {
@@ -105,6 +107,7 @@ public final class ParliamentTimedOvnWalletV1Tests {
     assertArrayEquals(filled(32, 1), anchor.networkId());
     assertArrayEquals(filled(32, 3), anchor.trustedCheckpointContextId());
     assertArrayEquals(filled(32, 5), anchor.expectedBallotAttemptId());
+    assertEquals(BigInteger.valueOf(7L), anchor.trustedCheckpointHeight());
     final byte[] returned = anchor.networkId();
     java.util.Arrays.fill(returned, (byte) 8);
     assertArrayEquals(filled(32, 1), anchor.networkId());
@@ -116,7 +119,54 @@ public final class ParliamentTimedOvnWalletV1Tests {
         () -> new ParliamentTimedOvnCastingTrustAnchorV1(network, 0, context, ballot));
     assertThrows(
         IllegalArgumentException.class,
+        () ->
+            new ParliamentTimedOvnCastingTrustAnchorV1(
+                network, BigInteger.ZERO, context, ballot));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new ParliamentTimedOvnCastingTrustAnchorV1(
+                network, BigInteger.ONE.shiftLeft(64), context, ballot));
+    assertThrows(
+        IllegalArgumentException.class,
         () -> new ParliamentTimedOvnCastingTrustAnchorV1(network, 7, context, new byte[32]));
+  }
+
+  @Test
+  public void trustAnchorAdmitsAndPromotesMaximumU64Height() {
+    final BigInteger maximumU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+    final ParliamentTimedOvnCastingTrustAnchorV1 anchor =
+        new ParliamentTimedOvnCastingTrustAnchorV1(
+            filled(32, 1), maximumU64, filled(32, 3), filled(32, 5));
+    assertEquals(maximumU64, anchor.trustedCheckpointHeight());
+
+    final ParliamentTimedOvnCastingTrustAnchorV1 promoted =
+        trustAnchor()
+            .promoted(
+                new ParliamentApiV1.TimedOvnCastingProofPageVerification(
+                    maximumU64, filled(32, 0x22), false));
+    assertEquals(maximumU64, promoted.trustedCheckpointHeight());
+    assertArrayEquals(filled(32, 0x22), promoted.trustedCheckpointContextId());
+  }
+
+  @Test
+  public void pageVerificationReturnsNativeAuthenticatedPromotionWithoutSeedAccess() {
+    final FakeBackend backend = new FakeBackend(true);
+    backend.pageVerification =
+        new ParliamentApiV1.TimedOvnCastingProofPageVerification(
+            BigInteger.valueOf(70L), filled(32, 0x22), true);
+    final ParliamentTimedOvnWalletV1 wallet =
+        ParliamentTimedOvnWalletV1.withBackendForTests(backend);
+
+    final ParliamentApiV1.TimedOvnCastingProofPageVerification verification =
+        wallet.verifyCastingProofPageV1(new byte[] {7}, trustAnchor());
+    assertEquals(BigInteger.valueOf(70L), verification.evaluatedBlockHeight);
+    assertArrayEquals(filled(32, 0x22), verification.evaluatedContextId());
+    assertTrue(verification.moreAvailable);
+    final ParliamentTimedOvnCastingTrustAnchorV1 promoted = trustAnchor().promoted(verification);
+    assertEquals(BigInteger.valueOf(70L), promoted.trustedCheckpointHeight());
+    assertArrayEquals(filled(32, 0x22), promoted.trustedCheckpointContextId());
+    assertNull(wallet.seedHandle("never-opened"));
   }
 
   @Test
@@ -195,6 +245,14 @@ public final class ParliamentTimedOvnWalletV1Tests {
             long.class,
             byte[].class,
             byte[].class);
+    final Method verifyPage =
+        endpoint.getDeclaredMethod(
+            "nativeVerifyCastingProofPageV1",
+            byte[].class,
+            byte[].class,
+            long.class,
+            byte[].class,
+            byte[].class);
     final Method registration =
         endpoint.getDeclaredMethod(
             "nativeRegistrationFromProofV1",
@@ -218,9 +276,10 @@ public final class ParliamentTimedOvnWalletV1Tests {
             int.class);
     assertEquals(int.class, abi.getReturnType());
     assertEquals(boolean.class, verify.getReturnType());
+    assertEquals(byte[].class, verifyPage.getReturnType());
     assertEquals(byte[].class, registration.getReturnType());
     assertEquals(byte[].class, ballot.getReturnType());
-    for (final Method method : new Method[] {abi, verify, registration, ballot}) {
+    for (final Method method : new Method[] {abi, verifyPage, verify, registration, ballot}) {
       assertTrue(Modifier.isPrivate(method.getModifiers()));
       assertTrue(Modifier.isStatic(method.getModifiers()));
       assertTrue(Modifier.isNative(method.getModifiers()));
@@ -249,6 +308,7 @@ public final class ParliamentTimedOvnWalletV1Tests {
             StandardCharsets.UTF_8);
     final String[] symbols = {
       "Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion",
+      "Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofPageV1",
       "Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1",
       "Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1",
       "Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1",
@@ -260,6 +320,7 @@ public final class ParliamentTimedOvnWalletV1Tests {
         new String[] {
           "CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint",
           "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1",
+          "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1",
           "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1",
           "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1",
           "AUTHORITY_UTF8_MAX_BYTES_V1",
@@ -269,6 +330,7 @@ public final class ParliamentTimedOvnWalletV1Tests {
           "clear_parliament_jni_exception",
           ".filter(|choice| *choice <= 2)",
           "verified_casting_context_from_proof_v1",
+          "verified_casting_proof_page_v1",
           "registration_from_verified_context_v1",
           "ballot_from_verified_context_v1",
         }) {
@@ -317,6 +379,7 @@ public final class ParliamentTimedOvnWalletV1Tests {
     private final Map<String, Object> locks = new HashMap<>();
     private int nextGeneration = 1;
     private int registrationBytes = ParliamentTimedOvnWalletV1.REGISTRATION_RECORD_BYTES;
+    private ParliamentApiV1.TimedOvnCastingProofPageVerification pageVerification;
     private ParliamentTimedOvnBallotChoiceV1 lastChoice;
     private byte[] lastProof;
     private boolean blockRegistration;
@@ -366,6 +429,15 @@ public final class ParliamentTimedOvnWalletV1Tests {
     }
 
     @Override
+    public ParliamentApiV1.TimedOvnCastingProofPageVerification verifyCastingProofPage(
+        final byte[] proofResponse,
+        final ParliamentTimedOvnCastingTrustAnchorV1 trustAnchor) {
+      assertTrue(proofResponse.length > 0);
+      assertEquals(BigInteger.valueOf(7L), trustAnchor.trustedCheckpointHeight());
+      return pageVerification;
+    }
+
+    @Override
     public byte[] registration(
         final byte[] proofResponse,
         final ParliamentTimedOvnCastingTrustAnchorV1 trustAnchor,
@@ -411,7 +483,7 @@ public final class ParliamentTimedOvnWalletV1Tests {
         final ParliamentTimedOvnCastingTrustAnchorV1 trustAnchor,
         final String authority) {
       assertTrue(proofResponse.length > 0);
-      assertEquals(7L, trustAnchor.trustedCheckpointHeight());
+      assertEquals(BigInteger.valueOf(7L), trustAnchor.trustedCheckpointHeight());
       assertEquals(AUTHORITY, authority);
       lastProof = proofResponse;
     }

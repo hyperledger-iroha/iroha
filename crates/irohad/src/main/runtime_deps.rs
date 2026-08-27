@@ -150,14 +150,6 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn sorafs_node::MusubiProviderAttestationInventoryRuntimeV1>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ThresholdSignerStartupReadinessV1 {
-    Ready,
-    ParliamentTleShareUnavailable {
-        key_session_id: iroha_core::tle_release::TleKeySessionId,
-    },
-}
-
 fn require_global_beacon_signer_for_local_seat_v1(
     local_has_committee_seat: bool,
     signer_is_resolved: bool,
@@ -168,23 +160,25 @@ fn require_global_beacon_signer_for_local_seat_v1(
     Ok(())
 }
 
-fn parliament_tle_signer_readiness_for_local_seat_v1(
-    key_session_id: iroha_core::tle_release::TleKeySessionId,
+fn require_parliament_tle_signer_for_local_seat_v1(
     local_has_committee_seat: bool,
     signer_is_resolved: bool,
-) -> ThresholdSignerStartupReadinessV1 {
+) -> Result<(), &'static str> {
     if local_has_committee_seat && !signer_is_resolved {
-        ThresholdSignerStartupReadinessV1::ParliamentTleShareUnavailable { key_session_id }
-    } else {
-        ThresholdSignerStartupReadinessV1::Ready
+        return Err("local Parliament TLE committee seat has no resolved partial-release signer");
     }
+    Ok(())
 }
 
+/// Validate runtime custody for every active threshold session assigned to the local peer.
+///
+/// Private timed-OVN ballots have no plaintext or manual-opening fallback, so a local seat in the
+/// active Parliament TLE roster is not operational without its runtime partial-release signer.
 fn validate_threshold_signer_startup_readiness_v1(
     state: &iroha_core::state::State,
     local_peer: &PeerId,
     runtime_deps: &IrohaRuntimeDeps,
-) -> Result<ThresholdSignerStartupReadinessV1, &'static str> {
+) -> Result<(), &'static str> {
     use iroha_core::state::WorldReadOnly as _;
 
     let world = state.world_view();
@@ -217,7 +211,7 @@ fn validate_threshold_signer_startup_readiness_v1(
     }
 
     let Some(tle_key_session_id) = world.active_tle_key_session() else {
-        return Ok(ThresholdSignerStartupReadinessV1::Ready);
+        return Ok(());
     };
     let tle_session = world
         .tle_key_sessions()
@@ -230,12 +224,11 @@ fn validate_threshold_signer_startup_readiness_v1(
     if tle_session.network_id != *state.network_id_ref().as_bytes() {
         return Err("active Parliament TLE key session belongs to another network");
     }
-    Ok(parliament_tle_signer_readiness_for_local_seat_v1(
-        tle_key_session_id,
+    require_parliament_tle_signer_for_local_seat_v1(
         tle_session.roster_hash == topology_roster_hash
             && topology.iter().any(|peer| peer == local_peer),
         runtime_deps.parliament_tle_partial_release_signer.is_some(),
-    ))
+    )
 }
 macro_rules! define_runtime_dep_setters_v1 {
     (
@@ -329,10 +322,11 @@ impl IrohaRuntimeDeps {
     /// Build the opaque Core coordinator used by Torii's authenticated local
     /// Parliament partial-release route.
     ///
-    /// A missing deployment provider produces a fail-closed coordinator. The
-    /// provider trait object is cloned only as an `Arc`; secret-share material
-    /// remains inside the runtime implementation and is never projected into
-    /// daemon configuration or route state.
+    /// Ordinary startup rejects a missing provider when the committed active
+    /// TLE roster assigns this node a seat. A non-seated node still receives a
+    /// fail-closed coordinator. The provider trait object is cloned only as an
+    /// `Arc`; secret-share material remains inside the runtime implementation
+    /// and is never projected into daemon configuration or route state.
     pub(crate) fn parliament_tle_release_coordinator(
         &self,
     ) -> Arc<iroha_core::tle_release::TleReleaseCoordinatorV1> {
@@ -705,7 +699,7 @@ mod parliament_tle_release_tests {
     }
 
     #[test]
-    fn local_threshold_committee_seats_surface_missing_runtime_signers() {
+    fn local_threshold_committee_seats_fail_closed_without_runtime_signers() {
         assert_eq!(
             require_global_beacon_signer_for_local_seat_v1(true, false),
             Err("local global-beacon committee seat has no resolved partial signer")
@@ -719,16 +713,44 @@ mod parliament_tle_release_tests {
             Ok(())
         );
 
-        let session_id = iroha_core::tle_release::TleKeySessionId::new([0x71; 32]);
         assert_eq!(
-            parliament_tle_signer_readiness_for_local_seat_v1(session_id, true, false),
-            ThresholdSignerStartupReadinessV1::ParliamentTleShareUnavailable {
-                key_session_id: session_id,
-            }
+            require_parliament_tle_signer_for_local_seat_v1(true, false),
+            Err("local Parliament TLE committee seat has no resolved partial-release signer")
         );
         assert_eq!(
-            parliament_tle_signer_readiness_for_local_seat_v1(session_id, true, true),
-            ThresholdSignerStartupReadinessV1::Ready
+            require_parliament_tle_signer_for_local_seat_v1(true, true),
+            Ok(())
         );
+        assert_eq!(
+            require_parliament_tle_signer_for_local_seat_v1(false, false),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn threshold_signer_preflight_rejects_before_consensus_startup() {
+        let startup = include_str!("../main.rs")
+            .split_once("let sumeragi = if emergency_fast")
+            .expect("consensus startup branch")
+            .1
+            .split_once("let tx_gossiper = if emergency_fast")
+            .expect("consensus startup boundary")
+            .0;
+        let preflight = startup
+            .find("validate_threshold_signer_startup_readiness_v1")
+            .expect("threshold-signer startup preflight");
+        let consensus_start = startup.find("SumeragiStartArgs").expect("Sumeragi startup");
+        let guarded_preflight: String = startup[preflight..consensus_start]
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+
+        assert!(preflight < consensus_start);
+        assert!(
+            guarded_preflight
+                .contains(".map_err(|message|Report::new(StartError::StartP2p).attach(message))?;")
+        );
+        assert!(!startup.contains("ParliamentTleShareUnavailable"));
+        assert!(!startup.contains("local Parliament TLE committee seat is not operational"));
     }
 }

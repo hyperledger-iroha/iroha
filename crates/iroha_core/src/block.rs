@@ -8263,6 +8263,13 @@ pub(crate) mod valid {
                     "global beacon pulse differs from the authenticated block height, fixed protocol round, or network",
                 ));
             }
+            if world.parliament_attempts().iter().any(|(_, attempt)| {
+                attempt.classifies_beacon_pulse_unavailable_at(logical_beacon_id, pulse.height)
+            }) {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse arrives after Parliament terminally classified its slot as unavailable",
+                ));
+            }
             let parent_hash = block.header().prev_block_hash().ok_or_else(|| {
                 Self::npos_effects_error("global beacon pulse has no finalized parent anchor")
             })?;
@@ -8277,6 +8284,20 @@ pub(crate) mod valid {
             if world.global_beacon_pulses.get(&pulse.pulse_id).is_some() {
                 return Err(Self::npos_effects_error(
                     "global beacon pulse replays a pulse already in committed state",
+                ));
+            }
+            if world.global_beacon_pulse_slots.len() != world.global_beacon_pulses.len() {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse slot index differs from authoritative history",
+                ));
+            }
+            if world
+                .global_beacon_pulse_slots
+                .get(&(pulse.network_id, pulse.height))
+                .is_some()
+            {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse replays a network-height slot already in committed state",
                 ));
             }
             let active_session = world

@@ -714,6 +714,11 @@ enum RecoveredDecisionApplyInstallAuthority {
         _projection: Box<RecoveredDecisionApplyStagedStorageV1>,
         _effects: Vec<AdapterEffect>,
     },
+    ReleasedProjection {
+        _projection: Box<RecoveredDecisionApplyStagedStorageV1>,
+        _effects: Vec<AdapterEffect>,
+        _released: AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+    },
     Carrier {
         _authority: Box<(
             ProductionLifecycleAdapterStartupV1,
@@ -746,6 +751,21 @@ impl RecoveredDecisionApplyInstallError {
             reason,
             _authority: Box::new(RecoveredDecisionApplyInstallAuthority::Carrier {
                 _authority: authority,
+            }),
+        }
+    }
+    fn released_projection(
+        reason: &'static str,
+        projection: Box<RecoveredDecisionApplyStagedStorageV1>,
+        effects: Vec<AdapterEffect>,
+        released: AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+    ) -> Self {
+        Self {
+            reason,
+            _authority: Box::new(RecoveredDecisionApplyInstallAuthority::ReleasedProjection {
+                _projection: projection,
+                _effects: effects,
+                _released: released,
             }),
         }
     }

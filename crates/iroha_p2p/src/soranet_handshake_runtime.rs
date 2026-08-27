@@ -177,7 +177,7 @@ pub(crate) fn runtime_from_handshake(
 }
 
 #[cfg(test)]
-pub fn runtime_from_handshake_in_memory(
+pub(crate) fn runtime_from_handshake_in_memory(
     handshake: ActualSoranetHandshake,
 ) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
     runtime_from_handshake_with_store(handshake, |owner| {

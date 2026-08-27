@@ -2076,6 +2076,27 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     user_puzzle = user_config.split("pub struct SoranetHandshakePuzzle", 1)[1].split(
         "impl SoranetHandshakePuzzle", 1
     )[0]
+    client_pow_summary = client_api.split(
+        "pub struct SoranetHandshakePowSummary", 1
+    )[1].split("impl From<&'_ base::SoranetPow>", 1)[0]
+    client_puzzle_update = client_api.split(
+        "pub struct SoranetHandshakePuzzleUpdate", 1
+    )[1].split("impl SoranetHandshakePuzzleUpdate", 1)[0]
+    client_pow_update = client_api.split(
+        "pub struct SoranetHandshakePowUpdate", 1
+    )[1].split("impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary", 1)[0]
+    client_puzzle_summary_parser = client_api.split(
+        "impl<'a> FastFromJson<'a> for SoranetHandshakePuzzleSummary", 1
+    )[1].split("impl JsonDeserialize for SoranetHandshakePuzzleSummary", 1)[0]
+    client_puzzle_update_parser = client_api.split(
+        "fn parse_soranet_puzzle_update", 1
+    )[1].split("/// Directive describing how to update the handshake resume hash.", 1)[0]
+    client_pow_summary_parser = client_api.split(
+        "impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary", 1
+    )[1].split("impl JsonDeserialize for SoranetHandshakePowSummary", 1)[0]
+    client_pow_update_parser = client_api.split(
+        "impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate", 1
+    )[1].split("impl JsonDeserialize for SoranetHandshakePowUpdate", 1)[0]
 
     for stale in (
         "pow-optional",
@@ -2103,6 +2124,18 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "signed_ticket_public_key_hex" not in client_api
     assert "required: bool" not in user_pow
     assert "enabled: bool" not in user_puzzle
+    assert "pub required:" not in client_pow_summary
+    assert "pub puzzle: SoranetHandshakePuzzleSummary" in client_pow_summary
+    assert "pub enabled:" not in client_puzzle_update
+    assert "pub required:" not in client_pow_update
+    assert "unknown field" in client_puzzle_summary_parser
+    assert "unknown field" in client_puzzle_update_parser
+    assert "unknown field" in client_pow_summary_parser
+    assert "unknown field" in client_pow_update_parser
+    assert "_ => w.skip_value()?" not in client_puzzle_summary_parser
+    assert "_ => w.skip_value()?" not in client_puzzle_update_parser
+    assert "_ => w.skip_value()?" not in client_pow_summary_parser
+    assert "_ => w.skip_value()?" not in client_pow_update_parser
     parsed_user_pow = user_config.split("fn parse(self) -> actual::SoranetPow", 1)[1].split(
         "/// Puzzle configuration supplied at the user level.", 1
     )[0]
@@ -2120,8 +2153,8 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "if !value" in apply_config_update
     assert "Self::apply_pow_update(&mut handshake.pow, &pow_update)?" in apply_handshake_update
     assert "-> Result<(), String>" in apply_pow_update
-    assert "PoW admission is mandatory" in apply_pow_update
-    assert "Argon2 puzzle admission is mandatory" in apply_pow_update
+    assert "update.required" not in apply_pow_update
+    assert "puzzle_update.enabled" not in apply_pow_update
     assert "pow.required" not in apply_pow_update
     assert "pow.puzzle = None" not in apply_pow_update
 

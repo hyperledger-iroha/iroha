@@ -24645,6 +24645,167 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         )
     }
 
+    /// Request one exact, consensus-authenticated timed-OVN casting-proof page.
+    public func requestParliamentTimedOvnCastingProofV1(
+        ballotAttemptId: String,
+        trustedCheckpointHeight: UInt64,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiParliamentTimedOvnCastingProofResponseV1 {
+        let body = try ToriiParliamentAPIV1.timedOvnCastingProofRequestData(
+            trustedCheckpointHeight: trustedCheckpointHeight
+        )
+        let path = try ToriiParliamentAPIV1.timedOvnCastingProofPath(
+            ballotAttemptId: ballotAttemptId
+        )
+        let managedHeaders = [
+            "Accept", "Content-Type", "Accept-Encoding", "Content-Encoding",
+        ]
+        guard !defaultHeaders.keys.contains(where: { candidate in
+            managedHeaders.contains { $0.caseInsensitiveCompare(candidate) == .orderedSame }
+        }) else {
+            throw ToriiClientError.invalidPayload(
+                "Exact Parliament casting-proof headers cannot be overridden."
+            )
+        }
+        var request = try makeCanonicalAccountRequest(
+            path: path,
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+                "Accept-Encoding": "identity",
+            ],
+            canonicalAuth: canonicalAuth
+        )
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.httpShouldUsePipelining = false
+        let (data, _) = try await sendExactParliamentCastingProof(
+            request,
+            maximumBytes: ToriiParliamentAPIV1.maximumTimedOvnCastingProofResponseBytes
+        )
+        return try ToriiParliamentAPIV1.decodeTimedOvnCastingProofResponse(data)
+    }
+
+    /// Fetch one bounded checkpoint-promotion page for native wallet verification.
+    public func getParliamentTimedOvnCastingProofPageV1(
+        ballotAttemptId: String,
+        trustedCheckpointHeight: UInt64,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiParliamentTimedOvnCastingProofResponseV1 {
+        try await requestParliamentTimedOvnCastingProofV1(
+            ballotAttemptId: ballotAttemptId,
+            trustedCheckpointHeight: trustedCheckpointHeight,
+            canonicalAuth: canonicalAuth
+        )
+    }
+
+    /// Fetch, natively authenticate, and durably promote bounded proof pages until terminal.
+    ///
+    /// `persistCheckpoint` must return only after the promoted anchor is durable. The next exact
+    /// POST is not issued before that return. Timestamp and nonce must be left unpinned so every
+    /// page receives a fresh canonical anti-replay tuple.
+    public func requestParliamentTimedOvnCastingProofUntilTerminalV1(
+        ballotAttemptId: String,
+        initialTrustAnchor: ParliamentTimedOvnCastingTrustAnchorV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        persistCheckpoint: @escaping @Sendable (
+            ParliamentTimedOvnCastingTrustAnchorV1
+        ) async throws -> Void
+    ) async throws -> ToriiParliamentTimedOvnCastingProofTerminalV1 {
+        try await requestParliamentTimedOvnCastingProofUntilTerminalV1(
+            ballotAttemptId: ballotAttemptId,
+            initialTrustAnchor: initialTrustAnchor,
+            canonicalAuth: canonicalAuth,
+            verifyPage: { response, anchor in
+                try NoritoNativeBridge.shared.parliamentTimedOvnVerifyCastingProofPageV1(
+                    castingProofResponseNorito: response.canonicalNorito,
+                    trustAnchor: anchor
+                )
+            },
+            persistCheckpoint: persistCheckpoint
+        )
+    }
+
+    func requestParliamentTimedOvnCastingProofUntilTerminalV1(
+        ballotAttemptId: String,
+        initialTrustAnchor: ParliamentTimedOvnCastingTrustAnchorV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        verifyPage: @escaping @Sendable (
+            ToriiParliamentTimedOvnCastingProofResponseV1,
+            ParliamentTimedOvnCastingTrustAnchorV1
+        ) throws -> ParliamentTimedOvnCastingProofPageVerificationV1,
+        persistCheckpoint: @escaping @Sendable (
+            ParliamentTimedOvnCastingTrustAnchorV1
+        ) async throws -> Void
+    ) async throws -> ToriiParliamentTimedOvnCastingProofTerminalV1 {
+        guard canonicalAuth.timestampMs == nil, canonicalAuth.nonce == nil else {
+            throw ToriiClientError.invalidPayload(
+                "Casting-proof paging requires unpinned canonical authentication."
+            )
+        }
+        let initialHeight = initialTrustAnchor.trustedCheckpointHeight
+        var currentAnchor = initialTrustAnchor
+        var verifiedPageCount = 0
+        while verifiedPageCount < ToriiParliamentAPIV1.maximumTimedOvnCastingProofPages {
+            let response = try await requestParliamentTimedOvnCastingProofV1(
+                ballotAttemptId: ballotAttemptId,
+                trustedCheckpointHeight: currentAnchor.trustedCheckpointHeight,
+                canonicalAuth: canonicalAuth
+            )
+            let verification = try verifyPage(response, currentAnchor)
+            let currentHeight = currentAnchor.trustedCheckpointHeight
+            guard verification.evaluatedBlockHeight >= currentHeight else {
+                throw ToriiClientError.invalidPayload(
+                    "Native casting-proof verification regressed the checkpoint height."
+                )
+            }
+            let pageAdvance = verification.evaluatedBlockHeight - currentHeight
+            guard pageAdvance <=
+                    ToriiParliamentAPIV1.maximumTimedOvnCastingProofPageHeightAdvance else {
+                throw ToriiClientError.invalidPayload(
+                    "Native casting-proof verification exceeded the page height bound."
+                )
+            }
+            guard verification.evaluatedBlockHeight - initialHeight <=
+                    ToriiParliamentAPIV1.maximumTimedOvnCastingProofHeightAdvance else {
+                throw ToriiClientError.invalidPayload(
+                    "Native casting-proof verification exceeded the aggregate height bound."
+                )
+            }
+            if verification.moreAvailable {
+                guard pageAdvance > 0 else {
+                    throw ToriiClientError.invalidPayload(
+                        "A nonterminal casting-proof page did not advance its checkpoint."
+                    )
+                }
+            } else if pageAdvance == 0 {
+                guard verification.evaluatedContextID ==
+                        currentAnchor.trustedCheckpointContextID else {
+                    throw ToriiClientError.invalidPayload(
+                        "A terminal casting-proof page changed context without advancing height."
+                    )
+                }
+            }
+            let promotedAnchor = try currentAnchor.promoted(by: verification)
+            try await persistCheckpoint(promotedAnchor)
+            verifiedPageCount += 1
+            if !verification.moreAvailable {
+                return ToriiParliamentTimedOvnCastingProofTerminalV1(
+                    response: response,
+                    verificationAnchor: currentAnchor,
+                    promotedTrustAnchor: promotedAnchor,
+                    verification: verification,
+                    verifiedPageCount: verifiedPageCount
+                )
+            }
+            currentAnchor = promotedAnchor
+        }
+        throw ToriiClientError.invalidPayload(
+            "Parliament casting-proof page limit was reached."
+        )
+    }
+
     /// Fetch the complete public transcript for one currently authorized TLE release.
     public func getParliamentTleReleaseContextV1(
         ballotAttemptId: String,
@@ -27790,6 +27951,129 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
+    }
+
+    private func sendExactParliamentCastingProof(
+        _ request: URLRequest,
+        maximumBytes: Int
+    ) async throws -> (Data, HTTPURLResponse) {
+        precondition(maximumBytes > 0)
+        if let url = request.url,
+           let violation = IrohaTransportSecurity.httpViolation(
+               context: "ToriiClient Parliament casting proof",
+               baseURL: baseURL,
+               targetURL: url,
+               headers: request.allHTTPHeaderFields ?? [:],
+               body: request.httpBody
+           ) {
+            throw ToriiClientError.invalidPayload(violation)
+        }
+
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(
+                for: request,
+                delegate: ToriiRejectRedirectTaskDelegate.shared
+            )
+        } catch {
+            if error is CancellationError || Self.isCancelledTransportError(error) {
+                throw CancellationError()
+            }
+            throw ToriiClientError.transport(error)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            bytes.task.cancel()
+            throw ToriiClientError.invalidResponse
+        }
+        recordObservedServerClock(from: http, observedAtLocalMs: currentEpochMs())
+
+        if http.statusCode != 200 {
+            var errorBody = Data()
+            do {
+                for try await byte in bytes {
+                    guard errorBody.count < 64 * 1024 else {
+                        bytes.task.cancel()
+                        break
+                    }
+                    errorBody.append(byte)
+                }
+            } catch {
+                bytes.task.cancel()
+                if error is CancellationError { throw CancellationError() }
+                throw ToriiClientError.transport(error)
+            }
+            throw ToriiClientError.httpStatus(
+                code: http.statusCode,
+                message: Self.httpStatusMessage(response: http, responseBody: errorBody),
+                rejectCode: rejectCode(from: http)
+            )
+        }
+
+        guard http.value(forHTTPHeaderField: "Content-Type") == "application/x-norito" else {
+            bytes.task.cancel()
+            throw ToriiClientError.invalidPayload(
+                "Parliament timed-OVN casting proof response Content-Type must be exactly application/x-norito."
+            )
+        }
+        let hasContentEncoding = http.allHeaderFields.keys.contains { key in
+            guard let name = key as? String else { return false }
+            return name.caseInsensitiveCompare("Content-Encoding") == .orderedSame
+        }
+        guard !hasContentEncoding else {
+            bytes.task.cancel()
+            throw ToriiClientError.invalidPayload(
+                "Parliament timed-OVN casting proof response must use identity encoding."
+            )
+        }
+
+        let declaredLength: Int?
+        if let rawLength = http.value(forHTTPHeaderField: "Content-Length") {
+            let canonical = !rawLength.isEmpty
+                && rawLength.utf8.allSatisfy { (48...57).contains($0) }
+                && (rawLength == "0" || !rawLength.hasPrefix("0"))
+            guard canonical,
+                  let value = Int(rawLength),
+                  value <= maximumBytes else {
+                bytes.task.cancel()
+                throw ToriiClientError.invalidPayload(
+                    "Parliament timed-OVN casting proof Content-Length is invalid or exceeds 8 MiB."
+                )
+            }
+            declaredLength = value
+        } else {
+            declaredLength = nil
+        }
+
+        var data = Data()
+        data.reserveCapacity(min(declaredLength ?? 64 * 1024, 64 * 1024))
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumBytes else {
+                    bytes.task.cancel()
+                    throw ToriiClientError.invalidPayload(
+                        "Parliament timed-OVN casting proof response exceeds its 8 MiB bound."
+                    )
+                }
+                data.append(byte)
+            }
+        } catch let error as ToriiClientError {
+            bytes.task.cancel()
+            throw error
+        } catch {
+            bytes.task.cancel()
+            if error is CancellationError { throw CancellationError() }
+            throw ToriiClientError.transport(error)
+        }
+        guard !data.isEmpty else {
+            throw ToriiClientError.emptyBody
+        }
+        if let declaredLength, declaredLength != data.count {
+            throw ToriiClientError.invalidPayload(
+                "Parliament timed-OVN casting proof Content-Length does not match the body."
+            )
+        }
+        return (data, http)
     }
 
     private func send(_ request: URLRequest,
