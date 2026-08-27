@@ -16,10 +16,7 @@ use crate::{
 use blake2::{Blake2b, digest::consts::U32};
 use hex;
 use iroha_config::{
-    parameters::{
-        actual::{Snapshot as Config, SnapshotBootstrapPolicy, SnapshotResourcePolicy},
-        defaults,
-    },
+    parameters::actual::{Snapshot as Config, SnapshotBootstrapPolicy, SnapshotResourcePolicy},
     snapshot::Mode,
 };
 use iroha_crypto::{
@@ -378,8 +375,6 @@ std::thread_local! {
     static SNAPSHOT_BLOCK_HASH_VECTOR_CLONES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-/// Default chunk size used to derive snapshot Merkle metadata.
-const _DEFAULT_MERKLE_CHUNK_SIZE: NonZeroUsize = defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES;
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 enum SnapshotMerkleError {
     /// Snapshot Merkle metadata missing
@@ -2126,7 +2121,7 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
             key,
             "sumeragi_v2_bootstrap" | "commit_topology" | "prev_commit_topology"
         ),
-        CanonicalWsvPath::World => matches!(key, "consensus_evidence" | "vrf_epochs"),
+        CanonicalWsvPath::World => matches!(key, "consensus_evidence"),
         CanonicalWsvPath::Parameters | CanonicalWsvPath::Sumeragi | CanonicalWsvPath::Other => {
             false
         }
@@ -4829,9 +4824,6 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     // Consensus evidence is asynchronously enriched recovery data, not WSV data committed by
     // the block itself. Including it makes historical checkpoints depend on later peer input.
     world.remove("consensus_evidence");
-    // VRF epoch snapshots are maintained by consensus message handling outside
-    // block application. Kura replay verifies block-applied WSV data only.
-    world.remove("vrf_epochs");
 }
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
 #[cfg(any(test, feature = "iroha-core-tests"))]

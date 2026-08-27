@@ -56,6 +56,7 @@ const DEFAULT_LADDER_PRESETS_JSON: &str =
     include_str!("../../../../fixtures/taikai/ladder_presets.json");
 const TAIKAI_BUNDLE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.taikai.bundle.v1";
 const MAX_TAIKAI_POLICY_DOCUMENT_BYTES: u64 = 1024 * 1024;
+const MAX_TAIKAI_POLICY_OUTPUT_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Bundle a Taikai segment into a CAR archive and Norito envelope.
@@ -876,14 +877,21 @@ struct PolicyArtifactBytes<'a> {
     bytes: &'a [u8],
 }
 
+#[derive(Debug)]
 struct StagedPolicyArtifact {
     path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct PolicyOutputSnapshot {
+    backup: StagedPolicyArtifact,
+    target_metadata: fs::Metadata,
 }
 
 impl StagedPolicyArtifact {
     fn publish(&mut self, target: &Path) -> std::io::Result<()> {
         let path = self.path.as_ref().expect("staged artifact is unpublished");
-        fs::rename(path, target)?;
+        atomic_replace_policy_artifact(path, target)?;
         self.path = None;
         Ok(())
     }
@@ -891,6 +899,94 @@ impl StagedPolicyArtifact {
     fn restore(&mut self, target: &Path) -> std::io::Result<()> {
         self.publish(target)
     }
+
+    fn set_permissions(&self, permissions: fs::Permissions) -> std::io::Result<()> {
+        let path = self.path.as_ref().expect("staged artifact is unpublished");
+        let mut options = OpenOptions::new();
+        options.write(true);
+        set_policy_no_follow(&mut options);
+        let file = options.open(path)?;
+        let metadata = file.metadata()?;
+        if policy_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() {
+            return Err(std::io::Error::other(
+                "staged policy artifact is not a direct regular file",
+            ));
+        }
+        file.set_permissions(permissions)?;
+        file.sync_all()
+    }
+
+    fn metadata(&self) -> std::io::Result<fs::Metadata> {
+        let path = self.path.as_ref().expect("staged artifact is unpublished");
+        let metadata = fs::symlink_metadata(path)?;
+        if policy_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() {
+            return Err(std::io::Error::other(
+                "staged policy artifact is not a direct regular file",
+            ));
+        }
+        Ok(metadata)
+    }
+}
+
+#[cfg(unix)]
+fn atomic_replace_policy_artifact(staged: &Path, target: &Path) -> std::io::Result<()> {
+    fs::rename(staged, target)
+}
+
+#[cfg(windows)]
+fn windows_policy_wide_path(path: &Path) -> std::io::Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt as _;
+    let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if wide.contains(&0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "policy artifact path contains an interior NUL",
+        ));
+    }
+    wide.push(0);
+    Ok(wide)
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+#[allow(unsafe_code)]
+unsafe extern "system" {
+    #[link_name = "MoveFileExW"]
+    fn move_policy_artifact_file(
+        existing_path: *const u16,
+        replacement_path: *const u16,
+        flags: u32,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn atomic_replace_policy_artifact(staged: &Path, target: &Path) -> std::io::Result<()> {
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+    let staged_wide = windows_policy_wide_path(staged)?;
+    let target_wide = windows_policy_wide_path(target)?;
+    // SAFETY: both buffers are NUL-terminated and remain alive for the call.
+    // The staging file lives beside the target, so the move stays on one volume.
+    let succeeded = unsafe {
+        move_policy_artifact_file(
+            staged_wide.as_ptr(),
+            target_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if succeeded == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn atomic_replace_policy_artifact(_staged: &Path, _target: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic policy artifact replacement is unsupported on this platform",
+    ))
 }
 
 impl Drop for StagedPolicyArtifact {
@@ -907,6 +1003,18 @@ fn publish_policy_artifacts_with_hook<F>(
 ) -> Result<()>
 where
     F: FnOnce() -> Result<()>,
+{
+    publish_policy_artifacts_with_hooks(artifacts, before_publish, |_| Ok(()))
+}
+
+fn publish_policy_artifacts_with_hooks<F, G>(
+    artifacts: &[PolicyArtifactBytes<'_>],
+    before_publish: F,
+    mut before_artifact_publish: G,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+    G: FnMut(usize) -> Result<()>,
 {
     for artifact in artifacts {
         validate_policy_output_target(artifact.target, artifact.label)?;
@@ -927,14 +1035,54 @@ where
     }
 
     let mut backups = Vec::with_capacity(artifacts.len());
-    for artifact in artifacts {
-        backups.push(snapshot_policy_output(artifact.target, artifact.label)?);
+    for (index, artifact) in artifacts.iter().enumerate() {
+        backups.push(snapshot_policy_output(
+            artifact.target,
+            artifact.label,
+            &mut staged[index],
+        )?);
     }
+    let mut published_metadata = (0..artifacts.len()).map(|_| None).collect::<Vec<_>>();
 
     let mut published = 0;
     for (index, artifact) in artifacts.iter().enumerate() {
-        if let Err(error) = staged[index].publish(artifact.target) {
-            let rollback_error = rollback_policy_artifacts(artifacts, &mut backups, published);
+        let mut staged_metadata = None;
+        let publish_result = before_artifact_publish(index)
+            .and_then(|()| {
+                revalidate_policy_output_snapshot(
+                    artifact.target,
+                    artifact.label,
+                    backups[index].as_ref(),
+                )
+            })
+            .and_then(|()| {
+                staged_metadata = Some(staged[index].metadata().wrap_err_with(|| {
+                    format!(
+                        "failed to inspect staged {} before publication",
+                        artifact.label
+                    )
+                })?);
+                staged[index]
+                    .publish(artifact.target)
+                    .map_err(eyre::Report::from)
+            })
+            .and_then(|()| {
+                published_metadata[index] = Some(verify_policy_artifact_publication(
+                    artifact.target,
+                    artifact.label,
+                    staged_metadata
+                        .as_ref()
+                        .expect("published artifact has staged metadata"),
+                )?);
+                Ok(())
+            })
+            .and_then(|()| sync_policy_output_parent(artifact.target).map_err(eyre::Report::from));
+        if let Err(error) = publish_result {
+            if staged[index].path.is_none() {
+                published += 1;
+            }
+            let rollback_error =
+                rollback_policy_artifacts(artifacts, &mut backups, &published_metadata, published);
             let mut message = format!(
                 "failed to atomically publish {} `{}`: {error}",
                 artifact.label,
@@ -952,16 +1100,26 @@ where
 
 fn rollback_policy_artifacts(
     artifacts: &[PolicyArtifactBytes<'_>],
-    backups: &mut [Option<StagedPolicyArtifact>],
+    backups: &mut [Option<PolicyOutputSnapshot>],
+    published_metadata: &[Option<fs::Metadata>],
     published: usize,
 ) -> Result<()> {
     let mut failures = Vec::new();
     for index in (0..published).rev() {
         let target = artifacts[index].target;
-        let result = match backups[index].as_mut() {
-            Some(backup) => backup.restore(target),
-            None => fs::remove_file(target),
-        };
+        let result = published_metadata[index].as_ref().ok_or_else(|| {
+            std::io::Error::other("published file identity could not be established")
+        });
+        let result = result
+            .and_then(|metadata| {
+                revalidate_policy_artifact_before_rollback(target, artifacts[index].label, metadata)
+                    .map_err(|error| std::io::Error::other(error.to_string()))
+            })
+            .and_then(|()| match backups[index].as_mut() {
+                Some(snapshot) => snapshot.backup.restore(target),
+                None => fs::remove_file(target),
+            })
+            .and_then(|()| sync_policy_output_parent(target));
         if let Err(error) = result {
             failures.push(format!("`{}`: {error}", target.display()));
         }
@@ -976,8 +1134,84 @@ fn rollback_policy_artifacts(
     }
 }
 
-fn snapshot_policy_output(path: &Path, label: &str) -> Result<Option<StagedPolicyArtifact>> {
-    let metadata = match fs::symlink_metadata(path) {
+fn verify_policy_artifact_publication(
+    path: &Path,
+    label: &str,
+    staged_metadata: &fs::Metadata,
+) -> Result<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to inspect published {label} `{}`", path.display()))?;
+    if policy_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() {
+        return Err(eyre!(
+            "published {label} `{}` is not a direct regular file",
+            path.display()
+        ));
+    }
+    if !policy_metadata_denotes_same_file(staged_metadata, &metadata) {
+        return Err(eyre!(
+            "published {label} `{}` does not denote the staged replacement",
+            path.display()
+        ));
+    }
+    Ok(metadata)
+}
+
+fn revalidate_policy_artifact_before_rollback(
+    path: &Path,
+    label: &str,
+    published_metadata: &fs::Metadata,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to revalidate published {label} `{}` before rollback",
+            path.display()
+        )
+    })?;
+    if policy_metadata_is_symlink_or_reparse(&metadata)
+        || !metadata.is_file()
+        || !policy_input_metadata_state_unchanged(published_metadata, &metadata)
+    {
+        return Err(eyre!(
+            "published {label} `{}` no longer denotes the unchanged file published by this transaction; refusing rollback",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn snapshot_policy_output(
+    path: &Path,
+    label: &str,
+    replacement: &mut StagedPolicyArtifact,
+) -> Result<Option<PolicyOutputSnapshot>> {
+    snapshot_policy_output_with_hooks(path, label, replacement, || Ok(()), || Ok(()))
+}
+
+fn snapshot_policy_output_with_hook<F>(
+    path: &Path,
+    label: &str,
+    replacement: &mut StagedPolicyArtifact,
+    before_read: F,
+) -> Result<Option<PolicyOutputSnapshot>>
+where
+    F: FnOnce() -> Result<()>,
+{
+    snapshot_policy_output_with_hooks(path, label, replacement, || Ok(()), before_read)
+}
+
+#[allow(clippy::too_many_lines)]
+fn snapshot_policy_output_with_hooks<F, G>(
+    path: &Path,
+    label: &str,
+    replacement: &mut StagedPolicyArtifact,
+    before_open: F,
+    before_read: G,
+) -> Result<Option<PolicyOutputSnapshot>>
+where
+    F: FnOnce() -> Result<()>,
+    G: FnOnce() -> Result<()>,
+{
+    let path_metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
@@ -987,12 +1221,13 @@ fn snapshot_policy_output(path: &Path, label: &str) -> Result<Option<StagedPolic
             ));
         }
     };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if policy_metadata_is_symlink_or_reparse(&path_metadata) || !path_metadata.is_file() {
         return Err(eyre!(
             "{label} `{}` must be a regular file and must not be a symlink",
             path.display()
         ));
     }
+    before_open()?;
 
     let mut options = OpenOptions::new();
     options.read(true);
@@ -1003,34 +1238,154 @@ fn snapshot_policy_output(path: &Path, label: &str) -> Result<Option<StagedPolic
     let opened_metadata = file
         .metadata()
         .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?;
-    if !opened_metadata.is_file() {
+    if policy_metadata_is_symlink_or_reparse(&opened_metadata) || !opened_metadata.is_file() {
         return Err(eyre!(
             "{label} `{}` changed to a non-regular file while preparing output",
             path.display()
         ));
     }
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .wrap_err_with(|| format!("failed to snapshot existing {label} `{}`", path.display()))?;
-    let staged = stage_policy_artifact(path, &format!("{label} rollback snapshot"), &bytes)?;
-    fs::set_permissions(
-        staged.path.as_ref().expect("snapshot remains staged"),
-        metadata.permissions(),
-    )
-    .wrap_err_with(|| {
+    ensure_same_policy_input_state(
+        &path_metadata,
+        &opened_metadata,
+        path,
+        label,
+        "while it was being opened for a rollback snapshot",
+    )?;
+    let advertised_len = opened_metadata.len();
+    if advertised_len > MAX_TAIKAI_POLICY_OUTPUT_SNAPSHOT_BYTES {
+        return Err(eyre!(
+            "existing {label} `{}` exceeds the {}-byte rollback snapshot limit",
+            path.display(),
+            MAX_TAIKAI_POLICY_OUTPUT_SNAPSHOT_BYTES
+        ));
+    }
+    let capacity = usize::try_from(advertised_len).expect("bounded snapshot length fits usize");
+    let mut bytes = Vec::with_capacity(capacity);
+    before_read()?;
+    {
+        let mut limited = (&mut file).take(MAX_TAIKAI_POLICY_OUTPUT_SNAPSHOT_BYTES + 1);
+        limited.read_to_end(&mut bytes).wrap_err_with(|| {
+            format!("failed to snapshot existing {label} `{}`", path.display())
+        })?;
+    }
+    let bytes_read = u64::try_from(bytes.len()).expect("bounded snapshot length fits u64");
+    if bytes_read > MAX_TAIKAI_POLICY_OUTPUT_SNAPSHOT_BYTES {
+        return Err(eyre!(
+            "existing {label} `{}` grew beyond the {}-byte rollback snapshot limit while reading",
+            path.display(),
+            MAX_TAIKAI_POLICY_OUTPUT_SNAPSHOT_BYTES
+        ));
+    }
+    let final_opened_metadata = file.metadata().wrap_err_with(|| {
         format!(
-            "failed to preserve permissions for {label} `{}`",
+            "failed to re-inspect opened {label} `{}` after snapshotting",
             path.display()
         )
     })?;
-    Ok(Some(staged))
+    let final_path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to re-inspect existing {label} `{}` after snapshotting",
+            path.display()
+        )
+    })?;
+    if policy_metadata_is_symlink_or_reparse(&final_opened_metadata)
+        || !final_opened_metadata.is_file()
+        || policy_metadata_is_symlink_or_reparse(&final_path_metadata)
+        || !final_path_metadata.is_file()
+        || final_opened_metadata.len() != advertised_len
+        || final_path_metadata.len() != advertised_len
+        || bytes_read != advertised_len
+    {
+        return Err(eyre!(
+            "existing {label} `{}` changed length or file type while it was being snapshotted (advertised {advertised_len} bytes, read {bytes_read} bytes, final opened length {} bytes, final path length {} bytes)",
+            path.display(),
+            final_opened_metadata.len(),
+            final_path_metadata.len()
+        ));
+    }
+    ensure_same_policy_input_state(
+        &opened_metadata,
+        &final_opened_metadata,
+        path,
+        label,
+        "while it was being snapshotted",
+    )?;
+    ensure_same_policy_input_state(
+        &final_opened_metadata,
+        &final_path_metadata,
+        path,
+        label,
+        "before its rollback snapshot was staged",
+    )?;
+
+    let staged = stage_policy_artifact(path, &format!("{label} rollback snapshot"), &bytes)?;
+    let permissions = final_path_metadata.permissions();
+    staged
+        .set_permissions(permissions.clone())
+        .wrap_err_with(|| {
+            format!(
+                "failed to preserve rollback permissions for {label} `{}`",
+                path.display()
+            )
+        })?;
+    replacement.set_permissions(permissions).wrap_err_with(|| {
+        format!(
+            "failed to preserve replacement permissions for {label} `{}`",
+            path.display()
+        )
+    })?;
+    Ok(Some(PolicyOutputSnapshot {
+        backup: staged,
+        target_metadata: final_path_metadata,
+    }))
+}
+
+fn revalidate_policy_output_snapshot(
+    path: &Path,
+    label: &str,
+    snapshot: Option<&PolicyOutputSnapshot>,
+) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && snapshot.is_none() => {
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(eyre!(
+                "failed to revalidate {label} `{}` before publication: {error}",
+                path.display()
+            ));
+        }
+    };
+    let Some(snapshot) = snapshot else {
+        return Err(eyre!(
+            "{label} `{}` appeared after output preflight and will not be overwritten",
+            path.display()
+        ));
+    };
+    if policy_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() {
+        return Err(eyre!(
+            "{label} `{}` changed to an indirect or non-regular file before publication",
+            path.display()
+        ));
+    }
+    ensure_same_policy_input_state(
+        &snapshot.target_metadata,
+        &metadata,
+        path,
+        label,
+        "after its rollback snapshot and before publication",
+    )
 }
 
 fn validate_policy_output_target(path: &Path, label: &str) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(eyre!("{label} `{}` must not be a symlink", path.display()));
+            if policy_metadata_is_symlink_or_reparse(&metadata) {
+                return Err(eyre!(
+                    "{label} `{}` must not be a symlink or reparse point",
+                    path.display()
+                ));
             }
             if !metadata.is_file() {
                 return Err(eyre!("{label} `{}` must be a regular file", path.display()));
@@ -1055,9 +1410,9 @@ fn validate_policy_output_target(path: &Path, label: &str) -> Result<()> {
         }
         match fs::symlink_metadata(ancestor) {
             Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
+                if policy_metadata_is_symlink_or_reparse(&metadata) {
                     return Err(eyre!(
-                        "{label} parent `{}` must not be a symlink",
+                        "{label} parent `{}` must not be a symlink or reparse point",
                         ancestor.display()
                     ));
                 }
@@ -1137,51 +1492,33 @@ fn policy_output_parent(path: &Path) -> &Path {
 }
 
 #[cfg(unix)]
-fn set_policy_no_follow(options: &mut OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    options.custom_flags(policy_no_follow_flag());
+fn sync_policy_output_parent(path: &Path) -> std::io::Result<()> {
+    File::open(policy_output_parent(path))?.sync_all()
 }
 
 #[cfg(not(unix))]
+fn sync_policy_output_parent(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_policy_no_follow(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options.custom_flags(
+        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK)
+            .bits() as i32,
+    );
+}
+
+#[cfg(windows)]
+fn set_policy_no_follow(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
 fn set_policy_no_follow(_options: &mut OpenOptions) {}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const fn policy_no_follow_flag() -> i32 {
-    0o400000
-}
-
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn policy_no_follow_flag() -> i32 {
-    0x100
-}
-
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-const fn policy_no_follow_flag() -> i32 {
-    0
-}
 fn current_unix_timestamp() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1209,14 +1546,22 @@ fn resolve_rpt_validity_window(
 }
 
 fn open_policy_input(path: &Path, label: &str) -> Result<File> {
+    open_policy_input_with_hook(path, label, || Ok(()))
+}
+
+fn open_policy_input_with_hook<F>(path: &Path, label: &str, before_open: F) -> Result<File>
+where
+    F: FnOnce() -> Result<()>,
+{
     let path_metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to inspect {label} `{}`", path.display()))?;
-    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+    if policy_metadata_is_symlink_or_reparse(&path_metadata) || !path_metadata.is_file() {
         return Err(eyre!(
             "{label} `{}` must be a regular file and must not be a symlink",
             path.display()
         ));
     }
+    before_open()?;
 
     let mut options = OpenOptions::new();
     options.read(true);
@@ -1227,21 +1572,39 @@ fn open_policy_input(path: &Path, label: &str) -> Result<File> {
     let opened_metadata = file
         .metadata()
         .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?;
-    if !opened_metadata.is_file() {
+    if policy_metadata_is_symlink_or_reparse(&opened_metadata) || !opened_metadata.is_file() {
         return Err(eyre!(
             "{label} `{}` changed to a non-regular file while opening it",
             path.display()
         ));
     }
-    ensure_same_policy_input(&path_metadata, &opened_metadata, path, label)?;
+    ensure_same_policy_input_state(
+        &path_metadata,
+        &opened_metadata,
+        path,
+        label,
+        "while it was being opened",
+    )?;
     Ok(file)
 }
 
 fn read_policy_document(file: &mut File, path: &Path, label: &str) -> Result<Vec<u8>> {
-    let advertised_len = file
+    read_policy_document_with_hook(file, path, label, || Ok(()))
+}
+
+fn read_policy_document_with_hook<F>(
+    file: &mut File,
+    path: &Path,
+    label: &str,
+    before_read: F,
+) -> Result<Vec<u8>>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let initial_metadata = file
         .metadata()
-        .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?
-        .len();
+        .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?;
+    let advertised_len = initial_metadata.len();
     if advertised_len > MAX_TAIKAI_POLICY_DOCUMENT_BYTES {
         return Err(eyre!(
             "{label} `{}` exceeds the {}-byte policy document limit",
@@ -1251,52 +1614,158 @@ fn read_policy_document(file: &mut File, path: &Path, label: &str) -> Result<Vec
     }
     let capacity = usize::try_from(advertised_len).expect("bounded document length fits usize");
     let mut bytes = Vec::with_capacity(capacity);
-    file.take(MAX_TAIKAI_POLICY_DOCUMENT_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
-    if u64::try_from(bytes.len()).expect("bounded document length fits u64")
-        > MAX_TAIKAI_POLICY_DOCUMENT_BYTES
+    before_read()?;
     {
+        let mut limited = (&mut *file).take(MAX_TAIKAI_POLICY_DOCUMENT_BYTES + 1);
+        limited
+            .read_to_end(&mut bytes)
+            .wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
+    }
+    let bytes_read = u64::try_from(bytes.len()).expect("bounded document length fits u64");
+    if bytes_read > MAX_TAIKAI_POLICY_DOCUMENT_BYTES {
         return Err(eyre!(
             "{label} `{}` grew beyond the {}-byte policy document limit while reading",
             path.display(),
             MAX_TAIKAI_POLICY_DOCUMENT_BYTES
         ));
     }
+    let final_metadata = file.metadata().wrap_err_with(|| {
+        format!(
+            "failed to re-inspect opened {label} `{}` after reading",
+            path.display()
+        )
+    })?;
+    if !final_metadata.is_file()
+        || policy_metadata_is_symlink_or_reparse(&final_metadata)
+        || final_metadata.len() != advertised_len
+        || bytes_read != advertised_len
+    {
+        return Err(eyre!(
+            "{label} `{}` changed length while it was being read (advertised {advertised_len} bytes, read {bytes_read} bytes, final length {} bytes)",
+            path.display(),
+            final_metadata.len()
+        ));
+    }
+    ensure_same_policy_input_state(
+        &initial_metadata,
+        &final_metadata,
+        path,
+        label,
+        "while it was being read",
+    )?;
     Ok(bytes)
 }
 
-#[cfg(unix)]
-fn ensure_same_policy_input(
+fn ensure_same_policy_input_state(
     expected: &fs::Metadata,
     opened: &fs::Metadata,
     path: &Path,
     label: &str,
+    operation: &str,
 ) -> Result<()> {
-    use std::os::unix::fs::MetadataExt as _;
-    if expected.dev() != opened.dev() || expected.ino() != opened.ino() {
-        return Err(eyre!(
-            "{label} `{}` changed while it was being opened",
-            path.display()
-        ));
+    if !policy_input_metadata_state_unchanged(expected, opened) {
+        return Err(eyre!("{label} `{}` changed {operation}", path.display()));
     }
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn ensure_same_policy_input(
-    _expected: &fs::Metadata,
-    _opened: &fs::Metadata,
-    _path: &Path,
-    _label: &str,
-) -> Result<()> {
-    Ok(())
+#[cfg(unix)]
+fn policy_input_metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    policy_metadata_denotes_same_file(left, right)
+        && left.len() == right.len()
+        && left.mode() == right.mode()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(windows)]
+fn policy_input_metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    policy_metadata_denotes_same_file(left, right)
+        && left.file_size() == right.file_size()
+        && left.file_attributes() == right.file_attributes()
+        && left.last_write_time() == right.last_write_time()
+        && left.creation_time() == right.creation_time()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn policy_input_metadata_state_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn policy_metadata_denotes_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(windows)]
+fn policy_metadata_denotes_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn policy_metadata_denotes_same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+fn policy_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
     let mut hasher = Hasher::new();
     let mut file = open_policy_input(path, "policy input")?;
+    hash_file_contents(&mut file, path, &mut hasher)?;
+    Ok(*hasher.finalize().as_bytes())
+}
+fn hash_file_contents(file: &mut File, path: &Path, hasher: &mut Hasher) -> Result<()> {
+    hash_file_contents_with_hook(file, path, hasher, || Ok(()))
+}
+fn hash_file_contents_with_hook<F>(
+    file: &mut File,
+    path: &Path,
+    hasher: &mut Hasher,
+    before_read: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let initial_metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect `{}`", path.display()))?;
+    hash_file_contents_from_state_with_hook(file, path, hasher, &initial_metadata, before_read)
+}
+fn hash_file_contents_from_state_with_hook<F>(
+    file: &mut File,
+    path: &Path,
+    hasher: &mut Hasher,
+    initial_metadata: &fs::Metadata,
+    before_read: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    before_read()?;
     let mut buffer = [0u8; 8192];
+    let mut actual_len = 0_u64;
     loop {
         let read = file
             .read(&mut buffer)
@@ -1304,9 +1773,36 @@ fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
         if read == 0 {
             break;
         }
+        actual_len = actual_len
+            .checked_add(u64::try_from(read).expect("read buffer length fits u64"))
+            .ok_or_else(|| eyre!("file length overflowed while reading `{}`", path.display()))?;
         hasher.update(&buffer[..read]);
     }
-    Ok(*hasher.finalize().as_bytes())
+    let expected_len = initial_metadata.len();
+    if actual_len != expected_len {
+        return Err(eyre!(
+            "file `{}` changed length while hashing (expected {expected_len}, read {actual_len})",
+            path.display()
+        ));
+    }
+    let final_metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to re-inspect `{}` after hashing", path.display()))?;
+    if !final_metadata.is_file() || final_metadata.len() != expected_len {
+        return Err(eyre!(
+            "file `{}` changed length while hashing (expected {expected_len}, final length {})",
+            path.display(),
+            final_metadata.len()
+        ));
+    }
+    ensure_same_policy_input_state(
+        initial_metadata,
+        &final_metadata,
+        path,
+        "file",
+        "while it was being hashed",
+    )?;
+    Ok(())
 }
 fn validate_cek_receipt_binding(
     path: &Path,
@@ -1359,40 +1855,35 @@ fn compute_bundle_digest(path: &Path) -> Result<[u8; 32]> {
 fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
     update_path_marker(relative, b'F', hasher)?;
     let mut file = open_policy_input(path, "bundle file")?;
-    let expected_len = file
+    let initial_metadata = file
         .metadata()
-        .wrap_err_with(|| format!("failed to inspect `{}`", path.display()))?
-        .len();
+        .wrap_err_with(|| format!("failed to inspect `{}`", path.display()))?;
+    let expected_len = initial_metadata.len();
     hasher.update(&expected_len.to_le_bytes());
-    let mut buffer = [0u8; 8192];
-    let mut actual_len = 0_u64;
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        actual_len = actual_len
-            .checked_add(u64::try_from(read).expect("read buffer length fits u64"))
-            .ok_or_else(|| {
-                eyre!(
-                    "bundle file length overflowed while reading `{}`",
-                    path.display()
-                )
-            })?;
-        hasher.update(&buffer[..read]);
-    }
-    if actual_len != expected_len {
+    hash_file_contents_from_state_with_hook(&mut file, path, hasher, &initial_metadata, || Ok(()))
+}
+fn hash_directory_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
+    hash_directory_entry_with_hook(path, relative, hasher, || Ok(()))
+}
+fn hash_directory_entry_with_hook<F>(
+    path: &Path,
+    relative: &Path,
+    hasher: &mut Hasher,
+    before_traversal: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let initial_metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to inspect directory `{}`", path.display()))?;
+    if !initial_metadata.is_dir() || policy_metadata_is_symlink_or_reparse(&initial_metadata) {
         return Err(eyre!(
-            "bundle file `{}` changed length while hashing (expected {expected_len}, read {actual_len})",
+            "bundle directory `{}` must be a direct directory",
             path.display()
         ));
     }
-    Ok(())
-}
-fn hash_directory_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
     update_path_marker(relative, b'D', hasher)?;
+    before_traversal()?;
     let mut entries = Vec::new();
     for entry in fs::read_dir(path)
         .wrap_err_with(|| format!("failed to read directory `{}`", path.display()))?
@@ -1416,6 +1907,21 @@ fn hash_directory_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Re
         child_relative.push(file_name);
         hash_path_entry(&child_path, &child_relative, hasher)?;
     }
+    let final_metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to re-inspect directory `{}`", path.display()))?;
+    if !final_metadata.is_dir() || policy_metadata_is_symlink_or_reparse(&final_metadata) {
+        return Err(eyre!(
+            "bundle directory `{}` changed to an indirect or non-directory entry while hashing",
+            path.display()
+        ));
+    }
+    ensure_same_policy_input_state(
+        &initial_metadata,
+        &final_metadata,
+        path,
+        "bundle directory",
+        "while it was being hashed",
+    )?;
     Ok(())
 }
 fn hash_path_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
@@ -2873,6 +3379,36 @@ mod tests {
         );
     }
     #[test]
+    fn streamed_hash_rejects_same_length_file_mutation() {
+        const ORIGINAL: &[u8] = b"signed-gar-data";
+        const REPLACEMENT: &[u8] = b"SIGNED-GAR-DATA";
+        assert_eq!(ORIGINAL.len(), REPLACEMENT.len());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("gar.jws");
+        fs::write(&path, ORIGINAL).expect("write GAR");
+        let mut file = open_policy_input(&path, "policy input").expect("open GAR");
+        let mut hasher = Hasher::new();
+
+        let error = hash_file_contents_with_hook(&mut file, &path, &mut hasher, || {
+            std::thread::sleep(Duration::from_millis(20));
+            let mut replacement = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&path)
+                .wrap_err("open replacement GAR")?;
+            replacement.write_all(REPLACEMENT).wrap_err("replace GAR")?;
+            replacement.sync_all().wrap_err("sync replacement GAR")?;
+            Ok(())
+        })
+        .expect_err("same-length mutation during hashing must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("changed while it was being hashed")
+        );
+    }
+    #[test]
     fn bundle_digest_length_frames_file_contents() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let forged = tmp.path().join("forged");
@@ -2904,6 +3440,28 @@ mod tests {
         assert_eq!(
             hex::encode(compute_bundle_digest(&bundle).expect("bundle digest")),
             "32b42aff6303e492d041c7620f8b98f3dc1ee1f613de002a35c51b428d940846"
+        );
+    }
+    #[test]
+    fn bundle_hash_rejects_directory_membership_change() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bundle = tmp.path().join("bundle");
+        fs::create_dir(&bundle).expect("create bundle");
+        fs::write(bundle.join("original"), b"entry").expect("write original entry");
+        let mut hasher = Hasher::new();
+
+        let error = hash_directory_entry_with_hook(&bundle, Path::new(""), &mut hasher, || {
+            std::thread::sleep(Duration::from_millis(20));
+            fs::write(bundle.join("added"), b"late entry")
+                .wrap_err("add bundle member during traversal")?;
+            Ok(())
+        })
+        .expect_err("bundle membership changes must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("changed while it was being hashed")
         );
     }
     #[test]
@@ -2958,6 +3516,271 @@ mod tests {
 
         assert!(error.to_string().contains("must be a regular file"));
         assert!(!primary.exists());
+    }
+    #[test]
+    fn policy_artifact_writer_rejects_oversized_existing_snapshot() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join("receipt.to");
+        File::create(&primary)
+            .expect("create existing output")
+            .set_len(MAX_TAIKAI_POLICY_OUTPUT_SNAPSHOT_BYTES + 1)
+            .expect("size existing output beyond snapshot limit");
+        let artifacts = [PolicyArtifactBytes {
+            target: &primary,
+            label: "CEK receipt",
+            bytes: b"replacement",
+        }];
+
+        let error = publish_policy_artifacts_with_hook(&artifacts, || Ok(()))
+            .expect_err("an oversized existing output must fail before publication");
+
+        assert!(error.to_string().contains("rollback snapshot limit"));
+        assert_eq!(
+            fs::metadata(&primary)
+                .expect("inspect existing output")
+                .len(),
+            MAX_TAIKAI_POLICY_OUTPUT_SNAPSHOT_BYTES + 1
+        );
+        assert!(
+            fs::read_dir(tmp.path())
+                .expect("list output directory")
+                .all(|entry| !entry
+                    .expect("directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".taikai-policy-")),
+            "failed publication must clean every staging file"
+        );
+    }
+    #[test]
+    fn policy_output_snapshot_rejects_same_length_mutation() {
+        const ORIGINAL: &[u8] = b"existing-output";
+        const MUTATED: &[u8] = b"EXISTING-OUTPUT";
+        assert_eq!(ORIGINAL.len(), MUTATED.len());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join("receipt.to");
+        fs::write(&primary, ORIGINAL).expect("write existing output");
+        let mut replacement =
+            stage_policy_artifact(&primary, "replacement", b"replacement").expect("stage output");
+
+        let error =
+            snapshot_policy_output_with_hook(&primary, "CEK receipt", &mut replacement, || {
+                std::thread::sleep(Duration::from_millis(20));
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&primary)
+                    .wrap_err("open existing output for mutation")?;
+                file.write_all(MUTATED).wrap_err("mutate existing output")?;
+                file.sync_all().wrap_err("sync mutated existing output")?;
+                Ok(())
+            })
+            .expect_err("same-length mutation during snapshotting must fail closed");
+
+        assert!(error.to_string().contains("while it was being snapshotted"));
+        assert_eq!(fs::read(&primary).expect("read mutated output"), MUTATED);
+    }
+    #[test]
+    fn policy_artifact_writer_revalidates_snapshot_before_publish() {
+        const ORIGINAL: &[u8] = b"existing-output";
+        const MUTATED: &[u8] = b"EXISTING-OUTPUT";
+        assert_eq!(ORIGINAL.len(), MUTATED.len());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join("receipt.to");
+        fs::write(&primary, ORIGINAL).expect("write existing output");
+        let artifacts = [PolicyArtifactBytes {
+            target: &primary,
+            label: "RPT",
+            bytes: b"replacement",
+        }];
+
+        let error = publish_policy_artifacts_with_hooks(
+            &artifacts,
+            || Ok(()),
+            |_| {
+                std::thread::sleep(Duration::from_millis(20));
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&primary)
+                    .wrap_err("open snapshotted output for mutation")?;
+                file.write_all(MUTATED)
+                    .wrap_err("mutate snapshotted output")?;
+                file.sync_all().wrap_err("sync mutated output")?;
+                Ok(())
+            },
+        )
+        .expect_err("a target changed after snapshotting must not be overwritten");
+
+        assert!(
+            error
+                .to_string()
+                .contains("after its rollback snapshot and before publication")
+        );
+        assert_eq!(fs::read(&primary).expect("read concurrent output"), MUTATED);
+    }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn policy_artifact_rollback_preserves_concurrent_replacement() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join("receipt.to");
+        let json = tmp.path().join("receipt.json");
+        let foreign = tmp.path().join("foreign-output");
+        fs::write(&foreign, b"foreign replacement").expect("stage foreign replacement");
+        let artifacts = [
+            PolicyArtifactBytes {
+                target: &primary,
+                label: "CEK receipt",
+                bytes: b"framed-norito",
+            },
+            PolicyArtifactBytes {
+                target: &json,
+                label: "CEK receipt JSON",
+                bytes: b"{}",
+            },
+        ];
+
+        let error = publish_policy_artifacts_with_hooks(
+            &artifacts,
+            || Ok(()),
+            |index| {
+                if index == 1 {
+                    atomic_replace_policy_artifact(&foreign, &primary)
+                        .wrap_err("replace first output concurrently")?;
+                    return Err(eyre!("injected second-output publish failure"));
+                }
+                Ok(())
+            },
+        )
+        .expect_err("rollback must not clobber a concurrent replacement");
+
+        let message = error.to_string();
+        assert!(message.contains("injected second-output publish failure"));
+        assert!(message.contains("rollback also failed"));
+        assert!(message.contains("refusing rollback"));
+        assert_eq!(
+            fs::read(&primary).expect("read concurrent replacement"),
+            b"foreign replacement"
+        );
+        assert!(!json.exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn policy_output_snapshot_rejects_regular_to_fifo_swap_without_blocking() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join("receipt.to");
+        fs::write(&primary, b"existing-output").expect("write existing output");
+        let mut replacement =
+            stage_policy_artifact(&primary, "replacement", b"replacement").expect("stage output");
+        let writer_path = primary.clone();
+        let unblocker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(1));
+            let mut options = OpenOptions::new();
+            options.write(true);
+            set_policy_no_follow(&mut options);
+            let _ = options.open(writer_path);
+        });
+
+        let started = std::time::Instant::now();
+        let error = snapshot_policy_output_with_hooks(
+            &primary,
+            "RPT",
+            &mut replacement,
+            || {
+                fs::remove_file(&primary).wrap_err("remove original output")?;
+                let status = std::process::Command::new("mkfifo")
+                    .arg(&primary)
+                    .status()
+                    .wrap_err("run mkfifo")?;
+                if !status.success() {
+                    return Err(eyre!("mkfifo failed with {status}"));
+                }
+                Ok(())
+            },
+            || Ok(()),
+        )
+        .expect_err("a FIFO substituted during snapshot open must fail closed");
+        let elapsed = started.elapsed();
+        unblocker.join().expect("join FIFO unblocker");
+
+        assert!(error.to_string().contains("non-regular file"));
+        assert!(
+            elapsed < Duration::from_millis(900),
+            "snapshot open blocked on a substituted FIFO for {elapsed:?}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn policy_artifact_writer_preserves_existing_mode_on_replacement() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join("receipt.to");
+        fs::write(&primary, b"existing-output").expect("write existing output");
+        fs::set_permissions(&primary, fs::Permissions::from_mode(0o640))
+            .expect("set existing output mode");
+        let artifacts = [PolicyArtifactBytes {
+            target: &primary,
+            label: "RPT",
+            bytes: b"replacement",
+        }];
+
+        publish_policy_artifacts_with_hook(&artifacts, || Ok(()))
+            .expect("publish replacement output");
+
+        assert_eq!(
+            fs::read(&primary).expect("read replacement"),
+            b"replacement"
+        );
+        assert_eq!(
+            fs::metadata(&primary).expect("inspect replacement").mode() & 0o777,
+            0o640
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn policy_artifact_writer_replaces_existing_output_on_windows() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join("receipt.to");
+        fs::write(&primary, b"existing-output").expect("write existing output");
+        let artifacts = [PolicyArtifactBytes {
+            target: &primary,
+            label: "RPT",
+            bytes: b"replacement",
+        }];
+
+        publish_policy_artifacts_with_hook(&artifacts, || Ok(())).expect("replace existing output");
+
+        assert_eq!(
+            fs::read(&primary).expect("read replacement"),
+            b"replacement"
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn policy_artifact_writer_rejects_windows_reparse_target() {
+        use std::os::windows::fs::symlink_file;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let victim = tmp.path().join("victim");
+        let primary = tmp.path().join("receipt.to");
+        fs::write(&victim, b"victim-bytes").expect("write victim");
+        match symlink_file(&victim, &primary) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("create output reparse point: {error}"),
+        }
+        let artifacts = [PolicyArtifactBytes {
+            target: &primary,
+            label: "RPT",
+            bytes: b"replacement",
+        }];
+
+        let error = publish_policy_artifacts_with_hook(&artifacts, || Ok(()))
+            .expect_err("a reparse output target must fail closed");
+
+        assert!(error.to_string().contains("reparse point"));
+        assert_eq!(fs::read(&victim).expect("read victim"), b"victim-bytes");
     }
     #[cfg(unix)]
     #[test]
@@ -3080,6 +3903,97 @@ mod tests {
             .expect_err("oversized CEK receipt must fail before decoding");
 
         assert!(error.to_string().contains("policy document limit"));
+    }
+    #[test]
+    fn policy_reader_rejects_document_truncated_after_size_check() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("changing.to");
+        fs::write(&path, b"policy-document").expect("write policy document");
+        let mut file = open_policy_input(&path, "test policy document").expect("open document");
+
+        let error =
+            read_policy_document_with_hook(&mut file, &path, "test policy document", || {
+                OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&path)
+                    .wrap_err("truncate policy document")?;
+                Ok(())
+            })
+            .expect_err("a document truncated after its size check must fail closed");
+
+        assert!(error.to_string().contains("changed length"));
+    }
+    #[test]
+    fn policy_reader_rejects_same_length_document_mutation() {
+        const ORIGINAL: &[u8] = b"policy-document";
+        const REPLACEMENT: &[u8] = b"POLICY-DOCUMENT";
+        assert_eq!(ORIGINAL.len(), REPLACEMENT.len());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("changing.to");
+        fs::write(&path, ORIGINAL).expect("write policy document");
+        let mut file = open_policy_input(&path, "test policy document").expect("open document");
+
+        let error =
+            read_policy_document_with_hook(&mut file, &path, "test policy document", || {
+                std::thread::sleep(Duration::from_millis(20));
+                let mut replacement = OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&path)
+                    .wrap_err("open replacement policy document")?;
+                replacement
+                    .write_all(REPLACEMENT)
+                    .wrap_err("replace policy document")?;
+                replacement
+                    .sync_all()
+                    .wrap_err("sync replacement policy document")?;
+                Ok(())
+            })
+            .expect_err("same-length in-place mutation must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("changed while it was being read")
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn policy_open_rejects_regular_to_fifo_swap_without_blocking() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("changing.to");
+        fs::write(&path, b"policy-document").expect("write policy document");
+        let writer_path = path.clone();
+        let unblocker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(1));
+            let mut options = OpenOptions::new();
+            options.write(true);
+            set_policy_no_follow(&mut options);
+            let _ = options.open(writer_path);
+        });
+
+        let started = std::time::Instant::now();
+        let error = open_policy_input_with_hook(&path, "test policy document", || {
+            fs::remove_file(&path).wrap_err("remove original policy document")?;
+            let status = std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .wrap_err("run mkfifo")?;
+            if !status.success() {
+                return Err(eyre!("mkfifo failed with {status}"));
+            }
+            Ok(())
+        })
+        .expect_err("a FIFO substituted during open must fail closed");
+        let elapsed = started.elapsed();
+        unblocker.join().expect("join FIFO unblocker");
+
+        assert!(error.to_string().contains("non-regular file"));
+        assert!(
+            elapsed < Duration::from_millis(900),
+            "FIFO substitution blocked for {elapsed:?}"
+        );
     }
     #[test]
     fn storage_ticket_derivation_length_prefixes_names() {

@@ -453,7 +453,33 @@ fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
         confirmation_metadata.business_message_id(),
         Some("SEC-CONF-BAH-1")
     );
-    record_original(&runtime, "sese.023:PVP-FIXTURE-1", "sese.023");
+    let confirmed_instruction_document =
+        SESE023_FIXTURE_XML.replace("DVP-FIXTURE-1", "PVP-FIXTURE-1");
+    let confirmed_instruction_payload = data_pdu_with_app_header(
+        "SEC-INSTR-PVP-BAH-1",
+        "sese.023.001.11",
+        "securities.csd.cash",
+        &confirmed_instruction_document,
+    );
+    let confirmed_instruction = parse_message("sese.023", confirmed_instruction_payload.as_bytes())
+        .expect("confirmed sese.023 fixture");
+    let confirmed_instruction_metadata = runtime
+        .validate_profile_submission(
+            profile,
+            "sese.023",
+            &confirmed_instruction,
+            confirmed_instruction_payload.as_bytes(),
+        )
+        .expect("confirmed sese.023 fixture validates through Torii profile");
+    let confirmed_instruction_id =
+        Iso20022BridgeRuntime::lifecycle_message_id("sese.023", &confirmed_instruction)
+            .expect("confirmed sese.023 durable id");
+    assert_eq!(confirmed_instruction_id, "sese.023:PVP-FIXTURE-1");
+    assert!(
+        runtime
+            .check_and_record_inbound(&confirmed_instruction_id, confirmed_instruction_metadata,)
+    );
+    assert!(runtime.mark_queued(&confirmed_instruction_id));
     assert!(runtime.check_and_record_inbound(&confirmation_id, confirmation_metadata));
     let confirmation_outcome = runtime
         .apply_inbound_lifecycle_message(&confirmation_id, "sese.025", &confirmation)

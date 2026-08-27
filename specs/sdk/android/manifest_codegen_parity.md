@@ -14,12 +14,15 @@ builders can stay aligned with the Rust data model.
 
 ## 1. Inputs & Evidence
 
-- The generated Android manifest projection enumerates **110**
+- The exporter source now enumerates **112**
   `InstructionBox` entries with discriminants, schema hashes, enum layouts, and
   Rust type names exported by `norito_codegen_exporter`
   (`tools/norito_codegen_exporter/src/main.rs`). Each entry now carries a
   schema-derived summary when rustdoc text is unavailable, eliminating the
-  earlier `TODO` placeholders.
+  earlier `TODO` placeholders. The tracked files under
+  `specs/sdk/android/generated/` still describe the previous 110-entry run;
+  rerun `make android-codegen-docs` from a settled Cargo workspace before
+  treating those generated references as current.
 - `target-codex/android_codegen/builder_index.json` lists the generated Kotlin /
   Java builders plus package names, feature gates, and stability annotations
   consumed by `scripts/android_codegen_docs.py` (and surfaced in
@@ -40,14 +43,15 @@ builders can stay aligned with the Rust data model.
 
 ## 2. Instruction Coverage Snapshot
 
-- The 110 discriminants span 18 generator families sourced from
+- The current 112-discriminant exporter set spans 18 generator families sourced from
   `crates/iroha_data_model/src/isi/`, and every discriminant has a builder
   entry. The four boxed helpers use the short wire IDs `iroha.grant`,
   `iroha.revoke`, `iroha.set_key_value`, and `iroha.remove_key_value` while
   mapping to their fully qualified Rust types.
-- Every discriminant already has a Norito example file, so fixture generation is
-  complete from Rust’s perspective. Android needs to bundle these examples into
-  a signed manifest per release (see §4).
+- The previous 110-discriminant run has one Norito example per entry. The new
+  `ReportKaigiRelayHealth` and `UnregisterKaigiRelay` entries still need the
+  canonical generator rerun before fixture generation is complete. Android then
+  needs to bundle the examples into a signed manifest per release (see §4).
 
 | Module | Count | Example discriminants |
 |---|---:|---|
@@ -56,7 +60,7 @@ builders can stay aligned with the Rust data model.
 | `zk` | 7 | CancelConfidentialPolicyTransition, CreateElection |
 | `sorafs` | 15 | ApprovePinManifest, BindManifestAlias |
 | `governance` | 6 | CastPlainBallot, ProposeDeployContract |
-| `kaigi` | 7 | CreateKaigi, EndKaigi |
+| `kaigi` | 9 | CreateKaigi, UnregisterKaigiRelay |
 | `ministry` | 1 | SubmitAgendaProposal |
 | `mint_burn` | 6 | iroha.burn, iroha.mint |
 | `transfer` | 6 | iroha.transfer, iroha.transfer_batch |

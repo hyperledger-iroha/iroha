@@ -41,6 +41,12 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 import requests
 from blake3 import blake3
+from iroha_torii_client.canonical_transport import (
+    CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
+)
+from iroha_torii_client.canonical_transport import (
+    OperatorRequestHeaderPlan as _OperatorRequestHeaderPlan,
+)
 from iroha_torii_client.client import (
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
@@ -50,69 +56,11 @@ from iroha_torii_client.client import (
     NetworkTimeSample,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    OfflineAppliedOperation,
-    OfflineAppliedResult,
-    OfflineAssetScale,
-    OfflineAuthorizationJson,
-    OfflineAxtErrorDetails,
-    OfflineBranchClaimJson,
-    OfflineBranchPathJson,
-    OfflineErrorDetails,
-    OfflineErrorEnvelope,
-    OfflineLanePrivacyMerkleVariantJson,
-    OfflineLanePrivacyMerkleWitnessJson,
-    OfflineLanePrivacyProofJson,
-    OfflineMerkleProofJson,
-    OfflineOperationKind,
-    OfflineOperationReference,
-    OfflineOperationStatus,
-    OfflinePeerSplitTransitionJson,
-    OfflinePeerSplitTransitionVariantJson,
-    OfflinePendingOperation,
-    OfflinePendingState,
-    OfflineProofAttachmentJson,
-    OfflineProofBackend,
-    OfflineProofBoxJson,
-    OfflineQueueErrorDetails,
     OfflineStatus,
-    OfflineRecursiveSpendBundleJson,
-    OfflineRecursiveSpendProofJson,
-    OfflineRecursiveSpendStatementJson,
-    OfflineRecursiveSpendTransitionJson,
-    OfflineRedeemChangeJson,
-    OfflineRedeemOperationResult,
-    OfflineRedeemResult,
-    OfflineRedemptionChangeTransitionJson,
-    OfflineRedemptionChangeTransitionVariantJson,
-    OfflineRedemptionIntentJson,
-    OfflineRejectedOperation,
-    OfflineScaledAmount,
-    OfflineScaledAmountJson,
-    OfflineSpendableNote,
-    OfflineSpendableNoteJson,
-    OfflineSpendBranchJson,
-    OfflineTopUpAnchor,
-    OfflineTopUpAnchorReferenceJson,
-    OfflineTopUpFinalityProof,
-    OfflineTopUpFinalityProofAnchor,
-    OfflineTopUpOperationResult,
-    OfflineTopUpResult,
-    OfflineUnshieldPublicInputsJson,
-    OfflineVerifiedFoldBundleJson,
-    OfflineVerifiedFoldRecordBundleJson,
-    OfflineVerifiedFoldStepJson,
-    OfflineVerifiedFoldVerifierRecordJson,
-    OfflineVerifierKeyId,
-    OfflineVerifierKeyIdJson,
-    OfflineVerifierStatus,
-    OfflineVerifyingKeyJson,
-    OfflineVerifyingKeyRecordJson,
     SorafsOrderbookSubmissionAmbiguousError,
     SorafsOrderbookSubmissionIdentity,
     SorafsOrderbookSubmissionReceipt,
     SorafsOrderbookSubmissionReceiptPayload,
-    StreamingSoranetConfig,
-    StreamingTransportConfig,
     SubscriptionActionResult,
     SubscriptionCreateResult,
     SubscriptionListItem,
@@ -121,10 +69,7 @@ from iroha_torii_client.client import (
     SubscriptionPlanListItem,
     SubscriptionPlanListPage,
     SumeragiV2LivenessStatus,
-    SumeragiV2Round,
     ToriiCanonicalRequestAuth,
-    TransportConfig,
-    TransportNoritoRpcConfig,
     VpnProfile,
     VpnQuote,
     VpnQuoteCreateRequest,
@@ -138,32 +83,6 @@ from iroha_torii_client.client import (
     canonical_query_string,
     canonical_request_message,
     inspect_i105_network_prefix,
-)
-from iroha_torii_client.governance_proposals import (
-    GovernanceCanonicalObject,
-    GovernanceManifestProvenance,
-    GovernanceMusubiActionKind,
-    GovernanceProposalDeployContract,
-    GovernanceProposalKind,
-    GovernanceProposalKindTag,
-    GovernanceProposalLifecycleStatus,
-    GovernanceProposalMusubiRegistryGovernance,
-    GovernanceProposalRecord,
-    GovernanceProposalResult,
-    GovernanceProposalRuntimeUpgrade,
-    GovernanceProposalSccpRouteGovernance,
-    GovernanceProposalSorafsProviderGovernance,
-    GovernanceProposalValidationFeePayoutLifecycle,
-    GovernanceProposalValidationFeePolicy,
-    GovernanceRuntimeUpgradeManifest,
-    GovernanceSccpRouteAction,
-    GovernanceSccpRouteActionKind,
-    GovernanceSorafsProviderAction,
-    GovernanceSorafsProviderActionKind,
-    GovernanceValidationFeeChargingMode,
-    GovernanceValidationFeePayoutBinding,
-    GovernanceValidationFeePayoutRecipient,
-    GovernanceValidationFeePolicy,
 )
 from iroha_torii_client.client import (
     SumeragiAutonomousLaneExecution as _CanonicalSumeragiAutonomousLaneExecution,
@@ -201,7 +120,39 @@ from iroha_torii_client.client import (
 from iroha_torii_client.client import (
     ToriiClient as _BaseToriiClient,
 )
-from iroha_torii_client.client_status_models import parse_sumeragi_json_object
+from iroha_torii_client.client_status_models import (
+    StreamingSoranetConfig,
+    StreamingTransportConfig,
+    TransportConfig,
+    TransportNoritoRpcConfig,
+    parse_sumeragi_json_object,
+)
+from iroha_torii_client.governance_proposals import (
+    GovernanceCanonicalObject,
+    GovernanceManifestProvenance,
+    GovernanceMusubiActionKind,
+    GovernanceProposalDeployContract,
+    GovernanceProposalKind,
+    GovernanceProposalKindTag,
+    GovernanceProposalLifecycleStatus,
+    GovernanceProposalMusubiRegistryGovernance,
+    GovernanceProposalRecord,
+    GovernanceProposalResult,
+    GovernanceProposalRuntimeUpgrade,
+    GovernanceProposalSccpRouteGovernance,
+    GovernanceProposalSorafsProviderGovernance,
+    GovernanceProposalValidationFeePayoutLifecycle,
+    GovernanceProposalValidationFeePolicy,
+    GovernanceRuntimeUpgradeManifest,
+    GovernanceSccpRouteAction,
+    GovernanceSccpRouteActionKind,
+    GovernanceSorafsProviderAction,
+    GovernanceSorafsProviderActionKind,
+    GovernanceValidationFeeChargingMode,
+    GovernanceValidationFeePayoutBinding,
+    GovernanceValidationFeePayoutRecipient,
+    GovernanceValidationFeePolicy,
+)
 from iroha_torii_client.native_amx import (
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
@@ -214,13 +165,20 @@ from ._privacy_backends import (
     _require_production_verify_backend_label,
     _verifier_backend_registry_tag_v1,
 )
-from .address import AccountAddress, AccountAddressError, normalize_i105_discriminant
+from .address import (
+    I105_DISCRIMINANT_MAX,
+    AccountAddress,
+    AccountAddressError,
+    normalize_i105_discriminant,
+)
+from .address import (
+    require_canonical_asset_definition_id as _require_canonical_asset_definition_id,
+)
 from .connect import (
     ConnectSessionInfo,
     _connect_session_info_from_response,
     _normalize_connect_session_request,
 )
-from .connect_transport import prepare_connect_websocket_request
 from .connect_models import (
     ConnectAdmissionManifest,
     ConnectAdmissionManifestEntry,
@@ -228,6 +186,7 @@ from .connect_models import (
     ConnectAppRecord,
     ConnectAppRegistryPage,
 )
+from .connect_transport import prepare_connect_websocket_request
 from .dataspaces import (
     DataspacePlan,
     DataspaceSpec,
@@ -271,34 +230,11 @@ from .sumeragi_native_amx_models import (
     SumeragiNativeAmxSourceId,
     SumeragiNativeAmxTransactionEntrypointHash,
 )
-from .sumeragi_v2_status_types import SumeragiV2BodyState, SumeragiV2GlobalPhase, SumeragiV2LaneFinalityManifestCommitment, SumeragiV2StatusPhase
-from .torii_client_governance_ballots import (
-    bind_governance_ballot_network_id,
-    create_torii_client_governance_ballot_mixin,
-)
-from .torii_client_iso20022 import (
-    OperatorSigningContext,
-    ToriiClientIsoOperatorContextMixin,
-    get_iso_message_status as _get_iso_message_status,
-    is_iso_status_terminal as _is_iso_status_terminal,
-    normalize_iso_optional_string as _normalize_iso_optional_string,
-    normalize_iso_status as _normalize_iso_status,
-    normalize_iso_string_array as _normalize_iso_string_array,
-    normalize_iso_wait_kwargs as _normalize_iso_wait_kwargs,
-    normalize_pacs002_code as _normalize_pacs002_code,
-)
-from .torii_client_runtime_auth import (
-    _validate_client_data_model,
-    create_torii_client_runtime_auth_mixin,
-)
-from .torii_client_expensive_query_auth import ToriiClientExpensiveQueryAuthMixin
-from .torii_client_explorer_pagination import (
-    _normalize_explorer_cursor,
-    _normalize_explorer_limit,
-)
-from .torii_client_pipeline_status import (
-    _extract_pipeline_status_kind,
-    _normalize_transaction_status_scope,
+from .sumeragi_v2_status_types import (
+    SumeragiV2BodyState,
+    SumeragiV2GlobalPhase,
+    SumeragiV2LaneFinalityManifestCommitment,
+    SumeragiV2StatusPhase,
 )
 from .torii_client_config_normalization import (
     _coerce_duration_seconds,
@@ -308,6 +244,48 @@ from .torii_client_config_normalization import (
     _normalize_headers,
     _parse_retry_methods,
     _parse_retry_statuses,
+)
+from .torii_client_expensive_query_auth import ToriiClientExpensiveQueryAuthMixin
+from .torii_client_explorer_pagination import (
+    _normalize_explorer_cursor,
+    _normalize_explorer_limit,
+)
+from .torii_client_governance_ballots import (
+    bind_governance_ballot_network_id,
+    create_torii_client_governance_ballot_mixin,
+)
+from .torii_client_iso20022 import (
+    OperatorSigningContext,
+    ToriiClientIsoOperatorContextMixin,
+)
+from .torii_client_iso20022 import (
+    get_iso_message_status as _get_iso_message_status,
+)
+from .torii_client_iso20022 import (
+    is_iso_status_terminal as _is_iso_status_terminal,
+)
+from .torii_client_iso20022 import (
+    normalize_iso_optional_string as _normalize_iso_optional_string,
+)
+from .torii_client_iso20022 import (
+    normalize_iso_status as _normalize_iso_status,
+)
+from .torii_client_iso20022 import (
+    normalize_iso_string_array as _normalize_iso_string_array,
+)
+from .torii_client_iso20022 import (
+    normalize_iso_wait_kwargs as _normalize_iso_wait_kwargs,
+)
+from .torii_client_iso20022 import (
+    normalize_pacs002_code as _normalize_pacs002_code,
+)
+from .torii_client_pipeline_status import (
+    _extract_pipeline_status_kind,
+    _normalize_transaction_status_scope,
+)
+from .torii_client_runtime_auth import (
+    _validate_client_data_model,
+    create_torii_client_runtime_auth_mixin,
 )
 from .torii_client_space_directory import create_torii_client_space_directory_mixin
 from .torii_client_streaming_query import create_torii_client_streaming_query_mixin
@@ -369,6 +347,21 @@ ACCOUNT_FAUCET_POW_ALGORITHM = "scrypt-leading-zero-bits-v1"
 ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v1"
 ACCOUNT_FAUCET_MAX_SCRYPT_ROMIX_BYTES = 64 * 1024 * 1024
 ACCOUNT_FAUCET_MAX_SCRYPT_PARALLELIZATION = 16
+ACCOUNT_FAUCET_PUZZLE_FIELDS_V1 = frozenset(
+    {
+        "algorithm",
+        "network_id",
+        "chain_discriminant",
+        "difficulty_bits",
+        "anchor_height",
+        "anchor_block_hash_hex",
+        "challenge_salt_hex",
+        "scrypt_log_n",
+        "scrypt_r",
+        "scrypt_p",
+        "max_anchor_age_blocks",
+    }
+)
 ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
 TAIRA_PUBLIC_RESET_MUTATION_BINDING_SCHEMA = (
     "iroha.taira.public-reset.mutation-binding.v1"
@@ -531,6 +524,104 @@ def _copy_taira_mutation_binding(
     return copy.deepcopy(dict(binding))
 
 
+def _copy_fee_payment_intent_v1(value: Any, context: str) -> Dict[str, Any]:
+    intent = _require_mapping(value, context)
+    if set(intent) != {"payer", "value"}:
+        raise TypeError(f"{context} must contain exactly payer and value")
+    payer = intent.get("payer")
+    if payer not in {"authority", "sponsor"}:
+        raise ValueError(f"{context}.payer must be exactly 'authority' or 'sponsor'")
+    payment = _require_mapping(intent.get("value"), f"{context}.value")
+    required_payment_fields = {"charge_limits", "gas_limit"}
+    if payer == "sponsor":
+        required_payment_fields |= {"program_id", "program_revision"}
+    if set(payment) != required_payment_fields:
+        raise TypeError(f"{context}.value does not contain the exact {payer} fee fields")
+
+    gas_limit = payment.get("gas_limit")
+    if gas_limit is not None and (
+        isinstance(gas_limit, bool)
+        or not isinstance(gas_limit, int)
+        or not 0 < gas_limit < 1 << 64
+    ):
+        raise ValueError(f"{context}.value.gas_limit must be null or a positive u64")
+
+    limits = payment.get("charge_limits")
+    if isinstance(limits, (str, bytes, bytearray)) or not isinstance(limits, Sequence):
+        raise TypeError(f"{context}.value.charge_limits must be an array")
+    previous_kind = -1
+    for index, limit_value in enumerate(limits):
+        limit_context = f"{context}.value.charge_limits[{index}]"
+        limit = _require_mapping(limit_value, limit_context)
+        if set(limit) != {"kind", "asset_definition_id", "max_amount"}:
+            raise TypeError(f"{limit_context} does not contain the exact V1 fields")
+        kind_value = _require_mapping(limit.get("kind"), f"{limit_context}.kind")
+        if set(kind_value) != {"kind", "value"} or kind_value.get("value") is not None:
+            raise TypeError(f"{limit_context}.kind is not an exact unit variant")
+        kind_literal = kind_value.get("kind")
+        kind = 0 if kind_literal == "nexus" else 1 if kind_literal == "pipeline_gas" else -1
+        if kind < 0 or kind <= previous_kind:
+            raise ValueError(
+                f"{context}.value.charge_limits must be unique and ordered nexus before pipeline_gas"
+            )
+        previous_kind = kind
+        _require_canonical_asset_definition_id(
+            limit.get("asset_definition_id"),
+            f"{limit_context}.asset_definition_id",
+        )
+        _require_positive_exact_quantity_text(
+            limit.get("max_amount"),
+            f"{limit_context}.max_amount",
+        )
+
+    if payer == "sponsor":
+        program_id = _require_mapping(payment.get("program_id"), f"{context}.value.program_id")
+        if set(program_id) != {"sponsor", "name"}:
+            raise TypeError(f"{context}.value.program_id must contain exactly sponsor and name")
+        _normalize_exact_any_i105_account_id(
+            program_id.get("sponsor"), f"{context}.value.program_id.sponsor"
+        )
+        _require_exact_non_empty_string(
+            program_id.get("name"), f"{context}.value.program_id.name"
+        )
+        revision = payment.get("program_revision")
+        if (
+            isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or not 0 < revision < 1 << 64
+        ):
+            raise ValueError(f"{context}.value.program_revision must be a positive u64")
+    return copy.deepcopy(dict(intent))
+
+
+def _require_same_fee_payer_and_gas_bound_v1(
+    expected: Any,
+    actual: Any,
+    context: str,
+) -> Dict[str, Any]:
+    expected_intent = _copy_fee_payment_intent_v1(expected, f"{context}.expected")
+    actual_intent = _copy_fee_payment_intent_v1(actual, f"{context}.actual")
+    expected_payment = expected_intent["value"]
+    actual_payment = actual_intent["value"]
+    assert isinstance(expected_payment, Mapping)
+    assert isinstance(actual_payment, Mapping)
+    if (
+        expected_intent["payer"] != actual_intent["payer"]
+        or expected_payment["gas_limit"] != actual_payment["gas_limit"]
+        or (
+            expected_intent["payer"] == "sponsor"
+            and (
+                expected_payment["program_id"] != actual_payment["program_id"]
+                or expected_payment["program_revision"] != actual_payment["program_revision"]
+            )
+        )
+    ):
+        raise ValueError(
+            f"{context} fee payer, sponsor revision, or gas bound differs from the independent selection"
+        )
+    return expected_intent
+
+
 def _copy_prepared_taira_transaction(
     value: Any,
     *,
@@ -589,7 +680,7 @@ def _copy_prepared_taira_transaction(
     ):
         raise ValueError(f"{context}.signed_transaction_wire_hex must be non-empty lowercase hex")
     _require_exact_non_empty_string(prepared.get("account_id"), f"{context}.account_id")
-    _require_mapping(prepared.get("fee_payment"), f"{context}.fee_payment")
+    _copy_fee_payment_intent_v1(prepared.get("fee_payment"), f"{context}.fee_payment")
     signature = prepared.get("server_signature")
     if (
         not isinstance(signature, str)
@@ -711,16 +802,21 @@ def _prepared_signature_transcript(value: Mapping[str, Any], context: str) -> by
         claim = _require_mapping(value["claim"], f"{context}.claim")
         anchor = claim.get("pow_anchor_height")
         nonce = claim.get("pow_nonce_hex")
+        if isinstance(anchor, bool) or not isinstance(anchor, int) or not 0 < anchor < 1 << 64:
+            raise ValueError(f"{context}.claim.pow_anchor_height must be a positive u64")
+        if (
+            not isinstance(nonce, str)
+            or re.fullmatch(r"[0-9a-f]+", nonce) is None
+            or len(nonce) % 2 != 0
+            or not 2 <= len(nonce) <= 64
+        ):
+            raise ValueError(
+                f"{context}.claim.pow_nonce_hex must be 1..32 bytes of lowercase hex"
+            )
         for label, field_value in (
             ("claim.account_id", str(claim["account_id"])),
-            (
-                "claim.pow_anchor_height",
-                "none" if anchor is None else f"some:{anchor}",
-            ),
-            (
-                "claim.pow_nonce_hex",
-                "none" if nonce is None else f"some:{nonce}",
-            ),
+            ("claim.pow_anchor_height", str(anchor)),
+            ("claim.pow_nonce_hex", nonce),
             ("semantic_hash_hex", str(value["semantic_hash_hex"])),
             ("account_id", str(value["account_id"])),
             ("asset_definition_id", str(value["asset_definition_id"])),
@@ -1235,13 +1331,15 @@ def _normalize_zk_verifying_key_submission_payload(
         else:
             body["gas_schedule_id"] = gas_schedule_id
 
-    for field in ("curve", "metadata_uri_cid", "vk_bytes_cid"):
-        if field in body:
-            normalized = _normalize_optional_string(body.get(field), f"{context}.{field}")
+    for field_name in ("curve", "metadata_uri_cid", "vk_bytes_cid"):
+        if field_name in body:
+            normalized = _normalize_optional_string(
+                body.get(field_name), f"{context}.{field_name}"
+            )
             if normalized is None:
-                body.pop(field, None)
+                body.pop(field_name, None)
             else:
-                body[field] = normalized
+                body[field_name] = normalized
 
     if "max_proof_bytes" in body:
         max_proof_bytes = _normalize_optional_u32_field(
@@ -1635,14 +1733,16 @@ def _page_total(payload: Any) -> Optional[int]:
 
 
 def _page_metadata(payload: Mapping[str, Any], item_count: int, context: str) -> Dict[str, Any]:
+    total: Optional[int]
     has_total = payload.get("total") is not None
     if has_total:
         try:
-            total: Optional[int] = int(payload["total"])
+            parsed_total = int(payload["total"])
         except (TypeError, ValueError) as exc:
             raise TypeError(f"{context} `total` must be numeric") from exc
-        if total < 0:
+        if parsed_total < 0:
             raise TypeError(f"{context} `total` must be non-negative")
+        total = parsed_total
     elif "has_more" in payload or "count_mode" in payload:
         total = None
     else:
@@ -1722,6 +1822,50 @@ def _canonical_quantity_text(value: Any, context: str) -> str:
     if len(value) > 155:
         raise ValueError(f"{context} exceeds the canonical V1 text bound")
     return str(NumericV1Codec.decode_quantity_json(value))
+
+
+def _require_positive_exact_quantity_text(value: Any, context: str) -> str:
+    quantity = _canonical_quantity_text(value, context)
+    if Decimal(quantity) <= 0:
+        raise ValueError(f"{context} must be a positive exact quantity")
+    return quantity
+
+
+def _copy_expected_faucet_policy_v1(
+    asset_definition_id: Any,
+    amount: Any,
+    context: str,
+) -> tuple[str, str]:
+    return (
+        _require_canonical_asset_definition_id(
+            asset_definition_id,
+            f"{context}.asset_definition_id",
+        ),
+        _require_positive_exact_quantity_text(amount, f"{context}.amount"),
+    )
+
+
+def _require_prepared_faucet_policy_v1(
+    prepared: Mapping[str, Any],
+    *,
+    expected_asset_definition_id: str,
+    expected_amount: str,
+    context: str,
+) -> None:
+    actual_asset_definition_id = _require_canonical_asset_definition_id(
+        prepared.get("asset_definition_id"),
+        f"{context}.asset_definition_id",
+    )
+    actual_amount = _require_positive_exact_quantity_text(
+        prepared.get("amount"),
+        f"{context}.amount",
+    )
+    if actual_asset_definition_id != expected_asset_definition_id:
+        raise ValueError(
+            f"{context}.asset_definition_id differs from the independent faucet policy"
+        )
+    if actual_amount != expected_amount:
+        raise ValueError(f"{context}.amount differs from the independent faucet policy")
 
 
 def _quantity_decimal(value: Any) -> Decimal:
@@ -1948,16 +2092,16 @@ def _space_directory_manifest_scope(
         context=context,
     )
     scope: Dict[str, Any] = {}
-    for field, raw in value.items():
+    for field_name, raw in value.items():
         if raw is None:
-            raise ValueError(f"{context}.{field} must be omitted instead of null")
-        if field == "dataspace":
-            scope[field] = _require_u64(raw, f"{context}.{field}")
+            raise ValueError(f"{context}.{field_name} must be omitted instead of null")
+        if field_name == "dataspace":
+            scope[field_name] = _require_u64(raw, f"{context}.{field_name}")
             continue
-        literal = _require_exact_non_empty_string(raw, f"{context}.{field}")
-        if field == "role" and literal not in {"Initiator", "Participant"}:
+        literal = _require_exact_non_empty_string(raw, f"{context}.{field_name}")
+        if field_name == "role" and literal not in {"Initiator", "Participant"}:
             raise ValueError(f"{context}.role must be Initiator or Participant")
-        scope[field] = literal
+        scope[field_name] = literal
     return scope
 
 
@@ -3137,12 +3281,14 @@ def _require_one_shot_transport(
 
     try:
         adapter = session.get_adapter(url)
-        retry_policy = adapter.max_retries
-        retry_total = retry_policy.total
-    except (AttributeError, LookupError, ValueError) as exc:
+    except (LookupError, ValueError) as exc:
         raise ValueError(
             f"{context} requires a verifiable one-shot HTTP transport"
         ) from exc
+    retry_policy = getattr(adapter, "max_retries", None)
+    retry_total = getattr(retry_policy, "total", None)
+    if retry_policy is None or retry_total is None:
+        raise ValueError(f"{context} requires a verifiable one-shot HTTP transport")
     if retry_total is not False and retry_total != 0:
         raise ValueError(f"{context} requires transport retries to be disabled")
 
@@ -4826,6 +4972,8 @@ def _require_kaigi_lower_hex_32(value: Any, context: str) -> str:
     literal = _require_kaigi_exact_string(value, context)
     if re.fullmatch(r"[0-9a-f]{64}", literal) is None:
         raise ValueError(f"{context} must contain exactly 64 lowercase hex characters")
+    if bytes.fromhex(literal)[-1] & 1 != 1:
+        raise ValueError(f"{context} must set the Iroha Hash marker bit")
     return literal
 
 
@@ -5115,22 +5263,26 @@ class KaigiRelayDetail:
             )
         if "notes" in payload and not has_feedback:
             raise ValueError("kaigi_relay_detail.notes requires relay health feedback")
-        metrics = (
-            KaigiRelayDomainMetrics.from_payload(metrics_payload)
-            if "metrics" in payload
-            else None
-        )
+        metrics = None
+        if "metrics" in payload:
+            if not isinstance(metrics_payload, Mapping):
+                raise TypeError("kaigi_relay_detail.metrics must be an object")
+            metrics = KaigiRelayDomainMetrics.from_payload(metrics_payload)
         if metrics is not None and metrics.domain != relay.domain:
             raise ValueError(
                 "kaigi_relay_detail.metrics.domain must match the relay domain"
             )
 
+        reported_call = None
+        if "reported_call" in payload:
+            if not isinstance(reported_call_payload, Mapping):
+                raise TypeError("kaigi_relay_detail.reported_call must be an object")
+            reported_call = KaigiRelayReportedCall.from_payload(reported_call_payload)
+
         return cls(
             relay=relay,
             hpke_public_key_b64=hpke_literal,
-            reported_call=KaigiRelayReportedCall.from_payload(reported_call_payload)
-            if "reported_call" in payload
-            else None,
+            reported_call=reported_call,
             reported_by=reported_by,
             notes=notes,
             metrics=metrics,
@@ -5185,6 +5337,11 @@ class KaigiRelayHealthSnapshot:
         domain_ids = [entry.domain for entry in domains]
         if len(set(domain_ids)) != len(domain_ids):
             raise ValueError("kaigi_relay_health.domains contains duplicate domains")
+        if any(
+            previous >= current
+            for previous, current in zip(domain_ids, domain_ids[1:], strict=False)
+        ):
+            raise ValueError("kaigi_relay_health.domains must be strictly sorted by domain")
 
         def _resolve_counter(name: str) -> int:
             if name not in payload:
@@ -5226,11 +5383,11 @@ class KaigiRelayHealthSnapshot:
                 sum(entry.failovers_total for entry in domains),
             ),
         )
-        for field, actual, summed in aggregate_checks:
+        for field_name, actual, summed in aggregate_checks:
             expected = min(summed, _KAIGI_U64_MAX)
             if actual != expected:
                 raise ValueError(
-                    f"kaigi_relay_health.{field} must equal the saturated domain total"
+                    f"kaigi_relay_health.{field_name} must equal the saturated domain total"
                 )
         return snapshot
 
@@ -5439,22 +5596,22 @@ class GovernanceLockCustody:
         if not isinstance(escrowed, bool):
             raise TypeError("governance lock custody `escrowed` must be bool")
         identifiers: Dict[str, str] = {}
-        for field in (
+        for field_name in (
             "asset_definition_id",
             "bond_escrow_account",
             "slash_receiver_account",
         ):
-            value = payload[field]
+            value = payload[field_name]
             if not isinstance(value, str) or not value:
                 raise TypeError(
-                    f"governance lock custody `{field}` must be a non-empty string"
+                    f"governance lock custody `{field_name}` must be a non-empty string"
                 )
             if value.strip() != value:
                 raise TypeError(
-                    f"governance lock custody `{field}` must not contain "
+                    f"governance lock custody `{field_name}` must not contain "
                     "surrounding whitespace"
                 )
-            identifiers[field] = value
+            identifiers[field_name] = value
         return cls(
             escrowed=escrowed,
             asset_definition_id=identifiers["asset_definition_id"],
@@ -6235,7 +6392,7 @@ class EntrypointValueTypeV1:
         if analysis is None:
             raise TypeError("entrypoint value type is not a valid canonical V1 schema")
         try:
-            result.canonical_type_name
+            _ = result.canonical_type_name
         except ValueError as exc:
             raise TypeError("entrypoint value type contains a forged reserved V1 schema") from exc
         return result
@@ -6418,6 +6575,7 @@ class EntrypointValueTypeV1:
                 del rendered[len(rendered) - count :]
                 children.reverse()
 
+            result: Dict[str, Any]
             if node.kind is EntrypointValueTypeNodeKindV1.STRUCT:
                 descriptor = node.value
                 if not isinstance(descriptor, EntrypointStructTypeNodeV1):
@@ -6758,15 +6916,19 @@ class ContractEntrypointDescriptor:
             if descriptor.argument_schema is None
             else [field.name for field in descriptor.argument_schema.fields]
         )
-        exact_arguments = (
-            descriptor.argument_schema is None
-            if not descriptor.params
-            else schema_names == parameter_names
-            and all(
-                field.type.canonical_type_name == parameter.type_name
-                for field, parameter in zip(descriptor.argument_schema.fields, descriptor.params)
+        if not descriptor.params:
+            exact_arguments = descriptor.argument_schema is None
+        elif descriptor.argument_schema is None:
+            exact_arguments = False
+        else:
+            exact_arguments = schema_names == parameter_names and all(
+                argument_field.type.canonical_type_name == parameter.type_name
+                for argument_field, parameter in zip(
+                    descriptor.argument_schema.fields,
+                    descriptor.params,
+                    strict=True,
+                )
             )
-        )
         exact_return = (descriptor.return_type is None) == (descriptor.return_schema is None) and (
             descriptor.return_schema is None
             or (
@@ -6967,7 +7129,7 @@ def _validate_contract_dynamic_access_hint_state_maps(
         if (key_type := _kotodama_v1_state_map_key_type_name(state.type_name))
         is not None
     }
-    for field, hints in (
+    for field_name, hints in (
         ("dynamic_reads", access_set_hints.dynamic_reads),
         ("dynamic_writes", access_set_hints.dynamic_writes),
     ):
@@ -6975,12 +7137,12 @@ def _validate_contract_dynamic_access_hint_state_maps(
         for index, hint in enumerate(hints):
             if hint in seen:
                 raise TypeError(
-                    f"manifest access_set_hints.{field} contains a duplicate dynamic access hint"
+                    f"manifest access_set_hints.{field_name} contains a duplicate dynamic access hint"
                 )
             seen.add(hint)
             state_name = hint.base_key[len("state:") :]
             expected_key_type = state_maps.get(state_name)
-            path = f"manifest access_set_hints.{field}[{index}]"
+            path = f"manifest access_set_hints.{field_name}[{index}]"
             if expected_key_type is None:
                 raise TypeError(
                     f"{path}.base_key must reference a declared top-level StateMap"
@@ -9244,7 +9406,10 @@ def _strict_hex_string(
 
 
 def _require_strictly_ordered_source_ids(source_ids: Sequence[str], context: str) -> None:
-    if any(left >= right for left, right in zip(source_ids, source_ids[1:])):
+    if any(
+        left >= right
+        for left, right in zip(source_ids, source_ids[1:], strict=False)
+    ):
         raise ValueError(f"{context} source IDs must be strictly ordered and unique")
 
 
@@ -10488,9 +10653,9 @@ class SumeragiV2ExecutionCommitment:
             ),
             context,
         )
-        for field in ("lane_finality_manifest", "merge_carrier"):
-            if field not in payload:
-                raise TypeError(f"{context}.{field} is required")
+        for field_name in ("lane_finality_manifest", "merge_carrier"):
+            if field_name not in payload:
+                raise TypeError(f"{context}.{field_name} is required")
         topup_anchor_count = _sumeragi_v2_uint(
             payload.get("topup_anchor_count"),
             f"{context}.topup_anchor_count",
@@ -11860,7 +12025,7 @@ class ToriiStatusPayload:
                 commitments.append(
                     ToriiLanePrivacyCommitmentSnapshot(
                         id=commitment_id,
-                        scheme=scheme,
+                        scheme="merkle",
                         merkle=merkle,
                     )
                 )
@@ -12234,7 +12399,7 @@ class ToriiPipelinePreflight:
         if not isinstance(payload, Mapping):
             raise TypeError("pipeline preflight response must be a JSON object")
 
-        def _mapping(name: str) -> Mapping[str, Any]:
+        def _mapping(name: str) -> Dict[str, Any]:
             value = payload.get(name)
             if not isinstance(value, Mapping):
                 raise TypeError(f"pipeline preflight `{name}` must be a JSON object")
@@ -12704,7 +12869,7 @@ class ContractCallIntent:
                 "ContractCallIntent requires exactly one of "
                 "contract_address or contract_alias"
             )
-        for value, field in (
+        for value, field_name in (
             (self.contract_address, "contract_address"),
             (self.contract_alias, "contract_alias"),
             (self.expected_contract_address, "expected_contract_address"),
@@ -12712,19 +12877,19 @@ class ContractCallIntent:
             if value is not None:
                 _require_exact_non_empty_string(
                     value,
-                    f"ContractCallIntent.{field}",
+                    f"ContractCallIntent.{field_name}",
                 )
-        for value, field in (
+        for value, field_name in (
             (self.expected_code_hash_hex, "expected_code_hash_hex"),
             (self.expected_abi_hash_hex, "expected_abi_hash_hex"),
         ):
             if value is None:
                 continue
             if not isinstance(value, str):
-                raise TypeError(f"ContractCallIntent.{field} must be a string")
+                raise TypeError(f"ContractCallIntent.{field_name} must be a string")
             if re.fullmatch(r"[0-9a-f]{64}", value) is None:
                 raise ValueError(
-                    f"ContractCallIntent.{field} must be exactly "
+                    f"ContractCallIntent.{field_name} must be exactly "
                     "32 lowercase hexadecimal bytes"
                 )
 
@@ -12993,14 +13158,14 @@ class DataModelMismatchError(RuntimeError):
         self.expected = expected
         self.actual = actual
 
-_ToriiClientStreamingQueryMixin = create_torii_client_streaming_query_mixin(
+_ToriiClientStreamingQueryMixin: type[Any] = create_torii_client_streaming_query_mixin(
     require_crypto=_require_crypto,
     expect_sorafs_reputation_status=_expect_sorafs_reputation_status,
     normalize_count_mode_arg=_normalize_count_mode_arg,
     normalize_optional_string=_normalize_optional_string,
 )
 
-_ToriiClientGovernanceBallotMixin = create_torii_client_governance_ballot_mixin(
+_ToriiClientGovernanceBallotMixin: type[Any] = create_torii_client_governance_ballot_mixin(
     network_id_type=NetworkId,
     canonical_auth_type=ToriiCanonicalRequestAuth,
     normalize_network_id=_normalize_network_id,
@@ -13010,14 +13175,14 @@ _ToriiClientGovernanceBallotMixin = create_torii_client_governance_ballot_mixin(
     normalize_zk_ballot_v1=_normalize_governance_zk_ballot_v1_payload,
     normalize_zk_ballot_proof_v1=_normalize_governance_zk_ballot_proof_payload,
 )
-_ToriiClientSpaceDirectoryMixin = create_torii_client_space_directory_mixin(
+_ToriiClientSpaceDirectoryMixin: type[Any] = create_torii_client_space_directory_mixin(
     canonical_auth_type=ToriiCanonicalRequestAuth,
     normalize_publish_request=_normalize_publish_space_directory_manifest_request,
     normalize_revoke_request=_normalize_revoke_space_directory_manifest_request,
     normalize_transaction_draft=_normalize_app_api_transaction_draft,
 )
 
-_ToriiClientRuntimeAuthMixin = create_torii_client_runtime_auth_mixin(
+_ToriiClientRuntimeAuthMixin: type[Any] = create_torii_client_runtime_auth_mixin(
     node_capabilities_type=NodeCapabilities,
     node_admin_snapshot_type=NodeAdminSnapshot,
     runtime_metrics_type=RuntimeMetrics,
@@ -15815,7 +15980,7 @@ class ToriiClient(
             return nested_raw
         if isinstance(status, Mapping):
             return status
-        if is_dataclass(status):
+        if is_dataclass(status) and not isinstance(status, type):
             return asdict(status)
         raise TypeError("status must be a mapping or typed Torii status object")
 
@@ -15847,13 +16012,13 @@ class ToriiClient(
 
         payload = self._status_mapping(self.get_status() if status is None else status)
         indexed: Dict[Tuple[Optional[str], Optional[int]], Dict[str, Any]] = {}
-        for key in (
+        for catalog_key in (
             "teu_dataspace_backlog",
             "dataspaces",
             "dataspace_catalog",
             "teu_lane_commit",
         ):
-            entries = payload.get(key)
+            entries = payload.get(catalog_key)
             if not isinstance(entries, list):
                 continue
             for item in entries:
@@ -15868,9 +16033,9 @@ class ToriiClient(
                     )
                 except (TypeError, ValueError):
                     normalized_id = None
-                key = (alias or None, normalized_id)
-                existing = indexed.get(key, {})
-                indexed[key] = {**existing, **entry}
+                index_key = (alias or None, normalized_id)
+                existing = indexed.get(index_key, {})
+                indexed[index_key] = {**existing, **entry}
 
         lane_entries = payload.get("lane_governance")
         if isinstance(lane_entries, list):
@@ -15891,9 +16056,9 @@ class ToriiClient(
                     normalized_id = int(dataspace_id) if dataspace_id is not None else None
                 except (TypeError, ValueError):
                     normalized_id = None
-                key = (alias or None, normalized_id)
-                existing = indexed.get(key, {})
-                indexed[key] = {**existing, **entry}
+                index_key = (alias or None, normalized_id)
+                existing = indexed.get(index_key, {})
+                indexed[index_key] = {**existing, **entry}
 
         return list(indexed.values())
 
@@ -16517,13 +16682,10 @@ class ToriiClient(
     def list_kaigi_relays(self) -> Optional[Any]:
         """List registered Kaigi relays with exact-network operator authentication."""
 
-        response = self._operator_get(
+        return self._get_kaigi_relay_json_object(
             "/v1/kaigi/relays",
-            headers={"Accept": "application/json"},
             context="list_kaigi_relays",
         )
-        self._expect_status(response, (200,))
-        return self._maybe_json(response)
 
     def list_kaigi_relays_typed(self) -> KaigiRelaySummaryList:
         """Typed wrapper for :meth:`list_kaigi_relays`."""
@@ -16539,20 +16701,11 @@ class ToriiClient(
         """Fetch one relay diagnostic with exact-network operator authentication."""
 
         relay_literal = self._normalize_canonical_account_id(relay_id, "relay_id")
-        response = self._operator_get(
+        return self._get_kaigi_relay_json_object(
             f"/v1/kaigi/relays/{quote(relay_literal, safe='')}",
-            headers={"Accept": "application/json"},
             context="get_kaigi_relay",
+            allow_not_found=True,
         )
-        self._expect_status(response, (200, 404))
-        if response.status_code == 404:
-            return None
-        payload = self._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("kaigi relay detail endpoint returned an empty success response")
-        if not isinstance(payload, Mapping):
-            raise TypeError("kaigi relay detail response must be an object")
-        return payload
 
     def get_kaigi_relay_typed(self, relay_id: str) -> Optional[KaigiRelayDetail]:
         """Typed wrapper for :meth:`get_kaigi_relay`."""
@@ -16565,13 +16718,10 @@ class ToriiClient(
     def get_kaigi_relays_health(self) -> Optional[Any]:
         """Fetch aggregate relay health with exact-network operator authentication."""
 
-        response = self._operator_get(
+        return self._get_kaigi_relay_json_object(
             "/v1/kaigi/relays/health",
-            headers={"Accept": "application/json"},
             context="get_kaigi_relays_health",
         )
-        self._expect_status(response, (200,))
-        return self._maybe_json(response)
 
     def get_kaigi_relays_health_typed(self) -> KaigiRelayHealthSnapshot:
         """Typed wrapper for :meth:`get_kaigi_relays_health`."""
@@ -17259,9 +17409,38 @@ class ToriiClient(
             payload = data
 
         method_upper = method.upper()
+        request_timeout = timeout if timeout is not None else self._timeout
+        if isinstance(headers, _CanonicalRequestHeaderPlan):
+            signed_headers: Mapping[str, str] = _CanonicalRequestHeaderPlan(
+                final_headers,
+                headers.canonical_auth,
+                reject_ambient_auth=headers.reject_ambient_auth,
+            )
+        elif isinstance(headers, _OperatorRequestHeaderPlan):
+            signed_headers = _OperatorRequestHeaderPlan(final_headers, headers.context)
+        else:
+            signed_headers = final_headers
+        if isinstance(
+            signed_headers,
+            (_CanonicalRequestHeaderPlan, _OperatorRequestHeaderPlan),
+        ):
+            response = _BaseToriiClient._request(
+                self,
+                method_upper,
+                path,
+                params=params,
+                headers=signed_headers,
+                data=payload,
+                timeout=request_timeout,
+                allow_retry=allow_retry,
+                allow_redirects=allow_redirects,
+                stream=stream,
+            )
+            self._enforce_sorafs_alias_policy(response)
+            return response
+
         retry_enabled = allow_retry and method_upper in self._retry_methods
         max_attempts = 1 + (self._max_retries if retry_enabled else 0)
-        request_timeout = timeout if timeout is not None else self._timeout
         url = f"{self._base_url}{path}"
 
         delay = self._backoff_initial
@@ -17271,7 +17450,7 @@ class ToriiClient(
                     method_upper,
                     url,
                     params=params,
-                    headers=final_headers or None,
+                    headers=signed_headers or None,
                     data=payload,
                     timeout=request_timeout,
                     allow_redirects=allow_redirects,
@@ -17822,7 +18001,7 @@ class ToriiClient(
         self,
         *,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         accounts: Iterable[str],
@@ -18981,20 +19160,7 @@ class ToriiClient(
 
         if not isinstance(puzzle, Mapping):
             raise TypeError("account faucet puzzle must be an object")
-        puzzle_fields = {
-            "algorithm",
-            "network_id",
-            "chain_discriminant",
-            "difficulty_bits",
-            "anchor_height",
-            "anchor_block_hash_hex",
-            "challenge_salt_hex",
-            "scrypt_log_n",
-            "scrypt_r",
-            "scrypt_p",
-            "max_anchor_age_blocks",
-        }
-        if set(puzzle) != puzzle_fields:
+        if set(puzzle) != ACCOUNT_FAUCET_PUZZLE_FIELDS_V1:
             raise TypeError("account faucet puzzle must contain exactly the V1 fields")
         if (
             isinstance(max_nonce, bool)
@@ -19012,8 +19178,16 @@ class ToriiClient(
         if not isinstance(network_id_literal, str):
             raise TypeError("account faucet puzzle network_id must be a string")
         network_id = ExactNetworkId.parse(network_id_literal)
+        raw_chain_discriminant = puzzle.get("chain_discriminant")
+        if isinstance(raw_chain_discriminant, bool) or not isinstance(
+            raw_chain_discriminant, int
+        ):
+            raise AccountAddressError(
+                "account faucet puzzle chain_discriminant must be an integer between "
+                f"0 and {I105_DISCRIMINANT_MAX}"
+            )
         chain_discriminant = normalize_i105_discriminant(
-            puzzle.get("chain_discriminant"),
+            raw_chain_discriminant,
             "account faucet puzzle chain_discriminant",
         )
         account = _normalize_exact_i105_account_id(
@@ -19117,17 +19291,31 @@ class ToriiClient(
         account_id: str,
         *,
         binding: Mapping[str, Any],
+        fee_payment: Mapping[str, Any],
+        expected_asset_definition_id: str,
+        expected_amount: str,
         expected_authority: str,
         network_id: "NetworkId",
         puzzle: Optional[Mapping[str, Any]] = None,
         max_nonce: int = 1_000_000,
     ) -> requests.Response:
-        """Solve and prepare one faucet transaction without mutating ledger state."""
+        """Solve and prepare one faucet transaction under an independent exact policy."""
 
+        exact_asset_definition_id, exact_amount = _copy_expected_faucet_policy_v1(
+            expected_asset_definition_id,
+            expected_amount,
+            "prepare_account_faucet_registration.expected_policy",
+        )
         expected_network_id = _normalize_network_id(
             network_id, "prepare_account_faucet_registration.network_id"
         )
-        puzzle_payload = puzzle or self.get_account_faucet_puzzle()
+        puzzle_payload = (
+            self.get_account_faucet_puzzle() if puzzle is None else puzzle
+        )
+        if not isinstance(puzzle_payload, Mapping):
+            raise TypeError("account faucet puzzle must be an object")
+        if set(puzzle_payload) != ACCOUNT_FAUCET_PUZZLE_FIELDS_V1:
+            raise TypeError("account faucet puzzle must contain exactly the V1 fields")
         if puzzle_payload.get("network_id") != expected_network_id.literal:
             raise ValueError(
                 "prepare_account_faucet_registration puzzle network differs from the trust pin"
@@ -19140,6 +19328,9 @@ class ToriiClient(
         return self.prepare_account_faucet(
             account_id,
             binding=binding,
+            fee_payment=fee_payment,
+            expected_asset_definition_id=exact_asset_definition_id,
+            expected_amount=exact_amount,
             expected_authority=expected_authority,
             network_id=expected_network_id,
             pow_anchor_height=anchor_height,
@@ -19151,18 +19342,30 @@ class ToriiClient(
         account_id: str,
         *,
         binding: Mapping[str, Any],
+        fee_payment: Mapping[str, Any],
+        expected_asset_definition_id: str,
+        expected_amount: str,
         expected_authority: str,
         network_id: "NetworkId",
         pow_anchor_height: int,
         pow_nonce_hex: str,
     ) -> requests.Response:
-        """Validate a solved claim and return one authenticated exact transaction."""
+        """Return one authenticated transaction matching an independent exact faucet policy."""
 
+        exact_asset_definition_id, exact_amount = _copy_expected_faucet_policy_v1(
+            expected_asset_definition_id,
+            expected_amount,
+            "prepare_account_faucet.expected_policy",
+        )
         exact_binding = _copy_taira_mutation_binding(
             binding,
             expected_kind="faucet",
             context="prepare_account_faucet.binding",
             require_active=True,
+        )
+        exact_fee_payment = _copy_fee_payment_intent_v1(
+            fee_payment,
+            "prepare_account_faucet.fee_payment",
         )
         canonical_account_id = _normalize_exact_i105_account_id(
             account_id,
@@ -19199,6 +19402,7 @@ class ToriiClient(
                 "schema": ACCOUNT_FAUCET_PREPARE_SCHEMA,
                 "binding": exact_binding,
                 "claim": claim,
+                "fee_payment": exact_fee_payment,
             },
             allow_redirects=False,
         )
@@ -19214,10 +19418,21 @@ class ToriiClient(
             )
             if prepared["binding"] != exact_binding or prepared["claim"] != claim:
                 raise ValueError("prepare_account_faucet response differs from the exact request")
+            _require_same_fee_payer_and_gas_bound_v1(
+                exact_fee_payment,
+                prepared["fee_payment"],
+                "prepare_account_faucet.response",
+            )
             if prepared["account_id"] != canonical_account_id:
                 raise ValueError(
                     "prepare_account_faucet response account differs from the exact claim"
                 )
+            _require_prepared_faucet_policy_v1(
+                prepared,
+                expected_asset_definition_id=exact_asset_definition_id,
+                expected_amount=exact_amount,
+                context="prepare_account_faucet.response",
+            )
             _verify_prepared_transaction_authentication_v1(
                 prepared,
                 expected_authority=canonical_authority,
@@ -19230,15 +19445,28 @@ class ToriiClient(
         self,
         prepared: Mapping[str, Any],
         *,
+        expected_fee_payment: Mapping[str, Any],
+        expected_asset_definition_id: str,
+        expected_amount: str,
         expected_authority: str,
         network_id: "NetworkId",
     ) -> requests.Response:
-        """Submit only one server-authenticated exact faucet transaction."""
+        """Submit one authenticated transaction matching an independent exact faucet policy."""
 
+        exact_asset_definition_id, exact_amount = _copy_expected_faucet_policy_v1(
+            expected_asset_definition_id,
+            expected_amount,
+            "submit_prepared_account_faucet.expected_policy",
+        )
         exact_prepared = _copy_prepared_taira_transaction(
             prepared,
             expected_operation="faucet",
             context="submit_prepared_account_faucet.prepared",
+        )
+        _require_same_fee_payer_and_gas_bound_v1(
+            expected_fee_payment,
+            exact_prepared["fee_payment"],
+            "submit_prepared_account_faucet.prepared",
         )
         _copy_taira_mutation_binding(
             exact_prepared["binding"],
@@ -19250,6 +19478,12 @@ class ToriiClient(
             exact_prepared["account_id"],
             "submit_prepared_account_faucet.prepared.account_id",
             expected_discriminant=self._chain_discriminant,
+        )
+        _require_prepared_faucet_policy_v1(
+            exact_prepared,
+            expected_asset_definition_id=exact_asset_definition_id,
+            expected_amount=exact_amount,
+            context="submit_prepared_account_faucet.prepared",
         )
         canonical_authority = self._exact_account_identity_pin(
             expected_authority,
@@ -19359,6 +19593,7 @@ class ToriiClient(
         *,
         onboarding_token: str,
         binding: Mapping[str, Any],
+        fee_payment: Mapping[str, Any],
         receipt: Mapping[str, Any],
         expected_request: Mapping[str, Any],
         expected_authority: str,
@@ -19372,6 +19607,10 @@ class ToriiClient(
             expected_kind="onboarding",
             context="prepare_account_onboarding.binding",
             require_active=True,
+        )
+        exact_fee_payment = _copy_fee_payment_intent_v1(
+            fee_payment,
+            "prepare_account_onboarding.fee_payment",
         )
         canonical_authority = self._exact_account_identity_pin(
             expected_authority,
@@ -19403,6 +19642,7 @@ class ToriiClient(
                 "schema": ACCOUNT_ONBOARDING_PREPARE_SCHEMA,
                 "binding": exact_binding,
                 "receipt": exact_receipt,
+                "fee_payment": exact_fee_payment,
             },
             allow_retry=False,
             allow_redirects=False,
@@ -19423,6 +19663,11 @@ class ToriiClient(
                     raise ValueError(
                         "prepare_account_onboarding response differs from the exact request"
                     )
+                _require_same_fee_payer_and_gas_bound_v1(
+                    exact_fee_payment,
+                    prepared["fee_payment"],
+                    "prepare_account_onboarding.response",
+                )
                 body = _require_mapping(
                     exact_receipt["body"], "prepare_account_onboarding.receipt.body"
                 )
@@ -19664,6 +19909,7 @@ class ToriiClient(
         *,
         onboarding_token: str,
         prepared: Mapping[str, Any],
+        expected_fee_payment: Mapping[str, Any],
         expected_request: Mapping[str, Any],
         expected_authority: str,
         network_id: "NetworkId",
@@ -19675,6 +19921,11 @@ class ToriiClient(
             prepared,
             expected_operation="onboarding",
             context="submit_prepared_account_onboarding.prepared",
+        )
+        _require_same_fee_payer_and_gas_bound_v1(
+            expected_fee_payment,
+            exact_prepared["fee_payment"],
+            "submit_prepared_account_onboarding.prepared",
         )
         _copy_taira_mutation_binding(
             exact_prepared["binding"],
@@ -20613,7 +20864,7 @@ class ToriiClient(
     # ------------------------------------------------------------------
     @staticmethod
     def _contract_response_payload(response: Any) -> Any:
-        if is_dataclass(response):
+        if is_dataclass(response) and not isinstance(response, type):
             return asdict(response)
         return _json_safe_value(response)
 
@@ -20641,7 +20892,7 @@ class ToriiClient(
                     visit(child)
 
         visit(payload)
-        return _dedupe_strings(hashes)
+        return list(dict.fromkeys(hashes))
 
     @staticmethod
     def _contract_response_pipeline_statuses(response: Any) -> List[Mapping[str, Any]]:
@@ -20780,13 +21031,13 @@ class ToriiClient(
         if len(entries) > _CONTRACT_CALL_BATCH_MAX_ITEMS:
             raise ValueError("entries must contain at most 256 items")
 
-        from .crypto import _NativeInstruction
+        from .crypto import Instruction
 
         normalized: List[Dict[str, Any]] = []
         for index, entry in enumerate(entries):
             if isinstance(entry, ContractCallIntent):
                 normalized.append({"contract_call": entry.to_payload()})
-            elif isinstance(entry, _NativeInstruction):
+            elif isinstance(entry, Instruction):
                 instruction = bytes(entry.to_norito_bytes())
                 normalized.append(
                     {
@@ -20880,7 +21131,7 @@ class ToriiClient(
 
         prepared_entries: List[_PreparedContractCallBatchItem] = []
         for index, (binding_item, prepared_item, requested) in enumerate(
-            zip(binding_items, prepared_payload, normalized)
+            zip(binding_items, prepared_payload, normalized, strict=True)
         ):
             if not isinstance(binding_item, Mapping) or not isinstance(
                 prepared_item,
@@ -21056,7 +21307,7 @@ class ToriiClient(
             "binding_digest_hex": plan.binding_digest_hex,
         }
 
-        from .crypto import _NativeInstruction
+        from .crypto import Instruction
 
         draft = self._transaction_draft(
             authority=authority,
@@ -21067,7 +21318,7 @@ class ToriiClient(
         original_instructions: Dict[int, Any] = {
             index: entry
             for index, entry in enumerate(entries)
-            if isinstance(entry, _NativeInstruction)
+            if isinstance(entry, Instruction)
         }
         for index, prepared in enumerate(plan.prepared_entries):
             if prepared.kind == "contract_call":

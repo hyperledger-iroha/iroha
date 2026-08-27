@@ -27,6 +27,7 @@ use tempfile::{NamedTempFile, TempDir};
 const LEGACY_PUBLIC_KEY_LITERAL: &str =
     "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@test";
 const XML_SIGNATURE_TEST_SIGNING_TIME: &str = "2026-06-02T12:00:00Z";
+const TEST_PACS008_NAMESPACE: &str = "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08";
 const OFFICIAL_XSD_PACS008_001_08: &str =
     include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.008.001.08.xsd");
 const OFFICIAL_XSD_PACS009_001_08: &str =
@@ -551,6 +552,21 @@ fn signed_pacs008_xml_with_public_key(public_key_base64: &str) -> String {
         &payload[public_key_end..]
     )
 }
+fn canonicalize_xmlsig_signed_info(signed_info: &str, mode: CanonicalXmlMode) -> String {
+    let inherited_namespaces = [CanonicalXmlAttribute {
+        name: "xmlns".to_owned(),
+        value: XMLDSIG_NS.to_owned(),
+        kind: CanonicalXmlAttributeKind::Namespace,
+    }];
+    canonicalize_supported_xml_with_mode(signed_info, &inherited_namespaces, mode)
+        .expect("canonical XMLDSig SignedInfo")
+}
+fn default_xmlsig_namespace_bindings() -> [CanonicalXmlNamespaceBinding; 1] {
+    [CanonicalXmlNamespaceBinding {
+        prefix: String::new(),
+        uri: XMLDSIG_NS.to_owned(),
+    }]
+}
 fn signed_pacs008_xml_with_c14n_algorithm(c14n_algorithm: &str) -> String {
     signed_pacs008_xml_with_c14n_algorithm_and_signed_info_style(c14n_algorithm, false)
 }
@@ -579,11 +595,18 @@ fn signed_pacs008_xml_with_sgntr_signature_carrier() -> String {
     let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
     let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
     let signed_info = signed_info_xml_prefixed(XML_C14N_1_0, &digest);
-    let inherited_namespaces = [CanonicalXmlAttribute {
-        name: "xmlns:ds".to_owned(),
-        value: XMLDSIG_NS.to_owned(),
-        kind: CanonicalXmlAttributeKind::Namespace,
-    }];
+    let inherited_namespaces = [
+        CanonicalXmlAttribute {
+            name: "xmlns".to_owned(),
+            value: TEST_PACS008_NAMESPACE.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        },
+        CanonicalXmlAttribute {
+            name: "xmlns:ds".to_owned(),
+            value: XMLDSIG_NS.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        },
+    ];
     let canonical_signed_info = canonicalize_supported_xml_with_mode(
         &signed_info,
         &inherited_namespaces,
@@ -653,6 +676,24 @@ fn signed_pacs008_xml_with_inherited_namespace_same_document_reference() -> Stri
         XmlSignatureValueEncoding::Der,
     )
 }
+fn signed_pacs008_xml_with_app_header_outside_same_document_reference() -> String {
+    let reference_id = "payment-001";
+    let document = unsigned_pacs008_xml_with_inherited_default_namespace_reference_id(reference_id);
+    let unsigned = data_pdu_with_app_header(
+        "header-outside-reference",
+        "pacs.008.001.08",
+        "swift.cbprplus.02",
+        &document,
+    );
+    signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
+        unsigned,
+        XML_C14N_1_0,
+        &format!("#{reference_id}"),
+        false,
+        true,
+        XmlSignatureValueEncoding::Der,
+    )
+}
 fn signed_pacs008_xml_with_header_only_same_document_reference() -> String {
     let reference_id = "grp-header-001";
     let unsigned =
@@ -695,7 +736,7 @@ fn signed_pacs008_xml_with_extra_reference_transform() -> String {
         ),
     );
     let canonical_signed_info =
-        canonicalize_supported_xml(&signed_info).expect("canonical transformed SignedInfo");
+        canonicalize_xmlsig_signed_info(&signed_info, CanonicalXmlMode::Inclusive);
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
@@ -707,17 +748,19 @@ fn signed_pacs008_xml_with_extra_reference_transform() -> String {
     );
     let signature_xml = format!(
         concat!(
-            r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+            r#"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
             "<KeyInfo><KeyValue><ECKeyValue>",
             r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
             "<PublicKey>{public_key}</PublicKey>",
             "</ECKeyValue></KeyValue></KeyInfo>",
-            r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+            r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001"></QualifyingProperties></Object>"##,
             "</Signature>"
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1053,17 +1096,20 @@ fn signed_pacs008_xml_with_key_info_at(
     let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
     let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
     let signed_properties_id = "signed-props-001";
-    let signed_properties = xml_signature_x509_certificates(key_info)
-        .ok()
-        .and_then(|certificates| certificates.first().cloned())
-        .map(|leaf_der| {
-            signed_properties_xml_with_signing_certificate_v2_at(
-                signed_properties_id,
-                &leaf_der,
-                signing_time,
-            )
-            .0
-        });
+    let signed_properties = xml_signature_x509_certificates_with_namespaces(
+        key_info,
+        &default_xmlsig_namespace_bindings(),
+    )
+    .ok()
+    .and_then(|certificates| certificates.first().cloned())
+    .map(|leaf_der| {
+        signed_properties_xml_with_signing_certificate_v2_at(
+            signed_properties_id,
+            &leaf_der,
+            signing_time,
+        )
+        .0
+    });
     let signed_info = if let Some(signed_properties) = signed_properties.as_ref() {
         let canonical_signed_properties =
             canonicalize_supported_xml(signed_properties).expect("canonical SignedProperties");
@@ -1079,21 +1125,21 @@ fn signed_pacs008_xml_with_key_info_at(
         signed_info_xml(XML_C14N_1_0, &payload_digest, false)
     };
     let canonical_signed_info =
-        canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        canonicalize_xmlsig_signed_info(&signed_info, CanonicalXmlMode::Inclusive);
     let signature: P256Signature = signing_key.sign(canonical_signed_info.as_bytes());
     let signature = low_s_p256_signature(signature);
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
     let qualifying_properties = if let Some(signed_properties) = signed_properties {
         format!(
-            r##"<Object><QualifyingProperties Target="#sig-001">{signed_properties}</QualifyingProperties></Object>"##
+            r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">{signed_properties}</QualifyingProperties></Object>"##
         )
     } else {
-        r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##
+        r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001"></QualifyingProperties></Object>"##
             .to_owned()
     };
     let signature_xml = format!(
         concat!(
-            r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+            r#"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
             "{key_info}",
             "{qualifying_properties}",
             "</Signature>"
@@ -1101,7 +1147,8 @@ fn signed_pacs008_xml_with_key_info_at(
         signed_info = signed_info,
         signature_value = signature_value,
         key_info = key_info,
-        qualifying_properties = qualifying_properties
+        qualifying_properties = qualifying_properties,
+        XMLDSIG_NS = XMLDSIG_NS
     );
     format!(
         "{}{}{}",
@@ -1121,7 +1168,7 @@ fn signed_pacs008_xml_with_signed_info_rewrite(
     let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
     let signed_info = rewrite_signed_info(signed_info_xml(XML_C14N_1_0, &digest, false));
     let canonical_signed_info =
-        canonicalize_supported_xml(&signed_info).expect("canonical rewritten SignedInfo");
+        canonicalize_xmlsig_signed_info(&signed_info, CanonicalXmlMode::Inclusive);
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
@@ -1133,17 +1180,19 @@ fn signed_pacs008_xml_with_signed_info_rewrite(
     );
     let signature_xml = format!(
         concat!(
-            r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+            r#"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
             "<KeyInfo><KeyValue><ECKeyValue>",
             r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
             "<PublicKey>{public_key}</PublicKey>",
             "</ECKeyValue></KeyValue></KeyInfo>",
-            r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+            r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001"></QualifyingProperties></Object>"##,
             "</Signature>"
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1172,7 +1221,7 @@ fn signed_pacs008_xml_with_wrong_default_xades_namespace() -> String {
     let signed_properties =
         signed_properties_xml_with_default_namespace(signed_properties_id, "urn:not-xades");
     signed_pacs008_xml_with_signed_properties(signed_properties_id, &signed_properties).replacen(
-        r##"<QualifyingProperties Target="#sig-001">"##,
+        &format!(r##"<QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##),
         r##"<QualifyingProperties xmlns="urn:not-xades" Target="#sig-001">"##,
         1,
     )
@@ -1198,7 +1247,7 @@ fn signed_pacs008_xml_with_signed_properties(
         &signed_properties_digest,
     );
     let canonical_signed_info =
-        canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        canonicalize_xmlsig_signed_info(&signed_info, CanonicalXmlMode::Inclusive);
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
@@ -1210,12 +1259,12 @@ fn signed_pacs008_xml_with_signed_properties(
     );
     let signature_xml = format!(
         concat!(
-            r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+            r#"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
             "<KeyInfo><KeyValue><ECKeyValue>",
             r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
             "<PublicKey>{public_key}</PublicKey>",
             "</ECKeyValue></KeyValue></KeyInfo>",
-            r##"<Object><QualifyingProperties Target="#sig-001">"##,
+            r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##,
             "{signed_properties}",
             "</QualifyingProperties></Object>",
             "</Signature>"
@@ -1223,7 +1272,9 @@ fn signed_pacs008_xml_with_signed_properties(
         signed_info = signed_info,
         signature_value = signature_value,
         public_key = public_key,
-        signed_properties = signed_properties
+        signed_properties = signed_properties,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1235,12 +1286,13 @@ fn signed_pacs008_xml_with_signed_properties(
 fn signed_properties_xml(id: &str) -> String {
     format!(
         concat!(
-            r#"<SignedProperties Id="{id}"><SignedSignatureProperties>"#,
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="{id}"><SignedSignatureProperties>"#,
             "<SigningTime>{signing_time}</SigningTime>",
             "</SignedSignatureProperties></SignedProperties>"
         ),
         id = id,
-        signing_time = XML_SIGNATURE_TEST_SIGNING_TIME
+        signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
+        XADES_NS = XADES_NS
     )
 }
 fn signed_properties_xml_prefixed(id: &str, xades_namespace: &str) -> String {
@@ -1290,18 +1342,20 @@ fn signed_properties_xml_with_signing_certificate_v2_at(
     (
         format!(
             concat!(
-                r#"<SignedProperties Id="{id}"><SignedSignatureProperties>"#,
+                r#"<SignedProperties xmlns="{XADES_NS}" xmlns:ds="{XMLDSIG_NS}" Id="{id}"><SignedSignatureProperties>"#,
                 "<SigningTime>{signing_time}</SigningTime>",
                 "<SigningCertificateV2><Cert><CertDigest>",
-                r#"<DigestMethod Algorithm="{sha256}"></DigestMethod>"#,
-                "<DigestValue>{leaf_digest}</DigestValue>",
+                r#"<ds:DigestMethod Algorithm="{sha256}"></ds:DigestMethod>"#,
+                "<ds:DigestValue>{leaf_digest}</ds:DigestValue>",
                 "</CertDigest></Cert></SigningCertificateV2>",
                 "</SignedSignatureProperties></SignedProperties>"
             ),
             id = id,
             signing_time = signing_time,
             sha256 = XMLDSIG_SHA256,
-            leaf_digest = leaf_digest
+            leaf_digest = leaf_digest,
+            XMLDSIG_NS = XMLDSIG_NS,
+            XADES_NS = XADES_NS
         ),
         leaf_digest,
     )
@@ -1328,26 +1382,29 @@ fn test_xades_signing_certificate_v2_xml_with_cert_extra(
     let digest = BASE64_STANDARD.encode(Sha256::digest(&certificate_der));
     format!(
         concat!(
-            "<SigningCertificateV2><Cert><CertDigest>",
-            r#"<DigestMethod Algorithm="{sha256}"></DigestMethod>"#,
-            "<DigestValue>{digest}</DigestValue>",
+            r#"<SigningCertificateV2 xmlns="{XADES_NS}" xmlns:ds="{XMLDSIG_NS}"><Cert><CertDigest>"#,
+            r#"<ds:DigestMethod Algorithm="{sha256}"></ds:DigestMethod>"#,
+            "<ds:DigestValue>{digest}</ds:DigestValue>",
             "</CertDigest>{cert_extra}</Cert></SigningCertificateV2>"
         ),
         sha256 = XMLDSIG_SHA256,
         digest = digest,
-        cert_extra = cert_extra
+        cert_extra = cert_extra,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     )
 }
 fn test_xades_signed_properties_xml_with_extra(extra: &str) -> String {
     format!(
         concat!(
-            r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties>"#,
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="signed-props-001"><SignedSignatureProperties>"#,
             "<SigningTime>{signing_time}</SigningTime>",
             "{extra}",
             "</SignedSignatureProperties></SignedProperties>"
         ),
         signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
-        extra = extra
+        extra = extra,
+        XADES_NS = XADES_NS
     )
 }
 fn signed_properties_id_from_xml(signed_properties_xml: &str) -> &str {
@@ -1382,7 +1439,7 @@ fn test_xades_signed_properties_reference_for_xml(signed_properties_xml: &str) -
 }
 fn test_xades_object_xml(signed_properties_xml: &str) -> String {
     format!(
-        r##"<Object><QualifyingProperties Target="#sig-001">{signed_properties_xml}</QualifyingProperties></Object>"##
+        r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">{signed_properties_xml}</QualifyingProperties></Object>"##
     )
 }
 fn test_p256_key_info(signing_key: &P256SigningKey) -> String {
@@ -1455,11 +1512,11 @@ fn signed_pacs008_xml_with_key_info_and_xades_parts(
         signed_properties_reference_xml = signed_properties_reference_xml
     );
     let canonical_signed_info =
-        canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        canonicalize_xmlsig_signed_info(&signed_info, CanonicalXmlMode::Inclusive);
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
     let signature_xml = format!(
-        r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>{key_info}{xades_object_xml}</Signature>"#
+        r#"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>{key_info}{xades_object_xml}</Signature>"#
     );
     format!(
         "{}{}{}",
@@ -1479,8 +1536,8 @@ fn signed_properties_xml_with_signing_certificate_v2_digest_bytes(
             format!(
                 concat!(
                     "<Cert><CertDigest>",
-                    r#"<DigestMethod Algorithm="{sha256}"></DigestMethod>"#,
-                    "<DigestValue>{digest}</DigestValue>",
+                    r#"<ds:DigestMethod Algorithm="{sha256}"></ds:DigestMethod>"#,
+                    "<ds:DigestValue>{digest}</ds:DigestValue>",
                     "</CertDigest></Cert>"
                 ),
                 sha256 = XMLDSIG_SHA256,
@@ -1490,14 +1547,16 @@ fn signed_properties_xml_with_signing_certificate_v2_digest_bytes(
         .collect::<String>();
     format!(
         concat!(
-            r#"<SignedProperties Id="{id}"><SignedSignatureProperties>"#,
+            r#"<SignedProperties xmlns="{XADES_NS}" xmlns:ds="{XMLDSIG_NS}" Id="{id}"><SignedSignatureProperties>"#,
             "<SigningTime>{signing_time}</SigningTime>",
             "<SigningCertificateV2>{certs}</SigningCertificateV2>",
             "</SignedSignatureProperties></SignedProperties>"
         ),
         id = id,
         signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
-        certs = certs
+        certs = certs,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     )
 }
 struct CertificateChainSignedPropertiesPayload {
@@ -1559,7 +1618,7 @@ fn signed_pacs008_xml_with_certificate_chain_signed_properties_reference()
         &signed_properties_digest,
     );
     let canonical_signed_info =
-        canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        canonicalize_xmlsig_signed_info(&signed_info, CanonicalXmlMode::Inclusive);
     let signature = leaf_key
         .sign(canonical_signed_info.as_bytes())
         .expect("leaf XMLDSig signature");
@@ -1568,12 +1627,12 @@ fn signed_pacs008_xml_with_certificate_chain_signed_properties_reference()
     let issuer_certificate = BASE64_STANDARD.encode(issuer_cert.der().as_ref());
     let signature_xml = format!(
         concat!(
-            r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+            r#"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
             "<KeyInfo><X509Data>",
             "<X509Certificate>{leaf_certificate}</X509Certificate>",
             "<X509Certificate>{issuer_certificate}</X509Certificate>",
             "</X509Data></KeyInfo>",
-            r##"<Object><QualifyingProperties Target="#sig-001">"##,
+            r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##,
             "{signed_properties}",
             "</QualifyingProperties></Object>",
             "</Signature>"
@@ -1582,7 +1641,9 @@ fn signed_pacs008_xml_with_certificate_chain_signed_properties_reference()
         signature_value = signature_value,
         leaf_certificate = leaf_certificate,
         issuer_certificate = issuer_certificate,
-        signed_properties = signed_properties
+        signed_properties = signed_properties,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     CertificateChainSignedPropertiesPayload {
         payload: format!(
@@ -1607,7 +1668,7 @@ fn signed_pacs008_xml_with_comments() -> String {
         .replace("<Reference", "<!--signed-info comment--><Reference")
         .replace("</SignedInfo>", "<!--signed-info tail--></SignedInfo>");
     let canonical_signed_info =
-        canonicalize_supported_xml(&signed_info).expect("canonical commented SignedInfo");
+        canonicalize_xmlsig_signed_info(&signed_info, CanonicalXmlMode::Inclusive);
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
@@ -1619,17 +1680,19 @@ fn signed_pacs008_xml_with_comments() -> String {
     );
     let signature_xml = format!(
         concat!(
-            "<Signature>{signed_info}<SignatureValue>{signature_value}</SignatureValue>",
+            r#"<Signature xmlns="{XMLDSIG_NS}">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
             "<KeyInfo><KeyValue><ECKeyValue>",
             r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
             "<PublicKey>{public_key}</PublicKey>",
             "</ECKeyValue></KeyValue></KeyInfo>",
-            r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+            r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001"></QualifyingProperties></Object>"##,
             "</Signature>"
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1699,7 +1762,7 @@ fn signed_pacs008_xml_with_signed_info_xml_namespace_attribute() -> String {
         1,
     );
     let canonical_signed_info =
-        canonicalize_supported_xml(&signed_info).expect("canonical xml-attribute SignedInfo");
+        canonicalize_xmlsig_signed_info(&signed_info, CanonicalXmlMode::Inclusive);
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
@@ -1711,17 +1774,19 @@ fn signed_pacs008_xml_with_signed_info_xml_namespace_attribute() -> String {
     );
     let signature_xml = format!(
         concat!(
-            "<Signature>{signed_info}<SignatureValue>{signature_value}</SignatureValue>",
+            r#"<Signature xmlns="{XMLDSIG_NS}">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
             "<KeyInfo><KeyValue><ECKeyValue>",
             r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
             "<PublicKey>{public_key}</PublicKey>",
             "</ECKeyValue></KeyValue></KeyInfo>",
-            r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+            r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001"></QualifyingProperties></Object>"##,
             "</Signature>"
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1742,11 +1807,18 @@ fn signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute() -> String 
         r#"<SignedInfo ext:role="authorization">"#,
         1,
     );
-    let inherited_namespaces = vec![CanonicalXmlAttribute {
-        name: "xmlns:ext".to_owned(),
-        value: "urn:iso:test:ext".to_owned(),
-        kind: CanonicalXmlAttributeKind::Namespace,
-    }];
+    let inherited_namespaces = vec![
+        CanonicalXmlAttribute {
+            name: "xmlns".to_owned(),
+            value: XMLDSIG_NS.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        },
+        CanonicalXmlAttribute {
+            name: "xmlns:ext".to_owned(),
+            value: "urn:iso:test:ext".to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        },
+    ];
     let canonical_signed_info = canonicalize_supported_xml_with_mode(
         &signed_info,
         &inherited_namespaces,
@@ -1764,18 +1836,20 @@ fn signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute() -> String 
     );
     let signature_xml = format!(
         concat!(
-            r#"<Signature xmlns:ext="urn:iso:test:ext">{signed_info}"#,
+            r#"<Signature xmlns="{XMLDSIG_NS}" xmlns:ext="urn:iso:test:ext">{signed_info}"#,
             "<SignatureValue>{signature_value}</SignatureValue>",
             "<KeyInfo><KeyValue><ECKeyValue>",
             r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
             "<PublicKey>{public_key}</PublicKey>",
             "</ECKeyValue></KeyValue></KeyInfo>",
-            r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+            r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001"></QualifyingProperties></Object>"##,
             "</Signature>"
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1880,11 +1954,18 @@ fn signed_pacs008_xml_with_prefixed_signature_namespace_options_and_namespace(
     let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
     let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
     let signed_info = signed_info_xml_prefixed(c14n_algorithm, &digest);
-    let mut inherited_namespaces = vec![CanonicalXmlAttribute {
-        name: "xmlns:ds".to_owned(),
-        value: xmldsig_namespace.to_owned(),
-        kind: CanonicalXmlAttributeKind::Namespace,
-    }];
+    let mut inherited_namespaces = vec![
+        CanonicalXmlAttribute {
+            name: "xmlns".to_owned(),
+            value: TEST_PACS008_NAMESPACE.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        },
+        CanonicalXmlAttribute {
+            name: "xmlns:ds".to_owned(),
+            value: xmldsig_namespace.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        },
+    ];
     if include_unused_namespace {
         inherited_namespaces.push(CanonicalXmlAttribute {
             name: "xmlns:unused".to_owned(),
@@ -2040,8 +2121,28 @@ fn signed_pacs008_xml_from_unsigned_with_reference_options(
         self_closing_signed_info_methods,
         reference_c14n_algorithm,
     );
+    let mut signature_namespace_scope = xml_namespace_bindings_before_offset(&unsigned, insertion)
+        .expect("signature ancestor namespace scope");
+    if let Some(default_namespace) = signature_namespace_scope
+        .iter_mut()
+        .find(|binding| binding.prefix.is_empty())
+    {
+        default_namespace.uri = XMLDSIG_NS.to_owned();
+    } else {
+        signature_namespace_scope.push(CanonicalXmlNamespaceBinding {
+            prefix: String::new(),
+            uri: XMLDSIG_NS.to_owned(),
+        });
+    }
+    let signature_namespaces =
+        inherited_namespace_attributes_from_scope(&signature_namespace_scope);
     let canonical_signed_info = if sign_canonical_signed_info {
-        canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo")
+        canonicalize_supported_xml_with_mode(
+            &signed_info,
+            &signature_namespaces,
+            xml_canonicalization_mode(c14n_algorithm).expect("supported SignedInfo C14N"),
+        )
+        .expect("canonical SignedInfo")
     } else {
         signed_info.clone()
     };
@@ -2056,17 +2157,19 @@ fn signed_pacs008_xml_from_unsigned_with_reference_options(
     );
     let signature_xml = format!(
         concat!(
-            "<Signature>{signed_info}<SignatureValue>{signature_value}</SignatureValue>",
+            r#"<Signature xmlns="{xmldsig_ns}">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
             "<KeyInfo><KeyValue><ECKeyValue>",
             r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
             "<PublicKey>{public_key}</PublicKey>",
             "</ECKeyValue></KeyValue></KeyInfo>",
-            r##"<Object><QualifyingProperties Target="#sig-001"/></Object>"##,
+            r##"<Object><QualifyingProperties xmlns="{xades_ns}" Target="#sig-001"/></Object>"##,
             "</Signature>"
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        xmldsig_ns = XMLDSIG_NS,
+        xades_ns = XADES_NS,
     );
     format!(
         "{}{}{}",
@@ -2592,7 +2695,7 @@ fn signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
         &signed_properties_digest,
     );
     let canonical_signed_info =
-        canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        canonicalize_xmlsig_signed_info(&signed_info, CanonicalXmlMode::Inclusive);
     let signature = leaf_key
         .sign(canonical_signed_info.as_bytes())
         .expect("leaf XMLDSig signature");
@@ -2608,12 +2711,12 @@ fn signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
         .collect::<String>();
     let signature_xml = format!(
         concat!(
-            r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+            r#"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
             "<KeyInfo><X509Data>",
             "{certificates_xml}",
             "{extra_x509_data_xml}",
             "</X509Data></KeyInfo>",
-            r##"<Object><QualifyingProperties Target="#sig-001">"##,
+            r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##,
             "{signed_properties}",
             "</QualifyingProperties></Object>",
             "</Signature>"
@@ -2622,7 +2725,9 @@ fn signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
         signature_value = signature_value,
         certificates_xml = certificates_xml,
         extra_x509_data_xml = extra_x509_data_xml,
-        signed_properties = signed_properties
+        signed_properties = signed_properties,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     CertificateChainSignedPayload {
         payload: format!(
@@ -3105,6 +3210,11 @@ fn sample_config_with_live_reference_data() -> (actual::IsoBridge, Vec<NamedTemp
         &[("{asset_definition_id}", &asset_definition_id)],
     ));
     let mut config = sample_config();
+    config.currency_assets.push(actual::IsoCurrencyAsset {
+        currency: "EUR".to_owned(),
+        asset_definition: asset_definition_id.clone(),
+        max_amount: Quantity::from(10_000_u64),
+    });
     config.reference_data.bic_lei_path = Some(bic_lei.path().to_path_buf());
     config.reference_data.isin_crosswalk_path = Some(isin_crosswalk.path().to_path_buf());
     config.reference_data.mic_directory_path = Some(mic_directory.path().to_path_buf());
@@ -3151,6 +3261,12 @@ fn record_original(runtime: &Iso20022BridgeRuntime, message_id: &str, message_ty
     assert!(
         runtime.check_and_record_inbound(message_id, inbound_metadata(message_id, message_type)),
         "record original {message_id}"
+    );
+}
+fn record_lifecycle(runtime: &Iso20022BridgeRuntime, message_id: &str, message_type: &str) {
+    assert!(
+        runtime.check_and_record_inbound(message_id, inbound_metadata(message_id, message_type)),
+        "record lifecycle {message_id}"
     );
 }
 fn signed_pacs008_xml_with_certificate_chain_issuer_name_mismatch() -> CertificateChainSignedPayload
@@ -3452,7 +3568,7 @@ fn validate_require_verified_signed_payload(
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .expect("cfg")
         .expect("enabled");
-    let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+    let parsed = parse_xml_message("pacs.008", payload.as_bytes())?;
     let profile = runtime
         .resolve_profile(Some("signed-pacs008-test"))
         .expect("signed profile");
@@ -4310,9 +4426,9 @@ signed_payload_tests! {
 rejected_signed_payload_tests! {
     require_verified_profile_rejects_unreferenced_signed_properties: {
         signed_pacs008_xml().replacen(
-            r##"<Object><QualifyingProperties Target="#sig-001"/></Object>"##,
+            &format!(r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001"/></Object>"##),
             &format!(
-                r##"<Object><QualifyingProperties Target="#sig-001">{}</QualifyingProperties></Object>"##,
+                r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">{}</QualifyingProperties></Object>"##,
                 signed_properties_xml("unsigned-props-001")
             ),
             1,
@@ -4332,12 +4448,13 @@ rejected_signed_payload_tests! {
         let signed_properties_id = "signed-props-001";
         let signed_properties = format!(
             concat!(
-                r#"<SignedProperties Id="{id}"><SignedSignatureProperties>"#,
+                r#"<SignedProperties xmlns="{XADES_NS}" Id="{id}"><SignedSignatureProperties>"#,
                 r#"<SigningTime Source="unsupported">{signing_time}</SigningTime>"#,
                 "</SignedSignatureProperties></SignedProperties>"
             ),
             id = signed_properties_id,
-            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME
+            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
+            XADES_NS = XADES_NS
         );
         signed_pacs008_xml_with_signed_properties(signed_properties_id, &signed_properties)
     } => "unsupported signed SigningTime attributes must fail closed";
@@ -4490,8 +4607,8 @@ rejected_signed_payload_tests! {
     require_verified_profile_rejects_wrapped_qualifying_properties: {
         signed_pacs008_xml_with_signed_properties_reference()
             .replacen(
-                r##"<Object><QualifyingProperties Target="#sig-001">"##,
-                r##"<Object><Wrapper><QualifyingProperties Target="#sig-001">"##,
+                &format!(r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##),
+                &format!(r##"<Object><Wrapper><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##),
                 1,
             )
             .replacen(
@@ -4747,11 +4864,12 @@ fn supported_xml_reference_target_rejects_invalid_same_document_uris() {
 }
 #[test]
 fn supported_xml_reference_transform_accepts_optional_c14n_transform() {
+    let inherited_namespaces = default_xmlsig_namespace_bindings();
     let valid = format!(
         r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></Reference>"#
     );
     assert_eq!(
-        supported_xml_signature_reference_c14n_mode(&valid)
+        supported_xml_signature_reference_c14n_mode_with_namespaces(&valid, &inherited_namespaces)
             .expect("the supported Reference transform set should pass"),
         CanonicalXmlMode::Exclusive
     );
@@ -4759,16 +4877,22 @@ fn supported_xml_reference_transform_accepts_optional_c14n_transform() {
         r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform><Transform Algorithm="{XML_C14N_1_0}"></Transform></Transforms></Reference>"#
     );
     assert_eq!(
-        supported_xml_signature_reference_c14n_mode(&valid_with_c14n)
-            .expect("a final supported C14N transform should pass"),
+        supported_xml_signature_reference_c14n_mode_with_namespaces(
+            &valid_with_c14n,
+            &inherited_namespaces,
+        )
+        .expect("a final supported C14N transform should pass"),
         CanonicalXmlMode::Inclusive
     );
     let valid_with_transform_comments = format!(
         r#"<Reference URI=""><Transforms><!--before--><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform><!--after--></Transforms></Reference>"#
     );
     assert_eq!(
-        supported_xml_signature_reference_c14n_mode(&valid_with_transform_comments)
-            .expect("comments in no-comments SignedInfo transform wrappers should pass"),
+        supported_xml_signature_reference_c14n_mode_with_namespaces(
+            &valid_with_transform_comments,
+            &inherited_namespaces,
+        )
+        .expect("comments in no-comments SignedInfo transform wrappers should pass"),
         CanonicalXmlMode::Exclusive
     );
     for reference in [
@@ -4833,7 +4957,10 @@ fn supported_xml_reference_transform_accepts_optional_c14n_transform() {
                 r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform><Transform Algorithm="{XML_C14N_1_0}"></Transform><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms></Reference>"#
             ),
         ] {
-            let err = supported_xml_signature_reference_c14n_mode(&reference)
+            let err = supported_xml_signature_reference_c14n_mode_with_namespaces(
+                &reference,
+                &inherited_namespaces,
+            )
                 .expect_err("missing, reordered, extra, or unsupported transforms must fail closed");
             assert!(matches!(err, MsgError::ValidationFailed));
         }
@@ -4876,34 +5003,46 @@ fn supported_xml_signature_reference_rejects_wrong_prefixed_namespace() {
 }
 #[test]
 fn supported_xml_signature_reference_rejects_malformed_qnames() {
+    let inherited_namespaces = default_xmlsig_namespace_bindings();
     let malformed_reference = format!(
         r#"<ds::Reference xmlns:ds="{XMLDSIG_NS}" URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></ds::Reference>"#
     );
-    let err = supported_xml_signature_reference_c14n_mode(&malformed_reference)
-        .expect_err("malformed XMLDSig Reference QName must fail closed");
+    let err = supported_xml_signature_reference_c14n_mode_with_namespaces(
+        &malformed_reference,
+        &inherited_namespaces,
+    )
+    .expect_err("malformed XMLDSig Reference QName must fail closed");
     assert!(matches!(err, MsgError::ValidationFailed));
     let malformed_transform = format!(
         r#"<Reference URI=""><Transforms><ds::Transform xmlns:ds="{XMLDSIG_NS}" Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></ds::Transform></Transforms></Reference>"#
     );
-    let err = supported_xml_signature_reference_c14n_mode(&malformed_transform)
-        .expect_err("malformed direct XMLDSig Transform QName must fail closed");
+    let err = supported_xml_signature_reference_c14n_mode_with_namespaces(
+        &malformed_transform,
+        &inherited_namespaces,
+    )
+    .expect_err("malformed direct XMLDSig Transform QName must fail closed");
     assert!(matches!(err, MsgError::ValidationFailed));
     let canonical = "<Document></Document>";
     let digest = BASE64_STANDARD.encode(Sha256::digest(canonical.as_bytes()));
     let malformed_digest_method = format!(
         r#"<Reference URI=""><ds::DigestMethod xmlns:ds="{XMLDSIG_NS}" Algorithm="{XMLDSIG_SHA256}"></ds::DigestMethod><DigestValue>{digest}</DigestValue></Reference>"#
     );
-    let err = verify_xml_signature_reference_digest(&malformed_digest_method, canonical)
-        .expect_err("malformed namespace-bound DigestMethod QName must fail closed");
+    let err = verify_xml_signature_reference_digest_with_namespaces(
+        &malformed_digest_method,
+        canonical,
+        &inherited_namespaces,
+    )
+    .expect_err("malformed namespace-bound DigestMethod QName must fail closed");
     assert!(matches!(err, MsgError::ValidationFailed));
 }
 #[test]
 fn supported_xml_signed_properties_reference_requires_supported_c14n_transform() {
+    let inherited_namespaces = default_xmlsig_namespace_bindings();
     let valid = format!(
         r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transforms><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms></Reference>"##
     );
     assert_eq!(
-        signed_properties_reference_c14n_mode(&valid)
+        signed_properties_reference_c14n_mode_with_namespaces(&valid, &inherited_namespaces)
             .expect("SignedProperties Reference with supported C14N should pass"),
         CanonicalXmlMode::Exclusive
     );
@@ -4946,31 +5085,43 @@ fn supported_xml_signed_properties_reference_requires_supported_c14n_transform()
                 r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transforms><Transform Algorithm="{XML_C14N_1_0}"></Transform><Transform Algorithm="{XML_C14N_1_1}"></Transform></Transforms></Reference>"##
             ),
         ] {
-            let err = signed_properties_reference_c14n_mode(&reference)
+            let err = signed_properties_reference_c14n_mode_with_namespaces(
+                &reference,
+                &inherited_namespaces,
+            )
                 .expect_err("SignedProperties references require one supported C14N transform");
             assert!(matches!(err, MsgError::ValidationFailed));
         }
 }
 #[test]
 fn supported_xml_reference_digest_rejects_digest_method_unsupported_attributes() {
+    let inherited_namespaces = default_xmlsig_namespace_bindings();
     let canonical = "<Document></Document>";
     let digest = BASE64_STANDARD.encode(Sha256::digest(canonical.as_bytes()));
     let valid = format!(
         r#"<Reference URI=""><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></Reference>"#
     );
-    verify_xml_signature_reference_digest(&valid, canonical)
+    verify_xml_signature_reference_digest_with_namespaces(&valid, canonical, &inherited_namespaces)
         .expect("SHA-256 Reference digest should pass");
     let invalid = format!(
         r#"<Reference URI=""><DigestMethod Algorithm="{XMLDSIG_SHA256}" Id="digest-method-001"></DigestMethod><DigestValue>{digest}</DigestValue></Reference>"#
     );
-    let err = verify_xml_signature_reference_digest(&invalid, canonical)
-        .expect_err("unsupported DigestMethod attributes must fail closed");
+    let err = verify_xml_signature_reference_digest_with_namespaces(
+        &invalid,
+        canonical,
+        &inherited_namespaces,
+    )
+    .expect_err("unsupported DigestMethod attributes must fail closed");
     assert!(matches!(err, MsgError::ValidationFailed));
     let namespace_qualified_algorithm = format!(
         r#"<Reference URI=""><DigestMethod ds:Algorithm="{XMLDSIG_SHA256}" xmlns:ds="{XMLDSIG_NS}"></DigestMethod><DigestValue>{digest}</DigestValue></Reference>"#
     );
-    let err = verify_xml_signature_reference_digest(&namespace_qualified_algorithm, canonical)
-        .expect_err("namespace-qualified DigestMethod Algorithm must fail closed");
+    let err = verify_xml_signature_reference_digest_with_namespaces(
+        &namespace_qualified_algorithm,
+        canonical,
+        &inherited_namespaces,
+    )
+    .expect_err("namespace-qualified DigestMethod Algorithm must fail closed");
     assert!(matches!(err, MsgError::ValidationFailed));
 }
 #[test]
@@ -4982,13 +5133,14 @@ fn supported_xml_signed_properties_reference_verifies_generated_fixture() {
         .expect("QualifyingProperties Target should bind to Signature Id");
     let signed_info_span = find_first_xml_element(signature_xml, "SignedInfo").expect("SignedInfo");
     let signed_info_xml = &signature_xml[signed_info_span.start..signed_info_span.end];
+    let inherited_namespaces = default_xmlsig_namespace_bindings();
     verify_xml_signature_references(
         &payload,
         signature_span,
         signature_span,
         signature_xml,
         signed_info_xml,
-        &[],
+        &inherited_namespaces,
     )
     .expect("generated XAdES fixture references should verify");
 }
@@ -5000,24 +5152,24 @@ fn supported_xml_xades_qualifying_properties_requires_direct_shape() {
     ensure_xades_qualifying_properties_target(signature_xml)
         .expect("direct XAdES QualifyingProperties should be accepted");
     let prefixed_signature = format!(
-        r##"<Signature Id="sig-001"><Object><xades:QualifyingProperties xmlns:xades="{XADES_NS}" Target="#sig-001"><xades:SignedProperties Id="signed-props-001"></xades:SignedProperties></xades:QualifyingProperties></Object></Signature>"##
+        r##"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001"><Object><xades:QualifyingProperties xmlns:xades="{XADES_NS}" Target="#sig-001"><xades:SignedProperties Id="signed-props-001"></xades:SignedProperties></xades:QualifyingProperties></Object></Signature>"##
     );
     ensure_xades_qualifying_properties_target(&prefixed_signature)
         .expect("prefixed XAdES QualifyingProperties should bind to the supported namespace");
     for invalid_payload in [
             format!(
-                r##"<Signature Id="sig-001"><Object><xades:QualifyingProperties xmlns:xades="urn:not-xades" Target="#sig-001"><xades:SignedProperties Id="signed-props-001"></xades:SignedProperties></xades:QualifyingProperties></Object></Signature>"##
+                r##"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001"><Object><xades:QualifyingProperties xmlns:xades="urn:not-xades" Target="#sig-001"><xades:SignedProperties Id="signed-props-001"></xades:SignedProperties></xades:QualifyingProperties></Object></Signature>"##
             ),
-            r##"<Signature Id="sig-001"><Object><QualifyingProperties xmlns="urn:not-xades" Target="#sig-001"><SignedProperties Id="signed-props-001"></SignedProperties></QualifyingProperties></Object></Signature>"##.to_owned(),
+            format!(r##"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001"><Object><QualifyingProperties xmlns="urn:not-xades" Target="#sig-001"><SignedProperties Id="signed-props-001"></SignedProperties></QualifyingProperties></Object></Signature>"##),
             signed_pacs008_xml_with_signed_properties_reference().replacen(
-                r##"<QualifyingProperties Target="#sig-001">"##,
-                r##"<QualifyingProperties Target="#sig-001" Id="qp-001">"##,
+                &format!(r##"<QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##),
+                &format!(r##"<QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001" Id="qp-001">"##),
                 1,
             ),
             signed_pacs008_xml_with_signed_properties_reference()
                 .replacen(
-                    r##"<Object><QualifyingProperties Target="#sig-001">"##,
-                    r##"<Object><Wrapper><QualifyingProperties Target="#sig-001">"##,
+                    &format!(r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##),
+                    &format!(r##"<Object><Wrapper><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##),
                     1,
                 )
                 .replacen(
@@ -5046,9 +5198,10 @@ fn supported_xml_xades_qualifying_properties_requires_direct_shape() {
 fn supported_xml_xades_signing_certificate_v2_requires_direct_cert_children() {
     let digest = BASE64_STANDARD.encode([7_u8; 32]);
     let cert = format!(
-        r#"<Cert><CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></CertDigest></Cert>"#
+        r#"<Cert><CertDigest xmlns:ds="{XMLDSIG_NS}"><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"></ds:DigestMethod><ds:DigestValue>{digest}</ds:DigestValue></CertDigest></Cert>"#
     );
-    let valid = format!(r#"<SigningCertificateV2>{cert}</SigningCertificateV2>"#);
+    let valid =
+        format!(r#"<SigningCertificateV2 xmlns="{XADES_NS}">{cert}</SigningCertificateV2>"#);
     assert_eq!(
         xades_signing_certificate_v2_digests(&valid)
             .expect("direct Cert children should be accepted"),
@@ -5069,9 +5222,15 @@ fn supported_xml_xades_signing_certificate_v2_requires_direct_cert_children() {
         format!(
             r#"<xades:SigningCertificateV2 xmlns:xades="urn:not-xades">{prefixed_cert}</xades:SigningCertificateV2>"#
         ),
-        format!(r#"<SigningCertificateV2 Id="certs-001">{cert}</SigningCertificateV2>"#),
-        format!(r#"<SigningCertificateV2><Wrapper>{cert}</Wrapper></SigningCertificateV2>"#),
-        format!(r#"<SigningCertificateV2>{cert}<Wrapper>{cert}</Wrapper></SigningCertificateV2>"#),
+        format!(
+            r#"<SigningCertificateV2 xmlns="{XADES_NS}" Id="certs-001">{cert}</SigningCertificateV2>"#
+        ),
+        format!(
+            r#"<SigningCertificateV2 xmlns="{XADES_NS}"><Wrapper>{cert}</Wrapper></SigningCertificateV2>"#
+        ),
+        format!(
+            r#"<SigningCertificateV2 xmlns="{XADES_NS}">{cert}<Wrapper>{cert}</Wrapper></SigningCertificateV2>"#
+        ),
     ] {
         let err = xades_signing_certificate_v2_digests(&invalid)
             .expect_err("wrapped Cert children must fail closed");
@@ -5133,25 +5292,25 @@ fn supported_xml_xades_signing_certificate_v2_binds_ordered_chain_prefix() {
 fn supported_xml_xades_cert_digest_requires_direct_child() {
     let digest = BASE64_STANDARD.encode([9_u8; 32]);
     let cert_digest = format!(
-        r#"<CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></CertDigest>"#
+        r#"<CertDigest xmlns:ds="{XMLDSIG_NS}"><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"></ds:DigestMethod><ds:DigestValue>{digest}</ds:DigestValue></CertDigest>"#
     );
-    let valid = format!(r#"<Cert>{cert_digest}</Cert>"#);
+    let valid = format!(r#"<Cert xmlns="{XADES_NS}">{cert_digest}</Cert>"#);
     assert_eq!(
         xades_cert_digest_sha256(&valid).expect("direct CertDigest should be accepted"),
         lower_hex(&[9_u8; 32])
     );
     for invalid in [
-        format!(r#"<Cert Id="cert-001">{cert_digest}</Cert>"#),
+        format!(r#"<Cert xmlns="{XADES_NS}" Id="cert-001">{cert_digest}</Cert>"#),
         format!(
-            r#"<Cert><CertDigest Id="digest-001"><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></CertDigest></Cert>"#
+            r#"<Cert xmlns="{XADES_NS}" xmlns:ds="{XMLDSIG_NS}"><CertDigest Id="digest-001"><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"></ds:DigestMethod><ds:DigestValue>{digest}</ds:DigestValue></CertDigest></Cert>"#
         ),
         format!(
-            r#"<Cert><CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}" Id="method-001"></DigestMethod><DigestValue>{digest}</DigestValue></CertDigest></Cert>"#
+            r#"<Cert xmlns="{XADES_NS}" xmlns:ds="{XMLDSIG_NS}"><CertDigest><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}" Id="method-001"></ds:DigestMethod><ds:DigestValue>{digest}</ds:DigestValue></CertDigest></Cert>"#
         ),
-        format!(r#"<Cert><Wrapper>{cert_digest}</Wrapper></Cert>"#),
-        format!(r#"<Cert>{cert_digest}<Wrapper>{cert_digest}</Wrapper></Cert>"#),
+        format!(r#"<Cert xmlns="{XADES_NS}"><Wrapper>{cert_digest}</Wrapper></Cert>"#),
+        format!(r#"<Cert xmlns="{XADES_NS}">{cert_digest}<Wrapper>{cert_digest}</Wrapper></Cert>"#),
         format!(
-            r#"<Cert><CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue><Other></Other></CertDigest></Cert>"#
+            r#"<Cert xmlns="{XADES_NS}" xmlns:ds="{XMLDSIG_NS}"><CertDigest><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"></ds:DigestMethod><ds:DigestValue>{digest}</ds:DigestValue><Other></Other></CertDigest></Cert>"#
         ),
     ] {
         let err = xades_cert_digest_sha256(&invalid)
@@ -5180,23 +5339,23 @@ fn supported_xml_xades_signed_signature_properties_requires_direct_shape() {
     for invalid in [
         signed_properties_xml_prefixed("signed-props-001", "urn:not-xades"),
         format!(
-            r#"<SignedProperties Id="signed-props-001"><Wrapper>{}</Wrapper></SignedProperties>"#,
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="signed-props-001"><Wrapper>{}</Wrapper></SignedProperties>"#,
             signed_properties_xml("inner")
         ),
         format!(
-            r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><Wrapper><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></Wrapper></SignedSignatureProperties></SignedProperties>"#
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="signed-props-001"><SignedSignatureProperties><Wrapper><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></Wrapper></SignedSignatureProperties></SignedProperties>"#
         ),
         format!(
-            r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties><SignedDataObjectProperties></SignedDataObjectProperties></SignedProperties>"#
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties><SignedDataObjectProperties></SignedDataObjectProperties></SignedProperties>"#
         ),
         format!(
-            r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties Profile="unsupported"><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties></SignedProperties>"#
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="signed-props-001"><SignedSignatureProperties Profile="unsupported"><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties></SignedProperties>"#
         ),
         format!(
-            r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningCertificate></SigningCertificate></SignedSignatureProperties></SignedProperties>"#
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="signed-props-001"><SignedSignatureProperties><SigningCertificate></SigningCertificate></SignedSignatureProperties></SignedProperties>"#
         ),
         format!(
-            r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties></SignedProperties>"#
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties></SignedProperties>"#
         ),
     ] {
         let err = xades_signed_signature_properties_xml(&invalid)
@@ -5205,13 +5364,13 @@ fn supported_xml_xades_signed_signature_properties_requires_direct_shape() {
     }
     for invalid in [
         format!(
-            r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningTime Source="unsupported">{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties></SignedProperties>"#
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="signed-props-001"><SignedSignatureProperties><SigningTime Source="unsupported">{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties></SignedProperties>"#
         ),
         format!(
-            r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}<Chunk></Chunk></SigningTime></SignedSignatureProperties></SignedProperties>"#
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}<Chunk></Chunk></SigningTime></SignedSignatureProperties></SignedProperties>"#
         ),
         format!(
-            r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}<!--comment--></SigningTime></SignedSignatureProperties></SignedProperties>"#
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}<!--comment--></SigningTime></SignedSignatureProperties></SignedProperties>"#
         ),
     ] {
         let err = xades_signed_properties_signing_time(&invalid)
@@ -5262,35 +5421,39 @@ fn supported_xml_signature_shape_requires_direct_children() {
         .expect("direct XMLDSig Signature children should be accepted");
     let signed_info_xml =
         &signature_xml[signature_children.signed_info.start..signature_children.signed_info.end];
-    xml_signed_info_direct_child_spans(signed_info_xml)
+    let inherited_namespaces = default_xmlsig_namespace_bindings();
+    xml_signed_info_direct_child_spans_with_namespaces(signed_info_xml, &inherited_namespaces)
         .expect("direct XMLDSig SignedInfo children should be accepted");
     for invalid_payload in [
-            signed_pacs008_xml()
-                .replacen("<SignedInfo>", "<Wrapper><SignedInfo>", 1)
-                .replacen("</SignedInfo>", "</SignedInfo></Wrapper>", 1),
-            "<Signature><SignatureValue>AQ==</SignatureValue><SignedInfo></SignedInfo><KeyInfo></KeyInfo></Signature>"
-                .to_owned(),
-            "<Signature><SignedInfo></SignedInfo><KeyInfo></KeyInfo><SignatureValue>AQ==</SignatureValue></Signature>"
-                .to_owned(),
-            "<Signature><SignedInfo></SignedInfo><SignatureValue>AQ==</SignatureValue><Object></Object><KeyInfo></KeyInfo></Signature>"
-                .to_owned(),
-            signed_pacs008_xml().replacen(
-                "</SignatureValue>",
-                "</SignatureValue><SignatureValue>AQ==</SignatureValue>",
-                1,
-            ),
-            signed_pacs008_xml().replacen("<KeyInfo>", "<Manifest></Manifest><KeyInfo>", 1),
-            format!(
-                r#"<ds:Signature xmlns:ds="{XMLDSIG_NS}"><ds:SignedInfo></bad:SignedInfo><ds:SignatureValue>AQ==</ds:SignatureValue><ds:KeyInfo></ds:KeyInfo></ds:Signature>"#
-            ),
-        ] {
-            let signature_span = find_first_xml_element(&invalid_payload, "Signature")
-                .expect("invalid fixture Signature element");
-            let signature_xml = &invalid_payload[signature_span.start..signature_span.end];
-            let err = xml_signature_direct_child_spans(signature_xml)
-                .expect_err("unsupported Signature shape must fail closed");
-            assert!(matches!(err, MsgError::ValidationFailed));
-        }
+        signed_pacs008_xml()
+            .replacen("<SignedInfo>", "<Wrapper><SignedInfo>", 1)
+            .replacen("</SignedInfo>", "</SignedInfo></Wrapper>", 1),
+        format!(
+            r#"<Signature xmlns="{XMLDSIG_NS}"><SignatureValue>AQ==</SignatureValue><SignedInfo></SignedInfo><KeyInfo></KeyInfo></Signature>"#
+        ),
+        format!(
+            r#"<Signature xmlns="{XMLDSIG_NS}"><SignedInfo></SignedInfo><KeyInfo></KeyInfo><SignatureValue>AQ==</SignatureValue></Signature>"#
+        ),
+        format!(
+            r#"<Signature xmlns="{XMLDSIG_NS}"><SignedInfo></SignedInfo><SignatureValue>AQ==</SignatureValue><Object></Object><KeyInfo></KeyInfo></Signature>"#
+        ),
+        signed_pacs008_xml().replacen(
+            "</SignatureValue>",
+            "</SignatureValue><SignatureValue>AQ==</SignatureValue>",
+            1,
+        ),
+        signed_pacs008_xml().replacen("<KeyInfo>", "<Manifest></Manifest><KeyInfo>", 1),
+        format!(
+            r#"<ds:Signature xmlns:ds="{XMLDSIG_NS}"><ds:SignedInfo></bad:SignedInfo><ds:SignatureValue>AQ==</ds:SignatureValue><ds:KeyInfo></ds:KeyInfo></ds:Signature>"#
+        ),
+    ] {
+        let signature_span = find_first_xml_element(&invalid_payload, "Signature")
+            .expect("invalid fixture Signature element");
+        let signature_xml = &invalid_payload[signature_span.start..signature_span.end];
+        let err = xml_signature_direct_child_spans(signature_xml)
+            .expect_err("unsupported Signature shape must fail closed");
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
     for invalid_signed_info in [
             format!(
                 r#"<SignedInfo><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"></SignatureMethod><CanonicalizationMethod Algorithm="{XML_C14N_1_0}"></CanonicalizationMethod><Reference URI=""></Reference></SignedInfo>"#
@@ -5314,10 +5477,39 @@ fn supported_xml_signature_shape_requires_direct_children() {
                 1,
             ),
         ] {
-            let err = xml_signed_info_direct_child_spans(&invalid_signed_info)
+            let err = xml_signed_info_direct_child_spans_with_namespaces(
+                &invalid_signed_info,
+                &inherited_namespaces,
+            )
                 .expect_err("unsupported SignedInfo shape must fail closed");
             assert!(matches!(err, MsgError::ValidationFailed));
         }
+}
+#[test]
+fn supported_xml_signature_carrier_preserves_ancestor_namespace_scope() {
+    let payload = format!(
+        concat!(
+            r#"<Envelope xmlns:ds="{XMLDSIG_NS}">"#,
+            r#"<ds:Signature xmlns="{XMLDSIG_NS}">"#,
+            "<SignedInfo></SignedInfo>",
+            "<SignatureValue>AQ==</SignatureValue>",
+            "<KeyInfo></KeyInfo>",
+            "</ds:Signature></Envelope>"
+        ),
+        XMLDSIG_NS = XMLDSIG_NS
+    );
+    let carrier = xml_signature_carrier(&payload)
+        .expect("carrier discovery")
+        .expect("signature carrier");
+    assert!(
+        carrier
+            .inherited_namespaces
+            .iter()
+            .any(|binding| binding.prefix == "ds" && binding.uri == XMLDSIG_NS)
+    );
+    let signature_xml = &payload[carrier.signature_span.start..carrier.signature_span.end];
+    xml_signature_direct_child_spans_with_namespaces(signature_xml, &carrier.inherited_namespaces)
+        .expect("ancestor-declared Signature prefix should resolve");
 }
 #[test]
 fn supported_xml_p256_signature_rejects_all_zero_signature_material() {
@@ -5415,6 +5607,17 @@ fn supported_xml_key_material_enforces_key_info_shape() {
             .to_encoded_point(false)
             .as_bytes(),
     );
+    let default_namespaces = default_xmlsig_namespace_bindings();
+    let xml_signature_key_material = |signature_xml: &str, evaluation_time: Option<ASN1Time>| {
+        xml_signature_key_material_with_namespaces(
+            signature_xml,
+            evaluation_time,
+            &default_namespaces,
+        )
+    };
+    let xml_signature_x509_certificates = |key_info_xml: &str| {
+        xml_signature_x509_certificates_with_namespaces(key_info_xml, &default_namespaces)
+    };
     let valid = format!(
         r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
     );
@@ -5639,7 +5842,7 @@ fn supported_xml_x509_certificate_chain_bounds_reject_duplicates_and_overlong_ch
 fn supported_xml_xades_cert_digest_rejects_duplicate_methods() {
     let digest = BASE64_STANDARD.encode([0_u8; 32]);
     let cert_xml = format!(
-        r#"<Cert><CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></CertDigest></Cert>"#
+        r#"<Cert xmlns="{XADES_NS}" xmlns:ds="{XMLDSIG_NS}"><CertDigest><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"></ds:DigestMethod><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"></ds:DigestMethod><ds:DigestValue>{digest}</ds:DigestValue></CertDigest></Cert>"#
     );
     let err = xades_cert_digest_sha256(&cert_xml)
         .expect_err("duplicate XAdES CertDigest methods must fail closed");
@@ -5959,7 +6162,8 @@ fn require_verified_profile_accepts_same_document_reference_with_inherited_names
         .expect("cfg")
         .expect("enabled");
     let payload = signed_pacs008_xml_with_inherited_namespace_same_document_reference();
-    let parsed = sample_pacs008();
+    let parsed =
+        parse_xml_message("pacs.008", payload.as_bytes()).expect("parse same-document signed XML");
     let profile = runtime
         .resolve_profile(Some("signed-pacs008-test"))
         .expect("signed profile");
@@ -5967,12 +6171,60 @@ fn require_verified_profile_accepts_same_document_reference_with_inherited_names
         .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
         .expect("same-document references should inherit ancestor namespace context");
     assert!(metadata.embedded_signature_detected());
-    assert_eq!(metadata.business_message_id(), Some("m-profile"));
+    assert_eq!(metadata.business_message_id(), Some("sig-001"));
+}
+#[test]
+fn require_verified_profile_rejects_parsed_fields_from_another_xml_source() {
+    let mut config = sample_config();
+    config
+        .profiles
+        .push(signed_message_profile("require-verified"));
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let parsed_payload = signed_pacs008_xml();
+    let parsed = parse_xml_message("pacs.008", parsed_payload.as_bytes()).expect("parse payload A");
+    let signed_payload = signed_pacs008_xml_from_unsigned(
+        unsigned_pacs008_xml_with_message_id("sig-002"),
+        XML_C14N_1_0,
+        false,
+        true,
+    );
+    let profile = runtime
+        .resolve_profile(Some("signed-pacs008-test"))
+        .expect("signed profile");
+    let err = runtime
+        .validate_profile_submission(profile, "pacs.008", &parsed, signed_payload.as_bytes())
+        .expect_err("semantic fields and verified bytes must share one XML source");
+    assert!(matches!(err, MsgError::ValidationFailed));
+}
+#[test]
+fn require_verified_profile_rejects_developer_format_field_provenance() {
+    let mut config = sample_config();
+    config
+        .profiles
+        .push(signed_message_profile("require-verified"));
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let parsed = sample_pacs008();
+    let payload = signed_pacs008_xml();
+    let profile = runtime
+        .resolve_profile(Some("signed-pacs008-test"))
+        .expect("signed profile");
+    let err = runtime
+        .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+        .expect_err("developer-format fields do not carry signed XML provenance");
+    assert!(matches!(err, MsgError::ValidationFailed));
 }
 signed_payload_tests! {
     require_verified_profile_rejects_same_document_reference_outside_signature_carrier: assert_require_verified_signed_payload_rejected(
         signed_pacs008_xml_with_header_only_same_document_reference(),
         "same-document payload Reference must cover the XMLDSig carrier",
+    );
+    require_verified_profile_rejects_same_document_reference_with_semantic_header_outside: assert_require_verified_signed_payload_rejected(
+        signed_pacs008_xml_with_app_header_outside_same_document_reference(),
+        "every bridge-consumed field must be covered by the verified Reference",
     );
     require_verified_profile_accepts_reference_c14n_transform: assert_require_verified_signed_payload_accepted(
         signed_pacs008_xml_with_reference_c14n_transform(),
@@ -5997,29 +6249,19 @@ signed_payload_tests! {
 }
 #[test]
 fn require_verified_profile_rejects_prefixed_signature_with_wrong_namespace() {
-    let mut config = sample_config();
-    config
-        .profiles
-        .push(signed_message_profile("require-verified"));
-    let runtime = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
     let payload = signed_pacs008_xml_with_wrong_prefixed_signature_namespace();
-    let parsed =
-        parse_message("pacs.008", payload.as_bytes()).expect("parse wrong-namespace signed XML");
-    let profile = runtime
-        .resolve_profile(Some("signed-pacs008-test"))
-        .expect("signed profile");
-    let err = runtime
-        .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-        .expect_err("prefixed XMLDSig elements must bind to the XMLDSig namespace");
-    assert!(matches!(err, MsgError::ValidationFailed));
+    let err = parse_xml_message("pacs.008", payload.as_bytes())
+        .expect_err("prefixed Signature must bind to the XMLDSig namespace");
+    assert!(matches!(err, MsgError::InvalidFormat));
+}
+#[test]
+fn require_verified_profile_rejects_unprefixed_signature_with_wrong_default_namespace() {
+    let payload = signed_pacs008_xml_with_wrong_default_signature_namespace();
+    let err = parse_xml_message("pacs.008", payload.as_bytes())
+        .expect_err("unprefixed Signature must bind to the XMLDSig namespace");
+    assert!(matches!(err, MsgError::InvalidFormat));
 }
 signed_payload_tests! {
-    require_verified_profile_rejects_unprefixed_signature_with_wrong_default_namespace: assert_require_verified_signed_payload_rejected(
-        signed_pacs008_xml_with_wrong_default_signature_namespace(),
-        "unprefixed XMLDSig elements must reject wrong default namespaces",
-    );
     require_verified_profile_accepts_inclusive_c14n_with_unused_inherited_namespace: assert_require_verified_signed_payload_accepted(
         signed_pacs008_xml_with_inclusive_unused_signature_namespace(),
         "inclusive XML canonicalization should carry inherited root namespaces",
@@ -6170,12 +6412,13 @@ fn require_verified_profile_rejects_x509_xades_signing_certificate_v2_outside_si
         test_xades_signing_certificate_v2_xml(TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64);
     let signed_properties_xml = format!(
         concat!(
-            r#"<SignedProperties Id="xades-signed-props-001">"#,
+            r#"<SignedProperties xmlns="{XADES_NS}" Id="xades-signed-props-001">"#,
             "<SignedSignatureProperties><SigningTime>2026-06-02T00:00:00Z</SigningTime></SignedSignatureProperties>",
             "<SignedDataObjectProperties>{signing_certificate}</SignedDataObjectProperties>",
             "</SignedProperties>"
         ),
-        signing_certificate = signing_certificate
+        signing_certificate = signing_certificate,
+        XADES_NS = XADES_NS
     );
     let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
         &signed_properties_xml,
@@ -6545,9 +6788,9 @@ signed_payload_tests! {
 #[test]
 fn require_verified_profile_rejects_x509_crl_outside_key_info() {
     let payload = signed_pacs008_xml_with_crl_x509_certificate_chain(None).replacen(
-            r##"<Object><QualifyingProperties Target="#sig-001">"##,
+            &format!(r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##),
             &format!(
-                r##"<Object><X509CRL>{TEST_X509_CRL_EMPTY_DER_B64}</X509CRL><QualifyingProperties Target="#sig-001">"##
+                r##"<Object><X509CRL>{TEST_X509_CRL_EMPTY_DER_B64}</X509CRL><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##
             ),
             1,
         );
@@ -6675,9 +6918,9 @@ fn require_verified_profile_rejects_x509_ocsp_outside_key_info() {
         XML_SIGNATURE_TEST_SIGNING_TIME,
     );
     let payload = fixture.payload.replacen(
-            r##"<Object><QualifyingProperties Target="#sig-001">"##,
+            &format!(r##"<Object><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##),
             &format!(
-                r##"<Object><EncapsulatedOCSPValue>{}</EncapsulatedOCSPValue><QualifyingProperties Target="#sig-001">"##,
+                r##"<Object><EncapsulatedOCSPValue>{}</EncapsulatedOCSPValue><QualifyingProperties xmlns="{XADES_NS}" Target="#sig-001">"##,
                 fixture.response_der_base64
             ),
             1,
@@ -7407,6 +7650,18 @@ fn checked_in_securities_fixtures_reject_profile_version_and_root_drift() {
 #[test]
 fn checked_in_colr012_fixture_records_collateral_context() {
     let mut config = sample_config();
+    let asset_definition_id = sample_asset_definition_literal();
+    let isin_crosswalk = write_snapshot(&format!(
+        r#"{{
+            "version":"2024-05-01",
+            "source":"ISO 20022 collateral fixture",
+            "entries":[
+                {{"isin":"US0378331005","asset_definition_id":"{asset_definition_id}"}},
+                {{"isin":"US5949181045","asset_definition_id":"{asset_definition_id}"}}
+            ]
+        }}"#
+    ));
+    config.reference_data.isin_crosswalk_path = Some(isin_crosswalk.path().to_path_buf());
     config.profiles.push(live_collateral_lifecycle_profile());
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .expect("cfg")
@@ -7946,7 +8201,7 @@ fn live_rail_profile_xsd_fixtures_accept_prefixed_document_namespace() {
     )
     .replace(
         r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
-        r#"<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+        r#"<pacs:Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08" xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
     )
     .replace("<FIToFICstmrCdtTrf>", "<pacs:FIToFICstmrCdtTrf>")
     .replace("</FIToFICstmrCdtTrf>", "</pacs:FIToFICstmrCdtTrf>")
@@ -8260,6 +8515,202 @@ fn profile_idempotency_rejects_replayed_business_message_id() {
     );
 }
 #[test]
+fn concurrent_admission_commits_one_complete_identity_tuple() {
+    use std::sync::Barrier;
+
+    let runtime = Arc::new(sample_runtime());
+    let barrier = Arc::new(Barrier::new(3));
+    let mut workers = Vec::new();
+    for suffix in ["a", "b"] {
+        let runtime = Arc::clone(&runtime);
+        let barrier = Arc::clone(&barrier);
+        workers.push(std::thread::spawn(move || {
+            let metadata = IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("biz-race".to_owned()),
+                Some("123e4567-e89b-12d3-a456-426614174500".to_owned()),
+                "payload-race".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            );
+            barrier.wait();
+            runtime.check_and_record_inbound(&format!("race-message-{suffix}"), metadata)
+        }));
+    }
+    barrier.wait();
+    let accepted = workers
+        .into_iter()
+        .map(|worker| worker.join().expect("admission worker"))
+        .filter(|accepted| *accepted)
+        .count();
+    assert_eq!(accepted, 1);
+    assert_eq!(runtime.records.len(), 1);
+    assert_eq!(runtime.payload_hash_index.len(), 1);
+    assert_eq!(runtime.business_message_id_index.len(), 1);
+    assert_eq!(runtime.uetr_index.len(), 1);
+}
+#[test]
+fn durable_in_flight_reservation_pins_capacity_until_transaction_binding() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.store_max_records = 1;
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let metadata = IsoMessageMetadata::inbound(
+        "generic-iso20022",
+        "pacs.008",
+        None,
+        Some("in-flight-biz".to_owned()),
+        Some("123e4567-e89b-12d3-a456-426614174550".to_owned()),
+        "in-flight-payload".to_owned(),
+        "snapshot".to_owned(),
+        false,
+    );
+    assert!(runtime.check_and_record_inbound("in-flight", metadata));
+    assert!(
+        !runtime.check_and_record_inbound("capacity-racer", inbound_metadata("racer", "pacs.008")),
+        "an unresolved reservation must not be evicted to admit another payment"
+    );
+    assert!(runtime.update_message_context("in-flight", IsoMessageContext::default()));
+    assert!(runtime.bind_transaction_hash("in-flight", "tx-in-flight"));
+    assert_eq!(
+        runtime
+            .message_status("in-flight")
+            .expect("reservation survives")
+            .transaction_hash(),
+        Some("tx-in-flight")
+    );
+    assert!(!runtime.update_message_context("missing", IsoMessageContext::default()));
+}
+#[test]
+fn rejected_retry_requires_the_exact_original_metadata() {
+    let runtime = sample_runtime();
+    let original = IsoMessageMetadata::inbound(
+        "generic-iso20022",
+        "pacs.008",
+        None,
+        Some("biz-exact-retry".to_owned()),
+        None,
+        "payload-original".to_owned(),
+        "snapshot".to_owned(),
+        false,
+    );
+    assert!(runtime.check_and_record_inbound("exact-retry", original.clone()));
+    assert!(runtime.mark_rejected(
+        "exact-retry",
+        Some("definite pre-admission rejection".to_owned()),
+        Some("ED05")
+    ));
+    let mut changed = original.clone();
+    changed.payload_hash = Some("payload-replacement".to_owned());
+    assert!(!runtime.check_and_record_inbound("exact-retry", changed));
+    assert!(runtime.check_and_record_inbound("exact-retry", original));
+}
+#[test]
+fn queued_lifecycle_rejection_keeps_transaction_identity_and_blocks_retry() {
+    let runtime = sample_runtime();
+    let original_id = "queued-lifecycle-rejection";
+    let lifecycle_id = "queued-lifecycle-rejection-status";
+    let original = inbound_metadata(original_id, "pacs.008");
+    assert!(runtime.check_and_record_inbound(original_id, original.clone()));
+    runtime.mark_accepted(original_id, "tx-queued-lifecycle-rejection");
+    record_lifecycle(&runtime, lifecycle_id, "pacs.002");
+    assert_eq!(
+        runtime
+            .apply_lifecycle_update(
+                lifecycle_id,
+                original_id,
+                "pacs.002",
+                Some("RJCT"),
+                Some("AC04"),
+                Some("downstream rejection".to_owned()),
+            )
+            .expect("lifecycle rejection applies"),
+        "marked_rejected"
+    );
+    let status = runtime.message_status(original_id).expect("status");
+    assert_eq!(status.status_label(), "Rejected");
+    assert_eq!(
+        status.transaction_hash(),
+        Some("tx-queued-lifecycle-rejection")
+    );
+    assert_eq!(
+        runtime
+            .tx_hash_index
+            .get("tx-queued-lifecycle-rejection")
+            .as_deref()
+            .map(String::as_str),
+        Some(original_id)
+    );
+    assert!(
+        !runtime.check_and_record_inbound(original_id, original),
+        "an already-queued transaction must not become retryable from lifecycle status alone"
+    );
+    assert!(runtime.mark_transaction_applied("tx-queued-lifecycle-rejection", SystemTime::now()));
+    let settled = runtime.message_status(original_id).expect("settled status");
+    assert_eq!(settled.status_label(), "Accepted");
+    assert_eq!(settled.pacs002_code(), "ACSC");
+}
+#[test]
+fn pacs004_return_requires_settlement_and_preserves_original_transaction() {
+    let runtime = sample_runtime();
+    let original_id = "settled-payment-return";
+    let lifecycle_id = "settled-payment-return-message";
+    let original = inbound_metadata(original_id, "pacs.008");
+    assert!(runtime.check_and_record_inbound(original_id, original.clone()));
+    runtime.mark_accepted(original_id, "tx-settled-payment-return");
+    record_lifecycle(&runtime, lifecycle_id, "pacs.004");
+    assert_eq!(
+        runtime
+            .apply_lifecycle_update(
+                lifecycle_id,
+                original_id,
+                "pacs.004",
+                None,
+                Some("AC04"),
+                None,
+            )
+            .expect("unsettled return is ignored"),
+        "ignored_unsettled_return"
+    );
+    let unsettled = runtime
+        .message_status(original_id)
+        .expect("unsettled status");
+    assert_eq!(unsettled.status_label(), "Accepted");
+    assert_eq!(
+        unsettled.transaction_hash(),
+        Some("tx-settled-payment-return")
+    );
+    assert!(runtime.mark_settled(original_id, SystemTime::now()));
+    assert_eq!(
+        runtime
+            .apply_lifecycle_update(
+                lifecycle_id,
+                original_id,
+                "pacs.004",
+                None,
+                Some("AC04"),
+                None,
+            )
+            .expect("settled return applies"),
+        "marked_returned"
+    );
+    let returned = runtime
+        .message_status(original_id)
+        .expect("returned status");
+    assert_eq!(returned.status_label(), "Rejected");
+    assert!(returned.settled_at().is_some());
+    assert_eq!(
+        returned.transaction_hash(),
+        Some("tx-settled-payment-return")
+    );
+    assert!(!runtime.check_and_record_inbound(original_id, original));
+}
+#[test]
 fn retry_replacement_rejects_conflicting_uetr() {
     let runtime = sample_runtime();
     let first = IsoMessageMetadata::inbound(
@@ -8417,6 +8868,25 @@ fn durable_store_reloads_message_status() {
     );
     assert!(!reloaded.check_and_record_inbound("persisted-replay", replay));
 }
+#[test]
+fn transaction_hash_binding_fails_closed_when_durable_store_is_unwritable() {
+    let store = TempDir::new().expect("tempdir");
+    let blocked_store = store.path().join("not-a-directory");
+    fs::write(&blocked_store, b"file blocks durable store creation").expect("write blocker");
+    let mut config = sample_config();
+    config.store_dir = Some(blocked_store);
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    assert!(runtime.check_and_record_message("durability-blocked"));
+    assert!(!runtime.bind_transaction_hash("durability-blocked", "tx-must-not-dispatch"));
+    let status = runtime
+        .message_status("durability-blocked")
+        .expect("pending status retained");
+    assert_eq!(status.status_label(), "Pending");
+    assert_eq!(status.transaction_hash(), None);
+    assert!(!runtime.tx_hash_index.contains_key("tx-must-not-dispatch"));
+}
 fn read_audit_index(store: &TempDir) -> JsonValue {
     let index_path = store
         .path()
@@ -8511,6 +8981,7 @@ fn durable_store_reload_streams_only_deterministic_newest_records() {
                 ),
             ));
             runtime.mark_accepted(message_id, &format!("tx-{message_id}"));
+            runtime.mark_settled(message_id, SystemTime::now());
         }
     }
     for (message_id, updated_at_ms) in [
@@ -8676,6 +9147,7 @@ fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
         ),
     ));
     runtime.mark_accepted("compact-old", "tx-compact-old");
+    runtime.mark_settled("compact-old", SystemTime::now());
     std::thread::sleep(Duration::from_millis(1));
     assert!(runtime.check_and_record_inbound(
         "compact-new",
@@ -8746,6 +9218,7 @@ fn durable_store_compacts_records_older_than_retention_window() {
         ),
     ));
     runtime.mark_accepted("age-expired", "tx-age-expired");
+    runtime.mark_settled("age-expired", SystemTime::now());
     {
         let mut record = runtime.records.get_mut("age-expired").expect("record");
         record.updated_at = SystemTime::UNIX_EPOCH;
@@ -9774,10 +10247,16 @@ fn dedupe_prevents_duplicates_within_ttl() {
 }
 #[test]
 fn build_transaction_extracts_transfer() {
-    let runtime = sample_runtime();
+    let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
+    let (expected_account, canonical_account, _) = sample_account_bundle();
+    let account_address = AccountAddress::from_account_id(&expected_account).expect("address");
+    let account_i105 = account_address
+        .to_i105_for_discriminant(iroha_data_model::account::address::chain_discriminant())
+        .expect("i105 encoding");
+    let canonical_address = account_address.canonical_hex().expect("canonical hex");
     let msg = parse_message(
             "pacs.008",
-            b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\nSplmtryData/SourceAccountAddress=0xdebtor\nSplmtryData/TargetAccountAddress=0xcreditor",
+            format!("MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\nSplmtryData/SourceAccountAddress={account_i105}\nSplmtryData/TargetAccountAddress={account_i105}").as_bytes(),
         )
         .expect("parsed");
     let world = sample_world(None);
@@ -9795,7 +10274,6 @@ fn build_transaction_extracts_transfer() {
         )
         .expect("build");
     assert_eq!(context.ledger_id.as_deref(), Some(chain_id.as_str()));
-    let (_expected_account, canonical_account, _) = sample_account_bundle();
     assert_eq!(
         context.source_account_id.as_deref(),
         Some(canonical_account.as_str())
@@ -9809,10 +10287,13 @@ fn build_transaction_extracts_transfer() {
         context.asset_definition_id.as_deref(),
         Some(asset_definition.as_str())
     );
-    assert_eq!(context.source_account_address.as_deref(), Some("0xdebtor"));
+    assert_eq!(
+        context.source_account_address.as_deref(),
+        Some(canonical_address.as_str())
+    );
     assert_eq!(
         context.target_account_address.as_deref(),
-        Some("0xcreditor")
+        Some(canonical_address.as_str())
     );
     assert!(context.asset_id.as_ref().is_some());
     assert_eq!(
@@ -9852,7 +10333,7 @@ fn build_transaction_extracts_transfer() {
 }
 #[test]
 fn build_transaction_accepts_asset_alias_hint() {
-    let runtime = sample_runtime();
+    let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
     let msg = parse_message(
             "pacs.008",
             b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\nSplmtryData/AssetDefinitionId=usd#test",
@@ -10119,9 +10600,14 @@ fn pacs008_rejects_unbound_currency() {
 #[test]
 fn build_pacs009_payload_extracts_transfer() {
     let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
+    let (expected_account, _, _) = sample_account_bundle();
+    let account_i105 = AccountAddress::from_account_id(&expected_account)
+        .expect("address")
+        .to_i105_for_discriminant(iroha_data_model::account::address::chain_discriminant())
+        .expect("i105 encoding");
     let msg = parse_message(
             "pacs.009",
-            b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\nSplmtryData/SourceAccountAddress=0xdebtor\nSplmtryData/TargetAccountAddress=0xcreditor",
+            format!("BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\nSplmtryData/SourceAccountAddress={account_i105}\nSplmtryData/TargetAccountAddress={account_i105}").as_bytes(),
         )
         .expect("parsed");
     let world = sample_world(None);
@@ -10252,6 +10738,58 @@ fn status_transitions_are_recorded() {
     runtime.mark_transaction_applied("hash-1", SystemTime::now());
     let settled = runtime.message_status("m2").expect("status");
     assert_eq!(settled.pacs002_code(), "ACSC");
+}
+#[test]
+fn memory_only_runtime_refuses_transaction_binding_before_queue_admission() {
+    let mut config = sample_config();
+    config.dedupe_ttl_secs = 0;
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    assert!(runtime.check_and_record_message("queue-unknown"));
+    assert!(!runtime.bind_transaction_hash("queue-unknown", "tx-queue-unknown"));
+    let status = runtime.message_status("queue-unknown").expect("status");
+    assert_eq!(status.status_label(), "Pending");
+    assert_eq!(status.transaction_hash(), None);
+    assert!(!runtime.tx_hash_index.contains_key("tx-queue-unknown"));
+}
+#[test]
+fn durable_indeterminate_queue_outcome_survives_reload_and_pins_capacity() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.dedupe_ttl_secs = 0;
+    config.store_dir = Some(store.path().to_path_buf());
+    config.store_max_records = 1;
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_message("durable-queue-unknown"));
+        assert!(runtime.bind_transaction_hash("durable-queue-unknown", "tx-durable-queue-unknown"));
+        assert!(runtime.mark_queue_outcome_unknown(
+            "durable-queue-unknown",
+            "tx-durable-queue-unknown",
+            "journal outcome requires reconciliation".to_owned(),
+        ));
+        assert!(!runtime.check_and_record_message("capacity-must-fail-closed"));
+    }
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let status = reloaded
+        .message_status("durable-queue-unknown")
+        .expect("unknown outcome reloads");
+    assert_eq!(status.transaction_hash(), Some("tx-durable-queue-unknown"));
+    assert_eq!(status.pacs002_code(), "PDNG");
+    assert!(!reloaded.check_and_record_message("durable-queue-unknown"));
+    assert!(reloaded.mark_transaction_applied("tx-durable-queue-unknown", SystemTime::now()));
+    assert_eq!(
+        reloaded
+            .message_status("durable-queue-unknown")
+            .expect("reconciled status")
+            .pacs002_code(),
+        "ACSC"
+    );
 }
 #[test]
 fn status_history_encoded_byte_cap_accepts_exact_boundary() {
@@ -10420,12 +10958,22 @@ fn unknown_lifecycle_codes_refuse_unique_growth_before_memory_or_disk_mutation()
         .expect("cfg")
         .expect("enabled");
     let message_id = "bounded-unknown-lifecycle-codes";
+    let lifecycle_id = "bounded-unknown-lifecycle-codes-status";
     record_original(&runtime, message_id, "pacs.008");
+    assert!(runtime.mark_queued(message_id));
+    record_lifecycle(&runtime, lifecycle_id, "pacs.002");
     for index in 0..ISO_CHANGE_REASON_MAX_ENTRIES_V1 {
         let code = format!("U{index:03}");
         assert_eq!(
             runtime
-                .apply_lifecycle_update(message_id, "pacs.002", Some(&code), None, None)
+                .apply_lifecycle_update(
+                    lifecycle_id,
+                    message_id,
+                    "pacs.002",
+                    Some(&code),
+                    None,
+                    None,
+                )
                 .expect("unique code below cap must apply"),
             "recorded_status_code"
         );
@@ -10437,8 +10985,8 @@ fn unknown_lifecycle_codes_refuse_unique_growth_before_memory_or_disk_mutation()
     );
     assert_eq!(
         status.status_history().len(),
-        2,
-        "unique unknown codes must not evade their own cap when status history deduplicates"
+        3,
+        "unknown codes after the first ACWC transition must not grow status history"
     );
     let path = store
         .path()
@@ -10446,7 +10994,14 @@ fn unknown_lifecycle_codes_refuse_unique_growth_before_memory_or_disk_mutation()
         .join(message_filename(message_id));
     let before = fs::read(&path).expect("read exact-bound persisted record");
     assert_eq!(
-        runtime.apply_lifecycle_update(message_id, "pacs.002", Some("U_OVERFLOW"), None, None,),
+        runtime.apply_lifecycle_update(
+            lifecycle_id,
+            message_id,
+            "pacs.002",
+            Some("U_OVERFLOW"),
+            None,
+            None,
+        ),
         Err(IsoStatusHistoryLimitError::ChangeReasonCount)
     );
     assert_eq!(
@@ -10506,7 +11061,7 @@ fn message_context_is_preserved_in_status() {
 }
 #[test]
 fn payment_outbox_xml_uses_durable_amount_currency_and_escapes_reasons() {
-    let runtime = sample_runtime();
+    let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
     let msg = parse_message(
             "pacs.008",
             b"MsgId=m-outbox\nIntrBkSttlmAmt=10.25\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",

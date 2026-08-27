@@ -89,7 +89,7 @@ fn fixture_decoded_json_matches_decoder() {
             _ => panic!("decoded item is not object"),
         };
         assert_eq!(pc, op.pc, "pc mismatch at {i}");
-        assert_eq!(len as u32, op.len, "len mismatch at {i}");
+        assert_eq!(len, 4, "len mismatch at {i}");
         assert_eq!(inst as u32, op.inst, "inst mismatch at {i}");
     }
 }

@@ -310,6 +310,41 @@ pub enum DaPinIntentValidationError {
         /// Owner whose controller was not satisfied.
         owner: AccountId,
     },
+    /// Consensus-visible DA producer admission policy is absent.
+    #[error("DA ingest admission policy is missing")]
+    MissingAdmissionPolicy,
+    /// Consensus-visible DA producer admission policy is malformed.
+    #[error("DA ingest admission policy is invalid: {reason}")]
+    InvalidAdmissionPolicy {
+        /// Bounded validation detail.
+        reason: String,
+    },
+    /// The target lane has no active non-zero incarnation at this block height.
+    #[error(
+        "DA ingest lane {lane} has no active incarnation at epoch {epoch}, sequence {sequence}"
+    )]
+    InactiveAdmissionLane {
+        /// Target lane.
+        lane: LaneId,
+        /// Requested producer epoch.
+        epoch: u64,
+        /// Requested sequence.
+        sequence: u64,
+    },
+    /// The committed policy does not authorize the owner/lane/incarnation/epoch tuple.
+    #[error(
+        "DA ingest admission policy does not authorize owner {owner} for lane {lane}, epoch {epoch}, sequence {sequence}"
+    )]
+    AdmissionDenied {
+        /// Request owner.
+        owner: AccountId,
+        /// Target lane.
+        lane: LaneId,
+        /// Requested producer epoch.
+        epoch: u64,
+        /// Requested sequence.
+        sequence: u64,
+    },
     /// Deterministic per-account DA ingest count/byte ceiling was exceeded.
     #[error(
         "DA ingest quota for owner {owner} exceeded in window {window}: count {count}/{max_count}, bytes {bytes}/{max_bytes}"
@@ -1092,6 +1127,55 @@ pub fn validate_pin_intent_authorizations(
     }
     Ok(())
 }
+/// Validate every pin intent against the exact committed producer/epoch policy.
+///
+/// Empty bundles need no admission policy. Non-empty bundles fail closed when
+/// the policy is absent, malformed, stale for the active lane incarnation, or
+/// does not grant the exact signed owner and epoch.
+///
+/// # Errors
+///
+/// Returns the first policy, incarnation, or authorization mismatch.
+pub fn validate_pin_intent_admission_policy(
+    bundle: &iroha_data_model::da::pin_intent::DaPinIntentBundle,
+    policy: Option<&iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1>,
+    lane_incarnation: impl Fn(LaneId) -> Option<Hash>,
+) -> Result<(), DaPinIntentValidationError> {
+    if bundle.intents.is_empty() {
+        return Ok(());
+    }
+    let Some(policy) = policy else {
+        return Err(DaPinIntentValidationError::MissingAdmissionPolicy);
+    };
+    policy
+        .validate()
+        .map_err(|error| DaPinIntentValidationError::InvalidAdmissionPolicy {
+            reason: error.to_string(),
+        })?;
+    for intent in &bundle.intents {
+        let Some(incarnation) = lane_incarnation(intent.lane_id) else {
+            return Err(DaPinIntentValidationError::InactiveAdmissionLane {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+        };
+        if !policy.authorizes(
+            &intent.authorization.owner,
+            intent.lane_id,
+            incarnation,
+            intent.epoch,
+        ) {
+            return Err(DaPinIntentValidationError::AdmissionDenied {
+                owner: intent.authorization.owner.clone(),
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+        }
+    }
+    Ok(())
+}
 #[cfg(test)]
 /// Build a canonically signed DA ingest authorization for unit-test pin intents.
 pub(crate) fn signed_test_ingest_authorization(
@@ -1387,7 +1471,10 @@ mod proof_policy_tests {
     use iroha_data_model::{
         account::{AccountController, AccountId, MultisigMember, MultisigPolicy},
         da::{
-            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
+            ingest::{
+                DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1, DaIngestAuthorizationV1,
+                DaIngestSignatureV1,
+            },
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, StorageTicketId},
         },
@@ -1687,6 +1774,123 @@ mod proof_policy_tests {
             .signatures
             .sort_by(|left, right| left.signer.cmp(&right.signer));
         authorization
+    }
+    fn admission_policy(
+        lane_id: LaneId,
+        lane_incarnation: Hash,
+        owner: AccountId,
+        current_epoch: u64,
+        grace_epoch: Option<u64>,
+    ) -> DaIngestAdmissionPolicyV1 {
+        DaIngestAdmissionPolicyV1 {
+            version: DaIngestAdmissionPolicyV1::VERSION,
+            revision: 1,
+            expected_previous_policy_hash: None,
+            lanes: vec![DaIngestAdmissionLaneV1 {
+                lane_id,
+                lane_incarnation,
+                producers: vec![owner],
+                current_epoch,
+                grace_epoch,
+            }],
+        }
+    }
+    #[test]
+    fn pin_intent_admission_allows_current_and_grace_epoch_for_exact_scope() {
+        let lane = LaneId::SINGLE;
+        let incarnation = Hash::prehashed([0xD1; 32]);
+        let current = intent(lane, 7, 1, [0xD2; 32], [0xD3; 32]);
+        let grace = intent(lane, 6, 2, [0xD4; 32], [0xD5; 32]);
+        let owner = current.authorization.owner.clone();
+        let bundle = DaPinIntentBundle::new(vec![current, grace]);
+        let policy = admission_policy(lane, incarnation, owner, 7, Some(6));
+
+        validate_pin_intent_admission_policy(&bundle, Some(&policy), |candidate| {
+            (candidate == lane).then_some(incarnation)
+        })
+        .expect("the exact producer, incarnation, and current/grace epochs must be admitted");
+    }
+    #[test]
+    fn pin_intent_admission_fails_closed_without_policy() {
+        let lane = LaneId::SINGLE;
+        let bundle = DaPinIntentBundle::new(vec![intent(lane, 7, 1, [0xD6; 32], [0xD7; 32])]);
+
+        let error = validate_pin_intent_admission_policy(&bundle, None, |_| None)
+            .expect_err("a non-empty bundle must require the committed admission policy");
+        assert!(matches!(
+            error,
+            DaPinIntentValidationError::MissingAdmissionPolicy
+        ));
+    }
+    #[test]
+    fn pin_intent_admission_rejects_unretained_epoch() {
+        let lane = LaneId::SINGLE;
+        let incarnation = Hash::prehashed([0xD8; 32]);
+        let record = intent(lane, 9, 1, [0xD9; 32], [0xDA; 32]);
+        let owner = record.authorization.owner.clone();
+        let bundle = DaPinIntentBundle::new(vec![record]);
+        let policy = admission_policy(lane, incarnation, owner.clone(), 7, Some(6));
+
+        let error =
+            validate_pin_intent_admission_policy(&bundle, Some(&policy), |_| Some(incarnation))
+                .expect_err("an unrelated future epoch must not be admitted");
+        assert!(matches!(
+            error,
+            DaPinIntentValidationError::AdmissionDenied {
+                owner: denied,
+                lane: denied_lane,
+                epoch: 9,
+                sequence: 1,
+            } if denied == owner && denied_lane == lane
+        ));
+    }
+    #[test]
+    fn pin_intent_admission_rejects_wrong_incarnation() {
+        let lane = LaneId::SINGLE;
+        let incarnation = Hash::prehashed([0xDB; 32]);
+        let record = intent(lane, 7, 1, [0xDC; 32], [0xDD; 32]);
+        let owner = record.authorization.owner.clone();
+        let bundle = DaPinIntentBundle::new(vec![record]);
+        let policy = admission_policy(lane, incarnation, owner, 7, None);
+
+        let error = validate_pin_intent_admission_policy(&bundle, Some(&policy), |_| {
+            Some(Hash::prehashed([0xDE; 32]))
+        })
+        .expect_err("a previous or unrelated lane incarnation must not be admitted");
+        assert!(matches!(
+            error,
+            DaPinIntentValidationError::AdmissionDenied { lane: denied, .. }
+                if denied == lane
+        ));
+    }
+    #[test]
+    fn pin_intent_admission_rejects_wrong_owner() {
+        let lane = LaneId::SINGLE;
+        let incarnation = Hash::prehashed([0xDF; 32]);
+        let record = intent(lane, 7, 1, [0xE0; 32], [0xE1; 32]);
+        let denied_owner = record.authorization.owner.clone();
+        let bundle = DaPinIntentBundle::new(vec![record]);
+        let admitted_key =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xE2; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("valid deterministic admitted owner key");
+        let admitted_owner = AccountId::new(admitted_key.public_key().clone());
+        let policy = admission_policy(lane, incarnation, admitted_owner, 7, None);
+
+        let error =
+            validate_pin_intent_admission_policy(&bundle, Some(&policy), |_| Some(incarnation))
+                .expect_err(
+                    "an otherwise valid request from an unlisted owner must not be admitted",
+                );
+        assert!(matches!(
+            error,
+            DaPinIntentValidationError::AdmissionDenied { owner, .. }
+                if owner == denied_owner
+        ));
+    }
+    #[test]
+    fn empty_pin_intent_bundle_needs_no_admission_policy() {
+        validate_pin_intent_admission_policy(&DaPinIntentBundle::default(), None, |_| None)
+            .expect("an empty sidecar carries no producer scope to authorize");
     }
     #[test]
     fn ingest_authorization_rejects_same_label_different_genesis() {

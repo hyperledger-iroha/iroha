@@ -114,11 +114,10 @@ fn test_program_exceeding_old_cycle_limit() {
     vm.set_register(1, 0);
     let iterations: u64 = 35_000; // ~70k cycles with two instructions per loop
     vm.set_register(2, iterations);
-    let addi = ivm::kotodama::wide::encode_addi(1, 1, 1).to_le_bytes();
+    let addi =
+        encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 1, 1, 1).to_le_bytes();
     let blt =
-        ivm::kotodama::wide::encode_branch_checked(ivm::instruction::wide::control::BLT, 1, 2, -1)
-            .expect("loop branch")
-            .to_le_bytes();
+        encoding::wide::encode_branch(ivm::instruction::wide::control::BLT, 1, 2, -1).to_le_bytes();
     let mut code = Vec::new();
     code.extend_from_slice(&addi);
     code.extend_from_slice(&blt);

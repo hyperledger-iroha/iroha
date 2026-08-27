@@ -30,10 +30,8 @@
             .expect("apply shared-dataspace Nexus config");
         let owner_kp = crate::state::checked_keypair();
         let pending_sibling_kp = crate::state::checked_keypair();
-        let jailed_sibling_kp = crate::state::checked_keypair();
         let owner_validator = DMAccountId::of(owner_kp.public_key().clone());
         let pending_sibling_validator = DMAccountId::of(pending_sibling_kp.public_key().clone());
-        let jailed_sibling_validator = DMAccountId::of(jailed_sibling_kp.public_key().clone());
         let record =
             |lane_id, validator: DMAccountId, peer_key, status: PublicLaneValidatorStatus| {
                 lane_validator_record(lane_id, &validator, PeerId::from(peer_key), 10_u32, status)
@@ -58,15 +56,6 @@
                     PublicLaneValidatorStatus::PendingActivation(3),
                 ),
             );
-            block.insert(
-                (sibling_lane, jailed_sibling_validator.clone()),
-                record(
-                    sibling_lane,
-                    jailed_sibling_validator.clone(),
-                    jailed_sibling_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_2".to_owned()),
-                ),
-            );
             block.commit();
         }
         let header = BlockHeader::new(
@@ -79,7 +68,6 @@
         );
         let mut state_block = state.block(header);
         state_block.activate_due_public_lane_validators(3);
-        state_block.clear_expired_vrf_public_lane_jails(3);
         let owner = state_block
             .world
             .public_lane_validators
@@ -94,15 +82,5 @@
         assert!(matches!(
             pending_sibling.status,
             PublicLaneValidatorStatus::PendingActivation(3)
-        ));
-        let jailed_sibling = state_block
-            .world
-            .public_lane_validators
-            .get(&(sibling_lane, jailed_sibling_validator))
-            .expect("jailed non-owner validator remains present");
-        assert!(matches!(
-            jailed_sibling.status,
-            PublicLaneValidatorStatus::Jailed(ref reason)
-                if reason == "vrf_penalty_epoch_2"
         ));
     }

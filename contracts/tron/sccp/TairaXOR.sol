@@ -20,6 +20,7 @@ contract TairaXOR {
 
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
+    mapping(address => mapping(address => bool)) private allowanceRequiresClear;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
@@ -40,6 +41,12 @@ contract TairaXOR {
 
     function approve(address spender, uint256 value) external returns (bool) {
         require(spender != address(0), "Spender address is required");
+        if (value == 0) {
+            allowanceRequiresClear[msg.sender][spender] = false;
+        } else {
+            require(!allowanceRequiresClear[msg.sender][spender], "Clear allowance first");
+            allowanceRequiresClear[msg.sender][spender] = true;
+        }
         allowance[msg.sender][spender] = value;
         emit Approval(msg.sender, spender, value);
         return true;

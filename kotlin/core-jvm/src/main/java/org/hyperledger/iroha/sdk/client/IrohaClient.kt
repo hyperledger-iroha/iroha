@@ -21,6 +21,9 @@ import org.hyperledger.iroha.sdk.alias.AccountOnboardingPrepareResponseV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedTransactionV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetClaimV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPolicyV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPreparedTransactionV1
 import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1
 import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
@@ -339,29 +342,18 @@ interface IrohaClient {
         onboardingToken: String,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
-    ): CompletableFuture<AccountOnboardingPlanReceiptV1> {
-        val future = CompletableFuture<AccountOnboardingPlanReceiptV1>()
-        future.completeExceptionally(
-            IllegalStateException("pinned planSponsoredAccountOnboarding requires a concrete IrohaClient implementation")
-        )
-        return future
-    }
+    ): CompletableFuture<AccountOnboardingPlanReceiptV1>
 
-    /** Revalidates a receipt and returns an exact transaction or a nonterminal live-proof requirement. */
+    /** Revalidates a receipt and required fee intent, then returns an exact transaction or live-proof requirement. */
     fun prepareSponsoredAccountOnboarding(
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
         binding: TairaPublicResetMutationBindingV1,
+        feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
-    ): CompletableFuture<AccountOnboardingPrepareResponseV1> {
-        val future = CompletableFuture<AccountOnboardingPrepareResponseV1>()
-        future.completeExceptionally(
-            IllegalStateException("pinned prepareSponsoredAccountOnboarding requires a concrete IrohaClient implementation")
-        )
-        return future
-    }
+    ): CompletableFuture<AccountOnboardingPrepareResponseV1>
 
     /** Reauthenticates ProofRequired and obtains one atomic committed account-and-alias state. */
     fun verifyAccountOnboardingCurrentState(
@@ -374,20 +366,32 @@ interface IrohaClient {
         canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<AccountOnboardingCurrentStateV1>
 
-    /** Submits only one already authenticated exact prepared onboarding envelope. */
+    /** Submits an exact prepared onboarding envelope only if it preserves an independent expected fee intent. */
     fun submitPreparedAccountOnboarding(
         request: AccountOnboardingPlanRequestV1,
         prepared: AccountOnboardingPreparedTransactionV1,
+        expectedFeePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
-    ): CompletableFuture<PreparedTransactionSubmitResponseV1> {
-        val future = CompletableFuture<PreparedTransactionSubmitResponseV1>()
-        future.completeExceptionally(
-            IllegalStateException("pinned submitPreparedAccountOnboarding requires a concrete IrohaClient implementation")
-        )
-        return future
-    }
+    ): CompletableFuture<PreparedTransactionSubmitResponseV1>
+
+    /** Prepares and authenticates one exact faucet transaction against independent local policy. */
+    fun prepareAccountFaucetTransaction(
+        claim: AccountFaucetClaimV1,
+        binding: TairaPublicResetMutationBindingV1,
+        feePayment: FeePaymentIntent,
+        policy: AccountFaucetPolicyV1,
+        expectedNetworkId: NetworkId,
+    ): CompletableFuture<AccountFaucetPreparedTransactionV1>
+
+    /** Submits only a faucet envelope that still matches independent fee and faucet policy. */
+    fun submitPreparedAccountFaucetTransaction(
+        prepared: AccountFaucetPreparedTransactionV1,
+        expectedFeePayment: FeePaymentIntent,
+        policy: AccountFaucetPolicyV1,
+        expectedNetworkId: NetworkId,
+    ): CompletableFuture<PreparedTransactionSubmitResponseV1>
 
     /** Fetches authenticated, secret-free onboarding readiness diagnostics. */
     fun getAccountOnboardingReadiness(

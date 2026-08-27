@@ -112,22 +112,6 @@ impl BlockMessage {
             _ => Ok(()),
         }
     }
-    /// Return whether this message belongs to an admitted live protocol.
-    ///
-    /// Lane-local traffic remains independent from global v2 finality and is
-    /// admitted by the lane adapter.
-    #[must_use]
-    pub fn is_authoritative_v2_ingress(&self) -> bool {
-        match self {
-            Self::V2(message) => message.validate_version().is_ok(),
-            _ => true,
-        }
-    }
-    /// Return whether asynchronous ingress must preserve this live message.
-    #[must_use]
-    pub fn requires_blocking_ingress(&self) -> bool {
-        self.is_authoritative_v2_ingress()
-    }
     /// Network priority for this consensus message.
     pub fn priority(&self) -> iroha_p2p::Priority {
         iroha_p2p::Priority::High
@@ -650,19 +634,20 @@ mod tests {
         };
         (proposal, vote, qc)
     }
-    fn sample_v2_vrf_message() -> BlockMessage {
+    fn sample_v2_message() -> BlockMessage {
         use iroha_data_model::block::consensus_v2 as wire;
         BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::VrfCommit(wire::VrfCommit {
-                epoch: 7,
-                commitment: [0x71; 32],
-                signer: 3,
-                bls_sig: vec![0x72],
+            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"synthetic-manifest")),
+                index: 0,
+                bytes: vec![0x71],
+                sender: 3,
+                signature: vec![0x72],
             }),
         ))
     }
     fn retagged_block_message_frame(tag: u32) -> Vec<u8> {
-        let mut encoded = norito_core::to_bytes(&sample_v2_vrf_message())
+        let mut encoded = norito_core::to_bytes(&sample_v2_message())
             .expect("encode canonical Sumeragi v2 fixture");
         let align = norito_core::archived_payload_align::<BlockMessage>();
         let padding = if align <= 1 {
@@ -780,7 +765,7 @@ mod tests {
                 "KuraReplicaAdvert",
                 BlockMessage::KuraReplicaAdvert(signed_kura_replica_advert_fixture()),
             ),
-            ("V2", sample_v2_vrf_message()),
+            ("V2", sample_v2_message()),
             (
                 "LaneBlockProposal",
                 BlockMessage::LaneBlockProposal(lane_proposal),
@@ -798,7 +783,7 @@ mod tests {
     }
     #[test]
     fn block_message_wire_roundtrips_current_v2_payload() {
-        let msg = sample_v2_vrf_message();
+        let msg = sample_v2_message();
         let encoded = BlockMessageWire::try_encode_live_message(&msg)
             .expect("encode current Sumeragi v2 message");
         let wire = <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&encoded)
@@ -861,7 +846,7 @@ mod tests {
             );
         }
         const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
-        let wrapped = sample_v2_vrf_message();
+        let wrapped = sample_v2_message();
         let wrapped_encoded =
             BlockMessageWire::try_encode_live_message(&wrapped).expect("encode current v2 marker");
         assert!(wrapped_encoded.starts_with(&norito_core::MAGIC));
@@ -1084,8 +1069,6 @@ mod tests {
         let message = BlockMessage::KuraReplicaAdvert(advert.clone());
         assert!(message.is_live_auxiliary());
         assert!(!message.is_lane_local());
-        assert!(message.is_authoritative_v2_ingress());
-        assert!(message.requires_blocking_ingress());
         message
             .ensure_live_outbound()
             .expect("authenticated replica advert is an admitted live auxiliary type");

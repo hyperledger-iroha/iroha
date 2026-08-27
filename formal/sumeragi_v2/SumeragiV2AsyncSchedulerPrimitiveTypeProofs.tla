@@ -1067,14 +1067,14 @@ AsyncIoResponseItemsAfterService(node, queue) ==
                ELSE {}
 
 THEOREM CertifiedResponseItemIsTyped ==
-  \A via, archiveServer, request:
+  \A via, responder, request:
     /\ AsyncConfiguration
     /\ via \in AsyncIngressSources
-    /\ archiveServer \in AsyncArchiveServerIds
+    /\ responder \in AsyncArchiveServerIds
     /\ AsyncItemTyped(request)
     /\ request.kind = "CertifiedRequest"
     => AsyncItemTyped(
-         CertifiedResponseItem(via, archiveServer, request))
+         CertifiedResponseItem(via, responder, request))
 BY SMTT(30)
    DEF AsyncConfiguration, AsyncItemTyped, CertifiedResponseItem,
        AsyncNetworkItem, AsyncCertifiedResponseEnvelope,
@@ -1082,7 +1082,7 @@ BY SMTT(30)
        AsyncBodyEnvelopeTyped, AsyncNetworkKinds, AsyncIngressSources,
        AsyncArchiveServerIds, ValidatorIds,
        AsyncHeartbeatSubject, NoAsyncChunk,
-       AsyncCertifiedCitedResponder, AsyncCertifiedRequestHash,
+       AsyncCertifiedRequestHash,
        AsyncCertifiedRequestHashes, AsyncCertifiedRequestItems,
        AsyncCertifiedRequestEnvelope
 
@@ -1146,55 +1146,55 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM HistoricalResponseItemsSeparateRotatedHopFromExactRequest ==
-  \A bodyRequest, certificateRequest, qc, archiveServer:
+  \A bodyRequest, certificateRequest, qc, responder:
     /\ TypeInvariant
     /\ AsyncItemTyped(bodyRequest)
     /\ bodyRequest.kind = "CertifiedRequest"
     /\ AsyncItemTyped(certificateRequest)
     /\ certificateRequest.kind = "CommitCertificateRequest"
-    /\ certificateRequest.envelope.recipient = archiveServer
+    /\ certificateRequest.envelope.recipient = responder
     /\ qc \in QcRecordSet
-    /\ archiveServer \in AsyncArchiveServerIds
+    /\ responder \in AsyncArchiveServerIds
     => LET bodyResponse ==
              CertifiedResponseItem(
-               AsyncUntrustedSource, archiveServer, bodyRequest)
+               AsyncUntrustedSource, responder, bodyRequest)
            certificateResponse ==
              CommitCertificateResponseItem(certificateRequest, qc)
        IN /\ bodyResponse.source = AsyncUntrustedSource
-          /\ certificateResponse.source = archiveServer
+          /\ certificateResponse.source = responder
           /\ bodyResponse.source # certificateResponse.source
           /\ AsyncUntrustedSource \in AsyncIngressSources
           /\ AsyncUntrustedSource \notin CurrentVoters
           /\ bodyResponse.envelope.requestHash =
                AsyncCertifiedRequestHash(bodyRequest)
-          /\ bodyResponse.envelope.archiveServer = archiveServer
-          /\ bodyResponse.envelope.signatureOwner = archiveServer
+          /\ bodyResponse.envelope.responder = responder
+          /\ bodyResponse.envelope.signatureOwner = responder
           /\ certificateResponse.envelope.request = certificateRequest
 PROOF
   <1>1. ASSUME NEW bodyRequest, NEW certificateRequest,
-                NEW qc, NEW archiveServer,
+                NEW qc, NEW responder,
                 TypeInvariant,
                 AsyncItemTyped(bodyRequest),
                 bodyRequest.kind = "CertifiedRequest",
                 AsyncItemTyped(certificateRequest),
                 certificateRequest.kind = "CommitCertificateRequest",
-                certificateRequest.envelope.recipient = archiveServer,
+                certificateRequest.envelope.recipient = responder,
                 qc \in QcRecordSet,
-                archiveServer \in AsyncArchiveServerIds
+                responder \in AsyncArchiveServerIds
          PROVE LET bodyResponse ==
                        CertifiedResponseItem(
-                         AsyncUntrustedSource, archiveServer, bodyRequest)
+                         AsyncUntrustedSource, responder, bodyRequest)
                    certificateResponse ==
                      CommitCertificateResponseItem(certificateRequest, qc)
                IN /\ bodyResponse.source = AsyncUntrustedSource
-                  /\ certificateResponse.source = archiveServer
+                  /\ certificateResponse.source = responder
                   /\ bodyResponse.source # certificateResponse.source
                   /\ AsyncUntrustedSource \in AsyncIngressSources
                   /\ AsyncUntrustedSource \notin CurrentVoters
                   /\ bodyResponse.envelope.requestHash =
                        AsyncCertifiedRequestHash(bodyRequest)
-                  /\ bodyResponse.envelope.archiveServer = archiveServer
-                  /\ bodyResponse.envelope.signatureOwner = archiveServer
+                  /\ bodyResponse.envelope.responder = responder
+                  /\ bodyResponse.envelope.signatureOwner = responder
                   /\ certificateResponse.envelope.request = certificateRequest
     <2>1. CurrentVoters \subseteq ValidatorIds
       BY <1>1, RuntimeCurrentVotersAreFiniteValidators
@@ -1209,21 +1209,21 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM CertifiedResponseAuthenticationProjectionIsViaIndependent ==
-  \A leftVia, rightVia, archiveServer, request:
+  \A leftVia, rightVia, responder, request:
     AsyncCertifiedResponseAuthProjection(
-      CertifiedResponseItem(leftVia, archiveServer, request))
+      CertifiedResponseItem(leftVia, responder, request))
       =
     AsyncCertifiedResponseAuthProjection(
-      CertifiedResponseItem(rightVia, archiveServer, request))
+      CertifiedResponseItem(rightVia, responder, request))
 BY DEF AsyncCertifiedResponseAuthProjection, CertifiedResponseItem,
        AsyncCertifiedResponseEnvelope, AsyncNetworkItem
 
 THEOREM SentCertifiedResponseAuthenticatesEveryRelayOccurrence ==
-  \A sentVia, relayVia, archiveServer, request:
-    CertifiedResponseItem(sentVia, archiveServer, request)
+  \A sentVia, relayVia, responder, request:
+    CertifiedResponseItem(sentVia, responder, request)
       \in asyncSentItems
       => CertifiedResponseAuthenticatedOccurrence(
-           CertifiedResponseItem(relayVia, archiveServer, request))
+           CertifiedResponseItem(relayVia, responder, request))
 BY SMT
    DEF CertifiedResponseAuthenticatedOccurrence,
        AsyncCertifiedResponseAuthProjection, CertifiedResponseItem,
@@ -1246,16 +1246,14 @@ BY SMT
        AsyncIngressSources, AsyncUntrustedSource
 
 THEOREM ExactOutstandingCertifiedBodyResponseIsAuthorized ==
-  \A via, archiveServer, request:
+  \A via, responder, request:
     /\ request \in asyncActiveRequests
     /\ FrozenCertifiedRequestRegistration(request)
-    /\ archiveServer \in AsyncArchiveServerIds
-    /\ AsyncCertifiedCitedResponder(request)
-         \in request.envelope.certificate.signers
+    /\ responder \in AsyncArchiveServerIds
     /\ CertifiedResponseAuthenticatedOccurrence(
-         CertifiedResponseItem(via, archiveServer, request))
+         CertifiedResponseItem(via, responder, request))
     => CertifiedResponseAuthorized(
-         CertifiedResponseItem(via, archiveServer, request))
+         CertifiedResponseItem(via, responder, request))
 BY SMT
    DEF CertifiedResponseAuthorized, MatchingCertifiedRequests,
        CertifiedResponseItem, AsyncCertifiedResponseEnvelope,

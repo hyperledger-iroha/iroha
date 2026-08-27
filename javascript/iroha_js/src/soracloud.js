@@ -103,9 +103,9 @@ const APP_INFRA_ROUTE_FIELDS = [
 ];
 const LOWERCASE_EVEN_HEX_PATTERN = /^(?:[0-9a-f]{2})+$/;
 export const SORACLOUD_APP_INFRA_DEPLOY_WIRE_ID =
-  "iroha_data_model::isi::soracloud::DeploySoracloudAppInfra";
+  "iroha.instruction.v1::soracloud::DeploySoracloudAppInfra";
 export const SORACLOUD_APP_INFRA_UPGRADE_WIRE_ID =
-  "iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra";
+  "iroha.instruction.v1::soracloud::UpgradeSoracloudAppInfra";
 const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: "application/json" });
 const SORACLOUD_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 

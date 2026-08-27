@@ -81,10 +81,10 @@ pub struct FaucetPreparedSignatureFieldsV1<'a> {
     pub binding: PreparedMutationBindingRefV1<'a>,
     /// Canonical claim account.
     pub claim_account_id: &'a str,
-    /// Optional proof-of-work anchor height.
-    pub claim_pow_anchor_height: Option<u64>,
-    /// Optional canonical lowercase proof-of-work nonce.
-    pub claim_pow_nonce_hex: Option<&'a str>,
+    /// Positive committed block height anchoring the proof of work.
+    pub claim_pow_anchor_height: u64,
+    /// Nonempty canonical lowercase proof-of-work nonce.
+    pub claim_pow_nonce_hex: &'a str,
     /// Lowercase domain-separated claim hash.
     pub semantic_hash_hex: &'a str,
     /// Canonical result account.
@@ -173,18 +173,17 @@ pub fn faucet_prepared_signature_transcript_v1(
         b"claim.account_id",
         fields.claim_account_id.as_bytes(),
     );
-    let anchor = fields
-        .claim_pow_anchor_height
-        .map_or_else(|| "none".to_owned(), |value| format!("some:{value}"));
+    let anchor = fields.claim_pow_anchor_height.to_string();
     append_field(
         &mut transcript,
         b"claim.pow_anchor_height",
         anchor.as_bytes(),
     );
-    let nonce = fields
-        .claim_pow_nonce_hex
-        .map_or_else(|| "none".to_owned(), |value| format!("some:{value}"));
-    append_field(&mut transcript, b"claim.pow_nonce_hex", nonce.as_bytes());
+    append_field(
+        &mut transcript,
+        b"claim.pow_nonce_hex",
+        fields.claim_pow_nonce_hex.as_bytes(),
+    );
     append_field(
         &mut transcript,
         b"semantic_hash_hex",
@@ -325,6 +324,49 @@ mod tests {
         assert_ne!(
             prepared_signature_digest_v1(&transcript),
             prepared_signature_digest_v1(&transcript[..transcript.len() - 1])
+        );
+    }
+
+    #[test]
+    fn faucet_transcript_commits_direct_required_pow_values() {
+        let transcript = faucet_prepared_signature_transcript_v1(FaucetPreparedSignatureFieldsV1 {
+            envelope_schema: "faucet-envelope",
+            binding: PreparedMutationBindingRefV1 {
+                schema: "binding",
+                authorization_sha256: "11",
+                authorization_nonce: "nonce",
+                kind: "faucet",
+                phase: "faucet",
+                idempotency_key: "22",
+                execution_expires_at_unix_ms: 42,
+            },
+            claim_account_id: "account",
+            claim_pow_anchor_height: 7,
+            claim_pow_nonce_hex: "00010203",
+            semantic_hash_hex: "33",
+            account_id: "account",
+            asset_definition_id: "asset-definition",
+            asset_id: "asset",
+            amount: "5",
+            transaction_hash_hex: "44",
+            signed_transaction_wire_sha256: "55",
+            signed_transaction_wire: &[0x66],
+        });
+        assert!(transcript.windows(1).any(|window| window == b"7"));
+        assert!(
+            transcript
+                .windows(b"00010203".len())
+                .any(|window| window == b"00010203")
+        );
+        assert!(
+            !transcript
+                .windows(b"some:".len())
+                .any(|window| window == b"some:")
+        );
+        assert!(
+            !transcript
+                .windows(b"none".len())
+                .any(|window| window == b"none")
         );
     }
 }

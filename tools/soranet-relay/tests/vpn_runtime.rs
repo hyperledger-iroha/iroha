@@ -173,6 +173,48 @@ fn scheduler_rejects_sequence_wrap() {
 }
 
 #[test]
+fn scheduler_clamps_programmatic_cover_bursts_to_a_bounded_prefix() {
+    let overlay = VpnOverlay::from_config(VpnConfig {
+        cover: VpnCoverTrafficConfig {
+            enabled: true,
+            cover_to_data_per_mille: 1_000,
+            heartbeat_ms: 1,
+            max_cover_burst: u16::MAX,
+            max_jitter_millis: 0,
+        },
+        pacing_millis: 1,
+        ..VpnConfig::default()
+    });
+    let flow_label = VpnFlowLabelV1::from_u32(1).expect("flow");
+    let cover_meta = CoverFrameMeta {
+        circuit_id: [0x02; 16],
+        flow_label,
+        ack: 0,
+        flags: VpnCellFlagsV1::new(true, false, false, false),
+        start_sequence: 0,
+    };
+    let data_cell = VpnCellV1 {
+        header: VpnCellHeaderV1 {
+            version: 1,
+            class: VpnCellClassV1::Data,
+            flags: VpnCellFlagsV1::new(false, false, false, false),
+            circuit_id: [0x02; 16],
+            flow_label,
+            sequence: 0,
+            ack: 0,
+            padding_budget_ms: overlay.config().padding_budget_ms,
+            payload_len: 0,
+        },
+        payload: vec![0xAA],
+    };
+    let schedule = schedule_frames(&overlay, vec![data_cell], cover_meta, [0x12; 32])
+        .expect("bounded schedule");
+    assert_eq!(schedule.len(), 65);
+    assert_eq!(schedule.iter().filter(|frame| frame.is_cover).count(), 64);
+    assert!(!schedule.last().expect("data slot").is_cover);
+}
+
+#[test]
 fn scheduler_rejects_inert_cover_seed_even_when_cover_is_disabled() {
     let overlay = VpnOverlay::from_config(VpnConfig::default());
     let cover_meta = CoverFrameMeta {

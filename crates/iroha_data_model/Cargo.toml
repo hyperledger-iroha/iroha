@@ -103,7 +103,7 @@ trybuild = { workspace = true, optional = true }
 criterion = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "sm"] }
 hex-literal = { workspace = true }
-ivm = { path = "../ivm", default-features = false, features = ["runtime"] }
+ivm = { path = "../ivm" }
 
 tempfile = { workspace = true }
 

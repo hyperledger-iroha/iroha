@@ -120,7 +120,9 @@ final class DemoConnectViewModel: ObservableObject {
   private static func generateAddressPreview() -> AddressPreview? {
 #if canImport(IrohaSwift)
     do {
-      let sampleKey = makeSampleKeyMaterial()
+      let sampleKey = try Keypair(
+        privateKeyBytes: makeSampleKeyMaterial()
+      ).publicKey
       let address = try AccountAddress.fromAccount(publicKey: sampleKey, algorithm: "ed25519")
       let formats = try address.displayFormats()
       return AddressPreview(

@@ -17,12 +17,11 @@ These guidelines apply to the `crates/ivm` directory and supplement `../AGENTS.m
 - `target/prebuilt/` – Kotodama samples produced for integration tests; keep them deterministic because `integration_tests` copies them into `fixtures/ivm`.
 
 ## Development workflow
-- Keep changes deterministic across hardware. Every SIMD/Metal/CUDA/HTM path must have a byte-for-byte equivalent scalar fallback.
+- Keep changes deterministic across hardware. Every SIMD/Metal/CUDA path must have a byte-for-byte equivalent scalar fallback.
 - Features to know:
   - `metal` enables Apple Metal acceleration for SHA256BLOCK and vector helpers.
   - `cuda` builds kernels from `cuda/`. Requires `nvcc`; failures should fall back gracefully.
-  - `htm` toggles hardware transactional memory experiments on x86_64.
-  - `ml-dsa`, `ivm_vrf_tests`, `ivm_zk_tests` gate heavy cryptography/VRF/ZK suites.
+  - ML-DSA verification is unconditional; `ivm_vrf_tests` and `ivm_zk_tests` gate heavy test suites.
 - Run `cargo test -p ivm` for the default set, plus targeted commands when relevant:
   - `cargo test -p ivm --features ivm_zk_tests`
   - `cargo test -p ivm --features ivm_vrf_tests`

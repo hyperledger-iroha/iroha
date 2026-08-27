@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import vm from "node:vm";
 import {
@@ -21,7 +22,12 @@ import {
   isStatusQueueStalled,
 } from "../src/toriiClient.js";
 import { __sumeragiNativeAmxTestHelpers } from "../src/sumeragiTyped.js";
-import { ToriiClient as DistToriiClient } from "../dist/toriiClient.js";
+import {
+  LocalSigningContext as DistLocalSigningContext,
+  OperatorSigningContext as DistOperatorSigningContext,
+  ToriiClient as DistToriiClient,
+} from "../dist/toriiClient.js";
+import { NetworkId as DistNetworkId } from "../dist/networkId.js";
 import {
   resolveToriiClientConfig,
   extractToriiFeatureConfig,
@@ -87,6 +93,9 @@ const SelectedToriiClient =
   sumeragiDiagnosticsFocus?.ToriiClient ?? SourceToriiClient;
 const FocusValidationError =
   sumeragiDiagnosticsFocus?.ValidationError ?? ValidationError;
+const FocusLocalSigningContext =
+  sumeragiDiagnosticsFocus?.LocalSigningContext ?? LocalSigningContext;
+const FocusNetworkId = sumeragiDiagnosticsFocus?.NetworkId ?? NetworkId;
 
 function focusedTestRegistration(baseTest) {
   return (nameOrOptions, optionsOrFn, maybeFn) => {
@@ -110,13 +119,28 @@ if (sumeragiDiagnosticsFocus !== null && typeof nodeTest.only === "function") {
 
 const BASE_URL = "https://localhost:8080";
 const GOVERNANCE_PROPOSAL_ID = "ab".repeat(32);
-const VK_SIGNING_NETWORK_ID = NetworkId.parse(
+const VK_SIGNING_NETWORK_ID = FocusNetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
 );
-const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
+const VK_LOCAL_SIGNING_CONTEXT = new FocusLocalSigningContext(
   VK_SIGNING_NETWORK_ID,
 );
-const ISO_OPERATOR_SIGNING_CONTEXT = makeTestOperatorSigningContext(VK_SIGNING_NETWORK_ID);
+const ISO_OPERATOR_SIGNING_CONTEXT =
+  sumeragiDiagnosticsFocus?.operatorSigningContext
+  ?? makeTestOperatorSigningContext(VK_SIGNING_NETWORK_ID);
+const DIST_VK_SIGNING_NETWORK_ID = DistNetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
+const DIST_LOCAL_SIGNING_CONTEXT = new DistLocalSigningContext(
+  DIST_VK_SIGNING_NETWORK_ID,
+);
+const DIST_OPERATOR_SIGNING_CONTEXT = new DistOperatorSigningContext(
+  DIST_VK_SIGNING_NETWORK_ID,
+  {
+    publicKey: ISO_OPERATOR_SIGNING_CONTEXT.publicKey,
+    sign: (message) => ISO_OPERATOR_SIGNING_CONTEXT.sign(message),
+  },
+);
 class ToriiClient extends SelectedToriiClient {
   constructor(baseUrl, options = {}) {
     super(baseUrl, {
@@ -358,6 +382,7 @@ function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
     "memo",
     "validation_fee_policy_version",
     "validation_fee_policy_hash",
+    "validation_fee_hijiri_fee_quote_hash",
   ]) {
     offset = readNoritoFieldPayload(
       payload,
@@ -487,6 +512,11 @@ function fixtureAccountForms(label, variant = "fixture") {
 
 const FIXTURE_ALICE_ID = fixtureAccountId("alice");
 const FIXTURE_BOB_ID = fixtureAccountId("bob");
+const KAIGI_HPKE_PUBLIC_KEY_B64 = "QUJDRA==";
+const KAIGI_HPKE_FINGERPRINT_HEX =
+  "58c7dab691f514e0bd6f4082852ac0f1e08df24b5864038ff70ecd68419f4a23";
+const KAIGI_ALTERNATE_MARKED_HASH_HEX = `${"aa".repeat(31)}ab`;
+const KAIGI_SIGNAL_SCHEMA_V1 = "iroha-demo-kaigi-chain-signal/v1";
 const FIXTURE_CAROL_ID = fixtureAccountId("carol");
 const FIXTURE_ALICE_TEST_ID = fixtureAccountId("alice", "test");
 const FIXTURE_VALIDATOR_TEST_ID = fixtureAccountId("validator", "test");
@@ -5658,7 +5688,7 @@ test("getDaManifestToDir writes manifest and plan artefacts", async () => {
     });
 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const tmpDir = await fs.mkdtemp(path.join(process.cwd(), "tmp-js-da-manifest-"));
+  const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "tmp-js-da-manifest-"));
   try {
     const result = await client.getDaManifestToDir(ticketHex, { outputDir: tmpDir });
     const label = manifestHashHex.toLowerCase();
@@ -6553,7 +6583,7 @@ nativeTest("submitDaBlob writes artefacts when artifactDir is set", async () => 
       },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const dir = await fs.mkdtemp(path.join(process.cwd(), "tmp-js-da-submit-"));
+  const dir = await fs.mkdtemp(path.join(tmpdir(), "tmp-js-da-submit-"));
   try {
     const result = await client.submitDaBlob({
       networkId: VK_SIGNING_NETWORK_ID,
@@ -6690,7 +6720,7 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
       },
     ],
   };
-  const tmpDir = await fs.mkdtemp(path.join(process.cwd(), "tmp-js-da-prove-"));
+  const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "tmp-js-da-prove-"));
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
     sorafsGatewayFetch: async () => gatewayResult,
@@ -8650,7 +8680,7 @@ test("submitTransaction never retries a network failure after dispatch", async (
   assert.equal(attempts, 1);
 });
 
-test("submitTransaction may retry safe capability preflight before one-shot dispatch", async () => {
+test("submitTransaction never retries its authenticated capability preflight", async () => {
   let capabilityAttempts = 0;
   let submissionAttempts = 0;
   const fetchImpl = async (url, init) => {
@@ -8677,12 +8707,12 @@ test("submitTransaction may retry safe capability preflight before one-shot disp
     __nativeBinding: canonicalTransactionCodecNative(),
   });
 
-  assert.deepEqual(
-    await client.submitTransaction(Uint8Array.of(0x01, 0xad)),
-    { ok: true },
+  await assert.rejects(
+    () => client.submitTransaction(Uint8Array.of(0x01, 0xad)),
+    (error) => error instanceof ToriiHttpError && error.status === 503,
   );
-  assert.equal(capabilityAttempts, 2);
-  assert.equal(submissionAttempts, 1);
+  assert.equal(capabilityAttempts, 1);
+  assert.equal(submissionAttempts, 0);
 });
 
 for (const redirectStatus of [307, 308]) {
@@ -10107,30 +10137,20 @@ test("getPipelineRecoveryFastpqProofsTyped rejects malformed payloads", async ()
 });
 
 test("extractPipelineStatusKind returns nested status kind", () => {
-  const payload = {
-    kind: "Transaction",
-    content: { status: { kind: "Committed" } },
-  };
+  const payload = { status: { kind: "Committed" } };
   assert.equal(extractPipelineStatusKind(payload), "Committed");
 });
 
-test("extractPipelineStatusKind makes canonical transaction content authoritative", () => {
-  assert.equal(
-    extractPipelineStatusKind({
-      kind: "Transaction",
-      status: { kind: "Applied" },
-      content: {
-        hash: "ab".repeat(32),
-        status: { kind: "Pending", content: null },
-      },
-    }),
-    "Pending",
-  );
+test("extractPipelineStatusKind ignores retired nested transaction content", () => {
+  assert.equal(extractPipelineStatusKind({
+    kind: "Transaction",
+    content: { status: { kind: "Pending" } },
+  }), null);
 });
 
-test("extractPipelineStatusKind accepts direct status string", () => {
+test("extractPipelineStatusKind rejects the retired direct status string", () => {
   const payload = { status: "Rejected" };
-  assert.equal(extractPipelineStatusKind(payload), "Rejected");
+  assert.equal(extractPipelineStatusKind(payload), null);
 });
 
 test("extractPipelineStatusKind returns null when status missing", () => {
@@ -10837,7 +10857,15 @@ test("typed Sumeragi endpoints reject swapped status and diagnostics payloads", 
 });
 
 function sumeragiClientForPayload(payload, Client = ToriiClient) {
+  const useDistContexts = Client === DistToriiClient;
   return new Client(BASE_URL, {
+    localSigningContext: useDistContexts
+      ? DIST_LOCAL_SIGNING_CONTEXT
+      : VK_LOCAL_SIGNING_CONTEXT,
+    operatorSigningContext: useDistContexts
+      ? DIST_OPERATOR_SIGNING_CONTEXT
+      : ISO_OPERATOR_SIGNING_CONTEXT,
+    canonicalRequestAuth: APPLICATION_CANONICAL_AUTH,
     fetchImpl: async () =>
       createResponse({
         status: 200,
@@ -11240,8 +11268,6 @@ test("getSumeragiDiagnosticsTyped parses bounded native application evidence and
   const payload = createSumeragiDiagnosticsPayload({
     npos: {
       epoch_length_blocks: 100,
-      vrf_commit_deadline_offset: 20,
-      vrf_reveal_deadline_offset: 40,
       epoch_seed: Array(32).fill(1),
       prf_height: 10,
       prf_view: 2,
@@ -11259,13 +11285,19 @@ test("getSumeragiDiagnosticsTyped parses bounded native application evidence and
     diagnostics.native_amx_participant_applications[0].state,
     "durably_applied",
   );
-  await assert.rejects(
-    sumeragiDiagnosticsClientForPayload({
-      ...payload,
-      npos: { ...payload.npos, vrf_penalty_epoch: 1 },
-    }).getSumeragiDiagnosticsTyped(),
-    /contains unknown field vrf_penalty_epoch/,
-  );
+  for (const retired of [
+    "vrf_commit_deadline_offset",
+    "vrf_reveal_deadline_offset",
+    "vrf_penalty_epoch",
+  ]) {
+    await assert.rejects(
+      sumeragiDiagnosticsClientForPayload({
+        ...payload,
+        npos: { ...payload.npos, [retired]: 1 },
+      }).getSumeragiDiagnosticsTyped(),
+      new RegExp(`contains unknown field ${retired}`, "u"),
+    );
+  }
 
   const parseApplication = async (row) => {
     const parsed = await sumeragiDiagnosticsClientForPayload({
@@ -13604,7 +13636,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getNodeCapabilities();
+  const result = await client.getNodeCapabilities(canonicalReadOptions());
   assert.deepEqual(result, {
     abiVersion: 1,
     dataModelVersion: 4,
@@ -13663,7 +13695,7 @@ test("getNodeCapabilities rejects non-integer ABI version", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getNodeCapabilities(),
+    () => client.getNodeCapabilities(canonicalReadOptions()),
     (error) => {
       assert.match(error.message, /abi_version/);
       return true;
@@ -13690,7 +13722,7 @@ test("getRuntimeAbiActive normalizes ABI version", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getRuntimeAbiActive();
+  const result = await client.getRuntimeAbiActive(canonicalReadOptions());
   assert.deepEqual(result, {
     abiVersion: 1,
   });
@@ -13750,7 +13782,7 @@ test("getRuntimeMetrics normalizes counters", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getRuntimeMetrics();
+  const result = await client.getRuntimeMetrics(canonicalReadOptions());
   assert.deepEqual(result, {
     abiVersion: 1,
     upgradeEventsTotal: { proposed: 3, activated: 1, canceled: 1 },
@@ -18129,19 +18161,18 @@ test("getKaigiCall returns null on 404 and normalizes call views", async () => {
             schema: "iroha-demo-kaigi-call/v1",
           },
         },
-        scheduled_start_ms: "1700000000000",
+        scheduled_start_ms: 1700000000000,
         privacy_mode: "private",
         room_policy: "authenticated",
         relay_manifest: {
           expiryMs: 1700000001000,
         },
-        roster_root_hex: "aa".repeat(32),
-        participant_count: 1,
+        roster_root_hex: KAIGI_HPKE_FINGERPRINT_HEX,
         commitment_count: 1,
         nullifier_count: 0,
         usage_commitment_count: 0,
         status: "active",
-        created_at_ms: "1699999999000",
+        created_at_ms: 1699999999000,
         total_duration_ms: 0,
         total_billed_gas: 0,
         segments_recorded: 0,
@@ -18154,7 +18185,7 @@ test("getKaigiCall returns null on 404 and normalizes call views", async () => {
   assert.equal(requested, `${BASE_URL}/v1/kaigi/calls/${encodeURIComponent(callId)}`);
   assert.equal(call?.call_id, callId);
   assert.equal(call?.privacy_mode, "private");
-  assert.equal(call?.participant_count, 1);
+  assert.equal(call?.participant_count, undefined);
   assert.equal(call?.host_account_id, undefined);
   assert.equal(call?.relay_manifest?.expiryMs, 1700000001000);
 });
@@ -18170,16 +18201,17 @@ test("listKaigiCallSignals encodes filters and normalizes payloads", async () =>
     return createResponse({
       status: 200,
       jsonData: {
-        total: 1,
+        has_more: true,
+        next_cursor: "Abcd_123",
         items: [
           {
-            entrypoint_hash: "deadbeef",
-            timestamp_ms: "1700000000100",
+            entrypoint_hash: KAIGI_HPKE_FINGERPRINT_HEX,
+            timestamp_ms: 1700000000100,
             call_id: callId,
             signal_kind: "answer",
-            created_at_ms: "1700000000000",
+            created_at_ms: 1700000000000,
             metadata: {
-              schema: "iroha-demo-kaigi-chain-signal/v1",
+              schema: KAIGI_SIGNAL_SCHEMA_V1,
             },
           },
         ],
@@ -18191,12 +18223,12 @@ test("listKaigiCallSignals encodes filters and normalizes payloads", async () =>
   const signals = await client.listKaigiCallSignals(callId, {
     afterTimestampMs: 1700000000000,
     limit: 10,
-    offset: 2,
+    cursor: "Prev_123",
   });
   assert.ok(requested?.includes(`/v1/kaigi/calls/${encodeURIComponent(callId)}/signals`));
   assert.ok(requested?.includes("after_timestamp_ms=1700000000000"));
   assert.ok(requested?.includes("limit=10"));
-  assert.ok(requested?.includes("offset=2"));
+  assert.ok(requested?.includes("cursor=Prev_123"));
   assert.equal(requestInit?.redirect, "error");
   assert.equal(
     requestInit?.headers?.["X-Iroha-Account"],
@@ -18218,20 +18250,22 @@ test("listKaigiCallSignals encodes filters and normalizes payloads", async () =>
     Buffer.from(requestInit?.headers?.["X-Iroha-Signature"], "base64"),
     signEd25519(signatureMessage, APPLICATION_CANONICAL_AUTH.privateKey),
   );
-  assert.equal(signals.total, 1);
+  assert.equal(signals.has_more, true);
+  assert.equal(signals.next_cursor, "Abcd_123");
   assert.equal(signals.items[0].signal_kind, "answer");
   assert.equal(signals.items[0].authority, undefined);
   assert.equal(signals.items[0].participant_account_id, undefined);
   assert.equal(signals.items[0].created_at_ms, 1700000000000);
+  assert.equal(signals.items[0].metadata.schema, KAIGI_SIGNAL_SCHEMA_V1);
 });
 
 test("listKaigiCallSignals rejects malformed required wire fields", async () => {
   const callId = "kaigi:demo-room";
   for (const payload of [
-    { total: 0, items: false },
+    { has_more: false, items: false },
     { items: [] },
     {
-      total: 1,
+      has_more: false,
       items: [
         {
           entrypoint_hash: "deadbeef",
@@ -18252,9 +18286,31 @@ test("listKaigiCallSignals rejects malformed required wire fields", async () => 
     });
     await assert.rejects(
       () => client.listKaigiCallSignals(callId),
-      /(?:items must be an array|total must be a non-negative integer|created_at_ms must be a non-negative integer)/u,
+      /(?:items must be an array|fields are not canonical)/u,
     );
   }
+});
+
+test("listKaigiCallSignals rejects offset and noncanonical cursors before fetch", async () => {
+  let fetches = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetches += 1;
+      throw new Error("invalid cursor options must fail before fetch");
+    },
+  });
+  await assert.rejects(
+    () => client.listKaigiCallSignals("kaigi:demo-room", { offset: 1 }),
+    /unsupported fields: offset/u,
+  );
+  for (const cursor of ["", " padded", "not+padded=", "A"]) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      () => client.listKaigiCallSignals("kaigi:demo-room", { cursor }),
+      /(?:must not be empty|surrounding whitespace|base64url)/u,
+    );
+  }
+  assert.equal(fetches, 0);
 });
 
 test("listKaigiCallSignals prefers per-call canonical auth and rejects missing auth", async () => {
@@ -18271,7 +18327,7 @@ test("listKaigiCallSignals prefers per-call canonical auth and rejects missing a
       captured = { url, init };
       return createResponse({
         status: 200,
-        jsonData: { total: 0, items: [] },
+        jsonData: { has_more: false, items: [] },
         headers: { "content-type": "application/json" },
       });
     },
@@ -18327,7 +18383,7 @@ test("streamKaigiCallEvents encodes filters and normalizes payloads", async () =
     assert.equal(init.headers["Last-Event-ID"], "cursor");
     return createSseResponse([
       "event: kaigi.call\n",
-      `data: {"kind":"roster_updated","call":{"call_id":"${callId}","domain":"kaigi","call_name":"demo-room"},"privacy_mode":"private","participant_count":1,"commitment_count":1,"nullifier_count":0,"roster_root_hex":"${"aa".repeat(32)}"}\n`,
+      `data: {"kind":"roster_updated","call":{"call_id":"${callId}","domain":"kaigi","call_name":"demo-room"},"privacy_mode":"private","commitment_count":1,"nullifier_count":0,"roster_root_hex":"${KAIGI_HPKE_FINGERPRINT_HEX}"}\n`,
       "\n",
       "event: kaigi.call\n",
       `data: {"kind":"ended","call":{"call_id":"${callId}","domain":"kaigi","call_name":"demo-room"},"status":"ended","ended_at_ms":1700000001000}\n`,
@@ -18366,15 +18422,15 @@ test("listKaigiRelays normalizes summary payloads", async () => {
     return createResponse({
       status: 200,
       jsonData: {
-        total: "2",
+        total: 1,
         items: [
           {
-            relay_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+            relay_id: FIXTURE_ALICE_ID,
             domain: "kaigi",
             bandwidth_class: 255,
-            hpke_fingerprint_hex: "aa".repeat(32),
-            status: "Healthy",
-            reported_at_ms: "42",
+            hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
+            status: "healthy",
+            reported_at_ms: 42,
           },
         ],
       },
@@ -18384,7 +18440,7 @@ test("listKaigiRelays normalizes summary payloads", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.listKaigiRelays();
   assert.equal(requested, `${BASE_URL}/v1/kaigi/relays`);
-  assert.equal(payload.total, 2);
+  assert.equal(payload.total, 1);
   assert.equal(payload.items.length, 1);
   assert.equal(payload.items[0].bandwidth_class, 255);
   assert.equal(payload.items[0].status, "healthy");
@@ -18396,7 +18452,7 @@ test("listKaigiRelays rejects invalid bandwidth classes", async () => {
     const relay = {
       relay_id: FIXTURE_ALICE_ID,
       domain: "kaigi",
-      hpke_fingerprint_hex: "aa".repeat(32),
+      hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
     };
     if (bandwidthClass !== undefined) {
       relay.bandwidth_class = bandwidthClass;
@@ -18411,7 +18467,7 @@ test("listKaigiRelays rejects invalid bandwidth classes", async () => {
     });
     await assert.rejects(
       () => client.listKaigiRelays(),
-      /bandwidth_class must (?:be an integer|be between 1 and 255)/u,
+      /(?:missing=\[bandwidth_class\]|bandwidth_class must (?:be a canonical unsigned integer|be between 0 and 255|be between 1 and 255))/u,
     );
   }
 });
@@ -18428,8 +18484,9 @@ test("listKaigiRelays rejects non-string health status", async () => {
               relay_id: FIXTURE_ALICE_ID,
               domain: "kaigi",
               bandwidth_class: 1,
-              hpke_fingerprint_hex: "aa".repeat(32),
+              hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
               status: ["healthy"],
+              reported_at_ms: 1,
             },
           ],
         },
@@ -18447,7 +18504,7 @@ test("listKaigiRelays rejects malformed and oversized envelopes", async () => {
     relay_id: FIXTURE_ALICE_ID,
     domain: "kaigi",
     bandwidth_class: 1,
-    hpke_fingerprint_hex: "aa".repeat(32),
+    hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
   };
   for (const payload of [
     { total: 0, items: false },
@@ -18468,7 +18525,7 @@ test("listKaigiRelays rejects malformed and oversized envelopes", async () => {
     });
     await assert.rejects(
       () => client.listKaigiRelays(),
-      /(?:items must be an array|total must be a non-negative integer|items must not exceed 500 entries|hpke_fingerprint_hex must be a string)/u,
+      /(?:items must be an array|fields are not canonical|items must not exceed 500 entries|hpke_fingerprint_hex must be a string)/u,
     );
   }
 });
@@ -18506,13 +18563,13 @@ test("getKaigiRelay returns null on 404 and normalizes detail response", async (
           relay_id: relayId,
           domain: "kaigi",
           bandwidth_class: 7,
-          hpke_fingerprint_hex: "bb".repeat(32),
+          hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
           status: "degraded",
           reported_at_ms: 99,
         },
-        hpke_public_key_b64: "qrvM",
+        hpke_public_key_b64: KAIGI_HPKE_PUBLIC_KEY_B64,
         reported_call: { domain_id: "kaigi", call_name: "demo" },
-        reported_by: "ops@kaigi",
+        reported_by: FIXTURE_BOB_ID,
         notes: "staged",
         metrics: {
           domain: "kaigi",
@@ -18528,7 +18585,7 @@ test("getKaigiRelay returns null on 404 and normalizes detail response", async (
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const detail = await client.getKaigiRelay(relayId);
   assert.equal(requested, `${BASE_URL}/v1/kaigi/relays/${encodeURIComponent(relayId)}`);
-  assert.equal(detail?.hpke_public_key_b64, "qrvM");
+  assert.equal(detail?.hpke_public_key_b64, KAIGI_HPKE_PUBLIC_KEY_B64);
   assert.equal(detail?.reported_call?.call_name, "demo");
   assert.equal(detail?.metrics?.registrations_total, 3);
 });
@@ -18555,9 +18612,13 @@ test("getKaigiRelay rejects non-string health notes", async () => {
             relay_id: relayId,
             domain: "kaigi",
             bandwidth_class: 1,
-            hpke_fingerprint_hex: "aa".repeat(32),
+            hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
+            status: "healthy",
+            reported_at_ms: 1,
           },
-          hpke_public_key_b64: "qrvM",
+          hpke_public_key_b64: KAIGI_HPKE_PUBLIC_KEY_B64,
+          reported_call: { domain_id: "kaigi", call_name: "demo" },
+          reported_by: FIXTURE_BOB_ID,
           notes: 7,
         },
         headers: { "content-type": "application/json" },
@@ -18577,7 +18638,7 @@ test("getKaigiRelay rejects non-string health notes", async () => {
             relay_id: relayId,
             domain: "kaigi",
             bandwidth_class: 1,
-            hpke_fingerprint_hex: "aa".repeat(32),
+            hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
           },
           hpke_public_key_b64: "not-base64",
         },
@@ -18603,12 +18664,9 @@ test("getKaigiRelay forwards AbortSignal", async () => {
           relay_id: relayId,
           domain: "kaigi",
           bandwidth_class: 1,
-          hpke_fingerprint_hex: "aa".repeat(32),
-          status: "healthy",
-          reported_at_ms: 1,
-          hpke_public_key_b64: "qrvM",
+          hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
         },
-        hpke_public_key_b64: "qrvM",
+        hpke_public_key_b64: KAIGI_HPKE_PUBLIC_KEY_B64,
       },
       headers: { "content-type": "application/json" },
     });
@@ -18674,7 +18732,7 @@ test("getKaigiRelaysHealth rejects missing or malformed required fields", async 
     });
     await assert.rejects(
       () => client.getKaigiRelaysHealth(),
-      /(?:domains must be an array|reports_total must be a non-negative integer|domains must not exceed 500 entries)/u,
+      /(?:domains must be an array|fields are not canonical|domains must not exceed 500 entries)/u,
     );
   }
 });
@@ -18722,7 +18780,10 @@ test("streamKaigiRelayEvents encodes filters and normalizes payloads", async () 
     assert.equal(init.headers["Last-Event-ID"], "cursor");
     return createSseResponse([
       'event: kaigi\n',
-      `data: {"kind":"registration","domain":"kaigi","relay_id":"${relayId}","bandwidth_class":1,"hpke_fingerprint_hex":"${"aa".repeat(32)}"}\n`,
+      `data: {"kind":"registration","domain":"kaigi","relay_id":"${relayId}","bandwidth_class":1,"hpke_fingerprint_hex":"${KAIGI_HPKE_FINGERPRINT_HEX}"}\n`,
+      "\n",
+      'event: kaigi\n',
+      `data: {"kind":"unregistration","domain":"kaigi","relay_id":"${relayId}"}\n`,
       "\n",
       'event: kaigi\n',
       `data: {"kind":"health","domain":"kaigi","relay_id":"${relayId}","status":"degraded","reported_at_ms":5000,"call":{"domain":"kaigi","name":"demo"}}\n`,
@@ -18733,17 +18794,31 @@ test("streamKaigiRelayEvents encodes filters and normalizes payloads", async () 
   const iterator = client.streamKaigiRelayEvents({
     domain: "Kaigi",
     relay: relayId,
-    kind: ["registration", "health"],
+    kind: ["registration", "unregistration", "health"],
     lastEventId: "cursor",
   });
   const first = await iterator.next();
   assert.equal(first.value?.data?.kind, "registration");
   const second = await iterator.next();
-  assert.equal(second.value?.data?.status, "degraded");
-  assert.equal(second.value?.data?.call.name, "demo");
+  assert.equal(second.value?.data?.kind, "unregistration");
+  const third = await iterator.next();
+  assert.equal(third.value?.data?.status, "degraded");
+  assert.equal(third.value?.data?.call.name, "demo");
   assert.ok(requested?.includes("domain=kaigi"));
   assert.ok(requested?.includes(`relay=${encodeURIComponent(relayId)}`));
-  assert.ok(requested?.includes("kind=registration%2Chealth"));
+  assert.ok(requested?.includes("kind=registration%2Cunregistration%2Chealth"));
+});
+
+test("streamKaigiRelayEvents rejects extra unregistration fields", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createSseResponse([
+      "event: kaigi\n",
+      `data: {"kind":"unregistration","domain":"kaigi","relay_id":"${FIXTURE_ALICE_ID}","status":"healthy"}\n`,
+      "\n",
+    ]),
+  });
+  const iterator = client.streamKaigiRelayEvents();
+  await assert.rejects(() => iterator.next(), /fields are not canonical/u);
 });
 
 test("streamKaigiRelayEvents rejects invalid registration bandwidth classes", async () => {
@@ -18753,7 +18828,7 @@ test("streamKaigiRelayEvents rejects invalid registration bandwidth classes", as
       kind: "registration",
       domain: "kaigi",
       relay_id: relayId,
-      hpke_fingerprint_hex: "aa".repeat(32),
+      hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
     };
     if (bandwidthClass !== undefined) {
       event.bandwidth_class = bandwidthClass;
@@ -18769,7 +18844,7 @@ test("streamKaigiRelayEvents rejects invalid registration bandwidth classes", as
     const iterator = client.streamKaigiRelayEvents();
     await assert.rejects(
       () => iterator.next(),
-      /bandwidth_class must (?:be an integer|be between 1 and 255)/u,
+      /(?:missing=\[bandwidth_class\]|bandwidth_class must (?:be a canonical unsigned integer|be between 0 and 255|be between 1 and 255))/u,
     );
   }
 });
@@ -18792,8 +18867,433 @@ test("streamKaigiRelayEvents rejects non-object and incomplete event payloads", 
     const iterator = client.streamKaigiRelayEvents();
     await assert.rejects(
       () => iterator.next(),
-      /(?:kaigi relay event must be an object|reported_at_ms must be a non-negative integer)/u,
+      /(?:invalid JSON|fields are not canonical)/u,
     );
+  }
+});
+
+test("Kaigi JSON endpoints preserve literal u64 max values", async () => {
+  const callId = "kaigi:full-u64";
+  const u64Max = "18446744073709551615";
+  const responses = [
+    createResponse({
+      status: 200,
+      textBody: `{"call_id":"${callId}","domain":"kaigi","call_name":"full-u64","gas_rate_per_minute":${u64Max},"metadata":{},"scheduled_start_ms":${u64Max},"privacy_mode":"private","room_policy":"authenticated","relay_manifest":{"expiry_ms":${u64Max}},"roster_root_hex":"${KAIGI_HPKE_FINGERPRINT_HEX}","commitment_count":0,"nullifier_count":0,"usage_commitment_count":0,"status":"active","created_at_ms":${u64Max},"total_duration_ms":${u64Max},"total_billed_gas":${u64Max},"segments_recorded":0}`,
+      headers: { "content-type": "application/json" },
+    }),
+    createResponse({
+      status: 200,
+      textBody: `{"has_more":false,"items":[{"entrypoint_hash":"${KAIGI_HPKE_FINGERPRINT_HEX}","timestamp_ms":${u64Max},"call_id":"${callId}","signal_kind":"answer","created_at_ms":${u64Max},"metadata":{"schema":"${KAIGI_SIGNAL_SCHEMA_V1}"}}]}`,
+      headers: { "content-type": "application/json" },
+    }),
+    createResponse({
+      status: 200,
+      textBody: `{"total":1,"items":[{"relay_id":"${FIXTURE_ALICE_ID}","domain":"kaigi","bandwidth_class":1,"hpke_fingerprint_hex":"${KAIGI_HPKE_FINGERPRINT_HEX}","status":"healthy","reported_at_ms":${u64Max}}]}`,
+      headers: { "content-type": "application/json" },
+    }),
+    createResponse({
+      status: 200,
+      textBody: `{"relay":{"relay_id":"${FIXTURE_ALICE_ID}","domain":"kaigi","bandwidth_class":1,"hpke_fingerprint_hex":"${KAIGI_HPKE_FINGERPRINT_HEX}"},"hpke_public_key_b64":"${KAIGI_HPKE_PUBLIC_KEY_B64}","metrics":{"domain":"kaigi","registrations_total":${u64Max},"manifest_updates_total":${u64Max},"failovers_total":${u64Max},"health_reports_total":${u64Max}}}`,
+      headers: { "content-type": "application/json" },
+    }),
+    createResponse({
+      status: 200,
+      textBody: `{"healthy_total":1,"degraded_total":0,"unavailable_total":0,"reports_total":${u64Max},"registrations_total":${u64Max},"failovers_total":${u64Max},"domains":[{"domain":"kaigi","registrations_total":${u64Max},"manifest_updates_total":${u64Max},"failovers_total":${u64Max},"health_reports_total":${u64Max}}]}`,
+      headers: { "content-type": "application/json" },
+    }),
+  ];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => responses.shift(),
+  });
+  const expected = 18_446_744_073_709_551_615n;
+
+  const call = await client.getKaigiCall(callId);
+  assert.equal(call.gas_rate_per_minute, expected);
+  assert.equal(call.relay_manifest.expiry_ms, expected);
+  const signals = await client.listKaigiCallSignals(callId);
+  assert.equal(signals.has_more, false);
+  assert.equal(signals.items[0].created_at_ms, expected);
+  const relays = await client.listKaigiRelays();
+  assert.equal(relays.items[0].reported_at_ms, expected);
+  const detail = await client.getKaigiRelay(FIXTURE_ALICE_ID);
+  assert.equal(detail.metrics.registrations_total, expected);
+  assert.equal(detail.relay.hpke_fingerprint_hex, KAIGI_HPKE_FINGERPRINT_HEX);
+  const health = await client.getKaigiRelaysHealth();
+  assert.equal(health.reports_total, expected);
+  assert.equal(health.domains[0].health_reports_total, expected);
+});
+
+test("Kaigi SSE endpoints preserve literal u64 max values", async () => {
+  const callId = "kaigi:full-u64";
+  const u64Max = "18446744073709551615";
+  const responses = [
+    createSseResponse([
+      "event: kaigi.call\n",
+      `data: {"kind":"ended","call":{"call_id":"${callId}","domain":"kaigi","call_name":"full-u64"},"status":"ended","ended_at_ms":${u64Max}}\n`,
+      "\n",
+    ]),
+    createSseResponse([
+      "event: kaigi\n",
+      `data: {"kind":"health","domain":"kaigi","relay_id":"${FIXTURE_ALICE_ID}","status":"healthy","reported_at_ms":${u64Max},"call":{"domain":"kaigi","name":"full-u64"}}\n`,
+      "\n",
+    ]),
+  ];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => responses.shift(),
+  });
+  const expected = 18_446_744_073_709_551_615n;
+
+  const callEvent = await client.streamKaigiCallEvents(callId).next();
+  assert.equal(callEvent.value.data.ended_at_ms, expected);
+  const relayEvent = await client.streamKaigiRelayEvents().next();
+  assert.equal(relayEvent.value.data.reported_at_ms, expected);
+});
+
+test("Kaigi call views enforce exact variants, privacy fields, and requested identity", async () => {
+  const callId = "kaigi:strict";
+  const base = {
+    call_id: callId,
+    domain: "kaigi",
+    call_name: "strict",
+    gas_rate_per_minute: 0,
+    metadata: {},
+    privacy_mode: "private",
+    room_policy: "authenticated",
+    roster_root_hex: KAIGI_HPKE_FINGERPRINT_HEX,
+    commitment_count: 0,
+    nullifier_count: 0,
+    usage_commitment_count: 0,
+    status: "active",
+    created_at_ms: 1,
+    total_duration_ms: 0,
+    total_billed_gas: 0,
+    segments_recorded: 0,
+  };
+  const cases = [
+    [{ ...base, extra: true }, /fields are not canonical/u],
+    [{ ...base, title: ["not", "text"] }, /title must be a string/u],
+    [{ ...base, privacy_mode: "Private" }, /supported exact lowercase/u],
+    [{ ...base, room_policy: "Authenticated" }, /supported exact lowercase/u],
+    [{ ...base, status: "Active" }, /supported exact lowercase/u],
+    [{ ...base, ended_at_ms: 2 }, /present exactly when status is ended/u],
+    [{ ...base, status: "ended" }, /present exactly when status is ended/u],
+    [{ ...base, max_participants: 0 }, /max_participants must be between 1/u],
+    [{ ...base, status: "ended", ended_at_ms: 0 }, /must not precede created_at_ms/u],
+    [{ ...base, host_account_id: FIXTURE_ALICE_ID }, /agree with privacy_mode/u],
+    [{ ...base, privacy_mode: "transparent" }, /agree with privacy_mode/u],
+    [{ ...base, call_id: "kaigi:other" }, /match domain and call_name/u],
+    [{ ...base, call_id: "other:strict", domain: "other" }, /requested call id/u],
+    [{
+      ...base,
+      roster_root_hex: KAIGI_HPKE_FINGERPRINT_HEX.toUpperCase(),
+    }, /exact lowercase 32-byte hex string/u],
+    [{
+      ...base,
+      roster_root_hex: `0x${KAIGI_HPKE_FINGERPRINT_HEX}`,
+    }, /exact lowercase 32-byte hex string/u],
+    [{
+      ...base,
+      roster_root_hex: [...Buffer.from(KAIGI_HPKE_FINGERPRINT_HEX, "hex")],
+    }, /must be a string/u],
+    [{ ...base, roster_root_hex: "aa".repeat(32) }, /Iroha Hash marker bit/u],
+  ];
+  for (const [payload, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(() => client.getKaigiCall(callId), pattern);
+  }
+});
+
+test("Kaigi call signals enforce exact cursor pages and carrier-time invariants", async () => {
+  const callId = "kaigi:strict";
+  const signal = {
+    entrypoint_hash: KAIGI_HPKE_FINGERPRINT_HEX,
+    timestamp_ms: 10,
+    call_id: callId,
+    signal_kind: "answer",
+    created_at_ms: 9,
+    metadata: { schema: KAIGI_SIGNAL_SCHEMA_V1 },
+  };
+  const withoutTimestamp = { ...signal };
+  delete withoutTimestamp.timestamp_ms;
+  const cases = [
+    [{ has_more: false, items: [{ ...signal, extra: true }] }, /fields are not canonical/u],
+    [{ has_more: false, items: [withoutTimestamp] }, /fields are not canonical/u],
+    [{ has_more: false, items: [{ ...signal, created_at_ms: 11 }] }, /must not exceed timestamp_ms/u],
+    [{ has_more: false, items: [{ ...signal, call_id: "kaigi:other" }] }, /requested call id/u],
+    [{ has_more: false, items: [{ ...signal, signal_kind: "" }] }, /must not be empty/u],
+    [{ has_more: false, items: [{ ...signal, signal_kind: "\u0085answer" }] }, /Unicode whitespace/u],
+    [{ has_more: false, items: [{ ...signal, signal_kind: "Answer" }] }, /uppercase ASCII/u],
+    [{
+      has_more: false,
+      items: [{
+        ...signal,
+        entrypoint_hash: KAIGI_HPKE_FINGERPRINT_HEX.toUpperCase(),
+      }],
+    }, /exact lowercase 32-byte hex string/u],
+    [{
+      has_more: false,
+      items: [{ ...signal, entrypoint_hash: `0x${KAIGI_HPKE_FINGERPRINT_HEX}` }],
+    }, /exact lowercase 32-byte hex string/u],
+    [{
+      has_more: false,
+      items: [{
+        ...signal,
+        entrypoint_hash: [...Buffer.from(KAIGI_HPKE_FINGERPRINT_HEX, "hex")],
+      }],
+    }, /must be a string/u],
+    [{
+      has_more: false,
+      items: [{ ...signal, entrypoint_hash: "aa".repeat(32) }],
+    }, /Iroha Hash marker bit/u],
+    [{ has_more: false, items: [{ ...signal, metadata: {} }] }, /metadata\.schema must be/u],
+    [{
+      has_more: false,
+      items: [{ ...signal, metadata: { schema: "kaigi-signal/v0" } }],
+    }, /metadata\.schema must be/u],
+    [{ has_more: true, items: [signal] }, /next_cursor must be present/u],
+    [{ has_more: false, next_cursor: "Abcd_123", items: [signal] }, /next_cursor must be present/u],
+    [{ has_more: true, next_cursor: "not+padded=", items: [signal] }, /base64url/u],
+    [{ has_more: false, items: [signal, { ...signal }] }, /unique entrypoint_hash/u],
+    [{
+      has_more: false,
+      items: [
+        signal,
+        {
+          ...signal,
+          entrypoint_hash: KAIGI_ALTERNATE_MARKED_HASH_HEX,
+          timestamp_ms: 8,
+          created_at_ms: 7,
+        },
+      ],
+    }, null],
+  ];
+  for (const [payload, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    if (pattern === null) {
+      // Structural cursor order does not depend on carrier timestamps.
+      // eslint-disable-next-line no-await-in-loop
+      const page = await client.listKaigiCallSignals(callId);
+      assert.equal(page.items.length, 2);
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(() => client.listKaigiCallSignals(callId), pattern);
+    }
+  }
+});
+
+test("Kaigi call signal kinds retain the open normalized vocabulary", async () => {
+  for (const signalKind of [
+    "offer",
+    "answer",
+    "ice",
+    "signal",
+    "vendor.signal",
+    "信号",
+    "\0",
+    "\uFEFFsignal",
+  ]) {
+    const callId = "kaigi:open-signal-kind";
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: {
+          has_more: false,
+          items: [{
+            entrypoint_hash: KAIGI_HPKE_FINGERPRINT_HEX,
+            timestamp_ms: 10,
+            call_id: callId,
+            signal_kind: signalKind,
+            created_at_ms: 9,
+            metadata: { schema: KAIGI_SIGNAL_SCHEMA_V1 },
+          }],
+        },
+        headers: { "content-type": "application/json" },
+      }),
+    });
+
+    // eslint-disable-next-line no-await-in-loop
+    const response = await client.listKaigiCallSignals(callId);
+    assert.equal(response.items[0].signal_kind, signalKind);
+  }
+});
+
+test("Kaigi call SSE variants enforce exact fields and requested identity", async () => {
+  const callId = "kaigi:strict";
+  const call = { call_id: callId, domain: "kaigi", call_name: "strict" };
+  const privateRosterEvent = {
+    kind: "roster_updated",
+    call,
+    privacy_mode: "private",
+    commitment_count: 1,
+    nullifier_count: 0,
+    roster_root_hex: KAIGI_HPKE_FINGERPRINT_HEX,
+  };
+  const cases = [
+    [{
+      kind: "roster_updated",
+      call,
+      privacy_mode: "private",
+      participant_count: 1,
+      commitment_count: 1,
+      nullifier_count: 0,
+      roster_root_hex: KAIGI_HPKE_FINGERPRINT_HEX,
+    }, /roster fields must agree/u],
+    [{
+      ...privateRosterEvent,
+      roster_root_hex: KAIGI_HPKE_FINGERPRINT_HEX.toUpperCase(),
+    }, /exact lowercase 32-byte hex string/u],
+    [{
+      ...privateRosterEvent,
+      roster_root_hex: `0x${KAIGI_HPKE_FINGERPRINT_HEX}`,
+    }, /exact lowercase 32-byte hex string/u],
+    [{
+      ...privateRosterEvent,
+      roster_root_hex: [...Buffer.from(KAIGI_HPKE_FINGERPRINT_HEX, "hex")],
+    }, /must be a string/u],
+    [{ ...privateRosterEvent, roster_root_hex: "aa".repeat(32) }, /Iroha Hash marker bit/u],
+    [{ kind: "ended", call, status: "ended", ended_at_ms: 2, extra: true }, /fields are not canonical/u],
+    [{
+      kind: "ended",
+      call: { call_id: "other:strict", domain: "other", call_name: "strict" },
+      status: "ended",
+      ended_at_ms: 2,
+    }, /requested call id/u],
+  ];
+  for (const [payload, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createSseResponse([
+        "event: kaigi.call\n",
+        `data: ${JSON.stringify(payload)}\n`,
+        "\n",
+      ]),
+    });
+    const iterator = client.streamKaigiCallEvents(callId);
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(() => iterator.next(), pattern);
+  }
+});
+
+test("Kaigi relay lists reject noncanonical status, pairs, totals, IDs, and duplicates", async () => {
+  const relay = {
+    relay_id: FIXTURE_ALICE_ID,
+    domain: "kaigi",
+    bandwidth_class: 1,
+    hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
+  };
+  const cases = [
+    [{ total: 1, items: [{ ...relay, status: "Healthy", reported_at_ms: 1 }] }, /exact lowercase/u],
+    [{ total: 1, items: [{ ...relay, status: "healthy" }] }, /present together/u],
+    [{ total: 2, items: [relay] }, /total must equal items\.length/u],
+    [{ total: 2, items: [relay, relay] }, /unique relay_id/u],
+    [{ total: 1, items: [{ ...relay, relay_id: "ops@kaigi" }] }, /(?:canonical I105|encoded i105)/u],
+    [{ total: 1, items: [{ ...relay, extra: true }] }, /fields are not canonical/u],
+  ];
+  for (const [payload, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(() => client.listKaigiRelays(), pattern);
+  }
+});
+
+test("Kaigi relay details bind the marked Blake2b-32 HPKE fingerprint and feedback", async () => {
+  const marked = Buffer.from(blake2b256(Buffer.from("ABCD")));
+  marked[marked.length - 1] |= 1;
+  assert.equal(marked.toString("hex"), KAIGI_HPKE_FINGERPRINT_HEX);
+  const relay = {
+    relay_id: FIXTURE_ALICE_ID,
+    domain: "kaigi",
+    bandwidth_class: 1,
+    hpke_fingerprint_hex: KAIGI_HPKE_FINGERPRINT_HEX,
+  };
+  const base = {
+    relay,
+    hpke_public_key_b64: KAIGI_HPKE_PUBLIC_KEY_B64,
+    metrics: {
+      domain: "kaigi",
+      registrations_total: 0,
+      manifest_updates_total: 0,
+      failovers_total: 0,
+      health_reports_total: 0,
+    },
+  };
+  const feedbackRelay = { ...relay, status: "healthy", reported_at_ms: 1 };
+  const cases = [
+    [{ ...base, relay: { ...relay, hpke_fingerprint_hex: `${"00".repeat(31)}01` } }, /must match the marked/u],
+    [{ ...base, relay: feedbackRelay }, /feedback fields must agree/u],
+    [{ ...base, reported_call: { domain_id: "kaigi", call_name: "demo" } }, /feedback fields must agree/u],
+    [{ ...base, metrics: { ...base.metrics, domain: "other" } }, /metrics\.domain must match/u],
+    [{
+      ...base,
+      relay: feedbackRelay,
+      reported_call: { domain_id: "kaigi", call_name: "demo" },
+      reported_by: "ops@kaigi",
+    }, /(?:canonical I105|encoded i105)/u],
+  ];
+  for (const [payload, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(() => client.getKaigiRelay(FIXTURE_ALICE_ID), pattern);
+  }
+});
+
+test("Kaigi relay health rejects inconsistent aggregates and domain sets", async () => {
+  const domain = {
+    domain: "kaigi",
+    registrations_total: 1,
+    manifest_updates_total: 0,
+    failovers_total: 1,
+    health_reports_total: 1,
+  };
+  const base = {
+    healthy_total: 1,
+    degraded_total: 0,
+    unavailable_total: 0,
+    reports_total: 1,
+    registrations_total: 1,
+    failovers_total: 1,
+    domains: [domain],
+  };
+  const cases = [
+    [{ ...base, reports_total: 0 }, /reports_total must equal/u],
+    [{ ...base, domains: [domain, domain] }, /sorted with unique/u],
+    [{ ...base, extra: true }, /fields are not canonical/u],
+    [{ ...base, healthy_total: 501 }, /status totals must not exceed 500/u],
+  ];
+  for (const [payload, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(() => client.getKaigiRelaysHealth(), pattern);
   }
 });
 
@@ -21209,6 +21709,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     creationTimeMs: 123456,
     validationFeePolicyVersion: 7,
     validationFeePolicyHash: "AB".repeat(32),
+    validationFeeHijiriFeeQuoteHash: "CD".repeat(32),
     validationFeeInstructionIndex: 1,
     validationFeeTransferEntryIndex: 2,
   });
@@ -21232,6 +21733,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       feePayment: authorityFeePayment(),
       validationFeePolicyVersion: 7,
       validationFeePolicyHash: "AB".repeat(32),
+      validationFeeHijiriFeeQuoteHash: "CD".repeat(32),
       validationFeeInstructionIndex: 1,
       validationFeeTransferEntryIndex: 2,
     }),
@@ -21242,6 +21744,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       fee_payment: authorityFeePayment(),
       validation_fee_policy_version: "7",
       validation_fee_policy_hash: "ab".repeat(32),
+      validation_fee_hijiri_fee_quote_hash: "cd".repeat(32),
       validation_fee_instruction_index: "1",
       validation_fee_transfer_entry_index: "2",
     },
@@ -21328,6 +21831,7 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
   for (const [fieldName, value] of Object.entries({
     validation_fee_policy_version: 7,
     validation_fee_policy_hash: "ab".repeat(32),
+    validation_fee_hijiri_fee_quote_hash: "cd".repeat(32),
     validation_fee_instruction_index: 1,
     validation_fee_transfer_entry_index: 2,
   })) {
@@ -21340,6 +21844,24 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
       /unsupported snake_case validation fee field/,
     );
   }
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeeHijiriFeeQuoteHash: "cd".repeat(32),
+      }),
+    /requires policy metadata/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeHijiriFeeQuoteHash: "not-a-hash",
+      }),
+    /32-byte hex string/,
+  );
   await assert.rejects(
     () =>
       client.proposeMultisig({
@@ -21406,6 +21928,24 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
   assert.throws(
     () => buildMultisigProposeRequest({ ...request, instructions: [null] }),
     /multisigPropose\.instructions\[0\]/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeeHijiriFeeQuoteHash: "cd".repeat(32),
+      }),
+    /requires policy metadata/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeHijiriFeeQuoteHash: "not-a-hash",
+      }),
+    /32-byte hex string/,
   );
   assert.throws(
     () => buildMultisigProposeRequest({ ...request, validationFeeInstructionIndex: 1 }),
@@ -25670,8 +26210,11 @@ test("HTTP error diagnostics abort stalled bodies and retry cleanup cancels disc
       });
     },
   });
-  assert.equal((await retryClient.getNodeCapabilities()).abiVersion, 1);
-  assert.equal(requests, 2);
+  await assert.rejects(
+    () => retryClient.getNodeCapabilities(canonicalReadOptions()),
+    (error) => error instanceof ToriiHttpError && error.status === 503,
+  );
+  assert.equal(requests, 1);
   assert.equal(retryBodyCancels, 1);
 });
 

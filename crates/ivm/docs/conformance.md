@@ -3,7 +3,7 @@
 This checklist pins required golden tests/vectors and their locations to keep implementations stable across changes.
 
 - Decoder/Encoder
-  - IVM 32‑bit encodings and 16‑bit compressed forms roundtrip.
+  - Canonical IVM 32-bit words roundtrip; compact and mixed-width streams are rejected.
   - Deployable-artifact admission rejects undefined and noncanonical opcode forms before control-flow analysis, and the configured predecode cap is inclusive: exactly `max_decoded_ops` instructions are accepted while the first excess instruction is rejected.
   - Files: `crates/ivm/tests/decoder_roundtrip.rs`, `crates/ivm/tests/contract_artifact.rs`, `crates/ivm/tests/predecode_max_ops.rs`
 
@@ -25,10 +25,10 @@ This checklist pins required golden tests/vectors and their locations to keep im
   - Files: `crates/ivm/tests/gas_golden.rs`
 
 - Predecoder Vectors
-  - Mixed 16/32-bit streams decode identically across allowed header/metadata variants.
+  - Canonical wide streams decode identically across allowed header/metadata variants.
   - Generator: `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write`
   - Check: `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --check`
-  - Output: `crates/ivm/tests/fixtures/predecoder/mixed/` (`code.bin`, `decoded.json`, `index.json`, `artifacts/*.to`)
+  - Output: `crates/ivm/tests/fixtures/predecoder/mixed/` (`code.bin`, `decoded.json`, `index.json`, `artifacts/*.to`); every decoded instruction is four bytes.
 
 - Cross‑Backend Vectors
   - Vector/crypto helpers produce identical outputs across scalar/SIMD/GPU.

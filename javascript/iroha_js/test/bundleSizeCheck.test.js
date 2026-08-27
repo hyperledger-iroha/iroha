@@ -53,10 +53,16 @@ function fakeSplitBundle(options, entryText = "") {
   const lazyChunks = isTorii
     ? [
         {
+          name: "torii-optional",
+          input: "src/toriiOptional.js",
+          specifier: "./toriiOptional.js",
+          edges: 1,
+        },
+        {
           name: "sumeragi",
           input: "src/sumeragiTyped.js",
           specifier: "./sumeragiTyped.js",
-          edges: 2,
+          edges: 3,
         },
       ]
     : [
@@ -156,13 +162,19 @@ test("bundle-size targets retain audited ceilings, lazy baselines, and browser g
     [
       {
         label: "toriiClient.js",
-        limitKb: 983,
+        limitKb: 930,
         lazyChunks: [
           {
+            specifier: "./toriiOptional.js",
+            edgeCount: 1,
+            reviewedBytes: 137_044,
+            limitKb: 134,
+          },
+          {
             specifier: "./sumeragiTyped.js",
-            edgeCount: 2,
-            reviewedBytes: 71_905,
-            limitKb: 71,
+            edgeCount: 3,
+            reviewedBytes: 72_931,
+            limitKb: 72,
           },
         ],
         forbidNodeInputs: false,
@@ -210,8 +222,8 @@ test("bundle-size targets retain audited ceilings, lazy baselines, and browser g
           {
             specifier: "./sumeragiTyped.js",
             edgeCount: 2,
-            reviewedBytes: 72_243,
-            limitKb: 71,
+            reviewedBytes: 73_692,
+            limitKb: 72,
           },
           {
             specifier: "./smartContractDeploymentSubmit.js",
@@ -250,8 +262,8 @@ test("bundle-size check gates the complete public browser aggregate", () => {
   assert.match(target.entryPoint, /dist[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
   assert.ok(target.limitKb > 0 && target.limitKb <= 469);
-  assert.equal(target.reviewedEagerBytes, 480_214);
-  assert.equal(target.reviewedCombinedBytes, 561_634);
+  assert.equal(target.reviewedEagerBytes, 477_639);
+  assert.equal(target.reviewedCombinedBytes, 560_508);
   assert.match(target.lazyChunks[0].entryPoint, /dist[/\\]sumeragiTyped\.js$/u);
   assert.match(
     target.lazyChunks[1].entryPoint,
@@ -342,6 +354,7 @@ test("browser graph audit derives every explicit browser-conditioned package exp
       subpaths: ["./bootle-lantern-issuance"],
     },
     { target: "./dist/transactionCodec.js", subpaths: ["./transaction-codec"] },
+    { target: "./dist/contractPayload.js", subpaths: ["./contract-payload"] },
     {
       target: "./dist/smartContractDeployment.js",
       subpaths: ["./smart-contract-deployment"],
@@ -524,19 +537,19 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
       combinedLimitKb: metrics.combinedLimitKb,
     },
     {
-      eagerBytes: 480_214,
+      eagerBytes: 477_639,
       lazyBytes: [
-        { specifier: "./sumeragiTyped.js", bytes: 72_243 },
+        { specifier: "./sumeragiTyped.js", bytes: 73_692 },
         { specifier: "./smartContractDeploymentSubmit.js", bytes: 9_177 },
       ],
-      combinedBytes: 561_634,
-      combinedLimitKb: 549,
+      combinedBytes: 560_508,
+      combinedLimitKb: 550,
     },
   );
   assert.equal(
     target.limitKb * 1024 - metrics.eagerBytes,
-    42,
-    "public browser aggregate must retain the audited 42-byte eager headroom",
+    2_617,
+    "public browser aggregate must retain the audited 2,617-byte eager headroom",
   );
   assert.ok(
     metrics.eagerBytes <= Math.floor(458_081 * 1.05),
@@ -589,15 +602,15 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 97_869],
   ]);
   const maximumGrowth = new Map([
-    ["toriiClient.js", (983 * 1024) / 945_975],
+    ["toriiClient.js", 1],
     ["transactionCodec.js (browser)", 1.05],
     ["nexusApp.js (browser)", 1.05],
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 998_331, modules: 97 }],
-    ["transactionCodec.js (browser)", { bytes: 300_611, modules: 45 }],
-    ["nexusApp.js (browser)", { bytes: 384_814, modules: 55 }],
+    ["toriiClient.js", { bytes: 941_461, modules: 100 }],
+    ["transactionCodec.js (browser)", { bytes: 298_553, modules: 45 }],
+    ["nexusApp.js (browser)", { bytes: 385_674, modules: 55 }],
     ["canonicalRequest.js (browser)", { bytes: 95_840, modules: 42 }],
   ]);
   const { build } = await import("esbuild");
@@ -648,15 +661,18 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        8_261,
-        "Torii hard ceiling must retain the audited 8,261-byte eager headroom",
+        10_859,
+        "Torii hard ceiling must retain the audited 10,859-byte eager headroom",
       );
       assert.deepEqual(
         splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
-        [{ specifier: "./sumeragiTyped.js", bytes: 71_905 }],
+        [
+          { specifier: "./toriiOptional.js", bytes: 137_044 },
+          { specifier: "./sumeragiTyped.js", bytes: 72_931 },
+        ],
       );
-      assert.equal(splitMetrics.combinedBytes, 1_070_236);
-      assert.equal(splitMetrics.combinedLimitKb, 1_054);
+      assert.equal(splitMetrics.combinedBytes, 1_151_436);
+      assert.equal(splitMetrics.combinedLimitKb, 1_136);
       assert.equal(splitMetrics.eagerBytes, target.reviewedEagerBytes);
       assert.equal(splitMetrics.combinedBytes, target.reviewedCombinedBytes);
     }

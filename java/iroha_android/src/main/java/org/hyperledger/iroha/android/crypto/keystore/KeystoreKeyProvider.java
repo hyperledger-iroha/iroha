@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.crypto.keystore;
 
 import java.security.KeyPair;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
@@ -159,8 +160,9 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
   }
 
   /**
-   * Requests fresh attestation for {@code alias}. Providers that do not support attestation return
-   * {@link Optional#empty()}.
+   * Requests backend-generated attestation for {@code alias}. Android Keystore cannot re-attest an
+   * existing alias with a new challenge; callers must provision a new alias with the challenge in
+   * {@link KeyGenParameters} when fresh evidence is required.
    */
   public Optional<KeyAttestation> generateAttestation(
       final String alias, final byte[] challenge) throws KeyManagementException {
@@ -185,7 +187,7 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
       throw new KeyManagementException(
           "Attestation challenge is not supported by backend " + backend.name());
     }
-    return attestation.map(att -> cacheAttestation(alias, normalizedChallenge, att));
+    return attestation;
   }
 
   /**
@@ -199,28 +201,51 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
       throws AttestationVerificationException {
     Objects.requireNonNull(alias, "alias");
     Objects.requireNonNull(verifier, "verifier");
-    final byte[] challenge = expectedChallenge == null ? NO_CHALLENGE : expectedChallenge.clone();
+    if (expectedChallenge == null || expectedChallenge.length == 0) {
+      throw new AttestationVerificationException(
+          "Expected attestation challenge must be non-empty");
+    }
+    final byte[] challenge = expectedChallenge.clone();
     final Optional<KeyAttestation> attestation;
     try {
-      attestation = fetchAttestation(alias, challenge);
-    } catch (final KeyManagementException ex) {
-      return Optional.empty();
+      attestation = fetchRecordedAttestation(alias);
+    } catch (final KeyManagementException | RuntimeException ex) {
+      throw new AttestationVerificationException(
+          "Failed to obtain challenge-bound attestation material", ex);
     }
     if (!attestation.isPresent()) {
       return Optional.empty();
     }
     try {
-      if (expectedChallenge == null) {
-        return Optional.of(verifier.verify(attestation.get()));
+      final AttestationResult result = verifier.verify(attestation.get(), challenge);
+      final Optional<KeyPair> loadedKey;
+      try {
+        loadedKey = backend.load(alias);
+      } catch (final KeyManagementException | RuntimeException ex) {
+        throw new AttestationVerificationException(
+            "Failed to load the attested alias key", ex);
       }
-      return Optional.of(verifier.verify(attestation.get(), expectedChallenge.clone()));
+      if (loadedKey == null || !loadedKey.isPresent() || loadedKey.get().getPublic() == null) {
+        throw new AttestationVerificationException("Attested alias key is unavailable");
+      }
+      final byte[] aliasPublicKey = loadedKey.get().getPublic().getEncoded();
+      final java.security.PublicKey attestedLeafKey = result.leafCertificate().getPublicKey();
+      final byte[] attestedPublicKey =
+          attestedLeafKey == null ? null : attestedLeafKey.getEncoded();
+      if (aliasPublicKey == null
+          || attestedPublicKey == null
+          || !MessageDigest.isEqual(aliasPublicKey, attestedPublicKey)) {
+        throw new AttestationVerificationException(
+            "Attested leaf public key does not match the alias key");
+      }
+      return Optional.of(result);
     } catch (final AttestationVerificationException ex) {
       evictAttestations(alias);
       throw ex;
     }
   }
 
-  /** Verifies attestation without enforcing a challenge match. */
+  /** Retained for binary compatibility; always fails closed because a challenge is required. */
   @Override
   public Optional<AttestationResult> verifyAttestation(
       final String alias, final AttestationVerifier verifier)
@@ -299,13 +324,14 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
     if (cached.isPresent()) {
       return cached;
     }
-    if (normalized.length > 0) {
-      final Optional<KeyAttestation> generated = backend.generateAttestation(alias, normalized);
-      if (generated.isPresent()) {
-        return Optional.of(cacheAttestation(alias, normalized, generated.get()));
-      }
-    }
     return backend.attestation(alias).map(att -> cacheAttestation(alias, normalized, att));
+  }
+
+  private Optional<KeyAttestation> fetchRecordedAttestation(final String alias)
+      throws KeyManagementException {
+    // Challenge-bound Android certificates are minted at key provisioning time. Always reread the
+    // recorded chain here so verification cannot consume stale in-memory evidence.
+    return backend.attestation(alias);
   }
 
   private static byte[] fingerprintChallenge(final byte[] challenge) {

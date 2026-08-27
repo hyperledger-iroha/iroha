@@ -1599,6 +1599,98 @@ fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
     );
 }
 #[test]
+fn fast_execution_preflight_read_leaves_recovery_artifacts_byte_exact() {
+    let (temp_dir, mut config) =
+        kura_storage_fixture("create Fast lane execution Kura", BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let lane_entry = lane_config.primary().clone();
+    let lane_id = lane_entry.lane_id;
+    let lane_block_height = 1;
+    let block = dummy_block_with_lane_payload_ownership(
+        lane_id,
+        lane_entry.dataspace_id,
+        lane_block_height,
+    );
+    let proposal = lane_block_proposal_from_ownership(
+        block
+            .execution_context()
+            .expect("lane execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane payload ownership"),
+    );
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    kura.store_block(block)
+        .expect("store block with lane artifact");
+    let recovered = kura
+        .recover_lane_block_payload(&proposal)
+        .expect("recover executable lane payload");
+    kura.persist_lane_block_execution_input(&recovered)
+        .expect("persist lane execution input");
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("lane execution input");
+    let result = TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
+    kura.persist_lane_block_execution_preflight(&input, 0, None, vec![result])
+        .expect("persist lane execution preflight");
+    assert!(
+        kura.read_lane_block_execution_preflight(lane_id, lane_block_height)
+            .is_some(),
+        "Strict must read the stable lane execution preflight"
+    );
+
+    let (input_data_path, input_index_path) =
+        Kura::lane_block_execution_input_paths_for_entry(&lane_entry, temp_dir.path());
+    let (preflight_data_path, preflight_index_path) =
+        Kura::lane_block_execution_preflight_paths_for_entry(&lane_entry, temp_dir.path());
+    let input_temp_data_path = input_data_path.with_extension("norito.tmp");
+    let input_temp_index_path = input_index_path.with_extension("index.tmp");
+    let preflight_temp_data_path = preflight_data_path.with_extension("norito.tmp");
+    let preflight_temp_index_path = preflight_index_path.with_extension("index.tmp");
+    for (stable, staged) in [
+        (&input_data_path, &input_temp_data_path),
+        (&input_index_path, &input_temp_index_path),
+        (&preflight_data_path, &preflight_temp_data_path),
+        (&preflight_index_path, &preflight_temp_index_path),
+    ] {
+        fs::copy(stable, staged).expect("stage interrupted sidecar recovery file");
+    }
+    let paths = [
+        input_data_path,
+        input_index_path,
+        input_temp_data_path,
+        input_temp_index_path,
+        preflight_data_path,
+        preflight_index_path,
+        preflight_temp_data_path,
+        preflight_temp_index_path,
+    ];
+    let before = paths
+        .iter()
+        .map(fs::read)
+        .collect::<std::io::Result<Vec<_>>>()
+        .expect("snapshot lane execution files before Fast read");
+    drop(kura);
+
+    config.init_mode = InitMode::Fast;
+    let (fast, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("open emergency Fast Kura");
+    assert_eq!(
+        fast.read_lane_block_execution_preflight(lane_id, lane_block_height),
+        None,
+        "Fast must leave ambiguous recovery files unavailable and untouched"
+    );
+    let after = paths
+        .iter()
+        .map(fs::read)
+        .collect::<std::io::Result<Vec<_>>>()
+        .expect("snapshot lane execution files after Fast read");
+    assert_eq!(
+        after, before,
+        "Fast read must leave lane execution recovery files byte-exact"
+    );
+}
+#[test]
 fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
     let (
         (_temp_dir, config, lane_config),

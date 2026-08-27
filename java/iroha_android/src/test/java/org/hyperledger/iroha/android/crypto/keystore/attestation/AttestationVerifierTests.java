@@ -1,7 +1,13 @@
 package org.hyperledger.iroha.android.crypto.keystore.attestation;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import org.hyperledger.iroha.android.crypto.keystore.KeyAttestation;
 
 public final class AttestationVerifierTests {
@@ -58,12 +64,20 @@ public final class AttestationVerifierTests {
 
   private static final byte[] STRONGBOX_CHALLENGE = hex("4145454245");
   private static final byte[] TEE_CHALLENGE = hex("4348414C");
+  private static final long EVALUATION_TIME_EPOCH_MILLIS = 1761408000000L;
 
   private AttestationVerifierTests() {}
 
   public static void main(final String[] args) throws Exception {
     strongBoxAttestationPasses();
+    challengeIsMandatory();
     challengeMismatchFails();
+    builderRequiresRevocationConfiguration();
+    staleRevocationPolicyFails();
+    revokedSerialFails();
+    revokedTbsDigestFails();
+    canonicalSnapshotMatchesCrossLanguageVector();
+    unchangedCommitmentRejectsSnapshotMutation();
     strongBoxRequirementFailsForTee();
     teeAttestationAllowedWithoutStrongBoxRequirement();
     builderRequiresTrustAnchor();
@@ -78,7 +92,7 @@ public final class AttestationVerifierTests {
             .addCertificate(ROOT_CERT)
             .build();
     final AttestationVerifier verifier =
-        AttestationVerifier.builder()
+        verifierBuilder()
             .addTrustedRoot(ROOT_CERT)
             .requireStrongBox(true)
             .build();
@@ -91,6 +105,15 @@ public final class AttestationVerifierTests {
     assert result.keymasterSecurityLevel() == AttestationResult.SecurityLevel.STRONG_BOX;
   }
 
+  private static void challengeIsMandatory() throws Exception {
+    final KeyAttestation attestation = strongBoxAttestation();
+    final AttestationVerifier verifier =
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+    assertVerificationFails(() -> verifier.verify(attestation));
+    assertVerificationFails(() -> verifier.verify(attestation, null));
+    assertVerificationFails(() -> verifier.verify(attestation, new byte[0]));
+  }
+
   private static void challengeMismatchFails() throws Exception {
     final KeyAttestation attestation =
         KeyAttestation.builder()
@@ -99,7 +122,7 @@ public final class AttestationVerifierTests {
             .addCertificate(ROOT_CERT)
             .build();
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
     boolean threw = false;
     try {
       verifier.verify(attestation, hex("DEADBEEF"));
@@ -107,6 +130,126 @@ public final class AttestationVerifierTests {
       threw = true;
     }
     assert threw : "Challenge mismatch should fail verification";
+  }
+
+  private static void builderRequiresRevocationConfiguration() throws Exception {
+    boolean missingPolicyThrew = false;
+    try {
+      AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).build();
+    } catch (final IllegalStateException ex) {
+      missingPolicyThrew = true;
+    }
+    assert missingPolicyThrew : "Verifier must require a governed revocation policy";
+
+    boolean missingEvaluationTimeThrew = false;
+    try {
+      AttestationVerifier.builder()
+          .addTrustedRoot(ROOT_CERT)
+          .setRevocationPolicy(freshPolicy())
+          .build();
+    } catch (final IllegalStateException ex) {
+      missingEvaluationTimeThrew = true;
+    }
+    assert missingEvaluationTimeThrew : "Verifier must require an explicit evaluation time";
+  }
+
+  private static void staleRevocationPolicyFails() throws Exception {
+    final AndroidAttestationRevocationPolicyV1 stalePolicy =
+        AndroidAttestationRevocationTestFixtures.policy(
+            EVALUATION_TIME_EPOCH_MILLIS - 86_400_000L,
+            86_400L,
+            Collections.emptyList(),
+            Collections.emptyList());
+    final AttestationVerifier verifier =
+        AttestationVerifier.builder(stalePolicy, EVALUATION_TIME_EPOCH_MILLIS)
+            .addTrustedRoot(ROOT_CERT)
+            .build();
+    assertVerificationFails(
+        () -> verifier.verify(strongBoxAttestation(), STRONGBOX_CHALLENGE));
+  }
+
+  private static void revokedSerialFails() throws Exception {
+    final X509Certificate leaf = decodeCertificate(STRONGBOX_CERT);
+    final AndroidAttestationRevocationPolicyV1 policy =
+        AndroidAttestationRevocationTestFixtures.policy(
+            EVALUATION_TIME_EPOCH_MILLIS,
+            60L,
+            Collections.singletonList(leaf.getSerialNumber().toString(16)),
+            Collections.emptyList());
+    final AttestationVerifier verifier =
+        AttestationVerifier.builder(policy, EVALUATION_TIME_EPOCH_MILLIS)
+            .addTrustedRoot(ROOT_CERT)
+            .build();
+    assertVerificationFails(
+        () -> verifier.verify(strongBoxAttestation(), STRONGBOX_CHALLENGE));
+  }
+
+  private static void revokedTbsDigestFails() throws Exception {
+    final X509Certificate leaf = decodeCertificate(STRONGBOX_CERT);
+    final byte[] digest =
+        MessageDigest.getInstance("SHA-256").digest(leaf.getTBSCertificate());
+    final AndroidAttestationRevocationPolicyV1 policy =
+        AndroidAttestationRevocationTestFixtures.policy(
+            EVALUATION_TIME_EPOCH_MILLIS,
+            60L,
+            Collections.emptyList(),
+            Collections.singletonList(digest));
+    final AttestationVerifier verifier =
+        AttestationVerifier.builder(policy, EVALUATION_TIME_EPOCH_MILLIS)
+            .addTrustedRoot(ROOT_CERT)
+            .build();
+    assertVerificationFails(
+        () -> verifier.verify(strongBoxAttestation(), STRONGBOX_CHALLENGE));
+  }
+
+  private static void unchangedCommitmentRejectsSnapshotMutation() throws Exception {
+    final long responseDate = EVALUATION_TIME_EPOCH_MILLIS;
+    final byte[] snapshot =
+        AndroidAttestationRevocationTestFixtures.canonicalSnapshot(
+            responseDate,
+            responseDate - 1000L,
+            60L,
+            Collections.singletonList("a"),
+            Collections.singletonList(filledBytes(0x22)));
+    final byte[] trustedCommitment =
+        AndroidAttestationRevocationTestFixtures.sha256(snapshot);
+    final String text = new String(snapshot, StandardCharsets.US_ASCII);
+    final String[][] replacements = {
+      {"payload_sha256=", "payload_sha256=12"},
+      {"response_date_ms=" + responseDate, "response_date_ms=" + (responseDate + 1000L)},
+      {"last_modified_ms=" + (responseDate - 1000L),
+          "last_modified_ms=" + (responseDate - 2000L)},
+      {"cache_max_age_seconds=60", "cache_max_age_seconds=61"},
+      {"serial=a", "serial=b"},
+      {"tbs_sha256=" + repeat("22", 32), "tbs_sha256=" + repeat("23", 32)}
+    };
+    for (final String[] replacement : replacements) {
+      final byte[] mutated =
+          text.replace(replacement[0], replacement[1])
+              .getBytes(StandardCharsets.US_ASCII);
+      boolean threw = false;
+      try {
+        AndroidAttestationRevocationPolicyV1.fromCanonicalSnapshot(
+            mutated, trustedCommitment);
+      } catch (final IllegalArgumentException expected) {
+        threw = true;
+      }
+      assert threw : "Snapshot mutation must fail under an unchanged trusted commitment";
+    }
+  }
+
+  private static void canonicalSnapshotMatchesCrossLanguageVector() {
+    final byte[] snapshot =
+        AndroidAttestationRevocationTestFixtures.canonicalSnapshot(
+            EVALUATION_TIME_EPOCH_MILLIS,
+            EVALUATION_TIME_EPOCH_MILLIS - 1000L,
+            60L,
+            Arrays.asList("a", "ff"),
+            Collections.singletonList(filledBytes(0x22)));
+    assert AndroidAttestationRevocationTestFixtures.hex(
+            AndroidAttestationRevocationTestFixtures.sha256(snapshot))
+        .equals(AndroidAttestationRevocationTestFixtures.CANONICAL_VECTOR_SHA256)
+        : "Java canonical snapshot must match the shared V1 vector";
   }
 
   private static void strongBoxRequirementFailsForTee() throws Exception {
@@ -117,7 +260,7 @@ public final class AttestationVerifierTests {
             .addCertificate(ROOT_CERT)
             .build();
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
     boolean threw = false;
     try {
       verifier.verify(attestation, TEE_CHALLENGE);
@@ -135,7 +278,7 @@ public final class AttestationVerifierTests {
             .addCertificate(ROOT_CERT)
             .build();
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).requireStrongBox(false).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(false).build();
     final AttestationResult result = verifier.verify(attestation, TEE_CHALLENGE);
     assert result.attestationSecurityLevel() == AttestationResult.SecurityLevel.TRUSTED_ENVIRONMENT
         : "Expected TEE security level";
@@ -154,6 +297,84 @@ public final class AttestationVerifierTests {
 
   private static byte[] decodeBase64(final String value) {
     return Base64.getDecoder().decode(value);
+  }
+
+  private static AttestationVerifier.Builder verifierBuilder() {
+    return AttestationVerifier.builder(freshPolicy(), EVALUATION_TIME_EPOCH_MILLIS);
+  }
+
+  private static AndroidAttestationRevocationPolicyV1 freshPolicy() {
+    return AndroidAttestationRevocationTestFixtures.policy(
+        EVALUATION_TIME_EPOCH_MILLIS,
+        86_400L,
+        Collections.emptyList(),
+        Collections.emptyList());
+  }
+
+  /** Returns a verifier configured for the shared StrongBox test certificate chain. */
+  public static AttestationVerifier fixtureVerifier()
+      throws AttestationVerificationException {
+    return verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+  }
+
+  /** Returns the challenge embedded in the shared StrongBox test leaf certificate. */
+  public static byte[] fixtureChallenge() {
+    return STRONGBOX_CHALLENGE.clone();
+  }
+
+  /** Returns a genuine verification result for use by provider-boundary tests. */
+  public static AttestationResult fixtureResult(final String alias) throws Exception {
+    final KeyAttestation attestation =
+        KeyAttestation.builder()
+            .setAlias(alias)
+            .addCertificate(STRONGBOX_CERT)
+            .addCertificate(ROOT_CERT)
+            .build();
+    return fixtureVerifier().verify(attestation, STRONGBOX_CHALLENGE);
+  }
+
+  private static KeyAttestation strongBoxAttestation() {
+    return KeyAttestation.builder()
+        .setAlias("strongbox-alias")
+        .addCertificate(STRONGBOX_CERT)
+        .addCertificate(ROOT_CERT)
+        .build();
+  }
+
+  private static X509Certificate decodeCertificate(final byte[] certificateDer)
+      throws Exception {
+    return (X509Certificate)
+        CertificateFactory.getInstance("X.509")
+            .generateCertificate(new ByteArrayInputStream(certificateDer));
+  }
+
+  private static byte[] filledBytes(final int value) {
+    final byte[] digest = new byte[32];
+    Arrays.fill(digest, (byte) value);
+    return digest;
+  }
+
+  private static String repeat(final String value, final int count) {
+    final StringBuilder builder = new StringBuilder(value.length() * count);
+    for (int index = 0; index < count; index++) {
+      builder.append(value);
+    }
+    return builder.toString();
+  }
+
+  private static void assertVerificationFails(final VerificationCall call) throws Exception {
+    boolean threw = false;
+    try {
+      call.run();
+    } catch (final AttestationVerificationException ex) {
+      threw = true;
+    }
+    assert threw : "Attestation verification should fail closed";
+  }
+
+  @FunctionalInterface
+  private interface VerificationCall {
+    void run() throws Exception;
   }
 
   private static byte[] hex(final String hex) {

@@ -1,6 +1,12 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 private const val ACTION = "RegisterKaigiRelay"
+private val REGISTER_KAIGI_RELAY_ARGUMENTS = setOf(
+    "action",
+    "relay.relay_id",
+    "relay.hpke_public_key",
+    "relay.bandwidth_class",
+)
 
 /** Typed representation of `RegisterKaigiRelay` instructions. */
 class RegisterKaigiRelayInstruction(
@@ -10,7 +16,8 @@ class RegisterKaigiRelayInstruction(
     arguments: Map<String, String>? = null,
 ) : InstructionTemplate {
 
-    private val _arguments: Map<String, String> = arguments?.toMap() ?: canonicalArguments()
+    private val _arguments: Map<String, String> =
+        KaigiInstructionUtils.immutableArguments(canonicalArguments())
 
     override val kind: InstructionKind = InstructionKind.CUSTOM
 
@@ -18,8 +25,14 @@ class RegisterKaigiRelayInstruction(
 
     init {
         require(relayId.isNotBlank()) { "relayId must not be blank" }
-        KaigiInstructionUtils.requireBase64(hpkePublicKeyBase64, "hpkePublicKeyBase64")
+        KaigiInstructionUtils.requireHpkePublicKeyBase64(
+            hpkePublicKeyBase64,
+            "hpkePublicKeyBase64",
+        )
         require(bandwidthClass in 1..0xFF) { "bandwidthClass must be between 1 and 255" }
+        require(arguments == null || arguments == _arguments) {
+            "arguments must match the canonical RegisterKaigiRelay representation"
+        }
     }
 
     override fun equals(other: Any?): Boolean {
@@ -42,10 +55,11 @@ class RegisterKaigiRelayInstruction(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RegisterKaigiRelayInstruction {
+            KaigiInstructionUtils.requireKnownArguments(arguments, REGISTER_KAIGI_RELAY_ARGUMENTS)
             KaigiInstructionUtils.requireAction(arguments, ACTION)
             return RegisterKaigiRelayInstruction(
                 relayId = KaigiInstructionUtils.require(arguments, "relay.relay_id"),
-                hpkePublicKeyBase64 = KaigiInstructionUtils.requireBase64(
+                hpkePublicKeyBase64 = KaigiInstructionUtils.requireHpkePublicKeyBase64(
                     KaigiInstructionUtils.require(arguments, "relay.hpke_public_key"),
                     "relay.hpke_public_key",
                 ),
@@ -53,7 +67,6 @@ class RegisterKaigiRelayInstruction(
                     KaigiInstructionUtils.require(arguments, "relay.bandwidth_class"),
                     "relay.bandwidth_class",
                 ),
-                arguments = arguments,
             )
         }
     }

@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.address
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
+import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKeyAdmission
 
 private const val I105_WARNING =
     "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. " +
@@ -13,6 +14,11 @@ private const val I105_DISCRIMINANT_TEST = 0x0171
 private const val I105_DISCRIMINANT_DEV = 0x0000
 private const val I105_CHECKSUM_LEN = 6
 private const val BECH32M_CONST = 0x2bc830a3
+private const val ADDRESS_CLASS_SINGLE_KEY = 0
+private const val ADDRESS_CLASS_MULTISIG = 1
+private const val CONTROLLER_SINGLE_KEY_TAG = 0x00
+private const val CONTROLLER_MULTISIG_TAG = 0x01
+private const val CONTROLLER_SINGLE_KEY_EXTENDED_TAG = 0x02
 private const val I105_SENTINEL_SORA = "sora"
 private const val I105_SENTINEL_TEST = "test"
 private const val I105_SENTINEL_DEV = "dev"
@@ -112,19 +118,28 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
             publicKey: ByteArray,
             algorithm: String,
         ): AccountAddress {
-            if (publicKey.size > 0xFF) {
+            val curveId = curveIdForAlgorithm(algorithm).toInt() and 0xFF
+            validateControllerPublicKey(curveId, publicKey)
+            if (publicKey.size > 0xFFFF) {
                 throw AccountAddressException(
                     AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG,
                     "key payload too long: ${publicKey.size}",
                 )
             }
-            val header = encodeHeader(0, 0, 1)
+            val header = encodeHeader(0, ADDRESS_CLASS_SINGLE_KEY, 1)
 
             val out = ByteArrayOutputStream()
             out.write(header.toInt())
-            out.write(0x00)
-            out.write(curveIdForAlgorithm(algorithm).toInt())
-            out.write(publicKey.size)
+            if (publicKey.size <= 0xFF) {
+                out.write(CONTROLLER_SINGLE_KEY_TAG)
+                out.write(curveId)
+                out.write(publicKey.size)
+            } else {
+                out.write(CONTROLLER_SINGLE_KEY_EXTENDED_TAG)
+                out.write(curveId)
+                out.write((publicKey.size shr 8) and 0xFF)
+                out.write(publicKey.size and 0xFF)
+            }
             out.write(publicKey, 0, publicKey.size)
 
             return fromCanonicalBytes(out.toByteArray())
@@ -174,6 +189,7 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
                         "InvalidMultisigPolicy: key too long",
                     )
                 }
+                validateControllerPublicKey(member.curveId, member.publicKey)
                 totalWeight += member.weight
             }
             if (policy.threshold <= 0) {
@@ -189,11 +205,11 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
                 )
             }
 
-            val header = encodeHeader(0, 0, 1)
+            val header = encodeHeader(0, ADDRESS_CLASS_MULTISIG, 1)
             val out = ByteArrayOutputStream()
             out.write(header.toInt())
 
-            out.write(0x01) // multisig controller tag
+            out.write(CONTROLLER_MULTISIG_TAG)
             out.write(policy.version and 0xFF)
             out.write((policy.threshold shr 8) and 0xFF)
             out.write(policy.threshold and 0xFF)
@@ -321,15 +337,26 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
     if (canonical.size < 4) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
-    decodeHeader(canonical[0])
+    val addressClass = decodeHeader(canonical[0])
     var cursor = 1
 
     if (cursor >= canonical.size) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
-    val controllerTag = canonical[cursor++]
-    when (controllerTag.toInt()) {
-        0x00 -> {
+    val controllerTag = canonical[cursor++].toInt() and 0xFF
+    val controllerClass = when (controllerTag) {
+        CONTROLLER_SINGLE_KEY_TAG, CONTROLLER_SINGLE_KEY_EXTENDED_TAG -> ADDRESS_CLASS_SINGLE_KEY
+        CONTROLLER_MULTISIG_TAG -> ADDRESS_CLASS_MULTISIG
+        else -> null
+    }
+    if (controllerClass != null && controllerClass != addressClass) {
+        throw AccountAddressException(
+            AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+            "address header class does not match controller tag",
+        )
+    }
+    when (controllerTag) {
+        CONTROLLER_SINGLE_KEY_TAG -> {
             if (cursor + 2 > canonical.size) {
                 throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
             }
@@ -350,7 +377,36 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
                 )
             }
         }
-        0x01 -> {
+        CONTROLLER_SINGLE_KEY_EXTENDED_TAG -> {
+            if (cursor + 3 > canonical.size) {
+                throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
+            }
+            val curveId = canonical[cursor++].toInt() and 0xFF
+            if (!ignoreCurveSupport) {
+                ensureCurveEnabled(curveId, "curve id $curveId")
+            }
+            val keyLen = ((canonical[cursor].toInt() and 0xFF) shl 8) or
+                (canonical[cursor + 1].toInt() and 0xFF)
+            cursor += 2
+            if (keyLen <= 0xFF) {
+                throw AccountAddressException(
+                    AccountAddressErrorCode.INVALID_LENGTH,
+                    "extended single-key payload must exceed 255 bytes",
+                )
+            }
+            val end = cursor + keyLen
+            if (end > canonical.size) {
+                throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
+            }
+            validateControllerPublicKey(curveId, canonical.copyOfRange(cursor, end))
+            if (end != canonical.size) {
+                throw AccountAddressException(
+                    AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
+                    "unexpected trailing bytes in canonical payload",
+                )
+            }
+        }
+        CONTROLLER_MULTISIG_TAG -> {
             if (cursor + 5 > canonical.size) {
                 throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
             }
@@ -444,6 +500,12 @@ private fun validateControllerPublicKey(curveId: Int, publicKey: ByteArray) {
             "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup",
         )
     }
+    if (curveId == 0x02 && !MlDsaPublicKeyAdmission.isValid(publicKey)) {
+        throw AccountAddressException(
+            AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+            "invalid ML-DSA-65 public key: expected ${MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH} nonzero bytes",
+        )
+    }
 }
 
 @Throws(AccountAddressException::class)
@@ -460,16 +522,32 @@ private fun extractSingleKeyPayload(
     if (cursor >= canonical.size) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
-    val controllerTag = canonical[cursor++]
-    if (controllerTag.toInt() != 0x00) return null
-    if (cursor + 2 > canonical.size) {
+    val controllerTag = canonical[cursor++].toInt() and 0xFF
+    if (controllerTag != CONTROLLER_SINGLE_KEY_TAG && controllerTag != CONTROLLER_SINGLE_KEY_EXTENDED_TAG) {
+        return null
+    }
+    val lengthBytes = if (controllerTag == CONTROLLER_SINGLE_KEY_TAG) 1 else 2
+    if (cursor + 1 + lengthBytes > canonical.size) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
     val curveId = canonical[cursor++].toInt() and 0xFF
     if (!ignoreCurveSupport) {
         ensureCurveEnabled(curveId, "curve id $curveId")
     }
-    val keyLen = canonical[cursor++].toInt() and 0xFF
+    val keyLen = if (controllerTag == CONTROLLER_SINGLE_KEY_TAG) {
+        canonical[cursor++].toInt() and 0xFF
+    } else {
+        val length = ((canonical[cursor].toInt() and 0xFF) shl 8) or
+            (canonical[cursor + 1].toInt() and 0xFF)
+        cursor += 2
+        if (length <= 0xFF) {
+            throw AccountAddressException(
+                AccountAddressErrorCode.INVALID_LENGTH,
+                "extended single-key payload must exceed 255 bytes",
+            )
+        }
+        length
+    }
     val end = cursor + keyLen
     if (end > canonical.size) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
@@ -481,6 +559,7 @@ private fun extractSingleKeyPayload(
         )
     }
     val key = canonical.copyOfRange(cursor, end)
+    validateControllerPublicKey(curveId, key)
     return SingleKeyPayload(curveId, key)
 }
 
@@ -499,7 +578,7 @@ private fun extractMultisigPayload(
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
     val controllerTag = canonical[cursor++]
-    if (controllerTag.toInt() != 0x01) return null
+    if (controllerTag.toInt() != CONTROLLER_MULTISIG_TAG) return null
     if (cursor + 5 > canonical.size) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
@@ -575,7 +654,7 @@ private fun encodeHeader(version: Int, classId: Int, normVersion: Int): Byte {
 }
 
 @Throws(AccountAddressException::class)
-private fun decodeHeader(header: Byte) {
+private fun decodeHeader(header: Byte): Int {
     val classBits = (header.toInt() shr 3) and 0b11
     val extFlag = header.toInt() and 0x01
     if (extFlag != 0) {
@@ -589,6 +668,7 @@ private fun decodeHeader(header: Byte) {
             AccountAddressErrorCode.UNKNOWN_ADDRESS_CLASS, "unknown address class: $classBits",
         )
     }
+    return classBits
 }
 
 // -- Encoding helpers --
@@ -608,7 +688,9 @@ private fun curveIdForAlgorithm(algorithm: String): Byte {
     val normalized = algorithm.lowercase()
     val curveId = when (normalized) {
         "ed25519", "ed" -> 0x01
-        "ml-dsa", "mldsa", "ml_dsa" -> 0x02
+        "ml-dsa", "mldsa", "ml_dsa",
+        "mldsa65", "ml-dsa-65", "ml_dsa_65", "ml_dsa-65",
+        -> 0x02
         "bls_normal", "bls-normal", "blsnormal", "bls12-381-g1" -> 0x03
         "secp256k1", "secp-256k1", "secp" -> 0x04
         "bls_small", "bls-small", "blssmall", "bls12-381-g2" -> 0x05

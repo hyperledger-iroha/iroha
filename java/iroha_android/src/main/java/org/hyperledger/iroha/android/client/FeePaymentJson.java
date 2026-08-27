@@ -1,6 +1,9 @@
 package org.hyperledger.iroha.android.client;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -19,7 +22,7 @@ public final class FeePaymentJson {
   static FeeSponsorProgramResponse parseProgram(final byte[] payload) {
     final String path = "fee sponsor program response";
     final Map<String, Object> root =
-        objectValue(JsonParser.parse(new String(payload, StandardCharsets.UTF_8)), path);
+        objectValue(JsonParser.parse(strictUtf8(payload, path)), path);
     requireExactKeys(
         root,
         keys(
@@ -62,7 +65,7 @@ public final class FeePaymentJson {
         throw new IllegalArgumentException(path + ".lifecycle.state is unsupported");
     }
     FeeSponsorProgramActivation activation = null;
-    if (root.get("scheduled_activation") != null) {
+    if (root.containsKey("scheduled_activation")) {
       final Map<String, Object> value =
           objectValue(root.get("scheduled_activation"), path + ".scheduled_activation");
       requireExactKeys(
@@ -73,7 +76,7 @@ public final class FeePaymentJson {
       activation =
           new FeeSponsorProgramActivation(
               positiveLong(value.get("revision"), path + ".scheduled_activation.revision"),
-              nonNegativeLong(
+              positiveLong(
                   value.get("activate_at_height"),
                   path + ".scheduled_activation.activate_at_height"));
     }
@@ -83,16 +86,17 @@ public final class FeePaymentJson {
             string(id.get("name"), path + ".id.name")),
         string(root.get("payout_account"), path + ".payout_account"),
         lifecycleValue,
-        root.get("active_revision") == null
-            ? null : positiveLong(root.get("active_revision"), path + ".active_revision"),
-        root.get("staged_revision") == null
-            ? null : positiveLong(root.get("staged_revision"), path + ".staged_revision"),
+        root.containsKey("active_revision")
+            ? positiveLong(root.get("active_revision"), path + ".active_revision") : null,
+        root.containsKey("staged_revision")
+            ? positiveLong(root.get("staged_revision"), path + ".staged_revision") : null,
         activation);
   }
 
   static FeeQuoteResponse parseQuote(final byte[] payload) {
-    final Map<String, Object> root = objectValue(
-        JsonParser.parse(new String(payload, StandardCharsets.UTF_8)), "fee quote response");
+    final String path = "fee quote response";
+    final Map<String, Object> root =
+        objectValue(JsonParser.parse(strictUtf8(payload, path)), path);
     requireExactKeys(
         root,
         keys("intent", "observation", "components", "capacities", "decision"),
@@ -104,6 +108,19 @@ public final class FeePaymentJson {
         objectList(root.get("components"), "fee quote response.components"),
         objectList(root.get("capacities"), "fee quote response.capacities"),
         objectValue(root.get("decision"), "fee quote response.decision"));
+  }
+
+  private static String strictUtf8(final byte[] payload, final String path) {
+    try {
+      return StandardCharsets.UTF_8
+          .newDecoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT)
+          .decode(ByteBuffer.wrap(payload))
+          .toString();
+    } catch (final CharacterCodingException error) {
+      throw new IllegalArgumentException(path + " must be valid UTF-8", error);
+    }
   }
 
   public static FeePaymentIntent parse(final Object value, final String path) {
@@ -203,20 +220,6 @@ public final class FeePaymentJson {
       throw new IllegalArgumentException(path + " must be an integer", ex);
     }
     if (result <= 0L) throw new IllegalArgumentException(path + " must be positive");
-    return result;
-  }
-
-  private static long nonNegativeLong(final Object value, final String path) {
-    final long result;
-    try {
-      if (value instanceof BigDecimal) result = ((BigDecimal) value).longValueExact();
-      else if (value instanceof Byte || value instanceof Short
-          || value instanceof Integer || value instanceof Long) result = ((Number) value).longValue();
-      else throw new IllegalArgumentException(path + " must be an integer");
-    } catch (final ArithmeticException ex) {
-      throw new IllegalArgumentException(path + " must be an integer", ex);
-    }
-    if (result < 0L) throw new IllegalArgumentException(path + " must be non-negative");
     return result;
   }
 

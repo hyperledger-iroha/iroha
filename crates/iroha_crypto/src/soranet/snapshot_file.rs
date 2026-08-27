@@ -38,8 +38,9 @@ compile_error!(
 /// Canonical, owner-custodied location pinned for one persistent ledger lifetime.
 ///
 /// The configured path must be absolute. Existing parent aliases are resolved once, missing
-/// descendants are created owner-private, and all later I/O uses the retained canonical path.
-/// This prevents a mutable parent symlink from switching a running ledger between snapshots.
+/// descendants are created owner-private and durably synced with their containing directories,
+/// and all later I/O uses the retained canonical path. This prevents a mutable parent symlink
+/// from switching a running ledger between snapshots.
 /// Persistent custody is currently supported only on Unix, where owner, mode,
 /// and link-count policy can be enforced; other targets fail with
 /// [`io::ErrorKind::Unsupported`].
@@ -252,6 +253,13 @@ fn validate_absolute_ledger_path(path: &Path) -> io::Result<()> {
 }
 #[cfg(unix)]
 fn prepare_canonical_parent(configured_parent: &Path) -> io::Result<PathBuf> {
+    prepare_canonical_parent_with_sync(configured_parent, sync_direct_directory)
+}
+#[cfg(unix)]
+fn prepare_canonical_parent_with_sync(
+    configured_parent: &Path,
+    mut sync_directory: impl FnMut(&Path) -> io::Result<()>,
+) -> io::Result<PathBuf> {
     let mut missing = Vec::<OsString>::new();
     let mut existing = configured_parent.to_path_buf();
     loop {
@@ -289,7 +297,15 @@ fn prepare_canonical_parent(configured_parent: &Path) -> io::Result<PathBuf> {
         let owner_uid = owner_uid_for_writable_directory(&canonical)?;
         validate_custodied_ancestor_chain(&canonical, owner_uid, !missing.is_empty())?;
     }
+    // A prior attempt may have created this deepest existing directory and
+    // returned after its own sync but before syncing its containing directory.
+    // Re-establish both durability points before trusting it or adding children.
+    sync_directory(&canonical)?;
+    if let Some(containing_parent) = canonical.parent() {
+        sync_directory(containing_parent)?;
+    }
     while let Some(component) = missing.pop() {
+        let containing_parent = canonical.clone();
         canonical.push(component);
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
@@ -314,6 +330,10 @@ fn prepare_canonical_parent(configured_parent: &Path) -> io::Result<PathBuf> {
                 ));
             }
         }
+        // Persist the new directory before its name, then persist that name in
+        // the containing directory before relying on it for another child.
+        sync_directory(&canonical)?;
+        sync_directory(&containing_parent)?;
     }
     #[cfg(unix)]
     {
@@ -321,6 +341,33 @@ fn prepare_canonical_parent(configured_parent: &Path) -> io::Result<PathBuf> {
         validate_custodied_ancestor_chain(&canonical, owner_uid, false)?;
     }
     Ok(canonical)
+}
+#[cfg(unix)]
+fn sync_direct_directory(path: &Path) -> io::Result<()> {
+    let named_before = fs::symlink_metadata(path)?;
+    validate_direct_directory(&named_before, "replay ledger directory")?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options.custom_flags(SNAPSHOT_O_NOFOLLOW_FLAG);
+    let directory = options.open(path)?;
+    let opened_before = directory.metadata()?;
+    validate_direct_directory(&opened_before, "opened replay ledger directory")?;
+    if !metadata_identifies_same_file(&named_before, &opened_before) {
+        return Err(changed("replay ledger directory", "while opening for sync"));
+    }
+    directory.sync_all()?;
+    let named_after = fs::symlink_metadata(path)?;
+    let opened_after = directory.metadata()?;
+    validate_direct_directory(&named_after, "replay ledger directory")?;
+    validate_direct_directory(&opened_after, "opened replay ledger directory")?;
+    if !metadata_identifies_same_file(&named_before, &named_after)
+        || !metadata_identifies_same_file(&opened_before, &opened_after)
+        || !metadata_identifies_same_file(&named_after, &opened_after)
+    {
+        return Err(changed("replay ledger directory", "while synchronizing"));
+    }
+    Ok(())
 }
 fn validate_direct_directory(metadata: &fs::Metadata, subject: &'static str) -> io::Result<()> {
     if metadata_is_link(metadata) || !metadata.is_dir() {
@@ -727,6 +774,107 @@ mod tests {
         {
             assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn nested_parent_creation_syncs_child_then_containing_directory() {
+        let directory = tempdir().expect("temporary directory");
+        let root = fs::canonicalize(directory.path()).expect("canonical temporary directory");
+        let first = root.join("first");
+        let second = first.join("second");
+        let target = second.join("third");
+        let mut synced = Vec::new();
+        let canonical = prepare_canonical_parent_with_sync(&target, |path| {
+            assert!(path.is_dir(), "only created directories may be synced");
+            synced.push(path.to_path_buf());
+            sync_direct_directory(path)
+        })
+        .expect("create nested parent");
+        assert_eq!(canonical, target);
+        assert_eq!(
+            synced,
+            [
+                root.clone(),
+                root.parent()
+                    .expect("temporary directory has a parent")
+                    .to_path_buf(),
+                first.clone(),
+                root,
+                second.clone(),
+                first,
+                target.clone(),
+                second,
+            ]
+        );
+
+        let mut existing_synced = Vec::new();
+        prepare_canonical_parent_with_sync(&canonical, |path| {
+            existing_synced.push(path.to_path_buf());
+            sync_direct_directory(path)
+        })
+        .expect("reopen fully existing parent");
+        assert_eq!(
+            existing_synced,
+            [
+                canonical,
+                target
+                    .parent()
+                    .expect("nested target has a parent")
+                    .to_path_buf(),
+            ],
+            "a fully existing parent must repair its own directory entry on retry"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn nested_parent_creation_propagates_sync_failure_before_next_child() {
+        let directory = tempdir().expect("temporary directory");
+        let root = fs::canonicalize(directory.path()).expect("canonical temporary directory");
+        let first = root.join("first");
+        let target = first.join("second");
+        let mut synced = Vec::new();
+        let error = prepare_canonical_parent_with_sync(&target, |path| {
+            synced.push(path.to_path_buf());
+            if synced.len() == 4 {
+                return Err(io::Error::other("injected directory sync failure"));
+            }
+            sync_direct_directory(path)
+        })
+        .expect_err("directory sync errors must fail parent preparation");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(
+            synced,
+            [
+                root.clone(),
+                root.parent()
+                    .expect("temporary directory has a parent")
+                    .to_path_buf(),
+                first.clone(),
+                root.clone(),
+            ],
+            "the containing-directory sync fails after creating the first child"
+        );
+        assert!(
+            first.is_dir(),
+            "the directory was created before the failure"
+        );
+        assert!(
+            !target.exists(),
+            "no child may be created after sync failure"
+        );
+
+        let mut retry_synced = Vec::new();
+        let canonical = prepare_canonical_parent_with_sync(&target, |path| {
+            retry_synced.push(path.to_path_buf());
+            sync_direct_directory(path)
+        })
+        .expect("retry parent preparation");
+        assert_eq!(canonical, target);
+        assert_eq!(
+            retry_synced,
+            [first.clone(), root, target, first],
+            "retry must sync the surviving boundary and its entry before adding a child"
+        );
     }
     #[cfg(not(unix))]
     #[test]

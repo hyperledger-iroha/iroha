@@ -18,6 +18,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Function
+import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsStatus
 import org.hyperledger.iroha.sdk.consensus.SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES
@@ -56,6 +57,11 @@ import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedTransactionV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateRequestV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetClaimV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPolicyV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPrepareRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPreparedTransactionV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPreparedVerifier
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedVerifier
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingReceiptVerifier
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
@@ -523,6 +529,7 @@ class HttpClientTransport(
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
         binding: TairaPublicResetMutationBindingV1,
+        feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
@@ -539,7 +546,9 @@ class HttpClientTransport(
         require(binding.executionExpiresAtUnixMs > System.currentTimeMillis()) {
             "onboarding prepare binding is expired"
         }
-        val body = JsonEncoder.encode(AccountOnboardingPrepareRequestV1(binding, receipt).toJsonMap())
+        val body = JsonEncoder.encode(
+            AccountOnboardingPrepareRequestV1(binding, receipt, feePayment).toJsonMap(),
+        )
             .toByteArray(StandardCharsets.UTF_8)
         return fetchJson(
             buildOnboardingRequest("POST", "/v1/accounts/onboard/prepare", body, onboardingToken),
@@ -551,6 +560,7 @@ class HttpClientTransport(
                             request,
                             receipt,
                             binding,
+                            feePayment,
                             expectedNetworkId,
                             expectedAuthority,
                         )
@@ -617,6 +627,7 @@ class HttpClientTransport(
     override fun submitPreparedAccountOnboarding(
         request: AccountOnboardingPlanRequestV1,
         prepared: AccountOnboardingPreparedTransactionV1,
+        expectedFeePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
@@ -626,6 +637,7 @@ class HttpClientTransport(
             request,
             prepared.receipt,
             prepared.binding,
+            expectedFeePayment,
             expectedNetworkId,
             expectedAuthority,
         )
@@ -641,6 +653,77 @@ class HttpClientTransport(
                 AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
                     response,
                     prepared,
+                    expectedFeePayment,
+                    statusCode,
+                )
+            },
+        )
+    }
+
+    override fun prepareAccountFaucetTransaction(
+        claim: AccountFaucetClaimV1,
+        binding: TairaPublicResetMutationBindingV1,
+        feePayment: FeePaymentIntent,
+        policy: AccountFaucetPolicyV1,
+        expectedNetworkId: NetworkId,
+    ): CompletableFuture<AccountFaucetPreparedTransactionV1> {
+        require(binding.kind == TairaPublicResetMutationBindingV1.FAUCET) {
+            "faucet prepare requires a faucet binding"
+        }
+        require(binding.executionExpiresAtUnixMs > System.currentTimeMillis()) {
+            "faucet prepare binding is expired"
+        }
+        val body = JsonEncoder.encode(
+            AccountFaucetPrepareRequestV1(binding, claim, feePayment).toJsonMap(),
+        ).toByteArray(StandardCharsets.UTF_8)
+        return fetchJson(
+            buildJsonPostRequest("/v1/accounts/faucet/prepare", body),
+            Function { response ->
+                AccountOnboardingJsonParser.parseFaucetPrepareResponse(response).also { prepared ->
+                    AccountFaucetPreparedVerifier.requireValidPrepared(
+                        prepared,
+                        claim,
+                        binding,
+                        feePayment,
+                        policy,
+                        expectedNetworkId,
+                    )
+                }
+            },
+            "account faucet prepare",
+            200,
+        )
+    }
+
+    override fun submitPreparedAccountFaucetTransaction(
+        prepared: AccountFaucetPreparedTransactionV1,
+        expectedFeePayment: FeePaymentIntent,
+        policy: AccountFaucetPolicyV1,
+        expectedNetworkId: NetworkId,
+    ): CompletableFuture<PreparedTransactionSubmitResponseV1> {
+        AccountFaucetPreparedVerifier.requireValidPrepared(
+            prepared,
+            prepared.claim,
+            prepared.binding,
+            expectedFeePayment,
+            policy,
+            expectedNetworkId,
+        )
+        require(prepared.binding.executionExpiresAtUnixMs > System.currentTimeMillis()) {
+            "prepared faucet binding is expired"
+        }
+        val body = JsonEncoder.encode(prepared.toJsonMap()).toByteArray(StandardCharsets.UTF_8)
+        return fetchJson(
+            buildJsonPostRequest("/v1/accounts/faucet", body),
+            AccountOnboardingJsonParser::parseSubmitResponse,
+            "prepared account faucet submit",
+            responseValidator = { response, statusCode ->
+                AccountFaucetPreparedVerifier.requireValidSubmitResponse(
+                    response,
+                    prepared,
+                    expectedFeePayment,
+                    policy,
+                    expectedNetworkId,
                     statusCode,
                 )
             },
@@ -905,10 +988,16 @@ class HttpClientTransport(
         canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<FeeQuoteResponse> {
         requireNetworkTransactionDomain(unsignedPayload)
-        val authority = unsignedPayload["authority"] as? String
-            ?: throw IllegalArgumentException("unsignedPayload.authority must be a string")
-        require(authority == canonicalAuth.accountId) {
-            "canonicalAuth.accountId must equal unsignedPayload.authority"
+        val authority = requireCanonicalI105Address(
+            unsignedPayload["authority"] as? String
+                ?: throw IllegalArgumentException("unsignedPayload.authority must be a string"),
+            "unsignedPayload.authority",
+        )
+        require(
+            CanonicalRequestSigner.isCanonicalAsciiAccountAlias(canonicalAuth.accountId) ||
+                sameFeeQuoteAccountIdentity(authority, canonicalAuth.accountId),
+        ) {
+            "canonicalAuth.accountId must identify unsignedPayload.authority or be a canonical account alias"
         }
         val requestedIntent = FeePaymentJson.parse(
             unsignedPayload["fee_payment"],
@@ -916,14 +1005,24 @@ class HttpClientTransport(
         )
         val body = encodeJsonBody(linkedMapOf("payload" to unsignedPayload))
         return fetchJson(
-            buildVpnRequest("POST", "/v1/fees/quote", body, canonicalAuth),
-            FeePaymentJson::parseQuote,
+            buildVpnRequest(
+                "POST",
+                "/v1/fees/quote",
+                body,
+                canonicalAuth,
+                FEE_QUOTE_RESPONSE_MAX_BYTES,
+            ),
+            { response ->
+                require(response.size.toLong() <= FEE_QUOTE_RESPONSE_MAX_BYTES) {
+                    "fee quote response exceeds the $FEE_QUOTE_RESPONSE_MAX_BYTES byte limit"
+                }
+                FeePaymentJson.parseQuote(response)
+            },
             "fee quote",
             200,
+            exactJsonMediaType = true,
         ).thenApply { quote ->
-            require(requestedIntent.hasSamePayerAndGasBound(quote.intent)) {
-                "fee quote response changed the requested payer, sponsor revision, or gas bound"
-            }
+            quote.validateForDraft(requestedIntent, authority)
             quote
         }
     }
@@ -957,10 +1056,17 @@ class HttpClientTransport(
     ): CompletableFuture<FeeSponsorProgramResponse> {
         val body = encodeJsonBody(linkedMapOf("program_id" to programId.literal()))
         return fetchJson(
-            buildVpnRequest("POST", "/v1/fee-sponsor-programs/by-id", body, canonicalAuth),
+            buildVpnRequest(
+                "POST",
+                "/v1/fee-sponsor-programs/by-id",
+                body,
+                canonicalAuth,
+                FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES,
+            ),
             FeePaymentJson::parseProgram,
             "fee sponsor program lookup",
             200,
+            exactJsonMediaType = true,
         ).thenApply { program ->
             require(program.id == programId) {
                 "fee sponsor program response id does not match the requested program"
@@ -1572,15 +1678,28 @@ class HttpClientTransport(
         errorContext: String,
         acceptedStatus: Int? = null,
         responseValidator: ((T, Int) -> T)? = null,
+        exactJsonMediaType: Boolean = false,
     ): CompletableFuture<T> {
         notifyRequest(request); val future = CompletableFuture<T>()
         executor.execute(request).whenComplete { response, throwable ->
             if (throwable != null) { val cause = if (throwable is CompletionException) throwable.cause else throwable; notifyFailure(request, cause!!); future.completeExceptionally(RuntimeException("$errorContext request failed", cause)); return@whenComplete }
+            val maximumResponseBytes = request.maximumResponseBytes
+            if (maximumResponseBytes != null && response.body.size.toLong() > maximumResponseBytes) {
+                val error = IllegalArgumentException(
+                    "$errorContext response exceeds the $maximumResponseBytes byte limit",
+                )
+                notifyFailure(request, error)
+                future.completeExceptionally(error)
+                return@whenComplete
+            }
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
             val statusAccepted = acceptedStatus?.let { response.statusCode == it }
                 ?: (response.statusCode in 200..299)
             if (!statusAccepted) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); notifyFailure(request, error); future.completeExceptionally(error); return@whenComplete }
             try {
+                if (exactJsonMediaType) {
+                    requireExactJsonResponse(response, errorContext)
+                }
                 val parsed = parser.apply(response.body)
                 val validated = responseValidator?.invoke(parsed, response.statusCode) ?: parsed
                 notifyResponse(request, clientResponse)
@@ -1799,11 +1918,104 @@ class HttpClientTransport(
             .filter { (name, _) -> name.equals("Content-Type", ignoreCase = true) }
             .flatMap { (_, values) -> values.asSequence() }
             .toList()
-        if (contentTypes.size != 1 || contentTypes[0] != "application/json") {
+        if (contentTypes.size != 1 || !isUnambiguousApplicationJson(contentTypes[0])) {
             throw RuntimeException(
                 "$errorContext response Content-Type must be exactly application/json",
             )
         }
+    }
+
+    private fun isUnambiguousApplicationJson(value: String): Boolean {
+        if (',' in value) {
+            return false
+        }
+        var index = skipHttpOws(value, 0)
+        val mediaType = "application/json"
+        if (index + mediaType.length > value.length) {
+            return false
+        }
+        mediaType.indices.forEach { offset ->
+            val actual = value[index + offset]
+            val expected = mediaType[offset]
+            if (actual != expected && !(expected in 'a'..'z' && actual == (expected.code - 32).toChar())) {
+                return false
+            }
+        }
+        index = skipHttpOws(value, index + mediaType.length)
+        while (index < value.length) {
+            if (value[index] != ';') {
+                return false
+            }
+            index = skipHttpOws(value, index + 1)
+            val nameStart = index
+            while (index < value.length && isHttpTokenCharacter(value[index])) {
+                index += 1
+            }
+            if (index == nameStart || index >= value.length || value[index] != '=') {
+                return false
+            }
+            index += 1
+            if (index >= value.length) {
+                return false
+            }
+            if (value[index] == '"') {
+                index += 1
+                var closed = false
+                while (index < value.length) {
+                    val current = value[index]
+                    if (current == '"') {
+                        index += 1
+                        closed = true
+                        break
+                    }
+                    if (current == '\\') {
+                        index += 1
+                        if (index >= value.length || !isHttpQuotedPairCharacter(value[index])) {
+                            return false
+                        }
+                    } else if (!isHttpQuotedTextCharacter(current)) {
+                        return false
+                    }
+                    index += 1
+                }
+                if (!closed) {
+                    return false
+                }
+            } else {
+                val parameterValueStart = index
+                while (index < value.length && isHttpTokenCharacter(value[index])) {
+                    index += 1
+                }
+                if (index == parameterValueStart) {
+                    return false
+                }
+            }
+            index = skipHttpOws(value, index)
+        }
+        return true
+    }
+
+    private fun skipHttpOws(value: String, start: Int): Int {
+        var index = start
+        while (index < value.length && (value[index] == ' ' || value[index] == '\t')) {
+            index += 1
+        }
+        return index
+    }
+
+    private fun isHttpTokenCharacter(value: Char): Boolean =
+        value in '0'..'9' || value in 'A'..'Z' || value in 'a'..'z' ||
+            value in "!#$%&'*+-.^_`|~"
+
+    private fun isHttpQuotedTextCharacter(value: Char): Boolean {
+        val code = value.code
+        return code == 0x09 || code in 0x20..0x21 || code in 0x23..0x5B ||
+            code in 0x5D..0x7E || code in 0x80..0xFF
+    }
+
+    private fun isHttpQuotedPairCharacter(value: Char): Boolean {
+        val code = value.code
+        return code == 0x09 || code in 0x20..0x7E || code in 0x80..0xFF
     }
 
     private fun <T : Any> fetchJsonAllowingNotFound(
@@ -1842,6 +2054,8 @@ class HttpClientTransport(
         private const val PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status"
         private const val REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure"
         private const val U32_MAX = 4_294_967_295L
+        private const val FEE_QUOTE_RESPONSE_MAX_BYTES = 64L * 1024L
+        private const val FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES = 64L * 1024L
         private const val SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
         private const val NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
         private const val SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L
@@ -2098,6 +2312,7 @@ class HttpClientTransport(
                 payload,
                 request.validationFeePolicyVersion,
                 request.validationFeePolicyHash,
+                request.validationFeeHijiriFeeQuoteHash,
                 request.validationFeeInstructionIndex,
                 request.validationFeeTransferEntryIndex,
             )
@@ -2128,15 +2343,20 @@ class HttpClientTransport(
             payload: MutableMap<String, Any>,
             validationFeePolicyVersion: Long?,
             validationFeePolicyHash: String?,
+            validationFeeHijiriFeeQuoteHash: String?,
             validationFeeInstructionIndex: Long?,
             validationFeeTransferEntryIndex: Long?,
         ) {
             val hasPolicyVersion = validationFeePolicyVersion != null
             val hasPolicyHash = validationFeePolicyHash != null
+            val hasHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash != null
             val hasInstructionIndex = validationFeeInstructionIndex != null
             val hasTransferEntryIndex = validationFeeTransferEntryIndex != null
             require(hasPolicyVersion == hasPolicyHash) {
                 "validationFeePolicyVersion and validationFeePolicyHash must be provided together"
+            }
+            require(hasPolicyVersion || !hasHijiriFeeQuoteHash) {
+                "validationFeeHijiriFeeQuoteHash requires validationFeePolicyVersion and validationFeePolicyHash"
             }
             require(hasPolicyVersion || !hasInstructionIndex) {
                 "validationFeeInstructionIndex requires validation fee policy metadata"
@@ -2162,6 +2382,13 @@ class HttpClientTransport(
             }
             payload["validation_fee_policy_version"] = policyVersion.toString()
             payload["validation_fee_policy_hash"] = normalizeHex32(policyHash, "validationFeePolicyHash")
+            if (validationFeeHijiriFeeQuoteHash != null) {
+                payload["validation_fee_hijiri_fee_quote_hash"] =
+                    normalizeHex32(
+                        validationFeeHijiriFeeQuoteHash,
+                        "validationFeeHijiriFeeQuoteHash",
+                    )
+            }
             if (instructionIndex != null) {
                 payload["validation_fee_instruction_index"] = instructionIndex.toString()
             }

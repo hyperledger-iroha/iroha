@@ -46,10 +46,7 @@ fn wide_load_store_alignment() {
     vm_store.set_register(2, Memory::HEAP_START);
     vm_store.set_register(3, 0xABCDu64);
     let res = vm_store.run();
-    assert!(matches!(
-        res,
-        Err(VMError::MisalignedAccess { .. }) | Err(VMError::UnalignedAccess)
-    ));
+    assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
     // Prepare memory so an aligned store succeeds, then attempt a misaligned load.
     let mut vm_load = IVM::new(256);
     vm_load.load_program(&bytes).expect("load aligned program");
@@ -66,10 +63,7 @@ fn wide_load_store_alignment() {
         .expect("load misaligned program");
     vm_load.set_register(2, Memory::HEAP_START);
     let res = vm_load.run();
-    assert!(matches!(
-        res,
-        Err(VMError::MisalignedAccess { .. }) | Err(VMError::UnalignedAccess)
-    ));
+    assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
 }
 #[test]
 fn classic_halfword_ops_rejected() {

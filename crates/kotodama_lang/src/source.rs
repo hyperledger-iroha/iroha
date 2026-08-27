@@ -12,7 +12,7 @@ use std::{
 pub const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 /// Maximum number of non-trivia lexical tokens, including end-of-file.
 pub const MAX_TOKENS: usize = 250_000;
-/// Maximum combined delimiter, generic, unary, and conditional nesting accepted by the frontend.
+/// Maximum combined syntactic and recursive expression nesting accepted by the frontend.
 pub const MAX_NESTING_DEPTH: usize = 256;
 /// Maximum number of diagnostics retained for one compilation request.
 pub const MAX_DIAGNOSTICS: usize = 64;

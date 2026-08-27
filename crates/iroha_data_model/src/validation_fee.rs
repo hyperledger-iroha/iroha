@@ -63,6 +63,12 @@ pub const RETIRED_VALIDATION_FEE_POLICY_PARAMETER_ID: &str = "iroha:validation_f
 pub const VALIDATION_FEE_POLICY_VERSION_METADATA_KEY: &str = "validation_fee_policy_version";
 /// Transaction metadata key that binds a signed transaction to a policy hash.
 pub const VALIDATION_FEE_POLICY_HASH_METADATA_KEY: &str = "validation_fee_policy_hash";
+/// Transaction metadata key that binds a signed transaction to the composite Hijiri fee quote.
+///
+/// When present, its value is the lowercase 64-character hexadecimal quote hash. Inactive Hijiri
+/// pricing is represented by omitting the metadata key, not by storing a sentinel value.
+pub const VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY: &str =
+    "validation_fee_hijiri_fee_quote_hash";
 /// Transaction metadata key that identifies the aggregate validation-fee instruction.
 pub const VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY: &str = "validation_fee_instruction_index";
 /// Transaction metadata key that identifies the aggregate validation-fee batch entry, when used.
@@ -84,15 +90,19 @@ pub fn is_reserved_validation_fee_parameter_id(id: &CustomParameterId) -> bool {
 }
 /// Transaction-bound fee designation carried inside a multisig proposal's instruction list.
 ///
-/// The marker is encoded as a canonical `TRACE` [`Log`] instruction. Because it is part of the
-/// proposal instruction list, both the proposal hash and every approval bind the active policy and
-/// exact fee coordinate, including an optional batch-entry coordinate.
+/// The marker is encoded as a canonical `TRACE` [`Log`] instruction in
+/// `policy_version:policy_hash:hijiri_fee_quote_hash:instruction_index:transfer_entry_index` order.
+/// Hashes use lowercase 64-character hexadecimal; absent optional values use `-`. Because it is
+/// part of the proposal instruction list, both the proposal hash and every approval bind the active
+/// policy, optional composite Hijiri fee quote, and exact fee coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ValidationFeeMultisigMarkerV1 {
     /// Active Parliament-enacted validation-fee policy version.
     pub policy_version: u64,
     /// Active Parliament-enacted validation-fee policy hash.
     pub policy_hash: [u8; 32],
+    /// Composite Hijiri fee-quote hash, encoded as `-` when Hijiri pricing is inactive.
+    pub hijiri_fee_quote_hash: Option<[u8; 32]>,
     /// Fee transfer instruction index within this proposal execution context.
     pub instruction_index: u64,
     /// Fee batch-entry index, when the fee is an entry in `TransferAssetBatch`.
@@ -103,12 +113,14 @@ impl ValidationFeeMultisigMarkerV1 {
     pub const fn new(
         policy_version: u64,
         policy_hash: [u8; 32],
+        hijiri_fee_quote_hash: Option<[u8; 32]>,
         instruction_index: u64,
         transfer_entry_index: Option<u64>,
     ) -> Self {
         Self {
             policy_version,
             policy_hash,
+            hijiri_fee_quote_hash,
             instruction_index,
             transfer_entry_index,
         }
@@ -118,10 +130,13 @@ impl ValidationFeeMultisigMarkerV1 {
         let entry = self
             .transfer_entry_index
             .map_or_else(|| "-".to_owned(), |index| index.to_string());
+        let hijiri_fee_quote_hash = self
+            .hijiri_fee_quote_hash
+            .map_or_else(|| "-".to_owned(), hex::encode);
         Log::new(
             Level::TRACE,
             format!(
-                "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}{}:{}:{}:{entry}",
+                "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}{}:{}:{hijiri_fee_quote_hash}:{}:{entry}",
                 self.policy_version,
                 hex::encode(self.policy_hash),
                 self.instruction_index,
@@ -176,6 +191,27 @@ impl ValidationFeeMultisigMarkerV1 {
             .map_err(|_| ValidationFeeMultisigMarkerError::Malformed)?
             .try_into()
             .map_err(|_| ValidationFeeMultisigMarkerError::Malformed)?;
+        let hijiri_fee_quote_hash = match fields
+            .next()
+            .ok_or(ValidationFeeMultisigMarkerError::Malformed)?
+        {
+            "-" => None,
+            hash_hex => {
+                if hash_hex.len() != 64
+                    || !hash_hex
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err(ValidationFeeMultisigMarkerError::Malformed);
+                }
+                Some(
+                    hex::decode(hash_hex)
+                        .map_err(|_| ValidationFeeMultisigMarkerError::Malformed)?
+                        .try_into()
+                        .map_err(|_| ValidationFeeMultisigMarkerError::Malformed)?,
+                )
+            }
+        };
         let instruction_index = fields
             .next()
             .and_then(parse_canonical_marker_u64)
@@ -197,6 +233,7 @@ impl ValidationFeeMultisigMarkerV1 {
         Ok(Some(Self {
             policy_version,
             policy_hash,
+            hijiri_fee_quote_hash,
             instruction_index,
             transfer_entry_index,
         }))
@@ -232,6 +269,91 @@ impl core::fmt::Display for ValidationFeeMultisigMarkerError {
     }
 }
 impl std::error::Error for ValidationFeeMultisigMarkerError {}
+#[cfg(test)]
+mod multisig_marker_tests {
+    use super::*;
+
+    #[test]
+    fn hijiri_fee_quote_metadata_key_is_stable() {
+        assert_eq!(
+            VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
+            "validation_fee_hijiri_fee_quote_hash"
+        );
+    }
+
+    #[test]
+    fn marker_roundtrip_binds_composite_hijiri_fee_quote() {
+        let marker =
+            ValidationFeeMultisigMarkerV1::new(7, [0xab; 32], Some([0xcd; 32]), 12, Some(3));
+        let instruction = marker.into_instruction();
+        let log = instruction
+            .as_any()
+            .downcast_ref::<Log>()
+            .expect("marker is encoded as a Log instruction");
+        assert_eq!(
+            log.msg,
+            format!(
+                "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}7:{}:{}:12:3",
+                "ab".repeat(32),
+                "cd".repeat(32),
+            )
+        );
+        assert_eq!(
+            ValidationFeeMultisigMarkerV1::parse_instruction(&instruction),
+            Ok(Some(marker))
+        );
+    }
+
+    #[test]
+    fn marker_roundtrip_encodes_inactive_hijiri_as_dash() {
+        let marker = ValidationFeeMultisigMarkerV1::new(1, [0x01; 32], None, 0, None);
+        let instruction = marker.into_instruction();
+        let log = instruction
+            .as_any()
+            .downcast_ref::<Log>()
+            .expect("marker is encoded as a Log instruction");
+        assert_eq!(
+            log.msg,
+            format!(
+                "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{}:-:0:-",
+                "01".repeat(32),
+            )
+        );
+        assert_eq!(
+            ValidationFeeMultisigMarkerV1::parse_instruction(&instruction),
+            Ok(Some(marker))
+        );
+    }
+
+    #[test]
+    fn marker_rejects_noncanonical_hijiri_fee_quote_hashes() {
+        let policy_hash = "ab".repeat(32);
+        let invalid_messages = [
+            format!(
+                "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{policy_hash}:{}:0:-",
+                "CD".repeat(32),
+            ),
+            format!(
+                "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{policy_hash}:{}:0:-",
+                "c".repeat(63),
+            ),
+            format!(
+                "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{policy_hash}:{}:0:-",
+                "gg".repeat(32),
+            ),
+            format!("{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{policy_hash}:--:0:-"),
+            format!("{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{policy_hash}:0:-"),
+            format!("{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{policy_hash}:-:0:-:extra"),
+        ];
+        for message in invalid_messages {
+            let instruction: InstructionBox = Log::new(Level::TRACE, message).into();
+            assert_eq!(
+                ValidationFeeMultisigMarkerV1::parse_instruction(&instruction),
+                Err(ValidationFeeMultisigMarkerError::Malformed)
+            );
+        }
+    }
+}
 /// Error returned when a validation-fee policy registry is malformed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationFeePolicyRegistryError {

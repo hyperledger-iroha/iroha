@@ -7,6 +7,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr};
 use iroha::data_model::{
+    kaigi::{
+        KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1, KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
+        KAIGI_RELAY_MANIFEST_MIN_HOPS_V1,
+    },
     metadata::Metadata,
     prelude::{
         AccountId, DomainId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier,
@@ -30,6 +34,8 @@ pub enum Command {
     Quickstart(QuickstartArgs),
     /// Register or update a Kaigi relay descriptor.
     RegisterRelay(RegisterRelayArgs),
+    /// Retire a Kaigi relay descriptor and its retained health feedback.
+    UnregisterRelay(UnregisterRelayArgs),
     /// Replace or clear the relay manifest for an existing Kaigi session.
     SetRelayManifest(SetRelayManifestArgs),
     /// Join a Kaigi session.
@@ -49,6 +55,7 @@ impl Run for Command {
             Command::Create(args) => args.run(context),
             Command::Quickstart(args) => args.run(context),
             Command::RegisterRelay(args) => args.run(context),
+            Command::UnregisterRelay(args) => args.run(context),
             Command::SetRelayManifest(args) => args.run(context),
             Command::Join(args) => args.run(context),
             Command::Leave(args) => args.run(context),
@@ -371,6 +378,21 @@ impl Run for RegisterRelayArgs {
         };
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::RegisterKaigiRelay { relay }),
+        )])
+    }
+}
+#[derive(Args, Debug)]
+pub struct UnregisterRelayArgs {
+    /// Relay account identifier whose descriptor should be retired.
+    #[arg(long, value_name = "ACCOUNT-ID")]
+    pub relay: String,
+}
+impl Run for UnregisterRelayArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let relay_id = crate::resolve_account_id(context, &self.relay)
+            .wrap_err("failed to resolve relay account")?;
+        context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
+            Box::new(iroha::data_model::isi::kaigi::UnregisterKaigiRelay { relay_id }),
         )])
     }
 }
@@ -764,6 +786,25 @@ fn validate_relay_hpke_public_key(hpke_public_key: &[u8]) -> Result<()> {
     if hpke_public_key.is_empty() {
         eyre::bail!("relay HPKE public key must be non-empty");
     }
+    if hpke_public_key.len() > KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 {
+        eyre::bail!(
+            "relay HPKE public key must not exceed {KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1} bytes"
+        );
+    }
+    Ok(())
+}
+fn validate_relay_manifest_limits(manifest: &KaigiRelayManifest) -> Result<()> {
+    if manifest.hops.len() < KAIGI_RELAY_MANIFEST_MIN_HOPS_V1 {
+        eyre::bail!("relay manifest must include at least {KAIGI_RELAY_MANIFEST_MIN_HOPS_V1} hops");
+    }
+    if manifest.hops.len() > KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 {
+        eyre::bail!(
+            "relay manifest must not include more than {KAIGI_RELAY_MANIFEST_MAX_HOPS_V1} hops"
+        );
+    }
+    for hop in &manifest.hops {
+        validate_relay_hpke_public_key(&hop.hpke_public_key)?;
+    }
     Ok(())
 }
 fn validate_relay_health_notes(notes: Option<&str>) -> Result<()> {
@@ -842,7 +883,9 @@ fn decode_hex_vec(hex: &str) -> Result<Vec<u8>> {
 fn read_manifest(path: &str) -> Result<KaigiRelayManifest> {
     let contents = fs::read_to_string(path)
         .wrap_err_with(|| format!("failed to read relay manifest from `{path}`"))?;
-    norito::json::from_str(&contents).wrap_err("invalid relay manifest JSON")
+    let manifest = norito::json::from_str(&contents).wrap_err("invalid relay manifest JSON")?;
+    validate_relay_manifest_limits(&manifest)?;
+    Ok(manifest)
 }
 fn read_metadata(path: &str) -> Result<Metadata> {
     let contents = fs::read_to_string(path)
@@ -992,6 +1035,15 @@ mod tests {
                 assert_eq!(args.bandwidth_class, 7);
             }
             other => panic!("expected register-relay command, got {other:?}"),
+        }
+    }
+    #[test]
+    fn clap_parses_unregister_relay() {
+        match parse_command(&["unregister-relay", "--relay", PARTICIPANT_ACCOUNT]) {
+            Command::UnregisterRelay(args) => {
+                assert_eq!(args.relay, PARTICIPANT_ACCOUNT);
+            }
+            other => panic!("expected unregister-relay command, got {other:?}"),
         }
     }
     #[test]
@@ -1182,6 +1234,17 @@ mod tests {
         assert!(validate_usage_duration(0).is_err());
         assert!(validate_relay_hpke_public_key(&[1]).is_ok());
         assert!(validate_relay_hpke_public_key(&[]).is_err());
+        assert!(
+            validate_relay_hpke_public_key(&vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1])
+                .is_ok()
+        );
+        assert!(
+            validate_relay_hpke_public_key(&vec![
+                0xA5;
+                KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1
+            ])
+            .is_err()
+        );
         let max_notes = "界".repeat(512);
         let oversized_notes = "界".repeat(513);
         assert!(validate_relay_health_notes(None).is_ok());
@@ -1196,6 +1259,50 @@ mod tests {
             [0xaa, 0x55]
         );
         assert!(decode_hex_vec("0x0xaa55").is_err());
+    }
+    #[test]
+    fn relay_manifest_local_limits_match_core_v1_boundaries() {
+        fn hop(key_len: usize) -> iroha::data_model::kaigi::KaigiRelayHop {
+            let key_pair =
+                iroha_crypto::KeyPair::try_random().expect("generate checked relay fixture key");
+            iroha::data_model::kaigi::KaigiRelayHop {
+                relay_id: AccountId::new(key_pair.public_key().clone()),
+                hpke_public_key: vec![0xA5; key_len],
+                weight: 1,
+            }
+        }
+
+        let exact_minimum = KaigiRelayManifest {
+            hops: (0..KAIGI_RELAY_MANIFEST_MIN_HOPS_V1)
+                .map(|_| hop(KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1))
+                .collect(),
+            expiry_ms: 1,
+        };
+        assert!(validate_relay_manifest_limits(&exact_minimum).is_ok());
+
+        let too_few = KaigiRelayManifest {
+            hops: (0..KAIGI_RELAY_MANIFEST_MIN_HOPS_V1 - 1)
+                .map(|_| hop(1))
+                .collect(),
+            expiry_ms: 1,
+        };
+        assert!(validate_relay_manifest_limits(&too_few).is_err());
+
+        let too_many = KaigiRelayManifest {
+            hops: (0..KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 + 1)
+                .map(|_| hop(1))
+                .collect(),
+            expiry_ms: 1,
+        };
+        assert!(validate_relay_manifest_limits(&too_many).is_err());
+
+        let oversized_key = KaigiRelayManifest {
+            hops: (0..KAIGI_RELAY_MANIFEST_MIN_HOPS_V1)
+                .map(|_| hop(KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1))
+                .collect(),
+            expiry_ms: 1,
+        };
+        assert!(validate_relay_manifest_limits(&oversized_key).is_err());
     }
     #[test]
     fn local_billing_validation_requires_the_resolved_host() {

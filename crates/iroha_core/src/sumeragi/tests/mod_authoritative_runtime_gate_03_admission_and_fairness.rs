@@ -2,7 +2,7 @@
 fn ordinary_selector_preserves_certified_response_before_timeout_vote() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     let validator = PeerId::new(KeyPair::random().public_key().clone());
-    let response = v2_certified_body_response(0, 0, 1);
+    let response = v2_certified_body_response(0, validator.clone(), 1);
     let round = match &response {
         BlockMessage::V2(wire::ConsensusMessageV2 {
             payload: wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),

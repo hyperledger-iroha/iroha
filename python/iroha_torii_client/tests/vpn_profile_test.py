@@ -15,7 +15,6 @@ if str(PACKAGE_ROOT) not in sys.path:
 
 from iroha_torii_client import ToriiClient  # noqa: E402
 
-
 VPN_OPERATOR = "vpn-operator@paynet"
 VPN_RELAY_ID_HEX = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
 VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX = "55" * 1_952

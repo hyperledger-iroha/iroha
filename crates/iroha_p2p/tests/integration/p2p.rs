@@ -1309,7 +1309,6 @@ where
         .collect();
     network.update_peers_addresses(UpdatePeers(addresses));
 }
-#[cfg(feature = "p2p_tls")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_inbound_listener_smoke() {
     setup_logger();

@@ -150,6 +150,119 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     events.clear();
     Ok(())
 }
+
+#[test]
+fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
+    use iroha_data_model::events::time::{ExecutionTime, TimeEventFilter};
+
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let world = World::with(
+        [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
+        [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+        [],
+    );
+    let state = State::new(world, kura, query_handle);
+    let replacer_id: TriggerId = "a_time_sibling_replacer".parse().unwrap();
+    let replaced_id: TriggerId = "b_time_sibling_replaced".parse().unwrap();
+    let replacement_executed: Name = "time_replacement_executed".parse().unwrap();
+
+    let block1 = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(1).unwrap());
+        header.creation_time_ms = 1;
+    });
+    let mut state_block1 = state.block(block1.as_ref().header());
+    {
+        let mut stx = state_block1.transaction();
+        let replacement = Trigger::new(
+            replaced_id.clone(),
+            Action::new(
+                vec![InstructionBox::from(SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    replacement_executed.clone(),
+                    Json::from(norito::json!(true)),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::PreCommit),
+            )
+            .expect("replacement time-trigger action"),
+        );
+        let replacer = Trigger::new(
+            replacer_id,
+            Action::new(
+                vec![
+                    InstructionBox::from(Unregister::trigger(replaced_id.clone())),
+                    InstructionBox::from(Register::trigger(replacement)),
+                ],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::PreCommit),
+            )
+            .expect("time-trigger sibling replacer action"),
+        );
+        let original_sibling = Trigger::new(
+            replaced_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::PreCommit),
+            )
+            .expect("original time-trigger sibling action"),
+        );
+        Register::trigger(replacer)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::trigger(original_sibling)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+    }
+    let _ = state_block1.apply_without_execution(&block1, Vec::new());
+    state_block1.commit().unwrap();
+
+    let block2 = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(2).unwrap());
+        header.creation_time_ms = 2;
+    });
+    let mut state_block2 = state.block(block2.as_ref().header());
+    let _ = state_block2.apply(&block2, Vec::new());
+    state_block2.commit().unwrap();
+
+    {
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert!(
+            account.metadata().get(&replacement_executed).is_none(),
+            "a replacement registered after ID matching must not execute in the same block",
+        );
+        let replacement = view
+            .world
+            .triggers()
+            .time_triggers()
+            .get(&replaced_id)
+            .expect("replacement sibling must remain registered");
+        assert_eq!(replacement.repeats(), &Repeats::Exactly(1));
+    }
+
+    let block3 = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(3).unwrap());
+        header.creation_time_ms = 3;
+    });
+    let mut state_block3 = state.block(block3.as_ref().header());
+    let _ = state_block3.apply(&block3, Vec::new());
+    state_block3.commit().unwrap();
+
+    let view = state.view();
+    let account = view.world.account(&ALICE_ID).expect("alice account");
+    assert_eq!(
+        account.metadata().get(&replacement_executed),
+        Some(&Json::from(norito::json!(true))),
+        "the replacement becomes eligible in the following block",
+    );
+}
+
 fn persist_committed_test_block(kura: &Kura, block: &CommittedBlock) {
     let block_arc = Arc::new(block.clone().into());
     kura.store_block(block_arc)
@@ -727,8 +840,14 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
     let trigger_id: TriggerId = "ivm_gas_guard".parse().unwrap();
     let mut raw = Vec::new();
     // Two ADD instructions cost two cycles in total, exceeding the configured cap of one.
-    raw.extend_from_slice(&ivm::kotodama::wide::encode_add(3, 1, 2).to_le_bytes());
-    raw.extend_from_slice(&ivm::kotodama::wide::encode_add(3, 1, 2).to_le_bytes());
+    raw.extend_from_slice(
+        &ivm::encoding::wide::encode_rr(ivm::instruction::wide::arithmetic::ADD, 3, 1, 2)
+            .to_le_bytes(),
+    );
+    raw.extend_from_slice(
+        &ivm::encoding::wide::encode_rr(ivm::instruction::wide::arithmetic::ADD, 3, 1, 2)
+            .to_le_bytes(),
+    );
     raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut bytecode = assemble_ivm_header(&raw);
     bytecode[8..16].copy_from_slice(&1_u64.to_le_bytes());
@@ -1048,14 +1167,15 @@ let _marker = marker;
     );
 }
 #[test]
-fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
+fn execute_trigger_isi_rejects_depleted_entry_and_prunes_trigger() {
     use iroha_data_model::{
-        events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+        events::execute_trigger::ExecuteTriggerEventFilter,
         trigger::{
             Trigger,
             action::{Action, Repeats},
         },
     };
+    use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
@@ -1072,6 +1192,9 @@ fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        Register::account(new_sample_account(&BOB_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
         let action = Action::new(
             Vec::<InstructionBox>::new(),
             Repeats::Exactly(1),
@@ -1082,6 +1205,13 @@ fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
         )
         .expect("trigger action fixture satisfies validation invariants");
         Register::trigger(Trigger::new(trigger_id.clone(), action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        let permission: Permission = CanExecuteTrigger {
+            trigger: trigger_id.clone(),
+        }
+        .into();
+        Grant::account_permission(permission, BOB_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
@@ -1103,20 +1233,14 @@ fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
-    let event = ExecuteTriggerEvent {
-        trigger_id: trigger_id.clone(),
-        authority: ALICE_ID.clone(),
-        args: Json::default(),
-    };
-    let err = stx
-        .execute_called_trigger(&trigger_id, &event)
+    assert!(
+        stx.can_execute_trigger_for(&BOB_ID, &trigger_id),
+        "fixture must prime the stale permission cache",
+    );
+    let err = ExecuteTrigger::new(trigger_id.clone())
+        .execute(&BOB_ID, &mut stx)
         .expect_err("depleted trigger should be rejected");
-    match err {
-        TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
-            InstructionExecutionError::Find(FindError::Trigger(id)),
-        )) => assert_eq!(id, trigger_id),
-        other => panic!("unexpected rejection: {other:?}"),
-    }
+    assert!(matches!(err, Error::Find(FindError::Trigger(id)) if id == trigger_id));
     stx.apply();
     state_block.commit().unwrap();
     let view = state.view();
@@ -1124,10 +1248,24 @@ fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
         view.world.triggers().ids().get(&trigger_id).is_none(),
         "depleted trigger should be removed"
     );
+    let permission: Permission = CanExecuteTrigger {
+        trigger: trigger_id.clone(),
+    }
+    .into();
+    assert!(
+        !view
+            .world
+            .account_permissions()
+            .get(&*BOB_ID)
+            .is_some_and(|permissions| permissions.contains(&permission)),
+        "depleted-trigger cleanup must remove the stale account permission",
+    );
 }
 #[test]
 fn execute_called_trigger_rejects_disabled_trigger() {
-    use iroha_data_model::events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};
+    use iroha_data_model::events::execute_trigger::{
+        ExecuteTriggerEvent, ExecuteTriggerEventFilter,
+    };
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
@@ -1194,7 +1332,9 @@ fn execute_called_trigger_rejects_disabled_trigger() {
 }
 #[test]
 fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
-    use iroha_data_model::events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};
+    use iroha_data_model::events::execute_trigger::{
+        ExecuteTriggerEvent, ExecuteTriggerEventFilter,
+    };
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
@@ -1272,7 +1412,9 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
 }
 #[test]
 fn execute_called_trigger_rejects_malformed_enabled_trigger() {
-    use iroha_data_model::events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};
+    use iroha_data_model::events::execute_trigger::{
+        ExecuteTriggerEvent, ExecuteTriggerEventFilter,
+    };
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);

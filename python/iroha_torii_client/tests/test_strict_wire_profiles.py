@@ -334,7 +334,7 @@ def test_identifier_resolution_receipt_matches_shared_vectors() -> None:
     for noncanonical_uaid in (
         canonical_uaid.removeprefix("uaid:"),
         canonical_uaid.upper(),
-        "uaid:" + canonical_uaid.removeprefix("uaid:").upper(),
+        "uaid:A" + canonical_uaid.removeprefix("uaid:")[1:],
     ):
         mutated = json.loads(json.dumps(fixture["receipt"]))
         mutated["payload"]["uaid"] = noncanonical_uaid

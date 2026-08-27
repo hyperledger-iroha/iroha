@@ -521,16 +521,16 @@ impl RecoveryFixture {
             .expect("fsync completed Serve body");
         let request =
             self.authenticated_serve_request_for_subject(view, marker, requester_index, subject);
-        let responder = 0;
+        let responder_index = 0;
         let mut response = wire::CertifiedBodyResponse {
             request_hash: request.request_hash(),
             manifest,
             body,
-            responder,
+            responder: context.roster[responder_index].validator.clone(),
             signature: Vec::new(),
         };
         response.signature = Signature::new(
-            self.keys[usize::try_from(responder).expect("small responder")].private_key(),
+            self.keys[responder_index].private_key(),
             &response.signature_preimage(),
         )
         .payload()

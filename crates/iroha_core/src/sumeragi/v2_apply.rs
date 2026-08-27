@@ -740,10 +740,8 @@ pub(crate) fn retire_autonomous_lane_replica_with_queue_disposition(
     expected_epoch: u64,
 ) -> Result<(), V2ReservationLifecycleError> {
     let barrier = retirement.queue_release_barrier()?;
-    let authorization = queue.authorize_autonomous_lane_replica_queue_disposition(
-        &cursor_read,
-        &barrier.ordered_keys,
-    )?;
+    let authorization = queue
+        .authorize_autonomous_lane_replica_queue_disposition(&cursor_read, &barrier.ordered_keys)?;
     kura.retire_autonomous_lane_slot_with_replica_queue_disposition(
         retirement,
         expected_network_id,
@@ -769,13 +767,12 @@ pub(crate) fn recover_autonomous_lane_replica_with_queue_disposition(
     expected_epoch: u64,
 ) -> Result<(), V2ReservationLifecycleError> {
     let barrier = retirement.queue_release_barrier()?;
-    let authorization = queue
-        .authorize_autonomous_lane_replica_queue_disposition_during_startup(
-            &cursor_read,
-            &barrier.ordered_keys,
-            receipt,
-            snapshot,
-        )?;
+    let authorization = queue.authorize_autonomous_lane_replica_queue_disposition_during_startup(
+        &cursor_read,
+        &barrier.ordered_keys,
+        receipt,
+        snapshot,
+    )?;
     kura.retire_autonomous_lane_slot_with_replica_queue_disposition(
         retirement,
         expected_network_id,

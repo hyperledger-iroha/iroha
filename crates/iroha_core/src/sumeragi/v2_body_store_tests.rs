@@ -2,10 +2,11 @@
 mod tests {
     use super::{
         BlockSignaturePolicy, BodyValidationError, BodyValidationRejectionIdentity,
-        QuarantinedValidationOutcome, RecoveredTerminalValidateOutcomeCatalogError,
-        RevalidatedRejectedBody, STORE_MAGIC, STORE_VERSION, V2BodyStore, V2BodyStoreError,
-        VALIDATED_MAGIC, VALIDATION_OUTCOME_MARKER_VERSION, ValidatedBodyReceipt,
-        ValidationOutcomeMarker, ValidationOutcomeMarkerKind, write_validation_outcome_marker,
+        DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT, QuarantinedValidationOutcome,
+        RecoveredTerminalValidateOutcomeCatalogError, RevalidatedRejectedBody, STORE_MAGIC,
+        STORE_VERSION, V2BodyStore, V2BodyStoreCapacity, V2BodyStoreError, VALIDATED_MAGIC,
+        VALIDATION_OUTCOME_MARKER_VERSION, ValidatedBodyReceipt, ValidationOutcomeMarker,
+        ValidationOutcomeMarkerKind, write_validation_outcome_marker,
     };
     use crate::sumeragi::{
         v2::RecoveredValidationAuthority, v2_apply::VerifiedRecoveredFinalitySubject,
@@ -190,6 +191,21 @@ mod tests {
             .clone();
         (canonical_wire, manifest)
     }
+    fn body_and_manifest_for_view(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+        view: u64,
+    ) -> (Vec<u8>, wire::PayloadManifest) {
+        let leader = context.leader(view);
+        let leader_index = usize::try_from(leader).expect("leader index");
+        body_and_manifest_with_signature_and_views(
+            context,
+            &keys[leader_index],
+            u64::from(leader),
+            view,
+            view,
+        )
+    }
     #[test]
     fn body_store_instance_identity_distinguishes_a_same_path_reopen() {
         let directory = TempDir::new().expect("temporary identity body store");
@@ -209,9 +225,7 @@ mod tests {
     fn emergency_fast_body_store_skips_inventory_and_rejects_writes() {
         let root = TempDir::new().expect("temporary emergency body store");
         let (context, keys) = context_and_keys();
-        let expected_directory = root
-            .path()
-            .join(hex::encode(context.id().0.as_ref()));
+        let expected_directory = root.path().join(hex::encode(context.id().0.as_ref()));
         let mut store = V2BodyStore::open_emergency_fast_read_only(
             root.path(),
             context.clone(),
@@ -1685,17 +1699,21 @@ mod tests {
         ));
     }
     #[test]
-    fn final_file_corruption_fails_closed_but_incomplete_temp_is_ignored() {
+    fn final_file_corruption_fails_closed_and_incomplete_temp_is_removed() {
         let directory = TempDir::new().expect("temporary directory");
         let (context, keys) = context_and_keys();
         let (body, manifest) = body_and_manifest(&context, &keys, None);
         let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
         let _receipt = store.store(manifest, body).expect("store body");
         let context_directory = directory.path().join(hex::encode(context.id().0.as_ref()));
-        fs::write(context_directory.join("interrupted.norito.tmp"), b"partial")
-            .expect("write incomplete temp file");
+        let temporary_path = context_directory.join("interrupted.norito.tmp");
+        fs::write(&temporary_path, b"partial").expect("write incomplete temp file");
         V2BodyStore::open(directory.path(), context.clone())
             .expect("incomplete temp is unacknowledged");
+        assert!(
+            !temporary_path.exists(),
+            "bounded startup removes an unacknowledged atomic-write remnant"
+        );
         let final_path = fs::read_dir(&context_directory)
             .expect("list context directory")
             .map(|entry| entry.expect("directory entry").path())
@@ -1708,6 +1726,147 @@ mod tests {
         assert!(matches!(
             V2BodyStore::open(directory.path(), context),
             Err(V2BodyStoreError::ChecksumMismatch)
+        ));
+    }
+    #[test]
+    fn capacity_geometry_rejects_zero_limits() {
+        assert!(matches!(
+            V2BodyStoreCapacity::new(0),
+            Err(V2BodyStoreError::InvalidCapacityGeometry)
+        ));
+        assert!(matches!(
+            V2BodyStoreCapacity::for_test(0, 1),
+            Err(V2BodyStoreError::InvalidCapacityGeometry)
+        ));
+    }
+    #[test]
+    fn body_entry_capacity_preserves_exact_duplicate_idempotence() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let capacity = V2BodyStoreCapacity::for_test(1, DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT)
+            .expect("bounded test capacity");
+        let mut store = V2BodyStore::open_with_policy_and_capacity(
+            directory.path(),
+            context.clone(),
+            BlockSignaturePolicy::RotatingLeader,
+            capacity,
+        )
+        .expect("open bounded body store");
+        let (body, manifest) = body_and_manifest_for_view(&context, &keys, 0);
+        let receipt = store
+            .store(manifest.clone(), body.clone())
+            .expect("store first body");
+        let accounted_bytes = store.body_frame_bytes;
+        assert_eq!(
+            store
+                .store(manifest, body)
+                .expect("exact duplicate remains idempotent at capacity"),
+            receipt
+        );
+        assert_eq!(store.body_frame_bytes, accounted_bytes);
+
+        let (other_body, other_manifest) = body_and_manifest_for_view(&context, &keys, 1);
+        let other_path = store.path_for(other_manifest.round, other_manifest.subject);
+        assert!(matches!(
+            store.store(other_manifest, other_body),
+            Err(V2BodyStoreError::BodyEntryCapacityExceeded { capacity: 1 })
+        ));
+        assert_eq!(store.body_frame_bytes, accounted_bytes);
+        assert!(!other_path.exists(), "rejected body must not reach disk");
+    }
+    #[test]
+    fn recovered_byte_capacity_preserves_duplicate_and_rejects_new_body() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest_for_view(&context, &keys, 0);
+        let mut seed =
+            V2BodyStore::open(directory.path(), context.clone()).expect("open seed store");
+        let receipt = seed
+            .store(manifest.clone(), body.clone())
+            .expect("seed first body");
+        let first_path = seed.path_for(receipt.round(), receipt.subject());
+        let first_frame_bytes = fs::metadata(&first_path)
+            .expect("stat first body frame")
+            .len();
+        drop(seed);
+
+        let capacity =
+            V2BodyStoreCapacity::for_test(2, first_frame_bytes).expect("exact-frame byte capacity");
+        let mut store = V2BodyStore::open_with_policy_and_capacity(
+            directory.path(),
+            context.clone(),
+            BlockSignaturePolicy::RotatingLeader,
+            capacity,
+        )
+        .expect("recover body exactly at byte capacity");
+        assert_eq!(store.body_frame_bytes, first_frame_bytes);
+        assert_eq!(
+            store
+                .store(manifest, body)
+                .expect("recovered exact duplicate remains idempotent"),
+            receipt
+        );
+
+        let (other_body, other_manifest) = body_and_manifest_for_view(&context, &keys, 1);
+        let other_path = store.path_for(other_manifest.round, other_manifest.subject);
+        assert!(matches!(
+            store.store(other_manifest, other_body),
+            Err(V2BodyStoreError::BodyByteCapacityExceeded { capacity })
+                if capacity == first_frame_bytes
+        ));
+        assert_eq!(store.body_frame_bytes, first_frame_bytes);
+        assert!(
+            !other_path.exists(),
+            "over-capacity body must not reach disk"
+        );
+    }
+    #[test]
+    fn startup_capacity_inventory_precedes_corrupt_frame_decode() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let mut seed =
+            V2BodyStore::open(directory.path(), context.clone()).expect("open seed store");
+        let (first_body, first_manifest) = body_and_manifest_for_view(&context, &keys, 0);
+        let first_receipt = seed
+            .store(first_manifest, first_body)
+            .expect("store first body");
+        let first_path = seed.path_for(first_receipt.round(), first_receipt.subject());
+        let first_frame_bytes = fs::metadata(&first_path)
+            .expect("stat first body frame")
+            .len();
+        let (second_body, second_manifest) = body_and_manifest_for_view(&context, &keys, 1);
+        let _ = seed
+            .store(second_manifest, second_body)
+            .expect("store second body");
+        drop(seed);
+        let mut corrupt = fs::read(&first_path).expect("read first frame");
+        *corrupt.last_mut().expect("nonempty frame") ^= 0x80;
+        fs::write(&first_path, corrupt).expect("corrupt first frame without changing length");
+
+        let entry_capacity =
+            V2BodyStoreCapacity::for_test(1, DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT)
+                .expect("one-entry capacity");
+        assert!(matches!(
+            V2BodyStore::open_with_policy_and_capacity(
+                directory.path(),
+                context.clone(),
+                BlockSignaturePolicy::RotatingLeader,
+                entry_capacity,
+            ),
+            Err(V2BodyStoreError::BodyEntryCapacityExceeded { capacity: 1 })
+        ));
+
+        let byte_capacity =
+            V2BodyStoreCapacity::for_test(2, first_frame_bytes).expect("one-frame byte capacity");
+        assert!(matches!(
+            V2BodyStore::open_with_policy_and_capacity(
+                directory.path(),
+                context,
+                BlockSignaturePolicy::RotatingLeader,
+                byte_capacity,
+            ),
+            Err(V2BodyStoreError::BodyByteCapacityExceeded { capacity })
+                if capacity == first_frame_bytes
         ));
     }
     #[test]

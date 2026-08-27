@@ -1,13 +1,17 @@
 // Governed offline permission regressions share the default-executor module.
 #[cfg(test)]
 mod governed_offline_permission_tests {
+    use super::*;
+    use crate::{Iroha, permission::test_override, prelude};
     use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
         nexus::FeeSponsorProgramId,
         permission::Permission as PermissionObject,
-        prelude::{AccountId, Grant, Json, Register, Revoke, Role, RoleId, ValidationFail},
+        prelude::{
+            AccountId, Grant, InstructionBox, Json, Register, Revoke, Role, RoleId, ValidationFail,
+        },
     };
     use iroha_executor_data_model::permission::{
         nexus::{CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram},
@@ -18,8 +22,6 @@ mod governed_offline_permission_tests {
         parameter::CanSetParameters,
         role::CanManageRoles,
     };
-    use super::*;
-    use crate::{Iroha, permission::test_override, prelude};
     #[derive(Debug)]
     struct TestExecutor {
         host: Iroha,
@@ -291,5 +293,28 @@ mod governed_offline_permission_tests {
             .expect_err("a non-sponsor role manager must not seed sponsor authority");
         assert!(matches!(error, ValidationFail::NotPermitted(_)));
         assert!(error.to_string().contains("only the sponsor account"));
+    }
+    #[test]
+    fn role_registration_submits_only_the_register_instruction() {
+        let authority = account(51);
+        let initial_owner = account(52);
+        let registration = Register::role(Role::new(
+            "single_owner_assignment".parse().expect("role id"),
+            initial_owner,
+        ));
+        let expected: InstructionBox = registration.clone().into();
+        let mut executor = TestExecutor::genesis(authority);
+        let (_, submitted) = crate::tests::record_submitted_instructions(|| {
+            role::visit_register_role(&mut executor, &registration);
+        });
+        assert!(
+            executor.verdict().is_ok(),
+            "role registration should remain authorized"
+        );
+        assert_eq!(
+            submitted,
+            vec![expected],
+            "Core Register<Role> owns the one initial-owner assignment"
+        );
     }
 }

@@ -268,9 +268,18 @@ fn v4_activation_verifier_record_requires_exact_release_identity() {
     let mut wrong_schema = record.clone();
     wrong_schema.public_inputs_schema_hash[0] ^= 1;
     assert_rejected(&wrong_schema);
-    let mut wrong_commitment = record;
+    let mut wrong_commitment = record.clone();
     wrong_commitment.commitment[0] ^= 1;
     assert_rejected(&wrong_commitment);
+    let mut injected_gas_schedule = record.clone();
+    injected_gas_schedule.gas_schedule_id = Some("attacker-selected-gas".to_owned());
+    assert_rejected(&injected_gas_schedule);
+    let mut injected_metadata_uri = record.clone();
+    injected_metadata_uri.metadata_uri_cid = Some("ipfs://attacker-metadata".to_owned());
+    assert_rejected(&injected_metadata_uri);
+    let mut injected_key_uri = record;
+    injected_key_uri.vk_bytes_cid = Some("ipfs://attacker-key".to_owned());
+    assert_rejected(&injected_key_uri);
 }
 
 #[test]

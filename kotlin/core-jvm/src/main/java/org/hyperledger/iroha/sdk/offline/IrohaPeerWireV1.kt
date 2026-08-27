@@ -59,9 +59,6 @@ class IrohaPeerWireLimitsV1 @JvmOverloads constructor(
         require(maximumKagemushaEncodedBytes in 1..24_576)
     }
 
-    fun maximumEncodedBytes(@Suppress("UNUSED_PARAMETER") profile: IrohaPeerPayloadProfile): Int =
-        maximumKagemushaEncodedBytes
-
     companion object {
         @JvmField val PEER_V1 = IrohaPeerWireLimitsV1()
     }
@@ -264,7 +261,7 @@ class IrohaPeerWireMessageV1 private constructor(
             val canonicalLength = checkedLength(data.readU32(12), limits.maximumCanonicalBytes)
             val encodedLength = checkedLength(
                 data.readU32(16),
-                limits.maximumEncodedBytes(profile),
+                limits.maximumKagemushaEncodedBytes,
             )
             require(data.size == HEADER_LENGTH + encodedLength) { "Peer message length mismatch" }
             require(encoding != IrohaPeerContentEncodingV1.ZLIB ||
@@ -327,7 +324,7 @@ class IrohaPeerWireMessageV1 private constructor(
             val canonicalLength = checkedLength(data.readU32(12), limits.maximumCanonicalBytes)
             val encodedLength = checkedLength(
                 data.readU32(16),
-                limits.maximumEncodedBytes(profile),
+                limits.maximumKagemushaEncodedBytes,
             )
             require(encoding != IrohaPeerContentEncodingV1.NONE || canonicalLength == encodedLength) {
                 "Malformed IPM1 header"
@@ -369,7 +366,7 @@ class IrohaPeerWireMessageV1 private constructor(
             require(payload.byteCount <= limits.maximumCanonicalBytes) {
                 "Peer canonical payload exceeds its bound"
             }
-            val maximumEncoded = limits.maximumEncodedBytes(payload.profile)
+            val maximumEncoded = limits.maximumKagemushaEncodedBytes
             val digest = canonicalHash(payload)
             val canonical = payload.bytes
             val compressed = if (policy == IrohaPeerWireCompressionPolicyV1.PEER_OPTIMIZED) {

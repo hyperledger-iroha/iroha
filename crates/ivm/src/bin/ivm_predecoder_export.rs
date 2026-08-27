@@ -1,6 +1,6 @@
 //! Export predecoder golden vectors (JSON/bin) for cross-implementation reuse.
 //!
-//! Writes a mixed 16/32-bit instruction stream, its decoded op list, and a
+//! Writes a canonical 32-bit instruction stream, its decoded op list, and a
 //! small set of header-variant artifacts under:
 //!   `crates/ivm/tests/fixtures/predecoder/mixed/`
 //!

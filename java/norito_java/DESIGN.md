@@ -3,8 +3,7 @@
 ## Goals
 - Provide a pure-Java reference implementation of the Norito serialization
   codec that mirrors the Rust implementation semantics and the Python port.
-- Target JDK 21 without requiring third-party dependencies, so compilation with
-  `javac` works in constrained environments.
+- Target JDK 21 with one pinned, direct `zstd-jni` dependency for the release compression codec.
 - Offer composable adapters for encoding/decoding common types (primitives,
   strings, byte slices, options, results, sequences, packed structs) and expose
   high-level helpers for typical usage.
@@ -15,10 +14,9 @@
 - Header support: encode/decode `NoritoHeader` with validation of magic, version
   (major 0, minor 0x00), payload length, checksum (CRC64-XZ), flags, and
   compression byte.
-- Compression: support `COMPRESSION_NONE` and Zstandard. The codec reflects against
-  `com.github.luben.zstd.Zstd` at runtime; when present (e.g., via `zstd-jni`) the encoder can emit
-  compressed payloads and the decoder transparently inflates them. When absent, requesting Zstd
-  raises an `UnsupportedOperationException`, keeping the pure-Java build dependency-free.
+- Compression: support `COMPRESSION_NONE` and Zstandard through the direct, pinned
+  `com.github.luben.zstd.Zstd` dependency. The encoder and decoder have no reflective discovery or
+  optional-backend branch.
 - Flag support: `PACKED_SEQ`, `COMPACT_LEN`, `PACKED_STRUCT`, and `FIELD_BITSET`
   mirroring the Rust flag byte values. Reserved layout bits are rejected. The
   Java defaults mirror Rust by enabling compact per-value lengths
@@ -31,9 +29,9 @@
   (variable and fixed-length), optional values, result values, sequences
   (packed/delimited layouts), maps (sequence of key-value tuples), and packed
   structs using the hybrid bitset layout.
-- Struct support: `StructAdapter` supports dataclass-style factories (record
-  builder) and Map-backed values; size calculations follow the Python
-  implementation (bitset + varint sizes for non-self-delimiting fields).
+- Struct support: `StructAdapter` encodes exact Map-backed values and supports typed decode
+  factories. Missing fields and object-property discovery are rejected; size calculations follow
+  the Python implementation (bitset + varint sizes for non-self-delimiting fields).
 - High-level API: `NoritoCodec.encode(value, schema, adapter, flags)` and
   `NoritoCodec.decode(bytes, adapter, schema)` with builder helpers exposed via
   `NoritoAdapters` (static factory methods).
@@ -46,8 +44,7 @@
   `(u64, Optional<String>, boolean)`, `(u64, Optional<u32>, boolean)`,
   `(u64, bytes)`, `(u64, bytes, boolean)` (including optional bytes), and
   `(u64, enum(Name|Code), boolean)` rows.
-- Schema hashing: first 16 bytes of domain-separated SHA-256 over the canonical
-  type name or structural schema JSON.
+- Schema hashing: first 16 bytes of domain-separated SHA-256 over the canonical type name.
 - CLI utility: `NoritoDump` prints header fields for inspection.
 - Tests: standalone harness under `src/test/java` covering header roundtrips,
   encode/decode for primitives, sequences, options, results, struct adapters,
@@ -68,9 +65,8 @@
 - `java/norito_java/BUILDING.md` (alias README build section) if needed.
 
 ## Testing Strategy
-- Provide `run_tests.sh` that uses `javac --release 21` to compile both main and test sources into
-  `build/classes`, then
-  runs `java -ea org.hyperledger.iroha.norito.NoritoTests`.
+- Provide `run_tests.sh` as a small wrapper around the Gradle `runNoritoTests` task so compilation,
+  assertions, and the pinned Zstandard runtime use the published dependency graph.
 - Tests assert roundtrips for signed/unsigned ints, strings, sequences (packed
   offsets are fixed u64 in v1), options, results, and struct adapter behaviours; verify
   header validation and CRC mismatch detection.
@@ -95,13 +91,12 @@
   with `-PnoritoJavaVersion=...` to publish the `org.hyperledger.iroha:norito-java`
   artifact for local consumption.
 - Packaging guidance for the JNI backend:
-  1. Add `implementation("com.github.luben:zstd-jni:1.5.6-9")` to the Gradle build (or the
-     equivalent Maven dependency).
+  1. Consume the transitive `com.github.luben:zstd-jni:1.5.7-7` dependency from `norito-java` and
+     keep any centrally constrained version aligned.
   2. For Android, align the application ABI filters with the shipped native
      libraries and keep debug symbols for `libzstd-jni.so` when useful for
      crash triage.
-  3. Gate optional compression paths with `NoritoCompression.hasZstd()` so
-     environments without the native dependency skip compression explicitly.
+  3. Treat missing or broken JNI linkage as a packaging error; there is no optional codec path.
 
 ## Panama Acceleration Notes
 - norito-java currently avoids the Foreign Function & Memory API to keep the

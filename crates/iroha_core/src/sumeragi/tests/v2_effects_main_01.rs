@@ -85,20 +85,21 @@ fn signed_certified_response(
     task: &BodyFetchTask,
     manifest: wire::PayloadManifest,
     body: Vec<u8>,
-    responder: wire::ValidatorIndex,
+    responder_index: wire::ValidatorIndex,
 ) -> wire::CertifiedBodyResponse {
     let request = task
         .certified_request()
         .expect("certified fetch task owns its request");
+    let responder_index = usize::try_from(responder_index).expect("responder index");
     let mut response = wire::CertifiedBodyResponse {
         request_hash: HashOf::new(request),
         manifest,
         body,
-        responder,
+        responder: fixture.context.roster[responder_index].validator.clone(),
         signature: Vec::new(),
     };
     response.signature = Signature::new(
-        fixture.validator_keys[usize::try_from(responder).expect("responder index")].private_key(),
+        fixture.validator_keys[responder_index].private_key(),
         &response.signature_preimage(),
     )
     .payload()
@@ -727,7 +728,7 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         request_hash: request_hash_a,
         manifest: fixture.manifest.clone(),
         body: fixture.body.clone(),
-        responder: 0,
+        responder: fixture.context.roster[0].validator.clone(),
         signature: Vec::new(),
     };
     response_a.signature = Signature::new(
@@ -790,6 +791,21 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     planner_io.install_output_guard_for_test(
         &mut production_services,
         Arc::clone(&fixture.executor.output_guard),
+    );
+    let locked_candidate_tag = task_a.tag;
+    let locked_candidate_round = task_a.round;
+    let locked_candidate_subject = task_a.subject;
+    production_services
+        .request_locked_candidate(
+            locked_candidate_tag,
+            locked_candidate_round,
+            locked_candidate_subject,
+        )
+        .expect("queue the exact locked-body lookup before certified recovery");
+    assert_eq!(
+        planner_io.execute_one_locked_candidate_load(&mut production_services),
+        None,
+        "the absent locked body must wait for certified persistence"
     );
     V2EffectServices::enqueue_body_fetch(&mut production_services, task_a.clone())
         .expect("install A's exact certified-Fetch service owner");
@@ -854,6 +870,24 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
                 error,
             ) => panic!("A failed after the persistence commit: {error}"),
         });
+    assert_eq!(
+        planner_io.execute_one_locked_candidate_load(&mut production_services),
+        Some(locked_candidate_tag),
+        "certified persistence must wake the matching waiting acquisition"
+    );
+    let recovered_locked_candidate = production_services
+        .take_loaded_candidate()
+        .expect("deliver the certified body to the waiting locked proposal");
+    assert_eq!(recovered_locked_candidate.tag(), locked_candidate_tag);
+    assert_eq!(recovered_locked_candidate.round(), locked_candidate_round);
+    assert_eq!(
+        recovered_locked_candidate.subject(),
+        locked_candidate_subject
+    );
+    assert_eq!(
+        recovered_locked_candidate.into_canonical_wire(),
+        fixture.body
+    );
     assert!(matches!(
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
         (Some(LifecycleState::Ready), Some(2), None, false)
@@ -965,7 +999,7 @@ fn ungated_certified_fetch_phase_b_restarts_before_ledger_without_mutation() {
         ),
         manifest: fixture.manifest.clone(),
         body: fixture.body.clone(),
-        responder: 0,
+        responder: fixture.context.roster[0].validator.clone(),
         signature: Vec::new(),
     };
     response.signature = Signature::new(
@@ -1179,6 +1213,233 @@ fn ungated_certified_fetch_phase_b_restarts_before_ledger_without_mutation() {
         "the move-only restart error, not a second FIFO, retains the completion",
     );
     drop(failure);
+    planner_io.detach(&mut production_services);
+}
+#[test]
+#[allow(clippy::too_many_lines)]
+fn request_bound_rotated_archive_completes_fetch_without_leader_wire_slot() {
+    let mut fixture = ProductionTransportFixture::new();
+    fixture.executor.recovered_bodies.clear();
+    let mut services = FakeServices {
+        requester_key: Some(fixture.requester_key.clone()),
+        ..FakeServices::default()
+    };
+    let prepare =
+        fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
+    let effects = vec![AdapterEffect::FetchBody {
+        tag: fixture.executor.current_tag(),
+        round: fixture.round,
+        subject: fixture.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: fixture.certified_sources(&prepare),
+        certificate: Some(prepare),
+    }];
+    fixture
+        .executor
+        .runtime
+        .retain_retransmit_effect_ownership_for_test(&effects)
+        .expect("bind one production certified-Fetch owner");
+    assert_eq!(
+        fixture
+            .executor
+            .consume_effects(effects, &mut services)
+            .expect("admit one production certified-Fetch owner"),
+        1,
+    );
+    let task = services.fetch_tasks[0].clone();
+    let rotated_responder = PeerId::new(fixture.responder_key.public_key().clone());
+    assert!(
+        fixture
+            .context
+            .roster
+            .iter()
+            .all(|power| power.validator != rotated_responder),
+        "the current archive responder must be outside the frozen roster",
+    );
+    let mut response = wire::CertifiedBodyResponse {
+        request_hash: HashOf::new(
+            task.certified_request()
+                .expect("the Fetch owns its exact signed request"),
+        ),
+        manifest: fixture.manifest.clone(),
+        body: fixture.body.clone(),
+        responder: rotated_responder.clone(),
+        signature: Vec::new(),
+    };
+    response.signature = Signature::new(
+        fixture.responder_key.private_key(),
+        &response.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let (_ingress_directory, ingress, _ingress_gate) = fixture.bound_certified_response_ingress();
+    {
+        let state = ingress.state.lock();
+        assert!(state.requires_leader_wire_lifecycle_gate);
+        assert!(state.leader_wire_lifecycle_gate.is_some());
+        assert!(!state.roster.contains(&rotated_responder));
+    }
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+            )),
+            rotated_responder.clone(),
+        )),
+        Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let response_ordinal = ingress.state.lock().last_admission_ordinal;
+    assert!(ingress.exact_queued_ungated_occurrence_for_test(response_ordinal));
+    {
+        let state = ingress.state.lock();
+        let response_entry = state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .find(|entry| entry.admission_ordinal == response_ordinal)
+            .expect("the rotated response remains physically queued");
+        let ownership = response_entry
+            .inbound
+            .ingress_ownership()
+            .expect("the rotated response retains exact ingress ownership");
+        assert!(ownership.request_bound_non_roster_completion());
+        assert!(state.leader_wire_lifecycles.is_empty());
+    }
+    let outsider_chunk = wire::PayloadChunk {
+        manifest_hash: HashOf::new(&fixture.manifest),
+        index: 0,
+        bytes: vec![0xA5],
+        sender: 0,
+        signature: vec![0x5A],
+    };
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::PayloadChunk(outsider_chunk),
+            )),
+            rotated_responder,
+        )),
+        Err(crate::sumeragi::FairV2IngressPushError::Rejected(_))
+    ));
+    let prepared = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, response_ordinal)
+        .expect("authenticate the exact request-bound archive response family");
+    assert!(prepared.selected_certified_fetch_is_request_bound_archive_for_test());
+    assert_eq!(
+        prepared.certified_fetch_preledger_productive_ingress_token_for_test(),
+        Err(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken),
+        "the archive response must not consume a roster-sized generic lifecycle slot",
+    );
+    let effect = task.adapter_effect();
+    let pending = task
+        .ownership()
+        .exact_pending_adapter_effect_binding(&effect)
+        .expect("retain the exact Fetch registry carrier");
+    let proofs = fixture
+        .validator_keys
+        .iter()
+        .map(|key| {
+            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("validator proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
+        .expect("verified lifecycle owner context");
+    let owner_directory = TempDir::new().expect("temporary archive lifecycle owner storage");
+    let (mut owner, lifecycle_ordinal, lifecycle_source) =
+        crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::waiting_fetch_for_ingress_test(
+            verified,
+            &prepared,
+            effect,
+            pending,
+            &fixture.validator_keys[0],
+            owner_directory.path(),
+        );
+    let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+    let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
+        &mut production_services,
+        Arc::clone(&fixture.executor.output_guard),
+        1,
+    );
+    planner_io.install_output_guard_for_test(
+        &mut production_services,
+        Arc::clone(&fixture.executor.output_guard),
+    );
+    V2EffectServices::enqueue_body_fetch(&mut production_services, task.clone())
+        .expect("install the exact certified-Fetch service owner");
+    let planned = owner.plan_ingress_turn_for_test(
+        &production_services,
+        &fixture.executor,
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        prepared,
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
+    );
+    let queued = match planned {
+        Ok(ProductionIngressTurnPreparation::Queued(queued)) => queued,
+        Ok(ProductionIngressTurnPreparation::CapacityWait(_)) => {
+            panic!("available exact capacity cannot delay the archive response")
+        }
+        Err(_) => panic!("real Phase A must persist the request-bound archive response"),
+    };
+    assert_eq!(queued.ordinal(), lifecycle_ordinal);
+    planner_io.execute_one_certified_fetch(Arc::clone(&fixture.executor.output_guard));
+    let completion = match production_services
+        .take_next_lifecycle_completion()
+        .expect("take the persisted archive Fetch completion")
+    {
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::CertifiedFetch(completion) => {
+            completion
+        }
+        _ => panic!("the persisted archive response must classify as certified Fetch"),
+    };
+    owner
+        .complete_certified_fetch_for_test(
+            &mut fixture.executor,
+            &mut production_services,
+            &ingress,
+            completion,
+        )
+        .unwrap_or_else(|error| match error {
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::Retry(
+                error,
+            ) => panic!(
+                "archive completion must publish Ready and retire its response: {}: {}",
+                error.reason(),
+                error.detail(),
+            ),
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(
+                error,
+            ) => panic!(
+                "archive completion lost its sealed exact-request ingress mode: {}: {}",
+                error.reason(),
+                error.detail(),
+            ),
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
+                error,
+            ) => panic!("archive completion failed after Ledger: {}", error.detail()),
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(
+                error,
+            ) => panic!("archive completion lost its post-dequeue ownership: {error}"),
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
+                error,
+            ) => panic!("archive completion failed after its commit tail: {error}"),
+        });
+    assert!(matches!(
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+        (Some(LifecycleState::Ready), Some(2), None, false)
+    ));
+    assert!(fixture.executor.pending_fetches.is_empty());
+    assert!(fixture.executor.certified_work.is_empty());
+    assert!(fixture.executor.outstanding_requests.is_empty());
+    assert_eq!(
+        fixture.executor.outstanding_requests.response_claim_count(),
+        0
+    );
+    assert_eq!(ingress.len(), 0);
+    assert!(ingress.state.lock().leader_wire_lifecycles.is_empty());
+    assert!(!fixture.executor.output_guard.restart_required());
     planner_io.detach(&mut production_services);
 }
 #[test]

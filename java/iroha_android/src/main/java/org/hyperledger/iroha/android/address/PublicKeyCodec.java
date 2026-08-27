@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.address;
 import java.util.Arrays;
 import java.util.Locale;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
 import org.hyperledger.iroha.norito.Varint;
 
 /** Utilities for encoding and decoding canonical public key literals. */
@@ -82,7 +83,7 @@ public final class PublicKeyCodec {
       return null;
     }
     final byte[] keyBytes = Arrays.copyOfRange(bytes, payloadOffset, payloadOffset + payloadLength);
-    if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) {
+    if (!isValidPublicKey(curveId, keyBytes)) {
       return null;
     }
     return new PublicKeyPayload(curveId, keyBytes);
@@ -126,7 +127,7 @@ public final class PublicKeyCodec {
       return null;
     }
     final byte[] keyBytes = Arrays.copyOfRange(payload, 1, payload.length);
-    if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) {
+    if (!isValidPublicKey(curveId, keyBytes)) {
       return null;
     }
     return new PublicKeyPayload(curveId, keyBytes);
@@ -168,6 +169,20 @@ public final class PublicKeyCodec {
       throw new IllegalArgumentException(
           "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup");
     }
+    if (curveId == 0x02 && !MlDsaPublicKeyAdmission.isValid(keyBytes)) {
+      throw new IllegalArgumentException(
+          "invalid ML-DSA-65 public key: expected 1952 bytes with nonzero material");
+    }
+  }
+
+  private static boolean isValidPublicKey(final int curveId, final byte[] keyBytes) {
+    if (curveId == 0x01) {
+      return Ed25519PublicKeyAdmission.isValid(keyBytes);
+    }
+    if (curveId == 0x02) {
+      return MlDsaPublicKeyAdmission.isValid(keyBytes);
+    }
+    return true;
   }
 
   private static int compactAlgorithmTagForCurveId(final int curveId) {

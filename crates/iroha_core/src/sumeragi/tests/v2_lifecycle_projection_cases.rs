@@ -439,7 +439,7 @@ fn certified_validate_candidate(
         )),
         manifest: fixture.manifest.clone(),
         body: fixture.body.clone(),
-        responder: 0,
+        responder: fixture.context.roster[0].validator.clone(),
         signature: vec![0xA5],
     };
     let fetch_evidence =
@@ -1056,16 +1056,16 @@ fn certified_serve_completion_settles_from_the_post_fsync_response_receipt() {
     let pending_serve_replay = coordinator.durable_records[&1].replay_authority.clone();
     let pending_producer_replay = coordinator.durable_records[&2].replay_authority.clone();
     let lease = execute_ready_turn(&mut coordinator);
-    let responder = 0;
+    let responder_index = 0;
     let mut response = wire::CertifiedBodyResponse {
         request_hash: request.request_hash(),
         manifest: fixture.manifest.clone(),
         body: fixture.body.clone(),
-        responder,
+        responder: fixture.context.roster[responder_index].validator.clone(),
         signature: Vec::new(),
     };
     response.signature = Signature::new(
-        fixture.keys[usize::try_from(responder).expect("small responder")].private_key(),
+        fixture.keys[responder_index].private_key(),
         &response.signature_preimage(),
     )
     .payload()
@@ -1605,16 +1605,16 @@ fn durable_open_applies_completed_payload_store_ahead_cut() {
         coordinator.admit_certified_serve(&fixture.verified, &request, pending),
         Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
     ));
-    let responder = 0;
+    let responder_index = 0;
     let mut response = wire::CertifiedBodyResponse {
         request_hash: request.request_hash(),
         manifest,
         body,
-        responder,
+        responder: fixture.context.roster[responder_index].validator.clone(),
         signature: Vec::new(),
     };
     response.signature = Signature::new(
-        fixture.keys[usize::try_from(responder).expect("small responder")].private_key(),
+        fixture.keys[responder_index].private_key(),
         &response.signature_preimage(),
     )
     .payload()
@@ -1628,7 +1628,7 @@ fn durable_open_applies_completed_payload_store_ahead_cut() {
         &fixture,
         &payload_root,
         &body_store,
-        &fixture.keys[usize::try_from(responder).expect("small responder")],
+        &fixture.keys[responder_index],
     );
     let cut = lifecycle_recovery_cut(&fixture, &ledger_root, payloads);
     let restarted =
@@ -1771,16 +1771,16 @@ fn settled_completed_frame_persists_and_reopens_with_the_exact_replay_pair() {
         Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
     ));
     let lease = execute_ready_turn(&mut coordinator);
-    let responder = 0;
+    let responder_index = 0;
     let mut response = wire::CertifiedBodyResponse {
         request_hash: request.request_hash(),
         manifest,
         body,
-        responder,
+        responder: fixture.context.roster[responder_index].validator.clone(),
         signature: Vec::new(),
     };
     response.signature = Signature::new(
-        fixture.keys[usize::try_from(responder).expect("small responder")].private_key(),
+        fixture.keys[responder_index].private_key(),
         &response.signature_preimage(),
     )
     .payload()
@@ -1809,7 +1809,7 @@ fn settled_completed_frame_persists_and_reopens_with_the_exact_replay_pair() {
         &fixture,
         &payload_root,
         &body_store,
-        &fixture.keys[usize::try_from(responder).expect("small responder")],
+        &fixture.keys[responder_index],
     );
     let recovered = payloads
         .get(pending.id())
@@ -2599,7 +2599,7 @@ fn broadcast_vote_and_qc_have_collision_free_specialized_keys() {
     );
 }
 #[test]
-fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
+fn all_auxiliary_broadcast_payloads_are_explicitly_rejected() {
     let fixture = Fixture::new();
     let certified_request = wire::CertifiedBodyRequest {
         round: fixture.round,
@@ -2630,7 +2630,7 @@ fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
             request_hash: HashOf::new(&certified_request),
             manifest: fixture.manifest.clone(),
             body: fixture.body.clone(),
-            responder: 0,
+            responder: fixture.context.roster[0].validator.clone(),
             signature: vec![0x64],
         }),
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(commit_request.clone()),
@@ -2642,19 +2642,6 @@ fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
                 signature: vec![0x65],
             },
         ),
-        wire::ConsensusMessageV2Payload::VrfCommit(wire::VrfCommit {
-            epoch: fixture.context.epoch,
-            commitment: [0x66; 32],
-            signer: 0,
-            bls_sig: vec![0x66],
-        }),
-        wire::ConsensusMessageV2Payload::VrfReveal(wire::VrfReveal {
-            epoch: fixture.context.epoch,
-            reveal: [0x67; 32],
-            signer: 0,
-            vrf_proof: vec![0x67],
-            bls_sig: vec![0x67],
-        }),
         wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(
             wire::GlobalBeaconPartialSignature {
                 round: fixture.round,
@@ -2674,7 +2661,7 @@ fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
             },
         ),
     ];
-    assert_eq!(payloads.len(), 9);
+    assert_eq!(payloads.len(), 7);
     for (ordinal, payload) in (60_u128..).zip(payloads) {
         let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(payload));
         let ownership = bound_ownership(&effect, fixture.tag, ordinal);

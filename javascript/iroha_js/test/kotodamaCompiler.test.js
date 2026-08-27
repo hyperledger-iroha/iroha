@@ -1265,7 +1265,7 @@ test("compiler output requires a framed self-describing IVM artifact bound to ma
       bytes[16] = 2;
       return bytes;
     })()],
-    ["contract HTM mode", (() => {
+    ["unknown IVM mode bit", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
       bytes[6] = 0x04;
       return bytes;

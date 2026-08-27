@@ -78,6 +78,7 @@ AGGREGATE_TARGET = "multi-target"
 RELEASE_SIGNING_PROVIDER = "authenticated_external_signer"
 RELEASE_SIGNING_BACKEND = "software"
 RELEASE_SIGNER_QUALIFICATION = "software-key-qualified"
+_FASTPQ_ROLLOUT_STAMP_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}")
 
 
 class PipelineError(RuntimeError):
@@ -448,6 +449,40 @@ def summarize_fastpq_rollout_bundle(bundle_dir: Path, *, dry_run: bool) -> List[
     return summaries
 
 
+def evidence_inventory_label(path: Path, evidence_stage: Path) -> str:
+    """Return the stable inventory path for an item in the closed evidence archive."""
+
+    if ".." in path.parts or ".." in evidence_stage.parts:
+        raise PipelineError(
+            f"release evidence path contains lexical traversal: {path}"
+        )
+    absolute_path = path if path.is_absolute() else REPO_ROOT / path
+    absolute_stage = (
+        evidence_stage if evidence_stage.is_absolute() else REPO_ROOT / evidence_stage
+    )
+    try:
+        resolved_path = absolute_path.resolve(strict=False)
+        resolved_stage = absolute_stage.resolve(strict=False)
+        relative = resolved_path.relative_to(resolved_stage)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise PipelineError(
+            f"release evidence path is outside the staging tree: {path}"
+        ) from exc
+    return (Path("evidence") / relative).as_posix()
+
+
+def validate_fastpq_rollout_stamp(stamp: str | None) -> str | None:
+    """Require an optional FASTPQ rollout stamp to be one safe path component."""
+
+    if stamp is None:
+        return None
+    if _FASTPQ_ROLLOUT_STAMP_RE.fullmatch(stamp) is None:
+        raise PipelineError(
+            "--fastpq-rollout-stamp must be exactly one bounded safe path component"
+        )
+    return stamp
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="Target release version (e.g., 2.0.0-rc.3 or v2.0.0-rc.3)")
@@ -690,6 +725,9 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    fastpq_rollout_stamp = validate_fastpq_rollout_stamp(
+        args.fastpq_rollout_stamp
+    )
     profiles = RELEASE_PROFILES
     signing_cli_args = release_signing_cli_args(
         args.external_signer,
@@ -1302,7 +1340,7 @@ def main() -> int:
             raise PipelineError(
                 f"Grafana token not found in environment variable {args.grafana_token_env}."
             )
-        stamp = args.fastpq_rollout_stamp or (
+        stamp = fastpq_rollout_stamp or (
             f"{dt.datetime.fromtimestamp(source_date_epoch, tz=dt.timezone.utc):%Y%m%dT%H%MZ}_"
             f"{provided_version}"
         )
@@ -1350,10 +1388,7 @@ def main() -> int:
                     "0644",
                 ]
             )
-        try:
-            fastpq_grafana_rel = str(rollout_dir.relative_to(REPO_ROOT))
-        except ValueError:
-            fastpq_grafana_rel = str(rollout_dir)
+        fastpq_grafana_rel = evidence_inventory_label(rollout_dir, evidence_stage)
 
     archived_fastpq: List[Dict[str, object]] = []
     if args.fastpq_bundles:
@@ -1386,10 +1421,14 @@ def main() -> int:
                     dry_run=False,
                 )
             summary_paths = summarize_fastpq_rollout_bundle(dest_dir, dry_run=args.dry_run)
-            try:
-                bundle_label = str(dest_dir.relative_to(REPO_ROOT))
-            except ValueError:
-                bundle_label = str(dest_dir)
+            summary_paths = [
+                {
+                    kind: evidence_inventory_label(Path(path), evidence_stage)
+                    for kind, path in summary_paths_for_manifest.items()
+                }
+                for summary_paths_for_manifest in summary_paths
+            ]
+            bundle_label = evidence_inventory_label(dest_dir, evidence_stage)
             archived_fastpq.append(
                 {
                     "bundle": bundle_label,
@@ -1429,10 +1468,9 @@ def main() -> int:
                     "cbdc_rollouts",
                     dry_run=False,
                 )
-            try:
-                cbdc_validation_rel = str(cbdc_dir.relative_to(REPO_ROOT))
-            except ValueError:
-                cbdc_validation_rel = str(cbdc_dir)
+            cbdc_validation_rel = evidence_inventory_label(
+                evidence_stage / "cbdc_rollouts", evidence_stage
+            )
         else:
             raise PipelineError(
                 f"CBDC rollout directory has no cbdc.manifest.json: {cbdc_dir}"
@@ -1716,9 +1754,9 @@ def main() -> int:
         lines.append("Publish plan report: publish_plan_report.json")
         lines.append("Publish plan report (text): publish_plan_report.txt")
     if fastpq_grafana_rel:
-        lines.append(f"FASTPQ Grafana export: {fastpq_grafana_rel}")
+        lines.append(f"FASTPQ Grafana release-evidence path: {fastpq_grafana_rel}")
     if archived_fastpq:
-        lines.append("FASTPQ rollout bundles archived:")
+        lines.append("FASTPQ rollout bundles in release evidence:")
         for entry in archived_fastpq:
             bundle = entry.get("bundle", "")
             lines.append(f"  - {bundle}")
@@ -1728,7 +1766,7 @@ def main() -> int:
                     if markdown_path:
                         lines.append(f"    Summary: {markdown_path}")
     if cbdc_validation_rel:
-        lines.append(f"CBDC rollout bundles validated: {cbdc_validation_rel}")
+        lines.append(f"CBDC rollout release-evidence path: {cbdc_validation_rel}")
     if args.dry_run:
         print(f"[release-pipeline] (dry-run) write release summary {summary}")
     else:

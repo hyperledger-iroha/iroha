@@ -8,7 +8,7 @@ use iroha_data_model::{
             CertPhase, ConsensusBlockHeader, ConsensusGenesisModeParams, ConsensusGenesisParams,
             Evidence, EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg, LaneBlockCommitment,
             LaneSettlementReceipt, NposGenesisParams, Proposal, Qc, QcAggregate, QcRef, QcVote,
-            SumeragiV2EquivocationEvidence, VrfCommit, VrfReveal,
+            SumeragiV2EquivocationEvidence,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
@@ -217,8 +217,6 @@ fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
     NposGenesisParams {
         epoch_length_blocks: NonZeroU64::new(rng.next_u64()).unwrap_or(NonZeroU64::MIN),
         epoch_seed,
-        vrf_commit_window_blocks: rng.next_u64(),
-        vrf_reveal_window_blocks: rng.next_u64(),
         max_validators: rng.next_u32(),
         min_self_bond: rng.next_u64().into(),
         min_nomination_bond: rng.next_u64().into(),
@@ -338,22 +336,6 @@ fn rng_exec_witness_msg(rng: &mut DeterministicRng) -> ExecWitnessMsg {
         view: rng.next_u64(),
         epoch: rng.next_u64(),
         witness: rng_exec_witness(rng),
-    }
-}
-fn rng_vrf_commit(rng: &mut DeterministicRng) -> VrfCommit {
-    VrfCommit {
-        epoch: rng.next_u64(),
-        commitment: rng.array32(),
-        signer: rng.next_u32(),
-        bls_sig: rng.bytes(96),
-    }
-}
-fn rng_vrf_reveal(rng: &mut DeterministicRng) -> VrfReveal {
-    VrfReveal {
-        epoch: rng.next_u64(),
-        reveal: rng.array32(),
-        signer: rng.next_u32(),
-        bls_sig: rng.bytes(96),
     }
 }
 fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
@@ -501,8 +483,6 @@ fn consensus_genesis_norito_roundtrip() {
     let npos = NposGenesisParams {
         epoch_length_blocks: NonZeroU64::new(120).unwrap(),
         epoch_seed: [0x11; 32],
-        vrf_commit_window_blocks: 8,
-        vrf_reveal_window_blocks: 5,
         max_validators: 19,
         min_self_bond: 10_u64.into(),
         min_nomination_bond: 2_u64.into(),
@@ -664,18 +644,6 @@ fn consensus_messages_norito_roundtrip() {
         epoch: 2,
         witness: exec_witness.clone(),
     };
-    let vrf_commit = VrfCommit {
-        epoch: 3,
-        commitment: [0x33; 32],
-        signer: 5,
-        bls_sig: vec![0x35; 96],
-    };
-    let vrf_reveal = VrfReveal {
-        epoch: 3,
-        reveal: [0x44; 32],
-        signer: 5,
-        bls_sig: vec![0x45; 96],
-    };
     assert_roundtrip(&cert_header);
     assert_roundtrip(&block_header);
     assert_roundtrip(&proposal);
@@ -690,8 +658,6 @@ fn consensus_messages_norito_roundtrip() {
     assert_roundtrip(&evidence_record);
     assert_roundtrip(&exec_witness);
     assert_roundtrip(&exec_witness_msg);
-    assert_roundtrip(&vrf_commit);
-    assert_roundtrip(&vrf_reveal);
 }
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1082,10 +1048,6 @@ fn consensus_roundtrip_deterministic_fuzz() {
         assert_roundtrip(&exec_witness);
         let exec_witness_msg = rng_exec_witness_msg(&mut rng);
         assert_roundtrip(&exec_witness_msg);
-        let vrf_commit = rng_vrf_commit(&mut rng);
-        assert_roundtrip(&vrf_commit);
-        let vrf_reveal = rng_vrf_reveal(&mut rng);
-        assert_roundtrip(&vrf_reveal);
         let evidence = rng_evidence(&mut rng);
         assert_roundtrip(&evidence);
         let evidence_record = rng_evidence_record(&mut rng, evidence);

@@ -8,22 +8,22 @@ Production keeps these values distinct:
 
   * the relay/resource hop charged by fair ingress;
   * the original route target selected for the exact live request;
-  * the authenticated current archive server which signs the response;
-  * the exact signed-request hash resolved in the outstanding table; and
-  * the frozen-QC signer index cited by the response.
+  * the authenticated current archive `PeerId` which signs the response; and
+  * the exact signed-request hash resolved in the outstanding table.
 
 The exact request was originally routed to a distinct current voter.  The
-honest response is signed by a frozen-QC signer which has rotated out of the
-current voting roster and arrives through an unrelated relay.  The fixed
-predicate authenticates the response under that archive signer, checks the
-exact request hash and coordinates, and independently checks the cited signer.
-Routing is a liveness choice and grants no response authority.
+honest response is signed by a current archive identity which is not an index
+in the historical frozen-QC signer set and arrives through an unrelated relay.
+The fixed predicate authenticates that responder and checks the exact request
+hash and coordinates.  Routing is a liveness choice and grants no response
+authority.
 
-One mutant conflates the archive server with the cited responder.  A second
-mutant incorrectly requires the archive server to equal the request's old
-route target.  Both reject the valid non-target recovery response.  Exact
-request-hash, coordinate, cited-signer, and signature-owner negative controls
-are rejected without consuming or substituting the outstanding request.
+One legacy-named mutant incorrectly requires the current archive responder to
+belong to the historical signer set.  A second mutant incorrectly requires it
+to equal the request's old route target.  Both reject the valid non-target
+recovery response.  Exact request-hash, coordinate, responder-identity, and
+signature-owner negative controls are rejected without consuming or
+substituting the outstanding request.
 This small model is mutation evidence for the identity projection.  It is not
 a proof of the complete asynchronous ingress or body pipeline.
 ***************************************************************************)
@@ -47,6 +47,9 @@ UntrustedRelay == "relay-untrusted-4"
 CurrentVotingRoster ==
   {Requester, FrozenSigner, OtherFrozenSigner, OriginalRouteTarget}
 
+CurrentArchivePeers ==
+  {OriginalRouteTarget, RotatedArchive}
+
 CurrentVotingPower(peer) ==
   IF peer \in CurrentVotingRoster THEN 1 ELSE 0
 
@@ -64,7 +67,7 @@ CommitQc ==
    phase |-> "Commit",
    subject |-> RecoverySubject,
    signers |->
-     {Requester, FrozenSigner, OtherFrozenSigner, RotatedArchive}]
+     {Requester, FrozenSigner, OtherFrozenSigner}]
 
 ExactRequestPreimage ==
   [round |-> [height |-> RecoveryContext.height, view |-> RecoveryView],
@@ -93,13 +96,12 @@ CertifiedRequest ==
 CertifiedResponse(signatureOwner) ==
   [kind |-> "CertifiedResponse",
    via |-> UntrustedRelay,
-   archiveServer |-> RotatedArchive,
+   responder |-> RotatedArchive,
    requestHash |-> ExactRequestHash,
    recipient |-> Requester,
    context |-> RecoveryContext,
    view |-> RecoveryView,
    subject |-> RecoverySubject,
-   citedResponder |-> FrozenSigner,
    signatureOwner |-> signatureOwner]
 
 HonestResponse == CertifiedResponse(RotatedArchive)
@@ -116,8 +118,8 @@ RequestHashMismatchResponse ==
   [HonestResponse EXCEPT !.requestHash = WrongRequestHash]
 CoordinateMismatchResponse ==
   [HonestResponse EXCEPT !.view = RecoveryView + 1]
-CitedSignerMismatchResponse ==
-  [HonestResponse EXCEPT !.citedResponder = OriginalRouteTarget]
+ResponderIdentityMismatchResponse ==
+  [HonestResponse EXCEPT !.responder = OriginalRouteTarget]
 
 ExactResponseCoordinates(response) ==
   /\ response.requestHash = CertifiedRequest.requestHash
@@ -126,24 +128,22 @@ ExactResponseCoordinates(response) ==
   /\ response.view = CertifiedRequest.view
   /\ response.subject = CertifiedRequest.subject
 
-ArchiveSignatureAuthenticated(response) ==
-  response.signatureOwner = response.archiveServer
+ResponderSignatureAuthenticated(response) ==
+  response.signatureOwner = response.responder
 
 SeparatedResponseAuthorized(response) ==
   /\ response.kind = "CertifiedResponse"
   /\ ExactResponseCoordinates(response)
-  /\ ArchiveSignatureAuthenticated(response)
-  /\ response.archiveServer \in CertifiedRequest.certificate.signers
-  /\ response.citedResponder \in CertifiedRequest.certificate.signers
+  /\ ResponderSignatureAuthenticated(response)
+  /\ response.responder \in CurrentArchivePeers
 
 ConflatedResponseAuthorized(response) ==
   /\ SeparatedResponseAuthorized(response)
-  /\ response.archiveServer \in CommitQc.signers
-  /\ response.archiveServer = response.citedResponder
+  /\ response.responder \in CommitQc.signers
 
 RouteBoundResponseAuthorized(response) ==
   /\ SeparatedResponseAuthorized(response)
-  /\ response.archiveServer = CertifiedRequest.routeTarget
+  /\ response.responder = CertifiedRequest.routeTarget
 
 ResponseAuthorized(response) ==
   CASE Mode = "SeparatedIdentities" ->
@@ -160,7 +160,7 @@ AttemptKinds ==
    "Honest",
    "RequestHashMismatch",
    "CoordinateMismatch",
-   "CitedSignerMismatch",
+   "ResponderIdentityMismatch",
    "SignatureOwnerMismatch"}
 
 VARIABLES stage,
@@ -210,8 +210,9 @@ ProcessRequestHashMismatch ==
 ProcessCoordinateMismatch ==
   ProcessResponse(CoordinateMismatchResponse, "CoordinateMismatch")
 
-ProcessCitedSignerMismatch ==
-  ProcessResponse(CitedSignerMismatchResponse, "CitedSignerMismatch")
+ProcessResponderIdentityMismatch ==
+  ProcessResponse(
+    ResponderIdentityMismatchResponse, "ResponderIdentityMismatch")
 
 ProcessSignatureOwnerMismatch ==
   ProcessResponse(RelaySignedResponse, "SignatureOwnerMismatch")
@@ -224,7 +225,7 @@ Next ==
   \/ ProcessHonestResponse
   \/ ProcessRequestHashMismatch
   \/ ProcessCoordinateMismatch
-  \/ ProcessCitedSignerMismatch
+  \/ ProcessResponderIdentityMismatch
   \/ ProcessSignatureOwnerMismatch
   \/ Quiescent
 
@@ -248,7 +249,8 @@ AuthorityIdentitiesAreDistinct ==
   /\ RotatedArchive # FrozenSigner
   /\ RotatedArchive # OriginalRouteTarget
   /\ FrozenSigner # OriginalRouteTarget
-  /\ RotatedArchive \in CommitQc.signers \ {Requester}
+  /\ RotatedArchive \in CurrentArchivePeers
+  /\ RotatedArchive \notin CommitQc.signers
   /\ UntrustedRelay \notin CommitQc.signers
   /\ FrozenSigner \in CommitQc.signers \ {Requester}
   /\ CertifiedRequest.routeTarget = OriginalRouteTarget
@@ -259,15 +261,14 @@ AuthorityIdentitiesAreDistinct ==
 HonestResponseShape ==
   /\ ExactResponseCoordinates(HonestResponse)
   /\ HonestResponse.via = UntrustedRelay
-  /\ HonestResponse.archiveServer = RotatedArchive
-  /\ HonestResponse.citedResponder = FrozenSigner
-  /\ ArchiveSignatureAuthenticated(HonestResponse)
-  /\ HonestResponse.archiveServer # CertifiedRequest.routeTarget
+  /\ HonestResponse.responder = RotatedArchive
+  /\ ResponderSignatureAuthenticated(HonestResponse)
+  /\ HonestResponse.responder # CertifiedRequest.routeTarget
 
 ExactNegativeControlsRejected ==
   /\ ~SeparatedResponseAuthorized(RequestHashMismatchResponse)
   /\ ~SeparatedResponseAuthorized(CoordinateMismatchResponse)
-  /\ ~SeparatedResponseAuthorized(CitedSignerMismatchResponse)
+  /\ ~SeparatedResponseAuthorized(ResponderIdentityMismatchResponse)
   /\ ~SeparatedResponseAuthorized(RelaySignedResponse)
 
 ExactRequestRecoveryOwnerRetained ==

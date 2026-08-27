@@ -34,13 +34,12 @@ use norito::codec::{Decode, Encode};
 use std::{error::Error as StdError, fmt, fmt::Write as _};
 mod policy;
 /// Maximum executable-image bytes admitted by IVM code memory.
-pub const MAX_CONTRACT_IMAGE_BYTES: u64 = 0x0010_0000;
+pub const MAX_CONTRACT_IMAGE_BYTES: u64 = ivm_abi::metadata::MAX_PROGRAM_IMAGE_BYTES_V1 as u64;
 /// One fixed-width decoded instruction in the executable stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DecodedOp {
     pub(crate) pc: u64,
     pub(crate) inst: u32,
-    pub(crate) len: u32,
 }
 /// Admission outputs derived from the artifact itself.
 #[derive(Clone, Debug)]
@@ -332,7 +331,6 @@ fn decode_instruction_stream(code: &[u8]) -> Result<Vec<DecodedOp>, ContractArti
         decoded.push(DecodedOp {
             pc,
             inst: u32::from_le_bytes(bytes.try_into().expect("four-byte instruction")),
-            len: 4,
         });
     }
     Ok(decoded)

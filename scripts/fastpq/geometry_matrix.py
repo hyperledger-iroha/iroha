@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
@@ -46,17 +47,50 @@ RUN_HEADERS: Sequence[tuple[str, str]] = (
 )
 
 
+def _accelerator_reasons(entry: Dict[str, Any]) -> List[str]:
+    reasons: List[str] = []
+    if entry.get("gpu_available") is not True:
+        reasons.append("gpu_unavailable")
+    backend = entry.get("gpu_backend")
+    if not isinstance(backend, str) or backend.lower() != "metal":
+        backend_label = backend if isinstance(backend, str) and backend else "unknown"
+        reasons.append(f"backend={backend_label}")
+    return reasons
+
+
+def _is_finite_number(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _normalise_env_value(value: Any) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        except (TypeError, ValueError):
+            pass
+    return str(value)
+
+
 def classify_entry(entry: Dict[str, Any]) -> tuple[str, List[str]]:
     """Return classification plus reasons (non-empty for unstable)."""
 
-    reasons: List[str] = []
     # CPU fallback or missing accelerator should be treated as unstable so matrix
     # consumers can quickly spot hosts that never executed on the GPU.
-    if entry.get("gpu_available") is False:
-        reasons.append("gpu_unavailable")
-    backend = entry.get("gpu_backend")
-    if isinstance(backend, str) and backend.lower() != "metal":
-        reasons.append(f"backend={backend}")
+    reasons = _accelerator_reasons(entry)
 
     status = entry.get("status")
     if status != "ok":
@@ -72,7 +106,7 @@ def classify_entry(entry: Dict[str, Any]) -> tuple[str, List[str]]:
                 reasons.append(f"missing_{name}")
                 continue
             gpu_mean = report.get("gpu_mean_ms")
-            if not isinstance(gpu_mean, (int, float)) or gpu_mean <= 0:
+            if not _is_finite_number(gpu_mean) or gpu_mean <= 0:
                 reasons.append(f"{name}_missing_gpu")
 
     classification = "stable" if not reasons else "unstable"
@@ -90,7 +124,12 @@ def _classification_from_entry(entry: Dict[str, Any]) -> tuple[str, List[str]]:
             reasons = [str(reason) for reason in raw_reasons if str(reason)]
         stable_flag = block.get("stable")
         if isinstance(stable_flag, bool):
-            return ("stable" if stable_flag else "unstable"), reasons
+            _heuristic_classification, heuristic_reasons = classify_entry(entry)
+            for reason in heuristic_reasons:
+                if reason not in reasons:
+                    reasons.append(reason)
+            classification = "stable" if stable_flag and not reasons else "unstable"
+            return classification, reasons
 
     return classify_entry(entry)
 
@@ -193,7 +232,8 @@ def build_matrix_entries(
         if not isinstance(env, dict):
             env = {}
 
-        operations = entry.get("operations") or {}
+        raw_operations = entry.get("operations")
+        operations = raw_operations if isinstance(raw_operations, dict) else {}
         source = entry.get("_summary_source")
         host = entry.get("host") if isinstance(entry.get("host"), dict) else None
         classification, reasons = _classification_from_entry(entry)
@@ -208,7 +248,11 @@ def build_matrix_entries(
             "started_at": entry.get("started_at"),
             "completed_at": entry.get("completed_at"),
             "metrics": {
-                op: (operations.get(op) or {}).get("gpu_mean_ms")
+                op: (
+                    operations[op].get("gpu_mean_ms")
+                    if isinstance(operations.get(op), dict)
+                    else None
+                )
                 for op in REQUIRED_OPERATIONS
             },
             "host": host or {},
@@ -229,7 +273,10 @@ def build_matrix_entries(
         key=lambda item: (
             item["classification"] != "stable",
             _host_label(item.get("host")),
-            tuple(item["env"].get(key, "") for key, _ in ENV_COLUMNS),
+            tuple(
+                (type(item["env"].get(key)).__name__, str(item["env"].get(key, "")))
+                for key, _ in ENV_COLUMNS
+            ),
         )
     )
     return matrix
@@ -339,7 +386,10 @@ def build_env_summary(matrix: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         env = row.get("env") or {}
         if not isinstance(env, dict):
             env = {}
-        return tuple((env_key, env.get(env_key, "—")) for env_key, _ in ENV_COLUMNS)
+        return tuple(
+            (env_key, _normalise_env_value(env.get(env_key, "—")))
+            for env_key, _ in ENV_COLUMNS
+        )
 
     for row in matrix:
         key = env_key(row)
@@ -366,18 +416,24 @@ def build_env_summary(matrix: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         entry["classification_counts"][classification] += 1
 
         duration = row.get("duration_seconds")
-        if isinstance(duration, (int, float)):
-            entry["duration_sum"] += float(duration)
-            entry["duration_samples"] += 1
+        if _is_finite_number(duration):
+            duration_value = float(duration)
+            duration_sum = entry["duration_sum"] + duration_value
+            if math.isfinite(duration_sum):
+                entry["duration_sum"] = duration_sum
+                entry["duration_samples"] += 1
 
         metrics = row.get("metrics") or {}
         if not isinstance(metrics, dict):
             metrics = {}
         for op in REQUIRED_OPERATIONS:
             value = metrics.get(op)
-            if isinstance(value, (int, float)):
-                entry["metric_sums"][op] += float(value)
-                entry["metric_samples"][op] += 1
+            if _is_finite_number(value):
+                metric_value = float(value)
+                metric_sum = entry["metric_sums"][op] + metric_value
+                if math.isfinite(metric_sum):
+                    entry["metric_sums"][op] = metric_sum
+                    entry["metric_samples"][op] += 1
 
         host_label = _host_label(row.get("host"))
         if host_label != "—":
@@ -631,18 +687,22 @@ def load_summary(path: pathlib.Path) -> Tuple[Dict[str, Any] | None, List[Dict[s
     with path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     if isinstance(payload, list):
-        return None, payload
-    if isinstance(payload, dict):
+        runs = payload
+        host = None
+    elif isinstance(payload, dict):
         runs = payload.get("runs")
         if runs is None:
             raise ValueError(f"summary payload at {path} missing runs array")
         if not isinstance(runs, list):
             raise ValueError(f"summary payload at {path} has invalid runs array")
-        host = payload.get("host")
-        if isinstance(host, dict):
-            return host, runs
-        return None, runs
-    raise ValueError(f"summary payload at {path} must be a list or object")
+        raw_host = payload.get("host")
+        host = raw_host if isinstance(raw_host, dict) else None
+    else:
+        raise ValueError(f"summary payload at {path} must be a list or object")
+    for index, run in enumerate(runs):
+        if not isinstance(run, dict):
+            raise ValueError(f"summary payload at {path} run {index} must be an object")
+    return host, runs
 
 
 def gather_summary_entries(summary_paths: Sequence[pathlib.Path]) -> List[Dict[str, Any]]:
@@ -745,7 +805,10 @@ def main() -> None:
             continue
         label_specs.append((key, header))
 
-    entries = gather_summary_entries(summary_paths)
+    try:
+        entries = gather_summary_entries(summary_paths)
+    except (OSError, UnicodeError, ValueError) as exc:
+        parser.error(f"failed to load summary: {exc}")
     matrix_entries = build_matrix_entries(entries, label_specs)
     markdown = render_markdown(matrix_entries, label_specs)
 
@@ -754,6 +817,7 @@ def main() -> None:
         if args.markdown_out
         else summary_paths[0].with_name("geometry_matrix.md")
     )
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.write_text(markdown, encoding="utf-8")
 
     if args.print_table:
@@ -761,26 +825,31 @@ def main() -> None:
 
     if args.json_out:
         json_path = pathlib.Path(args.json_out)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text(json.dumps(matrix_entries, indent=2), encoding="utf-8")
 
     if args.host_summary_out:
         host_summary = build_host_summary(matrix_entries, label_specs)
         host_json_path = pathlib.Path(args.host_summary_out)
+        host_json_path.parent.mkdir(parents=True, exist_ok=True)
         host_json_path.write_text(json.dumps(host_summary, indent=2), encoding="utf-8")
 
     if args.env_summary_out:
         env_summary = build_env_summary(matrix_entries)
         env_json_path = pathlib.Path(args.env_summary_out)
+        env_json_path.parent.mkdir(parents=True, exist_ok=True)
         env_json_path.write_text(json.dumps(env_summary, indent=2), encoding="utf-8")
 
     if args.source_summary_out:
         source_summary = build_source_summary(matrix_entries)
         source_json_path = pathlib.Path(args.source_summary_out)
+        source_json_path.parent.mkdir(parents=True, exist_ok=True)
         source_json_path.write_text(json.dumps(source_summary, indent=2), encoding="utf-8")
 
     if args.reason_summary_out:
         reason_summary = build_reason_summary(matrix_entries)
         reasons_path = pathlib.Path(args.reason_summary_out)
+        reasons_path.parent.mkdir(parents=True, exist_ok=True)
         reasons_path.write_text(json.dumps(reason_summary, indent=2), encoding="utf-8")
 
 

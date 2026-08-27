@@ -9,7 +9,7 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 | Artifact | Type | Description |
 |----------|------|-------------|
 | `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-21/V4 artifact streaming |
-| `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA / offline flows |
+| `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA-65 / offline flows |
 | `org.hyperledger.iroha.sdk:offline-wallet-android` | AAR | Offline-wallet integration built on `client-android`; use this artifact for Android offline cash |
 
 ### Consumer usage
@@ -416,8 +416,10 @@ val instructionBox = cancel.toInstructionBox()
 ```
 
 The typed constructor derives the native `EscrowId` with Blake2b-256 and emits
-only `escrow_id` plus `expected_remaining_amount` under the registered
-`iroha_data_model::isi::escrow::CancelAssetLock` Norito wire name. The lock-ID
+only `escrow_id` plus `expected_remaining_amount`. The instruction pair uses
+the canonical `iroha.instruction.v1::escrow::CancelAssetLock` wire ID; its
+payload frame retains the concrete `iroha_data_model::isi::escrow::CancelAssetLock`
+Norito schema name. The lock-ID
 preimage must be nonempty exact text without surrounding whitespace or a BOM
 and is bounded by `CancelAssetLockInstruction.MAX_LOCK_ID_UTF8_BYTES_V1`
 (4,096 UTF-8 bytes, not characters); the on-wire `EscrowId` remains 32 bytes.
@@ -490,9 +492,10 @@ and `ready=true`. Asset scale, committed snapshot, verifier identities, and
 release bindings are supplied through the exact command and proof types that
 consume them rather than a separate readiness archive.
 `prepareTopUp` accepts only Torii's authoritative `next_zero_path` and retains the local note
-opening. Init results do not yet carry a proof-bound output membership witness, so the JVM surface
-intentionally does not project or restore a spendable init branch. Persisted openings and
-submission archives use typed decoders so idempotent retries reuse exact canonical bytes.
+opening. Init results carry the proof-bound output membership witness, and the JVM surface validates
+and restores the resulting spendable branch together with its owned opening and top-up provenance.
+Persisted openings and submission archives use typed decoders so idempotent retries reuse exact
+canonical bytes.
 Secret-bearing append and redeem requests are single-use and zeroized after native consumption.
 Each projected branch carries its complete ordered exact-state claim set and authenticated V4
 artifact binding. Native `conflictsWith` compares every claim pair, rejecting equality and
@@ -586,7 +589,7 @@ the generated native bridge task.
 
 ### Step 2: Build native libraries (for `client-android`)
 
-The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA signing and the typed Kagemusha lifecycle/artifact streaming. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
+The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA-65 signing and the typed Kagemusha lifecycle/artifact streaming. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
 
 **One-time setup:**
 
@@ -923,7 +926,7 @@ The original SDK shipped as a single monolith. This rewrite splits it into three
 
 - **`core-jvm`** — pure JVM, no Android framework dependency. Usable in Kotlin Multiplatform modules, JUnit tests without Robolectric, server-side tools, and admin panels. Contains all protocol logic: Norito codec, transaction building, client transport, connect protocol.
 
-- **`client-android`** — Android keystore integration, hardware-backed key generation, device telemetry, and the shared JNI bridge used for ML-DSA signing. Depends on `core-jvm` via `api()` — consumers get all core types transitively.
+- **`client-android`** — Android keystore integration, hardware-backed key generation, device telemetry, and the shared JNI bridge used for ML-DSA-65 signing. Depends on `core-jvm` via `api()` — consumers get all core types transitively.
 
 ### Null safety
 

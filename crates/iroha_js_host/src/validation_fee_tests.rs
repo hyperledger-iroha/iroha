@@ -71,8 +71,7 @@ fn assert_validation_fee_policy_instruction_roundtrip(
     policy: ValidationFeePolicyV1,
     payout_lifecycle_proposal_id: Option<[u8; 32]>,
 ) {
-    const WIRE_ID: &str =
-        "iroha.instruction.v1::governance::ProposeValidationFeePolicy";
+    const WIRE_ID: &str = "iroha.instruction.v1::governance::ProposeValidationFeePolicy";
     let instruction: InstructionBox = ProposeValidationFeePolicy {
         policy,
         payout_lifecycle_proposal_id,
@@ -88,7 +87,10 @@ fn assert_validation_fee_policy_instruction_roundtrip(
             .expect("frame validation-fee instruction");
     let decoded =
         decode_instruction_aligned(&framed).expect("decode framed validation-fee instruction");
-    assert_eq!(InstructionTrait::id(&*decoded), InstructionTrait::id(&*instruction));
+    assert_eq!(
+        InstructionTrait::id(&*decoded),
+        InstructionTrait::id(&*instruction)
+    );
     assert_eq!(
         InstructionTrait::dyn_encode(&*decoded),
         original_dyn_bytes,

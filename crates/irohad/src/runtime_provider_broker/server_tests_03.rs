@@ -1334,7 +1334,7 @@ fn sensitive_broker_payload_is_scrubbed_before_request_ownership_on_early_errors
             stream,
             session_id: TEST_SESSION_ID,
             next_request_id: 1,
-            poisoned: false,
+            poison_reason: None,
         }),
         chain_id: "sensitive-payload-test-chain".to_owned(),
         network_id: network_id(),

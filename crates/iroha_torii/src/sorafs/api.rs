@@ -15718,7 +15718,7 @@ async fn submit_sorafs_appeal_finance_delivery(
     } else {
         let response = crate::execute_torii_transaction_via_proxy(
             state,
-            transaction.into(),
+            accepted,
             routing_plan,
             durable_retry_claim,
             true,
@@ -16612,7 +16612,7 @@ async fn submit_sorafs_proof_outcome_delivery(
     } else {
         let response = crate::execute_torii_transaction_via_proxy(
             state,
-            exact_transaction.into(),
+            accepted,
             routing_plan,
             durable_retry_claim,
             true,
@@ -18427,7 +18427,7 @@ async fn submit_sorafs_repair_transaction(
     } else {
         let response = crate::execute_torii_transaction_via_proxy(
             state,
-            transaction.into(),
+            accepted,
             routing_plan,
             durable_retry_claim,
             true,

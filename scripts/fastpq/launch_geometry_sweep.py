@@ -23,6 +23,7 @@ import datetime
 import importlib.util
 import itertools
 import json
+import math
 import os
 import pathlib
 import platform
@@ -79,6 +80,14 @@ def _now_iso() -> str:
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z")
     )
+
+
+def _subprocess_output_text(value: str | bytes | None) -> str:
+    """Normalise captured subprocess output for text artefacts."""
+
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
 
 
 def collect_host_metadata(host_label: str | None = None) -> dict[str, Any]:
@@ -274,7 +283,37 @@ def _format_threshold(value: float) -> str:
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float))
+    if isinstance(value, bool):
+        return False
+    if not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _report_payload_error(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return "benchmark JSON payload must be an object"
+    operations = payload.get("operations", [])
+    if not isinstance(operations, list):
+        return "benchmark JSON operations must be a list"
+    for index, operation in enumerate(operations):
+        if not isinstance(operation, dict):
+            return f"benchmark JSON operation {index} must be an object"
+        name = operation.get("operation")
+        if not isinstance(name, str) or not name:
+            return f"benchmark JSON operation {index}.operation must be a non-empty string"
+        for block_name in ("gpu", "cpu", "speedup"):
+            if block_name in operation and not isinstance(operation[block_name], dict):
+                return (
+                    f"benchmark JSON operation {index}.{block_name} must be an object"
+                )
+    queue = payload.get("metal_dispatch_queue")
+    if queue is not None and not isinstance(queue, dict):
+        return "benchmark JSON metal_dispatch_queue must be an object"
+    return None
 
 
 def _compute_totals(operations: Dict[str, Dict[str, Any]]) -> Dict[str, Optional[float]]:
@@ -282,6 +321,8 @@ def _compute_totals(operations: Dict[str, Dict[str, Any]]) -> Dict[str, Optional
     total_cpu = 0.0
     counted = 0
     for stats in operations.values():
+        if not isinstance(stats, dict):
+            continue
         gpu_value = stats.get("gpu_mean_ms")
         cpu_value = stats.get("cpu_mean_ms")
         if not (_is_number(gpu_value) and _is_number(cpu_value)):
@@ -289,13 +330,23 @@ def _compute_totals(operations: Dict[str, Dict[str, Any]]) -> Dict[str, Optional
         total_gpu += float(gpu_value)
         total_cpu += float(cpu_value)
         counted += 1
-    if counted == 0 or total_gpu <= 0 or total_cpu <= 0:
+    if (
+        counted == 0
+        or not math.isfinite(total_gpu)
+        or not math.isfinite(total_cpu)
+        or total_gpu <= 0
+        or total_cpu <= 0
+    ):
         return {"gpu_ms": None, "cpu_ms": None, "speedup_ratio": None}
     total_speedup = total_cpu / total_gpu
+    if not math.isfinite(total_speedup):
+        total_speedup = None
     return {
         "gpu_ms": round(total_gpu, 3),
         "cpu_ms": round(total_cpu, 3),
-        "speedup_ratio": round(total_speedup, 3),
+        "speedup_ratio": (
+            round(total_speedup, 3) if total_speedup is not None else None
+        ),
     }
 
 
@@ -306,12 +357,23 @@ def _classify_entry(
     min_queue_busy: float,
     min_dispatch_count: int,
 ) -> Tuple[Dict[str, Any], Dict[str, Optional[float]]]:
+    if not _is_number(min_total_speedup) or min_total_speedup < 0:
+        raise ValueError("min_total_speedup must be finite and non-negative")
+    if not _is_number(min_queue_busy) or not 0 <= min_queue_busy <= 1:
+        raise ValueError("min_queue_busy must be finite and within [0, 1]")
+    if (
+        isinstance(min_dispatch_count, bool)
+        or not isinstance(min_dispatch_count, int)
+        or min_dispatch_count < 0
+    ):
+        raise ValueError("min_dispatch_count must be a non-negative integer")
     reasons: List[str] = []
-    if entry.get("gpu_available") is False:
+    if entry.get("gpu_available") is not True:
         reasons.append("gpu_unavailable")
     backend = entry.get("gpu_backend")
-    if isinstance(backend, str) and backend.lower() != "metal":
-        reasons.append(f"backend={backend}")
+    if not isinstance(backend, str) or backend.lower() != "metal":
+        backend_label = backend if isinstance(backend, str) and backend else "unknown"
+        reasons.append(f"backend={backend_label}")
     run_status = entry.get("run_status")
     if isinstance(run_status, dict):
         state = run_status.get("state")
@@ -322,9 +384,17 @@ def _classify_entry(
     if status != "ok":
         reasons.append(f"status:{status or 'unknown'}")
 
-    operations = entry.get("operations") or {}
-    if not operations:
+    raw_operations = entry.get("operations")
+    if not isinstance(raw_operations, dict) or not raw_operations:
         reasons.append("missing_operations")
+        operations: Dict[str, Dict[str, Any]] = {}
+    else:
+        operations = {}
+        for name, stats in raw_operations.items():
+            if isinstance(stats, dict):
+                operations[name] = stats
+            else:
+                reasons.append(f"invalid_operation={name}")
     totals = _compute_totals(operations)
     speedup = totals.get("speedup_ratio")
     if min_total_speedup > 0:
@@ -334,7 +404,7 @@ def _classify_entry(
             reasons.append(f"total_speedup<{_format_threshold(min_total_speedup)}")
 
     queue_stats = entry.get("metal_dispatch_queue")
-    if queue_stats is None:
+    if not isinstance(queue_stats, dict):
         reasons.append("missing_queue_stats")
         busy_ratio = None
         dispatch_count = None
@@ -480,14 +550,14 @@ def _reset_env_values(env_template: Dict[str, str], overrides: Dict[str, Optiona
 def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.rows <= 0 or args.warmups <= 0 or args.iterations <= 0:
         parser.error("--rows/--warmups/--iterations must be positive integers")
-    if args.min_total_speedup < 0:
-        parser.error("--min-total-speedup must be >= 0")
-    if args.min_queue_busy < 0:
-        parser.error("--min-queue-busy must be >= 0")
-    if args.min_queue_busy > 1:
-        parser.error("--min-queue-busy cannot exceed 1.0")
+    if not math.isfinite(args.min_total_speedup) or args.min_total_speedup < 0:
+        parser.error("--min-total-speedup must be finite and >= 0")
+    if not math.isfinite(args.min_queue_busy) or not 0 <= args.min_queue_busy <= 1:
+        parser.error("--min-queue-busy must be finite and within [0, 1]")
     if args.min_dispatch_count < 0:
         parser.error("--min-dispatch-count must be >= 0")
+    if not _is_number(args.timeout_seconds) or args.timeout_seconds < 0:
+        parser.error("--timeout-seconds must be finite and >= 0")
 
     timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     if args.artifact_dir:
@@ -503,6 +573,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         if args.reason_summary_out
         else artifact_root / "reason_summary.json"
     )
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
 
     prefix_tokens = shlex.split(args.bench_prefix)
     if not prefix_tokens:
@@ -593,8 +664,8 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             completed_at = _now_iso()
         except subprocess.TimeoutExpired as exc:
             completed_at = _now_iso()
-            stdout_path.write_text(exc.stdout or "", encoding="utf-8")
-            stderr_path.write_text(exc.stderr or "", encoding="utf-8")
+            stdout_path.write_text(_subprocess_output_text(exc.stdout), encoding="utf-8")
+            stderr_path.write_text(_subprocess_output_text(exc.stderr), encoding="utf-8")
             entry = {
                 "index": index,
                 "label": label,
@@ -673,6 +744,17 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 break
             continue
 
+        payload_error = _report_payload_error(report_payload)
+        if payload_error is not None:
+            entry["status"] = "error"
+            entry["error"] = payload_error
+            entry["completed_at"] = completed_at
+            print(f"  invalid benchmark payload: {payload_error}")
+            summary_entries.append(entry)
+            if args.halt_on_error:
+                break
+            continue
+
         operations_block: Dict[str, Dict[str, Any]] = {}
         for operation in report_payload.get("operations", []):
             name = operation.get("operation")
@@ -687,7 +769,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         entry["operations"] = operations_block
         entry["execution_mode"] = report_payload.get("execution_mode")
         entry["gpu_backend"] = report_payload.get("gpu_backend")
-        entry["gpu_available"] = bool(report_payload.get("gpu_available"))
+        entry["gpu_available"] = report_payload.get("gpu_available") is True
         run_status = report_payload.get("run_status")
         if isinstance(run_status, dict):
             entry["run_status"] = run_status

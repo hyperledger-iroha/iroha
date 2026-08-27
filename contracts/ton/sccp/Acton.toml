@@ -1,0 +1,37 @@
+[package]
+name = "iroha-sccp-ton"
+description = "Immutable TON SCCP bridge and Taira XOR Jetton contracts"
+version = "0.1.0"
+license = "Apache-2.0"
+
+[toolchain]
+acton = "1.1.0"
+
+[contracts.TairaXorJettonWallet]
+display-name = "TairaXorJettonWallet"
+src = "contracts/TairaXorJettonWallet.tolk"
+depends = []
+
+[contracts.TairaXorSccpBridge]
+display-name = "TairaXorSccpBridge"
+src = "contracts/TairaXorSccpBridge.tolk"
+depends = ["TairaXorJettonWallet"]
+
+[contracts.TairaXorJettonMaster]
+display-name = "TairaXorJettonMaster"
+src = "contracts/TairaXorJettonMaster.tolk"
+depends = ["TairaXorJettonWallet"]
+
+[test]
+fail-on-diff = false
+
+[fmt]
+width = 100
+ignore = ["wrappers"]
+
+[import-mappings]
+acton = ".acton"
+contracts = "contracts"
+gen = "gen"
+tests = "tests"
+wrappers = "wrappers"

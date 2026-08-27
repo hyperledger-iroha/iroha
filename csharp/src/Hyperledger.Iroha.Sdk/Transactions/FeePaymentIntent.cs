@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Numeric;
 
 namespace Hyperledger.Iroha.Transactions;
@@ -18,6 +19,7 @@ public enum FeeChargeKind
 }
 
 /// <summary>Exact asset and maximum amount authorized for one fee component.</summary>
+[JsonConverter(typeof(FeeChargeLimitJsonConverter))]
 public sealed record class FeeChargeLimit
 {
     /// <summary>Creates a canonical, strictly positive fee charge limit.</summary>
@@ -63,8 +65,11 @@ public sealed record class FeeChargeLimit
 }
 
 /// <summary>Exact immutable sponsor-program identifier.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class FeeSponsorProgramId
 {
+    private readonly string sponsorControllerIdentity;
+
     /// <summary>Creates an exact sponsor-local program identifier.</summary>
     public FeeSponsorProgramId(string sponsor, string name)
     {
@@ -75,19 +80,47 @@ public sealed record class FeeSponsorProgramId
         }
 
         if (string.IsNullOrEmpty(name)
-            || !string.Equals(name.Normalize(NormalizationForm.FormC), name, StringComparison.Ordinal)
-            || name.Any(static character =>
-                char.IsWhiteSpace(character)
-                || char.IsControl(character)
-                || character is '@' or '#' or '$' or '/'))
+            || HasInvalidProgramNameCharacter(name)
+            || Encoding.UTF8.GetByteCount(name) > 255
+            || !string.Equals(name.Normalize(NormalizationForm.FormC), name, StringComparison.Ordinal))
         {
             throw new ArgumentException(
-                "Program name must be non-empty NFC text without whitespace or reserved characters.",
+                "Program name must be a canonical Iroha Name of at most 255 UTF-8 bytes.",
                 nameof(name));
         }
 
         Sponsor = canonicalSponsor;
         Name = name;
+        sponsorControllerIdentity = Convert.ToHexString(
+            AccountAddress.Parse(canonicalSponsor).ControllerBytes());
+    }
+
+    private static bool HasInvalidProgramNameCharacter(string name)
+    {
+        for (var index = 0; index < name.Length; index++)
+        {
+            var character = name[index];
+            if (char.IsHighSurrogate(character))
+            {
+                if (index + 1 >= name.Length || !char.IsLowSurrogate(name[index + 1]))
+                {
+                    return true;
+                }
+                index++;
+                continue;
+            }
+            if (char.IsLowSurrogate(character)
+                || char.IsWhiteSpace(character)
+                || char.IsControl(character)
+                || character is '\u061C' or '\u200E' or '\u200F'
+                || character is >= '\u202A' and <= '\u202E'
+                || character is >= '\u2066' and <= '\u2069'
+                || character is '@' or '#' or '$' or '/')
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>Canonical sponsor account.</summary>
@@ -122,6 +155,21 @@ public sealed record class FeeSponsorProgramId
         }
         return parsed;
     }
+
+    /// <inheritdoc />
+    public bool Equals(FeeSponsorProgramId? other) =>
+        ReferenceEquals(this, other)
+        || (other is not null
+            && string.Equals(
+                sponsorControllerIdentity,
+                other.sponsorControllerIdentity,
+                StringComparison.Ordinal)
+            && string.Equals(Name, other.Name, StringComparison.Ordinal));
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(
+        StringComparer.Ordinal.GetHashCode(sponsorControllerIdentity),
+        StringComparer.Ordinal.GetHashCode(Name));
 
     /// <inheritdoc />
     public override string ToString() => $"{Sponsor}/{Name}";
@@ -326,6 +374,57 @@ internal sealed class FeeChargeKindJsonConverter : JsonConverter<FeeChargeKind>
     }
 }
 
+internal sealed class FeeChargeLimitJsonConverter : JsonConverter<FeeChargeLimit>
+{
+    public override FeeChargeLimit Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        var item = FeePaymentIntentJsonConverter.RequireExactObject(
+            document.RootElement,
+            "fee charge limit",
+            ["kind", "asset_definition_id", "max_amount"]);
+        FeeChargeKind kind;
+        try
+        {
+            kind = item["kind"].Deserialize<FeeChargeKind>(options);
+        }
+        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+        {
+            throw new JsonException("fee charge limit.kind is invalid.", exception);
+        }
+        return new FeeChargeLimit(
+            kind,
+            RequireString(item["asset_definition_id"], "fee charge limit.asset_definition_id"),
+            RequireString(item["max_amount"], "fee charge limit.max_amount"));
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        FeeChargeLimit value,
+        JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        writer.WriteStartObject();
+        writer.WritePropertyName("kind");
+        JsonSerializer.Serialize(writer, value.Kind, options);
+        writer.WriteString("asset_definition_id", value.AssetDefinitionId);
+        writer.WriteString("max_amount", value.MaxAmount);
+        writer.WriteEndObject();
+    }
+
+    private static string RequireString(JsonElement element, string path)
+    {
+        if (element.ValueKind != JsonValueKind.String || element.GetString() is not { } value)
+        {
+            throw new JsonException($"{path} must be a string.");
+        }
+        return value;
+    }
+}
+
 internal sealed class FeePaymentIntentJsonConverter : JsonConverter<FeePaymentIntent>
 {
     public override FeePaymentIntent Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -338,12 +437,10 @@ internal sealed class FeePaymentIntentJsonConverter : JsonConverter<FeePaymentIn
             "authority" => RequireExactObject(
                 root["value"],
                 "fee payment.value",
-                ["charge_limits"],
                 ["charge_limits", "gas_limit"]),
             "sponsor" => RequireExactObject(
                 root["value"],
                 "fee payment.value",
-                ["program_id", "program_revision", "charge_limits"],
                 ["program_id", "program_revision", "charge_limits", "gas_limit"]),
             _ => throw new JsonException("fee payment.payer must be authority or sponsor."),
         };
@@ -356,8 +453,8 @@ internal sealed class FeePaymentIntentJsonConverter : JsonConverter<FeePaymentIn
             .EnumerateArray()
             .Select((element, index) => ReadLimit(element, options, $"fee payment.value.charge_limits[{index}]"))
             .ToArray();
-        ulong? gasLimit = value.TryGetValue("gas_limit", out var gasElement)
-            && gasElement.ValueKind != JsonValueKind.Null
+        var gasElement = value["gas_limit"];
+        ulong? gasLimit = gasElement.ValueKind != JsonValueKind.Null
                 ? RequirePositiveUInt64(gasElement, "fee payment.value.gas_limit")
                 : null;
 

@@ -199,19 +199,7 @@ mod signed_transaction_fixture_tests {
 #[cfg(test)]
 mod da_proof_summary_tests {
     use super::*;
-    use iroha_data_model::{
-        da::{
-            manifest::{ChunkCommitment, ChunkRole},
-            types::{
-                BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
-                ExtraMetadata, GovernanceTag, MetadataEntry, MetadataVisibility, RetentionPolicy,
-                StorageTicketId,
-            },
-        },
-        nexus::LaneId,
-        sorafs::pin_registry::StorageClass,
-    };
-    use sorafs_car::ChunkStore;
+    use std::{fs, path::Path};
     #[test]
     fn da_proof_summary_via_ffi() {
         let (manifest_bytes, payload) = sample_manifest_bytes();
@@ -243,90 +231,16 @@ mod da_proof_summary_tests {
         );
     }
     fn sample_manifest_bytes() -> (Vec<u8>, Vec<u8>) {
-        let payload: Vec<u8> = (0..64).map(|idx| idx as u8).collect();
-        let mut store = ChunkStore::new();
-        store.ingest_bytes(&payload).expect("ingest sample payload");
-        let data_shards = 2usize;
-        let chunk_commitments = store
-            .chunks()
-            .iter()
-            .enumerate()
-            .map(|(idx, chunk)| {
-                let stripe_id = u32::try_from(idx / data_shards).unwrap_or(u32::MAX);
-                ChunkCommitment::new_with_role(
-                    idx as u32,
-                    chunk.offset,
-                    chunk.length,
-                    ChunkDigest::new(chunk.blake3),
-                    ChunkRole::Data,
-                    stripe_id,
-                )
-            })
-            .collect::<Vec<_>>();
-        let chunk_size = chunk_commitments
-            .first()
-            .map(|commitment| commitment.length)
-            .unwrap_or(payload.len() as u32);
-        let metadata = ExtraMetadata {
-            items: vec![
-                MetadataEntry::new(
-                    "taikai.event_id",
-                    b"demo-event".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-                MetadataEntry::new(
-                    "taikai.stream_id",
-                    b"primary-stream".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-                MetadataEntry::new(
-                    "taikai.rendition_id",
-                    b"main-1080p".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-                MetadataEntry::new(
-                    "taikai.segment.sequence",
-                    b"42".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-            ],
-        };
-        let chunk_root = BlobDigest::new(*store.por_tree().root());
-        let manifest = DaManifestV1 {
-            version: DaManifestV1::VERSION,
-            client_blob_id: BlobDigest::new([0x11; 32]),
-            lane_id: LaneId::new(7),
-            epoch: 1,
-            blob_class: BlobClass::TaikaiSegment,
-            codec: BlobCodec::new(String::from("custom.binary")),
-            blob_hash: BlobDigest::new(*store.payload_digest().as_bytes()),
-            chunk_root,
-            storage_ticket: StorageTicketId::new([0x44; 32]),
-            total_size: payload.len() as u64,
-            chunk_size,
-            total_stripes: chunk_commitments.len().div_ceil(2).try_into().unwrap_or(0),
-            shards_per_stripe: 3,
-            erasure_profile: ErasureProfile {
-                data_shards: 2,
-                parity_shards: 1,
-                row_parity_stripes: 0,
-                chunk_alignment: 1,
-                fec_scheme: iroha_data_model::da::types::FecScheme::Rs12_10,
-            },
-            retention_policy: RetentionPolicy {
-                hot_retention_secs: 10,
-                cold_retention_secs: 20,
-                required_replicas: 3,
-                storage_class: StorageClass::Warm,
-                governance_tag: GovernanceTag::new(String::from("da.test")),
-            },
-            rent_quote: DaRentQuote::default(),
-            chunks: chunk_commitments,
-            ipa_commitment: chunk_root,
-            metadata,
-            issued_at_unix: 123,
-        };
-        let manifest_bytes = norito::to_bytes(&manifest).expect("manifest encode");
+        let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("workspace root")
+            .join("fixtures/da/reconstruct/rs_parity_v1");
+        let manifest_hex = fs::read_to_string(fixture_root.join("manifest.norito.hex"))
+            .expect("read shared DA manifest fixture");
+        let manifest_bytes = hex::decode(manifest_hex).expect("decode shared DA manifest fixture");
+        let payload =
+            fs::read(fixture_root.join("payload.bin")).expect("read shared DA payload fixture");
         (manifest_bytes, payload)
     }
 }

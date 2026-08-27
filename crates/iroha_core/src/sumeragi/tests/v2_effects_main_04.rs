@@ -1240,17 +1240,17 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
         .expect("fixture roster fits the recovered selector ingress");
     ingress.state.lock().leader_wire_context = Some((fixture.context.id(), fixture.context.height));
     ingress.open().expect("open recovered selector ingress");
-    let recovered_response = |responder: wire::ValidatorIndex| {
+    let recovered_response = |responder_index: wire::ValidatorIndex| {
+        let responder_index = usize::try_from(responder_index).expect("small responder index");
         let mut response = wire::CertifiedBodyResponse {
             request_hash,
             manifest: fixture.manifest.clone(),
             body: fixture.body.clone(),
-            responder,
+            responder: fixture.context.roster[responder_index].validator.clone(),
             signature: Vec::new(),
         };
         response.signature = Signature::new(
-            fixture.validator_keys[usize::try_from(responder).expect("small responder index")]
-                .private_key(),
+            fixture.validator_keys[responder_index].private_key(),
             &response.signature_preimage(),
         )
         .payload()
@@ -1563,7 +1563,8 @@ fn selected_certified_response_priority_routes_only_physical_family_winners_read
         .consume_effects(effects, &mut services)
         .expect("hybrid fetch establishes one exact ordinary response family");
     let task = services.fetch_tasks[0].clone();
-    let response = |responder: wire::ValidatorIndex| {
+    let response = |responder_index: wire::ValidatorIndex| {
+        let responder_index = usize::try_from(responder_index).expect("small responder index");
         let mut response = wire::CertifiedBodyResponse {
             request_hash: HashOf::new(
                 task.certified_request()
@@ -1571,12 +1572,11 @@ fn selected_certified_response_priority_routes_only_physical_family_winners_read
             ),
             manifest: fixture.manifest.clone(),
             body: fixture.body.clone(),
-            responder,
+            responder: fixture.context.roster[responder_index].validator.clone(),
             signature: Vec::new(),
         };
         response.signature = Signature::new(
-            fixture.validator_keys[usize::try_from(responder).expect("small responder index")]
-                .private_key(),
+            fixture.validator_keys[responder_index].private_key(),
             &response.signature_preimage(),
         )
         .payload()
@@ -1654,6 +1654,224 @@ fn selected_certified_response_priority_routes_only_physical_family_winners_read
 }
 #[test]
 #[allow(clippy::too_many_lines)]
+fn certified_fetch_capacity_release_after_timeout_cleanup_retries_without_restart() {
+    let mut fixture = ProductionTransportFixture::new();
+    fixture.executor.recovered_bodies.clear();
+    let mut effect_services = FakeServices {
+        requester_key: Some(fixture.requester_key.clone()),
+        ..FakeServices::default()
+    };
+    let prepare =
+        fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
+    let effects = vec![AdapterEffect::FetchBody {
+        tag: fixture.executor.current_tag(),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: fixture.certified_sources(&prepare),
+        certificate: Some(prepare),
+    }];
+    fixture
+        .executor
+        .runtime
+        .retain_retransmit_effect_ownership_for_test(&effects)
+        .expect("bind production Fetch ownership before timeout cleanup");
+    fixture
+        .executor
+        .consume_effects(effects, &mut effect_services)
+        .expect("admit one certified Fetch before timeout cleanup");
+    let task = effect_services.fetch_tasks[0].clone();
+    let mut response = wire::CertifiedBodyResponse {
+        request_hash: HashOf::new(
+            task.certified_request()
+                .expect("the selected Fetch owns its signed request"),
+        ),
+        manifest: fixture.manifest.clone(),
+        body: fixture.body.clone(),
+        responder: fixture.context.roster[0].validator.clone(),
+        signature: Vec::new(),
+    };
+    response.signature = Signature::new(
+        fixture.validator_keys[0].private_key(),
+        &response.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let (_ingress_directory, ingress, _ingress_gate) = fixture.bound_certified_response_ingress();
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+            )),
+            fixture.context.roster[0].validator.clone(),
+        )),
+        Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let response_ordinal = ingress.state.lock().last_admission_ordinal;
+    let prepared = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, response_ordinal)
+        .expect("prepare the exact response before its Fetch becomes stale");
+    let (_, _, _, _, _, _, wake_source) = prepared
+        .certified_fetch_ready_authority_for_test()
+        .expect("derive the selected response's sealed Fetch wake authority");
+
+    let proofs = fixture
+        .validator_keys
+        .iter()
+        .map(|key| {
+            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("validator proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
+        .expect("verified owner context");
+    let owner_directory = TempDir::new().expect("temporary lifecycle owner storage");
+    let mut owner = crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::empty_owner_for_ingress_test(
+        verified,
+        &fixture.validator_keys[0],
+        owner_directory.path(),
+    );
+    let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    let planner_io = owner.bind_body_store_to_planner_io_for_test(
+        &mut production_services,
+        Arc::clone(&fixture.executor.output_guard),
+        1,
+    );
+    production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+    V2EffectServices::enqueue_body_fetch(&mut production_services, task.clone())
+        .expect("install the exact certified-Fetch service owner");
+    planner_io.saturate_consensus_prefix(&production_services);
+    let registry_before_wait = owner.fetch_registry_snapshot_for_test();
+    let wait = match owner.plan_ingress_turn_for_test(
+        &production_services,
+        &fixture.executor,
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        prepared,
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
+    ) {
+        Ok(ProductionIngressTurnPreparation::CapacityWait(wait)) => wait,
+        Ok(ProductionIngressTurnPreparation::Queued(_)) => {
+            panic!("a saturated Consensus prefix cannot admit Fetch persistence")
+        }
+        Err(_) => panic!("saturation must retain the selector in a capacity wait"),
+    };
+    assert_eq!(
+        owner.fetch_wait_projection_for_test(1, wake_source),
+        (None, None, None, false),
+        "ordinary capacity waiting must not create durable Fetch admission",
+    );
+    assert_eq!(
+        owner.fetch_registry_snapshot_for_test(),
+        registry_before_wait
+    );
+
+    let timeout_applied_at = Instant::now();
+    fixture
+        .executor
+        .arm_live_clocks(
+            crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            timeout_applied_at,
+        )
+        .expect("arm pacemaker before applying the authenticated timeout certificate");
+    let mode_before_timeout = fixture.executor.lifecycle_mode_rank_snapshot();
+    let timeout_signers = vec![0, 1, 2];
+    let timeout_preimage = wire::TimeoutVote {
+        round: fixture.round,
+        highest_prepare_qc: None,
+        signer: timeout_signers[0],
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let timeout_shares = timeout_signers
+        .iter()
+        .map(|signer| {
+            Signature::new(
+                fixture.validator_keys[usize::try_from(*signer).expect("small timeout signer")]
+                    .private_key(),
+                &timeout_preimage,
+            )
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let timeout_share_refs = timeout_shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let timeout = wire::TimeoutCertificate {
+        round: fixture.round,
+        groups: vec![wire::TimeoutVoteGroup {
+            highest_prepare_qc: None,
+            signers: timeout_signers,
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&timeout_share_refs)
+                .expect("aggregate authenticated timeout certificate"),
+        }],
+    };
+    fixture
+        .executor
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+        ))
+        .expect("admit the externally authenticated timeout certificate");
+    assert!(matches!(
+        fixture
+            .executor
+            .step(timeout_applied_at, &mut effect_services)
+            .expect("the timeout certificate advances the view and retires stale Fetch"),
+        EffectExecutorStep::Advanced { .. }
+    ));
+    assert!(fixture.executor.pending_fetches.is_empty());
+    assert!(fixture.executor.certified_work.is_empty());
+    assert!(fixture.executor.outstanding_requests.hashes().is_empty());
+    assert_eq!(
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        mode_before_timeout,
+        "a view-only transition does not change finality-completion debt",
+    );
+
+    planner_io.release_one_predecessor();
+    let released_selector = match wait.retry(&production_services, &fixture.executor) {
+        ProductionIngressCapacityRetry::Released(selector) => selector,
+        ProductionIngressCapacityRetry::Pending(_) => {
+            panic!("the advanced service generation must release the retained selector")
+        }
+        ProductionIngressCapacityRetry::RestartRequired => {
+            panic!("view-only cleanup cannot turn an ordinary capacity wait into restart")
+        }
+    };
+    planner_io.release_one_predecessor();
+    let ingress_len_before_retry = ingress.len();
+    let physical_cut_before_retry = ingress.next_physical_admission_ordinal();
+    let retry = owner.plan_ingress_turn_for_test(
+        &production_services,
+        &fixture.executor,
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        released_selector,
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
+    );
+    assert!(matches!(
+        retry,
+        Err(ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionPreparation { .. })
+    ));
+    drop(retry);
+    assert_eq!(
+        owner.fetch_wait_projection_for_test(1, wake_source),
+        (None, None, None, false),
+        "stale retry cannot leave a durable Fetch row or wake owner",
+    );
+    assert_eq!(
+        owner.fetch_registry_snapshot_for_test(),
+        registry_before_wait
+    );
+    assert_eq!(ingress.len(), ingress_len_before_retry);
+    assert_eq!(
+        ingress.next_physical_admission_ordinal(),
+        physical_cut_before_retry,
+    );
+    assert!(!fixture.executor.output_guard.restart_required());
+    assert!(!fixture.executor.status().fail_closed);
+    planner_io.detach(&mut production_services);
+}
+#[test]
+#[allow(clippy::too_many_lines)]
 fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() {
     let mut fixture = ProductionTransportFixture::new();
     fixture.executor.recovered_bodies.clear();
@@ -1681,7 +1899,8 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         .consume_effects(effects, &mut services)
         .expect("hybrid fetch establishes one exact response family");
     let task = services.fetch_tasks[0].clone();
-    let response = |responder: wire::ValidatorIndex| {
+    let response = |responder_index: wire::ValidatorIndex| {
+        let responder_index = usize::try_from(responder_index).expect("small responder index");
         let mut response = wire::CertifiedBodyResponse {
             request_hash: HashOf::new(
                 task.certified_request()
@@ -1689,12 +1908,11 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
             ),
             manifest: fixture.manifest.clone(),
             body: fixture.body.clone(),
-            responder,
+            responder: fixture.context.roster[responder_index].validator.clone(),
             signature: Vec::new(),
         };
         response.signature = Signature::new(
-            fixture.validator_keys[usize::try_from(responder).expect("small responder index")]
-                .private_key(),
+            fixture.validator_keys[responder_index].private_key(),
             &response.signature_preimage(),
         )
         .payload()

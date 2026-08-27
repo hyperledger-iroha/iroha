@@ -44,9 +44,17 @@ from iroha_torii_client import (  # noqa: E402
 )
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 
-HASH = lambda byte: f"{byte:02x}" * 32
-PREFIX_HASH = lambda byte: "0x" + HASH(byte)
-UPPER = lambda byte, length: f"{byte:02x}".upper() * length
+
+def HASH(byte: int) -> str:
+    return f"{byte:02x}" * 32
+
+
+def PREFIX_HASH(byte: int) -> str:
+    return "0x" + HASH(byte)
+
+
+def UPPER(byte: int, length: int) -> str:
+    return f"{byte:02x}".upper() * length
 AUTHORITY = "sorauﾛ1Nヱﾐﾚﾗﾗﾁ9SHyｾｼF2ﾚbヱAｦiﾇｺﾂpﾆWyｿﾛWﾍ7ｾA7ﾋヰｿUJEKNX"
 MESSAGE_ID = HASH(0x11)
 MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1"
@@ -274,8 +282,14 @@ def _capabilities() -> Dict[str, Any]:
             "max_bls_aggregate_checks_per_block": 4_016,
             "max_bls_signer_contributions_per_transaction": 131_713,
             "max_bls_signer_contributions_per_block": 526_852,
+            "max_ed25519_signature_checks_per_transaction": 65_536,
+            "max_ed25519_signature_checks_per_block": 262_144,
+            "max_ed25519_validator_key_checks_per_transaction": 198_656,
+            "max_ed25519_validator_key_checks_per_block": 794_624,
             "max_bn254_pairing_checks_per_transaction": 1,
             "max_bn254_pairing_checks_per_block": 4,
+            "max_bls12_381_pairing_checks_per_transaction": 1,
+            "max_bls12_381_pairing_checks_per_block": 4,
         },
         "proof_submit_path": "/v1/bridge/proofs/submit",
         "native_message_submit_path": "/v1/bridge/messages",
@@ -757,8 +771,23 @@ def test_capabilities_require_exact_paths_and_reject_retired_fields_and_queries(
             "transaction resource",
         ),
         (
+            "max_ed25519_signature_checks_per_transaction",
+            "max_ed25519_signature_checks_per_block",
+            "transaction resource",
+        ),
+        (
+            "max_ed25519_validator_key_checks_per_transaction",
+            "max_ed25519_validator_key_checks_per_block",
+            "transaction resource",
+        ),
+        (
             "max_bn254_pairing_checks_per_transaction",
             "max_bn254_pairing_checks_per_block",
+            "transaction resource",
+        ),
+        (
+            "max_bls12_381_pairing_checks_per_transaction",
+            "max_bls12_381_pairing_checks_per_block",
             "transaction resource",
         ),
     ),

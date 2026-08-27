@@ -2663,7 +2663,6 @@ required_production_liveness_tests=(
   network::tests::actor_progress_retries_exactly_once_on_peer_writer_replacement
   network::tests::actor_progress_retry_round_robin_bypasses_partitioned_target
   network::tests::cap_one_blocked_source_cannot_prevent_live_source_service
-  network::tests::actor_progress_lease_survives_debug_packet_loss_until_delivery_retries
   network::tests::actor_broadcast_retry_targets_only_failed_peers
   network::tests::reliable_subscriber_is_single_consumer_under_clone_budget_pressure
   network::tests::reconnecting_peer_cannot_multiply_retained_source_credits
@@ -4120,8 +4119,8 @@ if [[ "$profile" == "--release" ]]; then
     129
     88
     34
+    44
     43
-    42
   )
   for sumeragi_v2_sdk_diagnostics_index in \
     "${!sumeragi_v2_sdk_diagnostics_surfaces[@]}"; do

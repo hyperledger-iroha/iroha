@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-
-from client_test_support import canonical_hash
 import iroha_torii_client.client as client_module
+import pytest
+from client_test_support import canonical_hash
 from iroha_torii_client.client import _SumeragiV2StatusParser
-
 
 _EMPTY_NATIVE_MANIFEST_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"

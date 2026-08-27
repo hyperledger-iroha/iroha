@@ -3,18 +3,17 @@
 //! Stock nodes use mandatory TLS 1.3 over TCP, with optional QUIC using the
 //! same application identity and channel-binding invariants. No plaintext or
 //! legacy Noise peer transport is selectable in the first release.
-#[cfg(any(feature = "p2p_tls", feature = "quic"))]
 use rustls::{
     DigitallySignedStruct, Error as RustlsError, SignatureScheme,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::{CertificateDer, ServerName, UnixTime},
 };
-#[cfg(any(feature = "p2p_tls", feature = "quic"))]
 static SELF_SIGNED_SIGNATURE_ALGORITHMS: std::sync::LazyLock<
     rustls::crypto::WebPkiSupportedAlgorithms,
 > = std::sync::LazyLock::new(|| {
     rustls::crypto::ring::default_provider().signature_verification_algorithms
 });
+const MAX_CONNECT_RESPONSE_HEADER_BYTES: usize = 8_192;
 /// Exact ALPN negotiated by Iroha's raw TLS and QUIC P2P transports.
 pub const P2P_ALPN: &[u8] = b"iroha-p2p/1";
 /// Certificate verifier for self-signed transport certificates.
@@ -24,12 +23,10 @@ pub const P2P_ALPN: &[u8] = b"iroha-p2p/1";
 /// before a certificate fingerprint can serve as a channel binding: accepting a signature produced
 /// by an unrelated key would let an attacker replay another node's certificate bytes. A pinned
 /// verifier additionally authenticates the exact leaf fingerprint at the transport layer.
-#[cfg(any(feature = "p2p_tls", feature = "quic"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CertificateKeyProofVerifier {
     expected_fingerprint: Option<[u8; iroha_crypto::Hash::LENGTH]>,
 }
-#[cfg(any(feature = "p2p_tls", feature = "quic"))]
 impl CertificateKeyProofVerifier {
     /// Verify certificate-key possession while deferring identity to the signed P2P handshake.
     pub(crate) const fn unpinned() -> Self {
@@ -44,7 +41,6 @@ impl CertificateKeyProofVerifier {
         }
     }
 }
-#[cfg(any(feature = "p2p_tls", feature = "quic"))]
 impl ServerCertVerifier for CertificateKeyProofVerifier {
     fn verify_server_cert(
         &self,
@@ -710,7 +706,6 @@ pub fn certificate_fingerprint(cert_der: &[u8]) -> crate::peer::TransportBinding
 ///
 /// Returns an error when the peer does not present a certificate or when the
 /// certificate chain is empty.
-#[cfg(feature = "p2p_tls")]
 pub fn tls_peer_certificate_fingerprint<S>(
     tls: &tokio_rustls::client::TlsStream<S>,
 ) -> std::io::Result<crate::peer::TransportBinding> {
@@ -761,14 +756,12 @@ pub fn quic_peer_certificate_fingerprint(
     })?;
     Ok(certificate_fingerprint(cert.as_ref()))
 }
-#[cfg(feature = "p2p_tls")]
 pub mod tls {
     //! Mandatory first-release TLS-over-TCP transport.
     //!
     //! Wraps a TCP stream with TLS 1.3 using rustls. Self-signed certificates are accepted after
     //! TLS proves possession of their private key; peer identity is then enforced by the
-    //! application handshake signature bound to the presented certificate fingerprint. Stock
-    //! builds enable this module; builds without it fail network startup before public binding.
+    //! application handshake signature bound to the presented certificate fingerprint.
     use rustls::{ClientConfig, client::danger::ServerCertVerifier, pki_types::ServerName};
     use std::sync::Arc;
     use tokio::io::{AsyncRead, AsyncWrite};
@@ -776,16 +769,16 @@ pub mod tls {
     const HTTPS_PROXY_ALPN: &[u8] = b"http/1.1";
 
     fn server_name(host: &str) -> tokio::io::Result<ServerName<'static>> {
-        if let Ok(name) = ServerName::try_from(host) {
-            Ok(name.to_owned())
-        } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-            Ok(ServerName::IpAddress(ip.into()))
-        } else {
-            Err(tokio::io::Error::new(
-                tokio::io::ErrorKind::InvalidInput,
-                "invalid SNI",
-            ))
-        }
+        ServerName::try_from(host).map_or_else(
+            |_| {
+                host.parse::<std::net::IpAddr>()
+                    .map(|ip| ServerName::IpAddress(ip.into()))
+                    .map_err(|_| {
+                        tokio::io::Error::new(tokio::io::ErrorKind::InvalidInput, "invalid SNI")
+                    })
+            },
+            |name| Ok(name.to_owned()),
+        )
     }
 
     fn require_alpn<S>(
@@ -1207,7 +1200,6 @@ pub enum TcpConnectStream {
     /// Raw substrate stream which is not itself an admitted P2P transport.
     Plain(TcpStream),
     /// TLS-wrapped stream to the proxy (`https://` proxies only).
-    #[cfg(feature = "p2p_tls")]
     Tls(tokio_rustls::client::TlsStream<TcpStream>),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1458,7 +1450,6 @@ where
     let write_result = stream.write_all(req.as_slice()).await;
     req.clear();
     write_result?;
-    const MAX_CONNECT_RESPONSE_HEADER_BYTES: usize = 8192;
     let mut response = SensitiveBytes::with_capacity(MAX_CONNECT_RESPONSE_HEADER_BYTES);
     let read_result = async {
         // Read exactly through CRLFCRLF. Chunked reads can consume tunneled P2P
@@ -1555,15 +1546,18 @@ fn validate_http_connect_response(response: &[u8]) -> Result<()> {
         ));
     }
     for line in lines {
+        // Splitting a CRLF-terminated header block on LF yields one final
+        // empty slice after the terminating line. It is framing, not a
+        // malformed header.
+        if line.is_empty() {
+            continue;
+        }
         let line = line.strip_suffix(b"\r").ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 "proxy CONNECT response contains a malformed header line",
             )
         })?;
-        if line.is_empty() {
-            continue;
-        }
         let colon = line.iter().position(|byte| *byte == b':').ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1612,7 +1606,7 @@ fn validate_http_connect_response(response: &[u8]) -> Result<()> {
 ///
 /// Returns an `io::Error` if TCP connect fails, proxy handshake fails, or I/O operations error.
 pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpConnectStream> {
-    let _configured_https_proxy_pin: Option<Arc<[u8]>> =
+    let configured_https_proxy_pin: Option<Arc<[u8]>> =
         if let Some(proxy) = opts.proxy.proxy.as_ref() {
             if proxy.auth.is_some() && proxy.kind != ProxyKind::HttpConnectTls {
                 return Err(io::Error::new(
@@ -1639,12 +1633,6 @@ pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpC
                         "HTTPS proxy leaf certificate pin cannot be empty",
                     ));
                 }
-                #[cfg(not(feature = "p2p_tls"))]
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "https proxy requires a build with the `iroha_p2p/p2p_tls` feature",
-                ));
-                #[cfg(feature = "p2p_tls")]
                 Some(pin)
             } else {
                 None
@@ -1678,27 +1666,16 @@ pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpC
                 http_connect_tunnel(&mut stream, proxy, addr, &proxy_endpoint).await?;
             }
             ProxyKind::HttpConnectTls => {
-                #[cfg(feature = "p2p_tls")]
-                {
-                    let pinned =
-                        _configured_https_proxy_pin.expect("HTTPS proxy pin validated before dial");
-                    let mut tls = crate::transport::tls::connect_https_proxy_tls_pinned(
-                        &proxy.host,
-                        stream,
-                        pinned,
-                    )
-                    .await?;
-                    http_connect_tunnel(&mut tls, proxy, addr, &proxy_endpoint).await?;
-                    return Ok(TcpConnectStream::Tls(tls));
-                }
-                #[cfg(not(feature = "p2p_tls"))]
-                {
-                    let _ = proxy_endpoint;
-                    return Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
-                        "https proxy requires a build with the `iroha_p2p/p2p_tls` feature",
-                    ));
-                }
+                let pinned =
+                    configured_https_proxy_pin.expect("HTTPS proxy pin validated before dial");
+                let mut tls = crate::transport::tls::connect_https_proxy_tls_pinned(
+                    &proxy.host,
+                    stream,
+                    pinned,
+                )
+                .await?;
+                http_connect_tunnel(&mut tls, proxy, addr, &proxy_endpoint).await?;
+                return Ok(TcpConnectStream::Tls(tls));
             }
             ProxyKind::Socks5 => {
                 socks5_connect(&mut stream, proxy, addr).await?;
@@ -2196,7 +2173,6 @@ mod tests {
         client_res.expect("client should succeed");
         server_res.expect("server should complete");
     }
-    #[cfg(feature = "p2p_tls")]
     async fn spawn_test_tls_server(
         alpn_protocols: Vec<Vec<u8>>,
         connections: usize,
@@ -2234,7 +2210,6 @@ mod tests {
         });
         Some((addr, Arc::from(cert.der().as_ref().to_vec()), server))
     }
-    #[cfg(feature = "p2p_tls")]
     #[tokio::test(flavor = "current_thread")]
     async fn raw_p2p_tls_requires_tls13_and_exact_alpn() {
         use tokio::net::TcpStream;
@@ -2265,7 +2240,6 @@ mod tests {
             server.await.expect("test TLS server task");
         }
     }
-    #[cfg(feature = "p2p_tls")]
     #[tokio::test(flavor = "current_thread")]
     async fn self_signed_tls_rejects_certificate_signed_by_another_key() {
         use rustls::{
@@ -2323,7 +2297,6 @@ mod tests {
             "TLS CertificateVerify must reject a replayed certificate without its private key"
         );
     }
-    #[cfg(feature = "p2p_tls")]
     #[tokio::test(flavor = "current_thread")]
     async fn https_proxy_tls_pinning_accepts_only_matching_cert() {
         use tokio::net::TcpStream;

@@ -17,6 +17,10 @@ mod tests {
     use tokio::io::AsyncWrite;
     const TEST_SORANET_TRANSPORT_BINDING: [u8; iroha_crypto::Hash::LENGTH] =
         [0xD7; iroha_crypto::Hash::LENGTH];
+    #[test]
+    fn first_release_frame_aead_uses_iroha3_domain() {
+        assert_eq!(super::DEFAULT_AAD, b"Iroha3 AAD");
+    }
     fn delegation_test_key(seed: u8, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], algorithm).expect("valid deterministic test key")
     }
@@ -341,10 +345,10 @@ mod tests {
         let transcript_a = super::soranet_admission_transcript(hello, &frame_a.binding);
         let transcript_b = super::soranet_admission_transcript(hello, &frame_b.binding);
         assert_ne!(transcript_a, transcript_b);
-        let handshake = SoranetHandshakeConfig::defaults();
+        let binding_config = SoranetHandshakeConfig::defaults();
         assert_ne!(
-            handshake.pow_binding(&transcript_a),
-            handshake.pow_binding(&transcript_b)
+            binding_config.pow_binding(&transcript_a),
+            binding_config.pow_binding(&transcript_b)
         );
         let config = || {
             SoranetHandshakeConfig::new(
@@ -363,7 +367,6 @@ mod tests {
                 ),
                 None,
                 Duration::from_secs(60),
-                None,
                 super::test_ticket_revocation_store(),
             )
             .expect("valid admission config")
@@ -511,7 +514,6 @@ mod tests {
                 ),
                 None,
                 Duration::from_secs(60),
-                None,
                 super::test_ticket_revocation_store(),
             )
             .expect("valid admission config"),
@@ -626,14 +628,16 @@ mod tests {
             Poll::Ready(Ok(()))
         }
     }
-    fn unsigned_handshake_hello(key_pair: &KeyPair, addr: SocketAddr) -> HandshakeHelloV1 {
-        let (algorithm, public_key) = key_pair
+    fn random_node_key_pair() -> KeyPair {
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+    }
+    fn unsigned_handshake_hello(key_pair: &KeyPair, addr: SocketAddr) -> HandshakeHello {
+        let (_, public_key) = key_pair
             .public_key()
             .try_to_bytes()
             .expect("fixture public key must be valid");
-        HandshakeHelloV1 {
+        HandshakeHello {
             network_id: test_network_id("test-chain"),
-            algorithm,
             public_key: public_key.to_vec(),
             signature: Vec::new(),
             addr,
@@ -661,7 +665,7 @@ mod tests {
         }
     }
     async fn read_crafted_handshake_hello(
-        hello: HandshakeHelloV1,
+        hello: HandshakeHello,
         cryptographer: Cryptographer<ChaCha20Poly1305>,
     ) -> Result<Ready<ChaCha20Poly1305>, crate::Error> {
         use tokio::io::AsyncWriteExt;
@@ -727,7 +731,7 @@ mod tests {
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0xA5; 32])
             .expect("valid key length");
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let hello = unsigned_handshake_hello(&KeyPair::random(), addr);
+        let hello = unsigned_handshake_hello(&random_node_key_pair(), addr);
         let sender_payload = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
@@ -745,7 +749,7 @@ mod tests {
     #[test]
     fn handshake_signature_payload_rejects_same_name_different_genesis() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let mut hello_a = unsigned_handshake_hello(&KeyPair::random(), addr);
+        let mut hello_a = unsigned_handshake_hello(&random_node_key_pair(), addr);
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x5A; 32])
             .expect("valid key length");
         let display_name = iroha_data_model::ChainId::from("shared-display-name");
@@ -772,7 +776,7 @@ mod tests {
     #[test]
     fn handshake_signature_payload_binds_the_full_session_hash() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let hello = unsigned_handshake_hello(&KeyPair::random(), addr);
+        let hello = unsigned_handshake_hello(&random_node_key_pair(), addr);
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x3C; 32])
             .expect("valid key length");
         let mut same_compact_prefix = cryptographer.clone();
@@ -803,7 +807,7 @@ mod tests {
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x6D; 32])
             .expect("valid key length");
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let mut hello = unsigned_handshake_hello(&KeyPair::random(), addr);
+        let mut hello = unsigned_handshake_hello(&random_node_key_pair(), addr);
         hello.consensus.mode = Some(ConsensusMode::Permissioned);
         hello.confidential.enabled = Some(true);
         hello.crypto.sm_enabled = Some(false);
@@ -876,7 +880,7 @@ mod tests {
     }
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_capabilities_changed_after_signing() {
-        let key_pair = KeyPair::random();
+        let key_pair = random_node_key_pair();
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x4E; 32])
             .expect("valid key length");
@@ -905,7 +909,7 @@ mod tests {
     async fn handshake_rejects_same_name_peer_from_a_different_genesis() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let display_name = iroha_data_model::ChainId::from("shared-display-name");
-        let key_pair = KeyPair::random();
+        let key_pair = random_node_key_pair();
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x7C; 32])
             .expect("valid key length");
         let (stream_a, stream_b) = tokio::io::duplex(512);
@@ -1048,7 +1052,7 @@ mod tests {
         receiver_caps: Option<ConfidentialHandshakeCaps>,
     ) -> crate::Error {
         let addr: SocketAddr = "127.0.0.1:1338".parse().unwrap();
-        let key_pair = KeyPair::random();
+        let key_pair = random_node_key_pair();
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[12u8; 32]).unwrap();
         let (stream_a, stream_b) = tokio::io::duplex(1024);
@@ -1254,15 +1258,14 @@ mod tests {
     fn untagged_handshake_is_rejected() {
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[9u8; 32]).unwrap();
-        let key_pair = KeyPair::random();
-        let (alg, pk_bytes) = key_pair
+        let key_pair = random_node_key_pair();
+        let (_, pk_bytes) = key_pair
             .public_key()
             .try_to_bytes()
             .expect("fixture public key must be valid");
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let hello = HandshakeHelloV1 {
+        let hello = HandshakeHello {
             network_id: test_network_id("test-chain"),
-            algorithm: alg,
             public_key: pk_bytes.to_vec(),
             signature: vec![0u8; 64],
             addr: addr.clone(),
@@ -1300,15 +1303,14 @@ mod tests {
     fn versioned_handshake_preserves_trust_flag() {
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[11u8; 32]).unwrap();
-        let key_pair = KeyPair::random();
-        let (alg, pk_bytes) = key_pair
+        let key_pair = random_node_key_pair();
+        let (_, pk_bytes) = key_pair
             .public_key()
             .try_to_bytes()
             .expect("fixture public key must be valid");
         let addr: SocketAddr = "127.0.0.1:1444".parse().unwrap();
-        let hello = HandshakeHelloV1 {
+        let hello = HandshakeHello {
             network_id: test_network_id("test-chain"),
-            algorithm: alg,
             public_key: pk_bytes.to_vec(),
             signature: vec![1u8; 64],
             addr: addr.clone(),
@@ -1338,13 +1340,12 @@ mod tests {
             encode_handshake_message(&cryptographer, &hello).expect("encode v1 handshake");
         let decoded =
             decode_handshake_message(&cryptographer, &encrypted).expect("decode v1 handshake");
-        let HandshakeHello::V1(v1) = decoded;
-        assert_eq!(v1.addr, addr);
-        assert!(v1.trust.trust_gossip);
+        assert_eq!(decoded.addr, addr);
+        assert!(decoded.trust.trust_gossip);
     }
     #[test]
     fn handshake_decode_honors_its_pre_auth_resource_budget() {
-        let key_pair = KeyPair::random();
+        let key_pair = random_node_key_pair();
         let addr: SocketAddr = "127.0.0.1:1444".parse().unwrap();
         let hello = unsigned_handshake_hello(&key_pair, addr);
         let body = hello.encode();
@@ -1366,7 +1367,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_fails_when_metadata_exceeds_limit() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let key_pair = KeyPair::random();
+        let key_pair = random_node_key_pair();
         let connection = Connection::from_split(7, tokio::io::empty(), tokio::io::sink());
         let cryptographer =
             super::cryptographer::Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(
@@ -1404,9 +1405,39 @@ mod tests {
         );
     }
     #[tokio::test(flavor = "current_thread")]
-    async fn handshake_v1_defaults_to_trust_gossip() {
+    async fn outbound_handshake_rejects_non_bls_node_identity() {
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
+            our_public_address: "127.0.0.1:1337".parse().expect("address"),
+            expected_peer_id: None,
+            key_pair,
+            connection: Connection::from_split(7, tokio::io::empty(), tokio::io::sink()),
+            cryptographer: Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[42u8; 32])
+                .expect("valid key length"),
+            network_id: test_network_id("test-chain"),
+            soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        });
+        let error = match SendKey::send_our_public_key(send_key).await {
+            Ok(_) => panic!("only BLS-normal node identities may initiate a handshake"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            crate::Error::HandshakeNodeAlgorithmMismatch {
+                found: Algorithm::Ed25519
+            }
+        ));
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_v1_propagates_trust_and_scion_capabilities() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let key_pair = KeyPair::random();
+        let key_pair = random_node_key_pair();
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[7u8; 32]).unwrap();
         let (stream_a, stream_b) = tokio::io::duplex(256);
@@ -1469,16 +1500,15 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_all_zero_signature_material() {
         let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
-        let key_pair = KeyPair::random();
-        let (algorithm, public_key) = key_pair
+        let key_pair = random_node_key_pair();
+        let (_, public_key) = key_pair
             .public_key()
             .try_to_bytes()
             .expect("fixture public key must be valid");
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32]).unwrap();
-        let hello = HandshakeHelloV1 {
+        let hello = HandshakeHello {
             network_id: test_network_id("test-chain"),
-            algorithm,
             public_key: public_key.to_vec(),
             signature: vec![0u8; 64],
             addr,
@@ -1533,22 +1563,10 @@ mod tests {
         );
     }
     #[tokio::test(flavor = "current_thread")]
-    async fn handshake_rejects_malformed_ed25519_signature_r() {
-        const SMALL_ORDER_R: [u8; 32] = [
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-        ];
-        const NONCANONICAL_R: [u8; 32] = [
-            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
-        for (label, replacement_r) in [
-            ("small-order", SMALL_ORDER_R),
-            ("noncanonical", NONCANONICAL_R),
-        ] {
+    async fn handshake_rejects_non_bls_node_identity() {
+        for algorithm in [Algorithm::Ed25519, Algorithm::MlDsa] {
             let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
-            let key_pair = KeyPair::random();
+            let key_pair = KeyPair::random_with_algorithm(algorithm);
             let cryptographer =
                 Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32]).unwrap();
             let mut hello = unsigned_handshake_hello(&key_pair, addr);
@@ -1558,91 +1576,24 @@ mod tests {
                 &TEST_SORANET_TRANSPORT_BINDING,
                 None,
             );
-            let mut signature = Signature::try_new(key_pair.private_key(), &payload)
-                .expect("checked handshake fixture signature")
+            hello.signature = Signature::try_new(key_pair.private_key(), &payload)
+                .expect("sign non-BLS rejection fixture")
                 .payload()
                 .to_vec();
-            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
-            hello.signature = signature;
-            let encoded =
-                encode_handshake_message(&cryptographer, &hello).expect("encode crafted hello");
-            let (stream_a, stream_b) = tokio::io::duplex(4096);
-            let (_sender_read, mut sender_write) = tokio::io::split(stream_a);
-            let (receiver_read, receiver_write) = tokio::io::split(stream_b);
-            write_framed_handshake(&mut sender_write, &encoded).await;
-            let get_key = GetKey::<ChaCha20Poly1305> {
-                connection: Connection::from_split(15, receiver_read, receiver_write),
-                expected_peer_id: None,
-                cryptographer,
-                network_id: test_network_id("test-chain"),
-                soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
-                consensus_caps: None,
-                confidential_caps: None,
-                crypto_caps: None,
-                relay_role: RelayRole::Disabled,
-                local_scion_supported: true,
-                trust_gossip: true,
-            };
-            let err = match GetKey::read_their_public_key(get_key).await {
-                Ok(_) => panic!("{label} Ed25519 handshake signature R must be rejected"),
-                Err(err) => err,
+            let err = match read_crafted_handshake_hello(hello, cryptographer).await {
+                Ok(_) => panic!("only BLS-normal node identities are admitted"),
+                Err(error) => error,
             };
             assert!(
                 matches!(err, crate::Error::Keys(_)),
-                "expected {label} signature parse failure, got {err:?}"
-            );
-        }
-    }
-    #[tokio::test(flavor = "current_thread")]
-    async fn handshake_rejects_malformed_mldsa_signature_lengths() {
-        let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
-        let key_pair = KeyPair::try_from_seed(
-            b"p2p-handshake-mldsa-signature-admission".to_vec(),
-            Algorithm::MlDsa,
-        )
-        .expect("derive checked ML-DSA handshake fixture keypair");
-        let cryptographer =
-            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[14u8; 32]).unwrap();
-        let mut hello = unsigned_handshake_hello(&key_pair, addr);
-        let payload = handshake_signature_payload::<ChaCha20Poly1305>(
-            &cryptographer,
-            &hello,
-            &TEST_SORANET_TRANSPORT_BINDING,
-            None,
-        );
-        let valid_signature = Signature::try_new(key_pair.private_key(), &payload)
-            .expect("checked ML-DSA handshake fixture signature")
-            .payload()
-            .to_vec();
-        hello.signature = valid_signature.clone();
-        read_crafted_handshake_hello(hello.clone(), cryptographer.clone())
-            .await
-            .expect("valid ML-DSA handshake signature must verify");
-        let mut short = valid_signature.clone();
-        short.pop();
-        let mut overlong = valid_signature.clone();
-        overlong.push(0x42);
-        for (label, signature) in [
-            ("short", short),
-            ("overlong", overlong),
-            ("all-zero", vec![0_u8; valid_signature.len()]),
-        ] {
-            let mut malformed = hello.clone();
-            malformed.signature = signature;
-            let err = match read_crafted_handshake_hello(malformed, cryptographer.clone()).await {
-                Ok(_) => panic!("{label} ML-DSA handshake signature unexpectedly verified"),
-                Err(err) => err,
-            };
-            assert!(
-                matches!(err, crate::Error::Keys(_)),
-                "expected {label} ML-DSA signature parse failure, got {err:?}"
+                "expected {algorithm:?} public-key rejection, got {err:?}"
             );
         }
     }
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_accepts_matching_transport_binding() {
         let addr: SocketAddr = "127.0.0.1:1444".parse().unwrap();
-        let key_pair = KeyPair::random();
+        let key_pair = random_node_key_pair();
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[9u8; 32]).unwrap();
         let transport_binding = [0x5Au8; iroha_crypto::Hash::LENGTH];
@@ -1703,7 +1654,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_mismatched_transport_binding() {
         let addr: SocketAddr = "127.0.0.1:1446".parse().unwrap();
-        let key_pair = KeyPair::random();
+        let key_pair = random_node_key_pair();
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[10u8; 32]).unwrap();
         let (stream_a, stream_b) = tokio::io::duplex(256);
@@ -1767,9 +1718,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn outgoing_handshake_rejects_unexpected_peer_identity() {
         let addr: SocketAddr = "127.0.0.1:1445".parse().unwrap();
-        let actual_key_pair = KeyPair::random();
+        let actual_key_pair = random_node_key_pair();
         let expected_peer_id =
-            iroha_data_model::prelude::PeerId::from(KeyPair::random().public_key().clone());
+            iroha_data_model::prelude::PeerId::from(random_node_key_pair().public_key().clone());
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[8u8; 32]).unwrap();
         let (stream_a, stream_b) = tokio::io::duplex(256);

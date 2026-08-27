@@ -18,7 +18,7 @@ Layout (current)
 <!-- END GENERATED HEADER LAYOUT -->
 
 Mode bits
-- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
+- `ZK = 0x01`, `VECTOR = 0x02`.
 
 Fields (meaning)
 - `abi_version`: syscall table and pointer‑ABI schema version.
@@ -26,7 +26,7 @@ Fields (meaning)
   final byte's least-significant bit set to 1) to the exact canonical ABI
   descriptor selected by `abi_version`; admission validates it before prefix
   or instruction decoding.
-- `mode`: feature bits for ZK tracing/VECTOR/HTM.
+- `mode`: feature bits for ZK tracing and vector execution.
 - `vector_length`: logical vector length for vector ops (0 selects the runtime default).
 - `max_cycles`: execution padding bound used in ZK mode and admission.
 
@@ -77,9 +77,8 @@ Validation
   execution. Pointer provenance accepts only exact validated pointer-entry
   starts; scalar values, instruction bytes, headers, and interior addresses are
   never pointer objects.
-- Generic `mode` parsing permits only known bits: `ZK`, `VECTOR`, `HTM`
-  (unknown bits are rejected). Deployable contracts permit only `ZK` and
-  `VECTOR`; `HTM` is rejected.
+- Generic and deployable `mode` parsing permits only `ZK` and `VECTOR`;
+  every other bit is rejected.
 - `vector_length` is `0` or `1..=64`; `0` selects the runtime default and the field may be non-zero even if the `VECTOR` bit is not set.
 - Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
 
@@ -91,7 +90,7 @@ The following policy summary is generated from the implementation and should not
 |---|---|
 | version_major | 1 |
 | version_minor | 0 or 1 (deployable CNTR contracts require 1) |
-| mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
+| mode (known bits) | 0x03 (ZK=0x01, VECTOR=0x02) |
 | abi_version | 1 |
 | vector_length | 0 or 1..=64 (0 selects runtime default; independent of VECTOR bit) |
 <!-- END GENERATED HEADER POLICY -->

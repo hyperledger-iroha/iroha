@@ -12,6 +12,12 @@ internal const val ML_DSA_SEED_LENGTH_BYTES = 32
 class MlDsaPublicKey(encoded: ByteArray) : PublicKey, Serializable {
     private val encodedBytes = encoded.copyOf()
 
+    init {
+        require(MlDsaPublicKeyAdmission.isValid(encodedBytes)) {
+            "invalid ML-DSA-65 public key: expected ${MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH} nonzero bytes"
+        }
+    }
+
     override fun getAlgorithm(): String = SigningAlgorithm.ML_DSA.providerName
 
     override fun getFormat(): String = "RAW"

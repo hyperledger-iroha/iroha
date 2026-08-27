@@ -19,7 +19,7 @@ def create_torii_client_space_directory_mixin(
     normalize_publish_request: Callable[[Mapping[str, Any]], dict[str, Any]],
     normalize_revoke_request: Callable[[Mapping[str, Any]], dict[str, Any]],
     normalize_transaction_draft: Callable[[Any, str], Any],
-) -> type:
+) -> Any:
     """Bind client-local normalizers to authenticated Space Directory drafts."""
 
     globals()["ToriiCanonicalRequestAuth"] = canonical_auth_type
@@ -28,6 +28,12 @@ def create_torii_client_space_directory_mixin(
     _normalize_transaction_draft = normalize_transaction_draft
 
     class ToriiClientSpaceDirectoryMixin:
+        _require_local_signing_context: Callable[..., Any]
+        _require_exact_i105_account_id: Callable[..., str]
+        _require_canonical_auth: Callable[..., Any]
+        _canonical_request_auth: Any
+        _account_request_json: Callable[..., Any]
+
         def _require_authenticated_draft_context(
             self,
             authority: Any,

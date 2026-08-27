@@ -656,6 +656,8 @@ pub(crate) struct V2LaneWorkLimits {
     native_session_capacity: NonZeroUsize,
     native_body_buckets_per_session: NonZeroUsize,
     native_source_capacity: NonZeroUsize,
+    /// Ordinary effect owners; one additional autonomous NewView progress
+    /// occurrence is reserved while such an occurrence is queued.
     effect_capacity: NonZeroUsize,
     relay_capacity: NonZeroUsize,
     merge_capacity: NonZeroUsize,
@@ -12930,10 +12932,32 @@ impl V2LaneWorkAdapter {
         if !lane_work_effect_reply_routes_are_valid(effect) {
             return Err(LaneWorkEffectInsertionOutcome::Rejected);
         }
-        if self.effects.len() >= self.limits.effect_capacity.get() {
+        let ordinary_capacity = self.limits.effect_capacity.get();
+        let autonomous_new_view_progress = Self::is_autonomous_new_view_progress_effect(effect)
+            || self
+                .effects
+                .iter()
+                .any(Self::is_autonomous_new_view_progress_effect);
+        // Retain one bounded autonomous pacemaker occurrence beyond the
+        // ordinary lane-output bound. Without this reserve, a continuously
+        // full delivery queue can reject every due NewView fanout before it
+        // acquires retry ownership, permanently pinning the lane cursor.
+        let admission_capacity =
+            ordinary_capacity.saturating_add(usize::from(autonomous_new_view_progress));
+        if self.effects.len() >= admission_capacity {
             return Err(LaneWorkEffectInsertionOutcome::Rejected);
         }
         Ok(key)
+    }
+    fn is_autonomous_new_view_progress_effect(effect: &V2LaneWorkEffect) -> bool {
+        matches!(
+            effect,
+            V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneBlockNewViewVote(_)
+                    | BlockMessage::LaneBlockNewViewCertificate(_),
+                ..
+            }
+        )
     }
     fn push_effect_with_fresh_authorization<Authorization>(
         &mut self,
@@ -24783,34 +24807,6 @@ pub(super) mod tests {
             prepare_qc: certificate.prepare_qc.clone(),
             commit_qc: certificate.commit_qc.clone(),
         }
-    }
-    fn install_finalized_vrf_epoch(
-        adapter: &V2LaneWorkAdapter,
-        epoch: u64,
-        updated_at_height: u64,
-    ) {
-        let mut world = adapter.state.world.block();
-        world.vrf_epochs_mut_for_testing().insert(
-            epoch,
-            iroha_data_model::consensus::VrfEpochRecord {
-                epoch,
-                seed: adapter.context.leader_seed,
-                epoch_length: 2,
-                commit_deadline_offset: 0,
-                reveal_deadline_offset: 0,
-                roster_len: 0,
-                finalized: true,
-                updated_at_height,
-                participants: Vec::new(),
-                late_reveals: Vec::new(),
-                committed_no_reveal: Vec::new(),
-                no_participation: Vec::new(),
-                penalties_applied: false,
-                penalties_applied_at_height: None,
-                validator_election: None,
-            },
-        );
-        world.commit();
     }
     fn posted_sidecar_chunk(effect: &V2LaneWorkEffect) -> Option<&CertifiedMergeSidecarChunkV1> {
         match effect {

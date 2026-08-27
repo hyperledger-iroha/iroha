@@ -312,7 +312,7 @@ pub enum Error {
         /// Maximum encrypted frames allowed.
         max_frames: usize,
     },
-    /// Decrypted frame carried a malformed inner payload
+    /// Authenticated decrypted frame carried a malformed inner payload; the peer must disconnect
     MalformedPayloadFrame,
     /// Decrypted frame exceeded the cap selected from its raw inbound topic
     InboundTopicCapExceeded,
@@ -340,6 +340,11 @@ pub enum Error {
         expected: iroha_data_model::prelude::PeerId,
         /// Peer identifier actually authenticated by the signed handshake.
         found: iroha_data_model::prelude::PeerId,
+    },
+    /// Node identity handshakes require BLS-normal, but `{found:?}` was supplied locally
+    HandshakeNodeAlgorithmMismatch {
+        /// Algorithm supplied for the node identity role.
+        found: Algorithm,
     },
     /// Handshake metadata exceeds the maximum supported length (`u16::MAX` bytes)
     HandshakeMessageTooLarge,

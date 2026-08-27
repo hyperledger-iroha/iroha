@@ -27,10 +27,14 @@ SNAPSHOT_VERSION = 1
 MAX_PAYLOAD_BYTES = 256 * 1024
 MAX_NON_VALID_SERIALS = 4_096
 MAX_SERIAL_HEX_BYTES = 40
+MAX_REVOKED_TBS_DIGESTS = 256
 MAX_CACHE_AGE_SECONDS = 86_400
 HTTP_CLOCK_TOLERANCE_MS = 5 * 60 * 1_000
 SERIAL_RE = re.compile(r"(?:0|[1-9a-f][0-9a-f]*)\Z")
+SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 NON_VALID_STATUSES = frozenset(("REVOKED", "SUSPENDED"))
+ANDROID_SDK_SNAPSHOT_DOMAIN = "iroha.android.attestation.revocation.snapshot.v1"
+ANDROID_SDK_SNAPSHOT_FILE = "android-sdk-revocation-snapshot-v1.txt"
 
 
 class CaptureError(RuntimeError):
@@ -75,7 +79,9 @@ def _http_date_ms(value: str, label: str) -> int:
     try:
         parsed = email.utils.parsedate_to_datetime(value)
     except (TypeError, ValueError) as error:
-        raise CaptureError(f"Android status {label} is not a valid HTTP date") from error
+        raise CaptureError(
+            f"Android status {label} is not a valid HTTP date"
+        ) from error
     if parsed is None or parsed.tzinfo is None:
         raise CaptureError(f"Android status {label} must include a timezone")
     parsed = parsed.astimezone(dt.timezone.utc)
@@ -93,17 +99,26 @@ def _cache_max_age_seconds(value: str) -> int:
     if "public" not in lowered or any(
         directive in {"private", "no-cache", "no-store"} for directive in lowered
     ):
-        raise CaptureError("Android status Cache-Control is not a public cache contract")
+        raise CaptureError(
+            "Android status Cache-Control is not a public cache contract"
+        )
     max_age_values = [
         directive.split("=", 1)[1]
         for directive in lowered
         if directive.startswith("max-age=")
     ]
-    if len(max_age_values) != 1 or re.fullmatch(r"(?:0|[1-9][0-9]*)", max_age_values[0]) is None:
-        raise CaptureError("Android status Cache-Control must contain one canonical max-age")
+    if (
+        len(max_age_values) != 1
+        or re.fullmatch(r"(?:0|[1-9][0-9]*)", max_age_values[0]) is None
+    ):
+        raise CaptureError(
+            "Android status Cache-Control must contain one canonical max-age"
+        )
     max_age = int(max_age_values[0])
     if not 1 <= max_age <= MAX_CACHE_AGE_SECONDS:
-        raise CaptureError("Android status Cache-Control max-age is outside protocol bounds")
+        raise CaptureError(
+            "Android status Cache-Control max-age is outside protocol bounds"
+        )
     return max_age
 
 
@@ -111,9 +126,13 @@ def _canonical_non_valid_serials(payload: bytes) -> list[str]:
     status = _strict_json_object(payload)
     entries = status.get("entries")
     if set(status) != {"entries"} or not isinstance(entries, dict):
-        raise CaptureError("Android status payload must contain exactly an entries object")
+        raise CaptureError(
+            "Android status payload must contain exactly an entries object"
+        )
     if len(entries) > MAX_NON_VALID_SERIALS:
-        raise CaptureError("Android status payload exceeds the governed serial-count bound")
+        raise CaptureError(
+            "Android status payload exceeds the governed serial-count bound"
+        )
     serials: list[str] = []
     for serial, record in entries.items():
         if (
@@ -123,9 +142,87 @@ def _canonical_non_valid_serials(payload: bytes) -> list[str]:
             or not isinstance(record, dict)
             or record.get("status") not in NON_VALID_STATUSES
         ):
-            raise CaptureError("Android status payload contains a malformed non-valid entry")
+            raise CaptureError(
+                "Android status payload contains a malformed non-valid entry"
+            )
         serials.append(serial)
     return sorted(serials)
+
+
+def _canonical_revoked_tbs_sha256(values: Iterable[str]) -> list[str]:
+    digests = list(values)
+    if len(digests) > MAX_REVOKED_TBS_DIGESTS:
+        raise CaptureError(
+            "Android SDK revocation snapshot exceeds the TBS digest bound"
+        )
+    for digest in digests:
+        if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+            raise CaptureError(
+                "Android SDK revoked TBS digest must be lowercase SHA-256"
+            )
+        if digest == "0" * 64:
+            raise CaptureError("Android SDK revoked TBS digest must not be all zero")
+    canonical = sorted(digests)
+    if len(set(canonical)) != len(canonical):
+        raise CaptureError("Android SDK revoked TBS digests must be unique")
+    return canonical
+
+
+def canonical_android_sdk_revocation_snapshot(
+    snapshot: dict[str, Any], revoked_tbs_sha256: Iterable[str] = ()
+) -> bytes:
+    """Encode the strict domain-separated V1 Android SDK revocation snapshot."""
+
+    try:
+        payload_sha256 = bytes(snapshot["payload_sha256"])
+        response_date_ms = snapshot["response_date_ms"]
+        last_modified_ms = snapshot["last_modified_ms"]
+        cache_max_age_seconds = snapshot["cache_max_age_seconds"]
+        serials = snapshot["non_valid_serials"]
+    except (KeyError, TypeError, ValueError) as error:
+        raise CaptureError(
+            "Android SDK revocation snapshot source is incomplete"
+        ) from error
+    if len(payload_sha256) != 32 or payload_sha256 == bytes(32):
+        raise CaptureError("Android SDK revocation payload digest is invalid")
+    if (
+        not isinstance(response_date_ms, int)
+        or response_date_ms <= 0
+        or response_date_ms % 1_000 != 0
+        or not isinstance(cache_max_age_seconds, int)
+        or not 1 <= cache_max_age_seconds <= MAX_CACHE_AGE_SECONDS
+    ):
+        raise CaptureError("Android SDK revocation freshness metadata is invalid")
+    if last_modified_ms is not None and (
+        not isinstance(last_modified_ms, int)
+        or last_modified_ms <= 0
+        or last_modified_ms % 1_000 != 0
+        or last_modified_ms > response_date_ms
+    ):
+        raise CaptureError("Android SDK revocation last-modified metadata is invalid")
+    if (
+        not isinstance(serials, list)
+        or len(serials) > MAX_NON_VALID_SERIALS
+        or serials != sorted(set(serials))
+        or any(
+            not isinstance(serial, str) or SERIAL_RE.fullmatch(serial) is None
+            for serial in serials
+        )
+    ):
+        raise CaptureError("Android SDK revocation serial inventory is not canonical")
+    tbs_digests = _canonical_revoked_tbs_sha256(revoked_tbs_sha256)
+    lines = [
+        ANDROID_SDK_SNAPSHOT_DOMAIN,
+        f"payload_sha256={payload_sha256.hex()}",
+        f"response_date_ms={response_date_ms}",
+        f"last_modified_ms={last_modified_ms if last_modified_ms is not None else '-'}",
+        f"cache_max_age_seconds={cache_max_age_seconds}",
+        f"serial_count={len(serials)}",
+        *(f"serial={serial}" for serial in serials),
+        f"tbs_sha256_count={len(tbs_digests)}",
+        *(f"tbs_sha256={digest}" for digest in tbs_digests),
+    ]
+    return ("\n".join(lines) + "\n").encode("ascii")
 
 
 def build_capture(
@@ -133,6 +230,7 @@ def build_capture(
     headers: Iterable[tuple[str, str]],
     *,
     captured_at_ms: int,
+    revoked_tbs_sha256: Iterable[str] = (),
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate exact response bytes/headers and derive the consensus snapshot."""
 
@@ -146,9 +244,13 @@ def build_capture(
     last_modified_value = _one_header(header_list, "Last-Modified", required=False)
     content_encoding = _one_header(header_list, "Content-Encoding", required=False)
     if content_encoding is not None and content_encoding.casefold() != "identity":
-        raise CaptureError("Android status response must not transform the exact payload bytes")
+        raise CaptureError(
+            "Android status response must not transform the exact payload bytes"
+        )
     if age_value is None or re.fullmatch(r"(?:0|[1-9][0-9]*)", age_value) is None:
-        raise CaptureError("Android status Age must be a canonical non-negative integer")
+        raise CaptureError(
+            "Android status Age must be a canonical non-negative integer"
+        )
     assert date_value is not None
     assert cache_control_value is not None
     assert expires_value is not None
@@ -170,7 +272,9 @@ def build_capture(
         raise CaptureError("Android status response is already stale according to Age")
     expected_capture_ms = response_date_ms + age_seconds * 1_000
     if abs(captured_at_ms - expected_capture_ms) > HTTP_CLOCK_TOLERANCE_MS:
-        raise CaptureError("Android status Date/Age metadata disagrees with the capture clock")
+        raise CaptureError(
+            "Android status Date/Age metadata disagrees with the capture clock"
+        )
     if captured_at_ms < response_date_ms or captured_at_ms >= fresh_until_ms:
         raise CaptureError("Android status response is not fresh at capture time")
 
@@ -184,6 +288,10 @@ def build_capture(
         "cache_max_age_seconds": cache_max_age_seconds,
         "non_valid_serials": serials,
     }
+    canonical_tbs_digests = _canonical_revoked_tbs_sha256(revoked_tbs_sha256)
+    sdk_snapshot = canonical_android_sdk_revocation_snapshot(
+        snapshot, canonical_tbs_digests
+    )
     receipt: dict[str, Any] = {
         "schema": CAPTURE_SCHEMA,
         "version": 1,
@@ -192,6 +300,10 @@ def build_capture(
         "fresh_until_ms": fresh_until_ms,
         "status_payload_sha256": payload_sha256.hex(),
         "status_payload_size_bytes": len(payload),
+        "android_sdk_revocation_snapshot_sha256": hashlib.sha256(
+            sdk_snapshot
+        ).hexdigest(),
+        "android_sdk_revoked_tbs_sha256": canonical_tbs_digests,
         "response_headers": {
             "date": date_value,
             "age": age_value,
@@ -239,7 +351,9 @@ def fetch_status() -> tuple[bytes, list[tuple[str, str]], int]:
             if re.fullmatch(r"(?:0|[1-9][0-9]*)", content_length) is None:
                 raise CaptureError("Android status Content-Length is not canonical")
             if int(content_length) != len(payload):
-                raise CaptureError("Android status Content-Length does not match exact bytes")
+                raise CaptureError(
+                    "Android status Content-Length does not match exact bytes"
+                )
         return payload, headers, captured_at_ms
     except (OSError, http.client.HTTPException) as error:
         raise CaptureError("Android status HTTPS fetch failed") from error
@@ -281,9 +395,7 @@ def _write_new_private(path: Path, payload: bytes) -> None:
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(
         path,
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_CLOEXEC", 0),
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0),
     )
     try:
         os.fsync(descriptor)
@@ -311,7 +423,22 @@ def publish_capture(
         or metadata.st_uid not in {0, os.geteuid()}
         or stat.S_IMODE(metadata.st_mode) & 0o022
     ):
-        raise CaptureError("capture output parent must be owner-controlled and non-writable")
+        raise CaptureError(
+            "capture output parent must be owner-controlled and non-writable"
+        )
+    revoked_tbs_sha256 = receipt.get("android_sdk_revoked_tbs_sha256")
+    if not isinstance(revoked_tbs_sha256, list):
+        raise CaptureError("capture receipt is missing the Android SDK TBS inventory")
+    sdk_snapshot = canonical_android_sdk_revocation_snapshot(
+        snapshot, revoked_tbs_sha256
+    )
+    if (
+        receipt.get("android_sdk_revocation_snapshot_sha256")
+        != hashlib.sha256(sdk_snapshot).hexdigest()
+    ):
+        raise CaptureError(
+            "capture receipt Android SDK snapshot commitment is inconsistent"
+        )
     target = parent / output_directory.name
     try:
         target.mkdir(mode=0o700)
@@ -320,6 +447,7 @@ def publish_capture(
     paths = [
         (target / "status.json", payload),
         (target / "snapshot.json", _canonical_json(snapshot)),
+        (target / ANDROID_SDK_SNAPSHOT_FILE, sdk_snapshot),
         (target / "capture-receipt.json", _canonical_json(receipt)),
     ]
     try:
@@ -336,6 +464,12 @@ def publish_capture(
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-directory", required=True, type=Path)
+    parser.add_argument(
+        "--revoked-tbs-sha256",
+        action="append",
+        default=[],
+        help="Reviewed revoked certificate TBS SHA-256; repeat as needed",
+    )
     args = parser.parse_args(argv)
     try:
         payload, headers, captured_at_ms = fetch_status()
@@ -343,6 +477,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             payload,
             headers,
             captured_at_ms=captured_at_ms,
+            revoked_tbs_sha256=args.revoked_tbs_sha256,
         )
         publish_capture(args.output_directory, payload, snapshot, receipt)
     except CaptureError as error:
@@ -352,6 +487,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(
         "[android-attestation-status] payload sha256: "
         f"{receipt['status_payload_sha256']}"
+    )
+    print(
+        "[android-attestation-status] Android SDK snapshot sha256: "
+        f"{receipt['android_sdk_revocation_snapshot_sha256']}"
     )
     return 0
 

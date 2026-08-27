@@ -1,4 +1,4 @@
-use ivm::{IVM, ProgramMetadata, encoding, instruction, kotodama::wide as kwide};
+use ivm::{IVM, ProgramMetadata, encoding, instruction};
 #[test]
 fn backward_branch_negative_offset_loop() {
     // Build a tiny loop that increments x1 three times using BNE with a negative offset.
@@ -13,8 +13,7 @@ fn backward_branch_negative_offset_loop() {
     let a_acc0 = ivm::kotodama::compiler::encode_addi(1, 0, 0).expect("encode addi");
     let a_inc = ivm::kotodama::compiler::encode_addi(1, 1, 1).expect("encode addi");
     let a_dec = ivm::kotodama::compiler::encode_addi(5, 5, -1).expect("encode addi");
-    let bne_back =
-        kwide::encode_branch_checked(instruction::wide::control::BNE, 5, 0, -2).expect("loop back");
+    let bne_back = encoding::wide::encode_branch(instruction::wide::control::BNE, 5, 0, -2);
     let halt = encoding::wide::encode_halt();
     let mut bytes = ProgramMetadata::default().encode();
     for w in [a_cnt, a_acc0, a_inc, a_dec, bne_back, halt] {
@@ -44,8 +43,7 @@ fn backward_branch_beq_to_nonzero_sentinel() {
     let a_acc0 = ivm::kotodama::compiler::encode_addi(1, 0, 0).expect("encode addi");
     let a_inc = ivm::kotodama::compiler::encode_addi(1, 1, 1).expect("encode addi");
     let a_dec = ivm::kotodama::compiler::encode_addi(5, 5, -1).expect("encode addi");
-    let beq_back = kwide::encode_branch_checked(instruction::wide::control::BEQ, 5, 6, -2)
-        .expect("branch back");
+    let beq_back = encoding::wide::encode_branch(instruction::wide::control::BEQ, 5, 6, -2);
     let halt = encoding::wide::encode_halt();
     let mut bytes = ProgramMetadata::default().encode();
     for w in [a_cnt, a_sen, a_acc0, a_inc, a_dec, beq_back, halt] {
@@ -75,8 +73,7 @@ fn forward_beq_skips_block() {
     // so skipping two 32-bit words requires +12 bytes.
     let a5_7 = ivm::kotodama::compiler::encode_addi(5, 0, 7).expect("encode addi");
     let a6_7 = ivm::kotodama::compiler::encode_addi(6, 0, 7).expect("encode addi");
-    let beq_skip = kwide::encode_branch_checked(instruction::wide::control::BEQ, 5, 6, 3)
-        .expect("forward branch");
+    let beq_skip = encoding::wide::encode_branch(instruction::wide::control::BEQ, 5, 6, 3);
     let mut bytes = ProgramMetadata::default().encode();
     for w in [a_acc0, a5_7, a6_7, beq_skip, inc5, inc6, inc1, halt] {
         bytes.extend_from_slice(&w.to_le_bytes());

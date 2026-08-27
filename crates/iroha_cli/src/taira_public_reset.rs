@@ -3,12 +3,17 @@
 use eyre::{Context as _, Result, eyre};
 use iroha::{
     client::AccountOnboardingPlanRequestV1,
-    data_model::{account::AccountId, nexus::FeeSponsorProgramId},
+    data_model::{
+        account::{AccountId, address::ChainDiscriminantGuard},
+        asset::AssetDefinitionId,
+        nexus::FeeSponsorProgramId,
+    },
 };
 use iroha_crypto::{
     Algorithm, Hash, PublicKey, ed25519_parse_signature, verify_signature_for_admission,
 };
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
+use iroha_primitives::numeric::Quantity;
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -233,7 +238,7 @@ impl PublicReset {
     pub(super) fn run_without_client_config<W: Write>(&self, mut output: W) -> Result<()> {
         let report = match &self.command {
             PublicResetCommand::Preflight(args) => {
-                let admitted = admit(
+                let (admitted, _chain_guard) = admit(
                     &args.inventory,
                     &args.authorization,
                     &args.trusted_public_key,
@@ -249,7 +254,7 @@ impl PublicReset {
             }
             PublicResetCommand::Apply(args) => {
                 let journal_dir = Path::new(JOURNAL_ROOT);
-                let mut admitted = admit_signed_inputs(
+                let (mut admitted, _chain_guard) = admit_signed_inputs(
                     &args.inventory,
                     &args.authorization,
                     &args.trusted_public_key,
@@ -468,6 +473,7 @@ struct InventoryV1 {
     edge: EdgeV1,
     inrou_canary: InrouCanaryV1,
     canary_onboarding_request: AccountOnboardingPlanRequestV1,
+    faucet_policy: FaucetPolicyV1,
     fee_intent: FeeIntentV1,
     cleanup: CleanupV1,
     timeouts: TimeoutsV1,
@@ -480,9 +486,19 @@ struct InventoryV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
+struct FaucetPolicyV1 {
+    authority: String,
+    asset_definition_id: String,
+    amount: Quantity,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct FeeIntentV1 {
     payer: String,
+    #[norito(required)]
     sponsor_program: Option<String>,
+    #[norito(required)]
     sponsor_program_revision: Option<u64>,
 }
 
@@ -687,6 +703,7 @@ struct AuthorizationClaimsV1 {
     onboarding_token_sha256: String,
     validator_client_configs_sha256: String,
     inrou_stage_tree_sha256: String,
+    faucet_policy: FaucetPolicyV1,
     fee_intent: FeeIntentV1,
     authorization_nonce: String,
     issued_at_unix_ms: u64,
@@ -774,8 +791,8 @@ fn admit(
     trusted_key_path: &Path,
     ssh_identity: &Path,
     known_hosts: &Path,
-) -> Result<AdmittedReset> {
-    let mut admitted = admit_signed_inputs(
+) -> Result<(AdmittedReset, ChainDiscriminantGuard)> {
+    let (mut admitted, chain_guard) = admit_signed_inputs(
         inventory_path,
         authorization_path,
         trusted_key_path,
@@ -790,7 +807,7 @@ fn admit(
         now_unix_ms()?,
     )?;
     admit_forward_closure(&mut admitted)?;
-    Ok(admitted)
+    Ok((admitted, chain_guard))
 }
 
 fn admit_signed_inputs(
@@ -799,11 +816,12 @@ fn admit_signed_inputs(
     trusted_key_path: &Path,
     ssh_identity: &Path,
     known_hosts: &Path,
-) -> Result<AdmittedReset> {
+) -> Result<(AdmittedReset, ChainDiscriminantGuard)> {
     validate_fixed_executable(Path::new(SSH), "OpenSSH client")?;
     let ssh_identity = pin_owner_private_file(ssh_identity, "OpenSSH identity")?;
 
     let (inventory, inventory_bytes) = read_json::<InventoryV1>(inventory_path, "inventory")?;
+    let chain_guard = enter_inventory_chain_discriminant(&inventory)?;
     validate_inventory(&inventory)?;
     host::validate_first_release_physical_host(&inventory)?;
     validate_shared_validator_closure(&inventory)?;
@@ -821,7 +839,7 @@ fn admit_signed_inputs(
         &trusted_key,
     )?;
     let authorization_sha256 = authorization_semantic_sha256(&authorization, &trusted_key)?;
-    Ok(AdmittedReset {
+    Ok((AdmittedReset {
         inventory,
         inventory_bytes,
         inventory_sha256,
@@ -833,7 +851,7 @@ fn admit_signed_inputs(
         pinned_artifacts: Vec::new(),
         ssh_identity,
         known_hosts,
-    })
+    }, chain_guard))
 }
 
 fn admit_forward_closure(admitted: &mut AdmittedReset) -> Result<()> {
@@ -988,6 +1006,7 @@ fn verify_authorization_window(
         || claims.onboarding_token_sha256 != inventory.onboarding_token_sha256
         || claims.validator_client_configs_sha256 != inventory.validator_client_configs_sha256
         || claims.inrou_stage_tree_sha256 != inventory.inrou_stage_tree_sha256
+        || claims.faucet_policy != inventory.faucet_policy
         || claims.fee_intent != inventory.fee_intent
         || claims.authorization_nonce != inventory.authorization_nonce
     {
@@ -1120,6 +1139,7 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     if inventory.schema != INVENTORY_SCHEMA_V1 {
         return Err(eyre!("inventory schema must be `{INVENTORY_SCHEMA_V1}`"));
     }
+    let _chain_guard = enter_inventory_chain_discriminant(inventory)?;
     validate_slug("deployment_id", &inventory.deployment_id)?;
     for (label, value) in [
         (
@@ -1146,11 +1166,6 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
             "inventory runtime closure does not bind its retained Inrou stage"
         ));
     }
-    if inventory.chain_id != CHAIN_ID || inventory.chain_discriminant != CHAIN_DISCRIMINANT {
-        return Err(eyre!(
-            "inventory must target the canonical Taira V1 chain identity"
-        ));
-    }
     for (label, value) in [
         (
             "previous genesis hash",
@@ -1170,6 +1185,7 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     validate_timeouts(&inventory.timeouts)?;
     validate_inrou(&inventory.inrou_canary)?;
     validate_canary_onboarding_request(&inventory.canary_onboarding_request)?;
+    validate_faucet_policy(&inventory.faucet_policy)?;
     validate_fee_intent(&inventory.fee_intent)?;
     validate_cleanup(&inventory.cleanup)?;
     if inventory.validators.len() != VALIDATOR_SLUGS.len() {
@@ -1220,8 +1236,13 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
                 "validator client identities must bind four distinct ordered accounts and Torii origins"
             ));
         }
-        iroha::data_model::account::AccountId::parse_encoded(&client.account_id)
+        let account = AccountId::parse_encoded(&client.account_id)
             .wrap_err("validator client account identity is not canonical")?;
+        if account.to_string() != client.account_id {
+            return Err(eyre!(
+                "validator client account identity is not canonical I105"
+            ));
+        }
     }
     validate_edge(&inventory.edge, &inventory.revision)?;
     if !hostnames.insert(inventory.edge.endpoint.hostname.clone()) {
@@ -1240,6 +1261,19 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn enter_inventory_chain_discriminant(
+    inventory: &InventoryV1,
+) -> Result<ChainDiscriminantGuard> {
+    if inventory.chain_id != CHAIN_ID || inventory.chain_discriminant != CHAIN_DISCRIMINANT {
+        return Err(eyre!(
+            "inventory must target the canonical Taira V1 chain identity"
+        ));
+    }
+    Ok(ChainDiscriminantGuard::enter(
+        inventory.chain_discriminant,
+    ))
 }
 
 fn validate_revision(revision: &RevisionV1) -> Result<()> {
@@ -1864,6 +1898,29 @@ fn validate_canary_onboarding_request(request: &AccountOnboardingPlanRequestV1) 
         return Err(eyre!(
             "public-reset canary onboarding request must be the exact empty-permission V1 canary identity"
         ));
+    }
+    Ok(())
+}
+
+fn validate_faucet_policy(policy: &FaucetPolicyV1) -> Result<()> {
+    let authority = AccountId::parse_encoded(&policy.authority)
+        .wrap_err("public-reset faucet authority is not a canonical I105 identity")?;
+    if authority.to_string() != policy.authority || authority.try_signatory().is_none() {
+        return Err(eyre!(
+            "public-reset faucet authority must be one canonical single-signatory AccountId"
+        ));
+    }
+    let asset_definition_id = AssetDefinitionId::from_str(&policy.asset_definition_id)
+        .wrap_err("public-reset faucet asset definition is invalid")?;
+    if asset_definition_id.to_string() != policy.asset_definition_id
+        || policy.asset_definition_id != crate::taira::DEFAULT_GAS_ASSET_ID
+    {
+        return Err(eyre!(
+            "public-reset faucet asset must be the canonical Taira V1 fee asset"
+        ));
+    }
+    if policy.amount.is_zero() {
+        return Err(eyre!("public-reset faucet amount must be greater than zero"));
     }
     Ok(())
 }
@@ -2712,6 +2769,7 @@ mod executor_model {
         status: String,
         phase: String,
         next_step: u16,
+        #[norito(required)]
         recovery_intent: Option<RecoveryIntentV1>,
         touched_validators: Vec<String>,
         edge_touched: bool,
@@ -4760,6 +4818,26 @@ mod executor_model {
         }
 
         #[test]
+        fn inventory_validation_uses_the_exact_taira_chain_discriminant() {
+            let inventory = sample_inventory();
+            let _conflicting_process_guard = ChainDiscriminantGuard::enter(753);
+            AccountId::parse_encoded(&inventory.canary_onboarding_request.account_id)
+                .expect_err("a Taira I105 identity must not parse under the SORA discriminant");
+
+            validate_inventory(&inventory)
+                .expect("inventory validation enters the signed Taira discriminant");
+            let _inventory_guard = enter_inventory_chain_discriminant(&inventory)
+                .expect("canonical Taira inventory chain guard");
+            let account =
+                AccountId::parse_encoded(&inventory.canary_onboarding_request.account_id)
+                    .expect("Taira I105 identity parses under discriminant 369");
+            assert_eq!(
+                account.to_string(),
+                inventory.canary_onboarding_request.account_id
+            );
+        }
+
+        #[test]
         fn recovery_intent_rejects_noncanonical_idempotency_digests() {
             let canonical = test_recovery_intent(ExecutionStep::Canary);
             validate_recovery_intent(&canonical, ExecutionStep::Canary)
@@ -4771,6 +4849,32 @@ mod executor_model {
                     .expect_err("noncanonical recovery idempotency key must fail closed");
                 assert!(format!("{error:#}").contains("exact lowercase SHA-256"));
             }
+        }
+
+        #[test]
+        fn journal_requires_explicit_nullable_recovery_intent_slot() {
+            let admitted = admitted(sample_inventory());
+            let state = initial_journal(&admitted);
+            let canonical = json::to_value(&state).expect("journal JSON value");
+            assert!(
+                canonical
+                    .as_object()
+                    .and_then(|object| object.get("recovery_intent"))
+                    .is_some_and(norito::json::Value::is_null),
+                "an empty recovery intent must serialize as an explicit null slot"
+            );
+            json::from_value::<JournalV1>(canonical.clone())
+                .expect("explicit nullable journal slot");
+
+            let mut missing = canonical;
+            missing
+                .as_object_mut()
+                .expect("journal object")
+                .remove("recovery_intent");
+            assert!(
+                json::from_value::<JournalV1>(missing).is_err(),
+                "the exact V1 journal must reject an omitted recovery_intent slot"
+            );
         }
 
         fn admitted(inventory: InventoryV1) -> AdmittedReset {
@@ -5095,6 +5199,93 @@ mod executor_model {
                 1_000_000,
             )
             .expect_err("program revision tampering must fail");
+        }
+
+        #[test]
+        fn signed_reset_documents_require_explicit_nullable_fee_policy_slots() {
+            let inventory = sample_inventory();
+            let canonical = json::to_value(&inventory).expect("inventory JSON value");
+            let fee_intent = canonical
+                .as_object()
+                .and_then(|object| object.get("fee_intent"))
+                .and_then(norito::json::Value::as_object)
+                .expect("fee-intent object");
+            for field in ["sponsor_program", "sponsor_program_revision"] {
+                assert!(
+                    fee_intent
+                        .get(field)
+                        .is_some_and(norito::json::Value::is_null),
+                    "authority fee intent must serialize `{field}` as explicit null"
+                );
+            }
+            json::from_value::<InventoryV1>(canonical.clone())
+                .expect("explicit nullable inventory slots");
+
+            for field in ["sponsor_program", "sponsor_program_revision"] {
+                let mut missing = canonical.clone();
+                missing
+                    .as_object_mut()
+                    .and_then(|object| object.get_mut("fee_intent"))
+                    .and_then(norito::json::Value::as_object_mut)
+                    .expect("fee-intent object")
+                    .remove(field);
+                assert!(
+                    json::from_value::<InventoryV1>(missing).is_err(),
+                    "the signed V1 inventory must reject omitted `{field}`"
+                );
+            }
+
+            let claims = sample_claims(&inventory, &"11".repeat(32));
+            let canonical = json::to_value(&claims).expect("authorization claims JSON value");
+            json::from_value::<AuthorizationClaimsV1>(canonical.clone())
+                .expect("explicit nullable authorization-claim slots");
+            for field in ["sponsor_program", "sponsor_program_revision"] {
+                let mut missing = canonical.clone();
+                missing
+                    .as_object_mut()
+                    .and_then(|object| object.get_mut("fee_intent"))
+                    .and_then(norito::json::Value::as_object_mut)
+                    .expect("authorization fee-intent object")
+                    .remove(field);
+                assert!(
+                    json::from_value::<AuthorizationClaimsV1>(missing).is_err(),
+                    "the signed V1 authorization must reject omitted `{field}`"
+                );
+            }
+        }
+
+        #[test]
+        fn signed_faucet_policy_binds_authority_asset_and_amount() {
+            let inventory = sample_inventory();
+            validate_faucet_policy(&inventory.faucet_policy)
+                .expect("canonical faucet policy is admitted");
+
+            let mut invalid_authority = inventory.faucet_policy.clone();
+            invalid_authority.authority = "not-an-account".to_owned();
+            validate_faucet_policy(&invalid_authority)
+                .expect_err("invalid faucet authority must fail closed");
+
+            let mut invalid_asset = inventory.faucet_policy.clone();
+            invalid_asset.asset_definition_id = "xor#universal".to_owned();
+            validate_faucet_policy(&invalid_asset)
+                .expect_err("an alias or non-Taira faucet asset must fail closed");
+
+            let mut zero_amount = inventory.faucet_policy.clone();
+            zero_amount.amount = Quantity::zero();
+            validate_faucet_policy(&zero_amount)
+                .expect_err("zero faucet amount must fail closed");
+
+            let admitted = signed_admitted(inventory, 1_000_000);
+            let mut substituted = admitted.authorization.clone();
+            substituted.claims.faucet_policy.amount = Quantity::from(1_u32);
+            verify_authorization(
+                &admitted.inventory,
+                &admitted.inventory_sha256,
+                &substituted,
+                &admitted.trusted_key,
+                1_000_000,
+            )
+            .expect_err("authorization faucet-policy substitution must fail closed");
         }
 
         #[test]
@@ -6020,6 +6211,7 @@ mod executor_model {
                 onboarding_token_sha256: inventory.onboarding_token_sha256.clone(),
                 validator_client_configs_sha256: inventory.validator_client_configs_sha256.clone(),
                 inrou_stage_tree_sha256: inventory.inrou_stage_tree_sha256.clone(),
+                faucet_policy: inventory.faucet_policy.clone(),
                 fee_intent: inventory.fee_intent.clone(),
                 authorization_nonce: inventory.authorization_nonce.clone(),
                 issued_at_unix_ms: 990_000,
@@ -6031,9 +6223,13 @@ mod executor_model {
         }
 
         pub(in super::super) fn sample_inventory() -> InventoryV1 {
+            let _chain_guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
             let canary_key_pair =
                 iroha_crypto::KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
                     .expect("deterministic canary key");
+            let faucet_key_pair =
+                iroha_crypto::KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+                    .expect("deterministic faucet key");
             let canary_account = AccountId::new(canary_key_pair.public_key().clone());
             let canary_alias = crate::taira::build_alias(
                 "tairarolloutcanary",
@@ -6112,7 +6308,16 @@ mod executor_model {
                     .map(|(index, slug)| ValidatorClientV1 {
                         slug: (*slug).to_owned(),
                         torii_origin: format!("https://taira-validator-{}.sora.org/", index + 1),
-                        account_id: format!("ed0120{}", "1".repeat(64 - index)),
+                        account_id: AccountId::new(
+                            iroha_crypto::KeyPair::try_from_seed(
+                                vec![u8::try_from(index + 1).expect("four fixture validators"); 32],
+                                Algorithm::Ed25519,
+                            )
+                            .expect("deterministic validator client key")
+                            .public_key()
+                            .clone(),
+                        )
+                        .to_string(),
                     })
                     .collect(),
                 edge: EdgeV1 {
@@ -6166,6 +6371,11 @@ mod executor_model {
                     guest_manifest_sha256: "0".repeat(64),
                 },
                 canary_onboarding_request,
+                faucet_policy: FaucetPolicyV1 {
+                    authority: AccountId::new(faucet_key_pair.public_key().clone()).to_string(),
+                    asset_definition_id: crate::taira::DEFAULT_GAS_ASSET_ID.to_owned(),
+                    amount: Quantity::from(25_000_u32),
+                },
                 fee_intent: FeeIntentV1 {
                     payer: "authority".to_owned(),
                     sponsor_program: None,

@@ -30,6 +30,7 @@ final class OfflineDeviceAttestationCodec {
       "iroha_data_model::offline::OfflineAndroidKeyMintChallengePreimage";
   static final String INSTRUCTION_SCHEMA =
       "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation";
+  static final String INSTRUCTION_WIRE_ID = "iroha.offline.device_attestation.register";
 
   private static final RegistrationAdapter REGISTRATION_ADAPTER = new RegistrationAdapter();
   private static final InstructionAdapter INSTRUCTION_ADAPTER = new InstructionAdapter();
@@ -99,7 +100,7 @@ final class OfflineDeviceAttestationCodec {
 
   static InstructionBox instruction(final DeviceAttestationRegistration registration) {
     return InstructionBox.fromWirePayload(
-        INSTRUCTION_SCHEMA, encodeInstructionPayload(registration));
+        INSTRUCTION_WIRE_ID, encodeInstructionPayload(registration));
   }
 
   static byte[] canonicalChallengeHash(final DeviceAttestationRegistration value) {

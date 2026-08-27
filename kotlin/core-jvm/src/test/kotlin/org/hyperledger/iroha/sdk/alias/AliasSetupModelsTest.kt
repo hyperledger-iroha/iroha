@@ -14,9 +14,11 @@ import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -593,7 +595,7 @@ class AliasSetupModelsTest {
     }
 
     @Test
-    fun sponsoredOnboardingReceiptAndPrepareRequestAreTypedAndSecretFree() {
+    fun onboardingAndFaucetPrepareRequestsAreTypedAndSecretFree() {
         val intent = AliasIntentV1.AccountAlias(
             AliasAccountIntentV1(
                 resolvedAlias(),
@@ -631,10 +633,76 @@ class AliasSetupModelsTest {
             idempotencyKey = "22".repeat(32),
             executionExpiresAtUnixMs = 4_102_444_800_000,
         )
-        val prepare = AccountOnboardingPrepareRequestV1(binding, receipt).toJsonMap()
+        val feePayment = FeePaymentIntent.authority(emptyList())
+        val prepare = AccountOnboardingPrepareRequestV1(binding, receipt, feePayment).toJsonMap()
         assertFalse(JsonEncoder.encode(prepare).contains("token"))
         assertFalse(JsonEncoder.encode(prepare).contains("private_key"))
         assertTrue(JsonEncoder.encode(prepare).contains("\"schema\":\"iroha.accounts.onboard.prepare.v1\""))
+        assertEquals(feePayment.toJsonMap(), prepare["fee_payment"])
+
+        val faucetBinding = TairaPublicResetMutationBindingV1(
+            authorizationSha256 = "33".repeat(32),
+            authorizationNonce = "faucet-fixture-nonce-00000000001",
+            kind = TairaPublicResetMutationBindingV1.FAUCET,
+            phase = "faucet",
+            idempotencyKey = "44".repeat(32),
+            executionExpiresAtUnixMs = 4_102_444_800_000,
+        )
+        val claim = AccountFaucetClaimV1(account(0x22), BigInteger.valueOf(42), "0001020304050607")
+        val faucetPrepare = AccountFaucetPrepareRequestV1(faucetBinding, claim, feePayment).toJsonMap()
+        assertEquals(AccountFaucetPrepareRequestV1.SCHEMA, faucetPrepare["schema"])
+        assertEquals(claim.toJsonMap(), faucetPrepare["claim"])
+        assertEquals(feePayment.toJsonMap(), faucetPrepare["fee_payment"])
+        assertFalse(faucetPrepare.containsKey("policy"))
+        assertEquals(64, claim.semanticHashHex().length)
+        val faucetPolicy = AccountFaucetPolicyV1(
+            account(0x11),
+            asset(),
+            KotodamaQuantity.parseCanonical("5"),
+        )
+        assertEquals(account(0x11), faucetPolicy.faucetAuthority)
+        assertEquals(asset(), faucetPolicy.assetDefinitionId)
+        assertEquals("5", faucetPolicy.amount.toString())
+        assertFailsWith<IllegalArgumentException> {
+            AccountFaucetPrepareRequestV1(binding, claim, feePayment)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AccountFaucetClaimV1(account(0x22), BigInteger.valueOf(42), "AA")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AccountFaucetClaimV1(account(0x22), BigInteger.ZERO, "00")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AccountFaucetClaimV1(account(0x22), BigInteger.ONE, "")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AccountFaucetClaimV1(account(0x22), BigInteger.ONE, "00".repeat(33))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AccountFaucetPolicyV1(account(0x11), asset(), KotodamaQuantity.parseCanonical("0"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AccountFaucetPolicyV1(account(0x11), "not-an-asset", KotodamaQuantity.parseCanonical("5"))
+        }
+
+        val sponsorProgram = FeeSponsorProgramId(account(0x11), "public-reset")
+        val sponsorRevisionOne = FeePaymentIntent.sponsor(sponsorProgram, 1L, emptyList())
+        assertTrue(
+            sponsorRevisionOne.hasSamePayerAndGasBound(
+                FeePaymentIntent.sponsor(sponsorProgram, 1L, emptyList()),
+            ),
+        )
+        assertFalse(
+            sponsorRevisionOne.hasSamePayerAndGasBound(
+                FeePaymentIntent.sponsor(sponsorProgram, 2L, emptyList()),
+            ),
+        )
+        assertFalse(sponsorRevisionOne.hasSamePayerAndGasBound(feePayment))
+        assertFalse(
+            sponsorRevisionOne.hasSamePayerAndGasBound(
+                FeePaymentIntent.sponsor(sponsorProgram, 1L, emptyList(), 1L),
+            ),
+        )
 
         val proofRequired = AccountOnboardingJsonParser.parsePrepareResponse(
             JsonEncoder.encode(
@@ -658,6 +726,65 @@ class AliasSetupModelsTest {
         )
         assertEquals(AliasSetupStatusV1.READY, readiness.status)
         assertTrue(readiness.diagnostics.isEmpty())
+    }
+
+    @Test
+    fun feeSponsorProgramIdentityIgnoresI105Discriminant() {
+        val sponsor = account(0x11)
+        val alternateSponsor = AccountAddress
+            .parseEncodedIgnoringCurveSupport(sponsor, null)
+            .toI105(42)
+        val program = FeeSponsorProgramId(sponsor, "public-reset")
+        val alternateProgram = FeeSponsorProgramId(alternateSponsor, "public-reset")
+
+        assertEquals(program, alternateProgram)
+        assertEquals(program.hashCode(), alternateProgram.hashCode())
+        assertTrue(
+            FeePaymentIntent.sponsor(program, 1L, emptyList()).hasSamePayerAndGasBound(
+                FeePaymentIntent.sponsor(alternateProgram, 1L, emptyList()),
+            ),
+        )
+        assertFalse(program == FeeSponsorProgramId(account(0x12), "public-reset"))
+        assertFalse(program == FeeSponsorProgramId(alternateSponsor, "other"))
+    }
+
+    @Test
+    fun feeSponsorProgramNameMatchesRustCanonicality() {
+        val sponsor = account(0x11)
+        FeeSponsorProgramId(sponsor, "a".repeat(255))
+        FeeSponsorProgramId(sponsor, "é".repeat(127) + "a")
+        FeeSponsorProgramId(sponsor, "emoji😀")
+
+        val invalid = mutableListOf(
+            "a".repeat(256),
+            "é".repeat(128),
+            "nul\u0000suffix",
+            "c1\u0080control",
+            "white space",
+            "no\u00A0break",
+            "narrow\u202Fspace",
+            "reserved@name",
+            "reserved#name",
+            "reserved\$name",
+            "slash/name",
+            "e\u0301",
+            String(charArrayOf('\uD800')),
+        )
+        invalid += listOf(0x061C, 0x200E, 0x200F)
+            .plus((0x202A..0x202E).toList())
+            .plus((0x2066..0x2069).toList())
+            .map { codePoint -> "prefix${String(Character.toChars(codePoint))}suffix" }
+        invalid.forEach { name ->
+            assertFailsWith<IllegalArgumentException> {
+                FeeSponsorProgramId(sponsor, name)
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            FeeSponsorProgramId("$sponsor/extra", "name")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            FeeSponsorProgramId.parse("$sponsor/name/extra")
+        }
     }
 
     @Test

@@ -748,7 +748,7 @@ impl CertifiedServePayloadRecoveryCut {
                         request_hash: request.request_hash(),
                         manifest: manifest.clone(),
                         body_hash: manifest.subject.payload_hash,
-                        responder: persisted_responder,
+                        responder: responder_peer.clone(),
                     };
                     let mut preimage = b"iroha:sumeragi:v2:certified-body-response".to_vec();
                     preimage.extend_from_slice(&signed_payload.encode());
@@ -778,7 +778,7 @@ impl CertifiedServePayloadRecoveryCut {
                             request_hash: request.request_hash(),
                             manifest: manifest.clone(),
                             body,
-                            responder: persisted_responder,
+                            responder: responder_peer.clone(),
                             signature: signature.clone(),
                         };
                         response
@@ -1887,10 +1887,22 @@ impl CertifiedServePayloadStoreV1 {
                 CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch,
             ));
         }
+        let responder = self
+            .context
+            .roster
+            .iter()
+            .position(|entry| entry.validator == response.responder)
+            .and_then(|index| wire::ValidatorIndex::try_from(index).ok())
+            .ok_or_else(|| {
+                CertifiedServeTerminalPersistenceError::InputRejected(invalid_frame(
+                    &self.directory,
+                    "response signer is outside the frozen roster",
+                ))
+            })?;
         let completed = PersistedCertifiedServePayloadStateV1::Completed {
             response_hash: HashOf::new(response),
             manifest: response.manifest.clone(),
-            responder: response.responder,
+            responder,
             signature: response.signature.clone(),
         };
         match &payload.state {
@@ -2098,19 +2110,27 @@ impl CertifiedServePayloadStoreV1 {
                 "response changed its exact request binding",
             ));
         }
-        let responder_index = usize::try_from(response.responder)
-            .ok()
-            .filter(|index| *index < self.context.roster.len())
+        let responder_index = self
+            .context
+            .roster
+            .iter()
+            .position(|entry| entry.validator == response.responder)
             .ok_or_else(|| {
                 invalid_frame(
                     &self.directory,
                     "response signer is outside the frozen roster",
                 )
             })?;
+        let responder_index = wire::ValidatorIndex::try_from(responder_index).map_err(|_| {
+            invalid_frame(
+                &self.directory,
+                "response signer index is not representable",
+            )
+        })?;
         if request
             .certificate
             .signers
-            .binary_search(&response.responder)
+            .binary_search(&responder_index)
             .is_err()
         {
             return Err(invalid_frame(
@@ -2118,7 +2138,7 @@ impl CertifiedServePayloadStoreV1 {
                 "response signer lost certified local retention authority",
             ));
         }
-        let responder = &self.context.roster[responder_index].validator;
+        let responder = &response.responder;
         response
             .validate_against(&self.context, request, responder)
             .map_err(|error| {
@@ -2842,15 +2862,16 @@ mod tests {
         responder: wire::ValidatorIndex,
         keys: &[KeyPair],
     ) -> wire::CertifiedBodyResponse {
+        let responder_index = usize::try_from(responder).expect("fixture responder index");
         let mut response = wire::CertifiedBodyResponse {
             request_hash: request.request_hash(),
             manifest,
             body,
-            responder,
+            responder: PeerId::new(keys[responder_index].public_key().clone()),
             signature: Vec::new(),
         };
         response.signature = Signature::new(
-            keys[usize::try_from(responder).expect("fixture responder index")].private_key(),
+            keys[responder_index].private_key(),
             &response.signature_preimage(),
         )
         .payload()
@@ -2924,7 +2945,7 @@ mod tests {
             request_hash: authenticated.request_hash(),
             manifest,
             body,
-            responder: 0,
+            responder: PeerId::new(key.public_key().clone()),
             signature: Vec::new(),
         };
         response.signature = Signature::new(key.private_key(), &response.signature_preimage())
@@ -2999,7 +3020,7 @@ mod tests {
         };
         assert_eq!(completed_ref.response_hash(), HashOf::new(&response));
         assert_eq!(completed_ref.manifest(), &response.manifest);
-        assert_eq!(completed_ref.responder(), response.responder);
+        assert_eq!(completed_ref.responder(), 0);
         assert_eq!(completed_ref.signature(), response.signature);
     }
     #[test]
@@ -3011,7 +3032,7 @@ mod tests {
             CertifiedServePayloadStoreV1::open(temporary.path(), &context).expect("open store");
         let _pending_receipt = store.persist_pending(&request).expect("persist pending");
         let mut nonretaining = response.clone();
-        nonretaining.responder = 3;
+        nonretaining.responder = PeerId::new(keys[3].public_key().clone());
         nonretaining.signature =
             Signature::new(keys[3].private_key(), &nonretaining.signature_preimage())
                 .payload()

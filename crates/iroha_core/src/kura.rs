@@ -106,7 +106,7 @@ use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 use iroha_data_model::{
-    AccountId, NetworkId,
+    AccountId, DomainId, NetworkId,
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
@@ -126,6 +126,7 @@ use iroha_data_model::{
         decode_framed_signed_block,
     },
     isi::offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
+    kaigi::KaigiId,
     merge::{
         LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
         MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
@@ -144,6 +145,7 @@ use iroha_data_model::{
     },
     parliament_types::BallotAttemptId,
     peer::PeerId,
+    prelude::Name,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
     validation_fee::ValidationFeePolicyWitnessProofV1,
 };
@@ -1574,11 +1576,14 @@ impl Kura {
             complete: false,
             indexed_heights: BTreeSet::new(),
             incomplete_merge_heights: BTreeSet::new(),
+            incomplete_kaigi_signal_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
             heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
+            kaigi_signal_candidates: BTreeMap::new(),
+            inventories_by_height: BTreeMap::new(),
         };
         let Some(entries) = block_data.dense_entries() else {
             return index;
@@ -1596,6 +1601,7 @@ impl Kura {
             }
         }
         index.complete = index.incomplete_merge_heights.is_empty()
+            && index.incomplete_kaigi_signal_heights.is_empty()
             && index.indexed_heights.len() == block_data.len();
         index
     }
@@ -1605,22 +1611,46 @@ impl Kura {
         block: &SignedBlock,
     ) {
         index.indexed_heights.insert(height);
+        index.inventories_by_height.entry(height).or_default();
+        let entrypoints = block.entrypoints_cloned().collect::<Vec<_>>();
+        if u64::try_from(entrypoints.len()).is_err() {
+            index.incomplete_kaigi_signal_heights.insert(height);
+            return;
+        }
         if !block.has_results() {
+            if !entrypoints.is_empty()
+                || block.entrypoint_hashes().next().is_some()
+                || block.results().next().is_some()
+                || block.result_hashes().next().is_some()
+            {
+                index.incomplete_kaigi_signal_heights.insert(height);
+            }
             return;
         }
         for hash in block.entrypoint_hashes() {
+            index
+                .inventories_by_height
+                .entry(height)
+                .or_default()
+                .entrypoint_hashes
+                .insert(hash);
             index
                 .heights_by_entrypoint
                 .entry(hash)
                 .or_default()
                 .insert(height);
         }
-        let entrypoints = block.entrypoints_cloned().collect::<Vec<_>>();
         for entrypoint in &entrypoints {
             Self::insert_offline_operation_id_heights(index, height, entrypoint);
         }
-        for entrypoint in entrypoints {
+        for entrypoint in &entrypoints {
             if let Some(authority) = entrypoint.authority_opt() {
+                index
+                    .inventories_by_height
+                    .entry(height)
+                    .or_default()
+                    .authorities
+                    .insert(authority.clone());
                 index
                     .heights_by_authority
                     .entry(authority.clone())
@@ -1629,18 +1659,151 @@ impl Kura {
             }
             if let Some(timestamp_ms) = entrypoint.creation_time_ms() {
                 index
+                    .inventories_by_height
+                    .entry(height)
+                    .or_default()
+                    .timestamps_ms
+                    .insert(timestamp_ms);
+                index
                     .heights_by_timestamp_ms
                     .entry(timestamp_ms)
                     .or_default()
                     .insert(height);
             }
         }
-        for result in block.results() {
+        let results = block.results().cloned().collect::<Vec<_>>();
+        for result in &results {
+            index
+                .inventories_by_height
+                .entry(height)
+                .or_default()
+                .result_statuses
+                .insert(result.as_ref().is_ok());
             index
                 .heights_by_result_status
                 .entry(result.as_ref().is_ok())
                 .or_default()
                 .insert(height);
+        }
+        if entrypoints.len() != results.len() {
+            index.incomplete_kaigi_signal_heights.insert(height);
+            return;
+        }
+        let block_hash = block.hash();
+        for (canonical_index, (entrypoint, result)) in entrypoints.iter().zip(&results).enumerate()
+        {
+            let Ok(transaction_index) = u64::try_from(canonical_index) else {
+                index.incomplete_kaigi_signal_heights.insert(height);
+                return;
+            };
+            if !Self::insert_kaigi_signal_candidate(
+                index,
+                height,
+                block_hash,
+                1,
+                transaction_index,
+                entrypoint,
+                result,
+            ) {
+                index.incomplete_kaigi_signal_heights.insert(height);
+                return;
+            }
+        }
+    }
+
+    pub(crate) fn kaigi_signal_candidate_identity(
+        entrypoint: &TransactionEntrypoint,
+        result: &TransactionResult,
+    ) -> Option<(KaigiId, AccountId)> {
+        if result.as_ref().is_err() {
+            return None;
+        }
+        let transaction = match entrypoint {
+            TransactionEntrypoint::External(transaction) => transaction,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                return None;
+            }
+        };
+        let key = "kaigi_signal".parse::<Name>().ok()?;
+        let signal = transaction
+            .metadata()
+            .get(&key)?
+            .try_into_any_norito::<JsonValue>()
+            .ok()?;
+        let object = signal.as_object()?;
+        if object.get("schema")?.as_str()? != "iroha-demo-kaigi-chain-signal/v1" {
+            return None;
+        }
+        let mut call_literal = None;
+        for key in ["callId", "call_id"] {
+            let Some(value) = object.get(key) else {
+                continue;
+            };
+            let candidate = value.as_str()?;
+            if call_literal.is_some_and(|existing| existing != candidate) {
+                return None;
+            }
+            call_literal = Some(candidate);
+        }
+        let call_literal = call_literal?;
+        let (domain_literal, call_name_literal) = call_literal.split_once(':')?;
+        if call_name_literal.contains(':') {
+            return None;
+        }
+        let call_id = KaigiId::new(
+            DomainId::parse_fully_qualified(domain_literal).ok()?,
+            call_name_literal.parse::<Name>().ok()?,
+        );
+        if call_id.to_string() != call_literal {
+            return None;
+        }
+        Some((call_id, transaction.authority().clone()))
+    }
+
+    fn insert_kaigi_signal_candidate(
+        index: &mut TransactionEntrypointIndex,
+        height: NonZeroUsize,
+        block_hash: HashOf<BlockHeader>,
+        execution_phase: u8,
+        transaction_index: u64,
+        entrypoint: &TransactionEntrypoint,
+        result: &TransactionResult,
+    ) -> bool {
+        let Some((call_id, authority)) = Self::kaigi_signal_candidate_identity(entrypoint, result)
+        else {
+            return true;
+        };
+        let Ok(block_height) = u64::try_from(height.get()) else {
+            return false;
+        };
+        let position = KaigiSignalCandidatePosition {
+            block_height,
+            execution_phase,
+            transaction_index,
+            block_hash,
+            entrypoint_hash: entrypoint.hash(),
+        };
+        let locator = KaigiSignalCandidateLocator {
+            position,
+            authority,
+        };
+        index
+            .inventories_by_height
+            .entry(height)
+            .or_default()
+            .kaigi_calls
+            .insert(call_id.clone());
+        match index
+            .kaigi_signal_candidates
+            .entry(call_id)
+            .or_default()
+            .entry(height)
+            .or_default()
+            .insert((execution_phase, transaction_index), locator.clone())
+        {
+            None => true,
+            Some(existing) => existing == locator,
         }
     }
     fn insert_offline_operation_id_heights(
@@ -1667,9 +1830,16 @@ impl Kura {
             if operation_id == [0; 32] {
                 continue;
             }
+            let key = (transaction_authority.clone(), operation_id);
+            index
+                .inventories_by_height
+                .entry(height)
+                .or_default()
+                .offline_operation_ids
+                .insert(key.clone());
             index
                 .heights_by_offline_operation_id
-                .entry((transaction_authority.clone(), operation_id))
+                .entry(key)
                 .or_default()
                 .insert(height);
         }
@@ -1711,17 +1881,45 @@ impl Kura {
     fn insert_merge_execution_index_heights(
         index: &mut TransactionEntrypointIndex,
         height: NonZeroUsize,
+        block_hash: HashOf<BlockHeader>,
         batch: &MergeExecutionBatch,
     ) {
+        index.inventories_by_height.entry(height).or_default();
+        let observed_merge_count = batch.lanes.iter().try_fold(0_usize, |count, execution| {
+            count.checked_add(execution.entrypoints.len())
+        });
+        let merge_projection_is_complete = observed_merge_count.is_some_and(|observed| {
+            usize::try_from(batch.entrypoint_count).is_ok_and(|declared| declared == observed)
+                && batch
+                    .lanes
+                    .iter()
+                    .all(|execution| execution.entrypoints.len() == execution.results.len())
+        });
+        if !merge_projection_is_complete {
+            index.incomplete_kaigi_signal_heights.insert(height);
+        }
+        let mut canonical_merge_index = 0_usize;
         for execution in &batch.lanes {
-            for entrypoint in &execution.entrypoints {
+            for (entrypoint, result) in execution.entrypoints.iter().zip(&execution.results) {
                 Self::insert_offline_operation_id_heights(index, height, entrypoint);
                 index
                     .heights_by_entrypoint
                     .entry(entrypoint.hash())
                     .or_default()
                     .insert(height);
+                index
+                    .inventories_by_height
+                    .entry(height)
+                    .or_default()
+                    .entrypoint_hashes
+                    .insert(entrypoint.hash());
                 if let Some(authority) = entrypoint.authority_opt() {
+                    index
+                        .inventories_by_height
+                        .entry(height)
+                        .or_default()
+                        .authorities
+                        .insert(authority.clone());
                     index
                         .heights_by_authority
                         .entry(authority.clone())
@@ -1730,13 +1928,41 @@ impl Kura {
                 }
                 if let Some(timestamp_ms) = entrypoint.creation_time_ms() {
                     index
+                        .inventories_by_height
+                        .entry(height)
+                        .or_default()
+                        .timestamps_ms
+                        .insert(timestamp_ms);
+                    index
                         .heights_by_timestamp_ms
                         .entry(timestamp_ms)
                         .or_default()
                         .insert(height);
                 }
+                if merge_projection_is_complete {
+                    let transaction_index =
+                        u64::try_from(canonical_merge_index).unwrap_or(u64::MAX);
+                    if !Self::insert_kaigi_signal_candidate(
+                        index,
+                        height,
+                        block_hash,
+                        0,
+                        transaction_index,
+                        entrypoint,
+                        result,
+                    ) {
+                        index.incomplete_kaigi_signal_heights.insert(height);
+                    }
+                }
+                canonical_merge_index = canonical_merge_index.saturating_add(1);
             }
             for result in &execution.results {
+                index
+                    .inventories_by_height
+                    .entry(height)
+                    .or_default()
+                    .result_statuses
+                    .insert(result.as_ref().is_ok());
                 index
                     .heights_by_result_status
                     .entry(result.as_ref().is_ok())
@@ -1749,28 +1975,67 @@ impl Kura {
         index: &mut TransactionEntrypointIndex,
         height: NonZeroUsize,
     ) {
-        index.heights_by_entrypoint.retain(|_, heights| {
-            heights.remove(&height);
-            !heights.is_empty()
-        });
-        index.heights_by_offline_operation_id.retain(|_, heights| {
-            heights.remove(&height);
-            !heights.is_empty()
-        });
-        index.heights_by_authority.retain(|_, heights| {
-            heights.remove(&height);
-            !heights.is_empty()
-        });
-        index.heights_by_timestamp_ms.retain(|_, heights| {
-            heights.remove(&height);
-            !heights.is_empty()
-        });
-        index.heights_by_result_status.retain(|_, heights| {
-            heights.remove(&height);
-            !heights.is_empty()
-        });
+        let inventory = index
+            .inventories_by_height
+            .remove(&height)
+            .unwrap_or_default();
+        Self::remove_transaction_height_for_keys(
+            &mut index.heights_by_entrypoint,
+            inventory.entrypoint_hashes,
+            height,
+        );
+        Self::remove_transaction_height_for_keys(
+            &mut index.heights_by_offline_operation_id,
+            inventory.offline_operation_ids,
+            height,
+        );
+        Self::remove_transaction_height_for_keys(
+            &mut index.heights_by_authority,
+            inventory.authorities,
+            height,
+        );
+        Self::remove_transaction_height_for_keys(
+            &mut index.heights_by_timestamp_ms,
+            inventory.timestamps_ms,
+            height,
+        );
+        Self::remove_transaction_height_for_keys(
+            &mut index.heights_by_result_status,
+            inventory.result_statuses,
+            height,
+        );
+        for call_id in inventory.kaigi_calls {
+            let remove_call =
+                index
+                    .kaigi_signal_candidates
+                    .get_mut(&call_id)
+                    .is_some_and(|heights| {
+                        heights.remove(&height);
+                        heights.is_empty()
+                    });
+            if remove_call {
+                index.kaigi_signal_candidates.remove(&call_id);
+            }
+        }
         index.indexed_heights.remove(&height);
         index.incomplete_merge_heights.remove(&height);
+        index.incomplete_kaigi_signal_heights.remove(&height);
+    }
+
+    fn remove_transaction_height_for_keys<K: Ord>(
+        indexed: &mut BTreeMap<K, BTreeSet<NonZeroUsize>>,
+        keys: impl IntoIterator<Item = K>,
+        height: NonZeroUsize,
+    ) {
+        for key in keys {
+            let remove_key = indexed.get_mut(&key).is_some_and(|heights| {
+                heights.remove(&height);
+                heights.is_empty()
+            });
+            if remove_key {
+                indexed.remove(&key);
+            }
+        }
     }
     fn set_transaction_entrypoint_index_entry(
         &self,
@@ -1804,13 +2069,14 @@ impl Kura {
         Self::remove_transaction_entrypoint_height(&mut index, height);
         Self::insert_transaction_entrypoint_heights(&mut index, height, block);
         if let Some(batch) = merge_entry.and_then(|entry| entry.execution_batch.as_ref()) {
-            Self::insert_merge_execution_index_heights(&mut index, height, batch);
+            Self::insert_merge_execution_index_heights(&mut index, height, block.hash(), batch);
         }
         if Self::block_merge_reference(block).is_some() && !merge_association_complete {
             index.incomplete_merge_heights.insert(height);
         }
-        index.complete =
-            index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == chain_len;
+        index.complete = index.incomplete_merge_heights.is_empty()
+            && index.incomplete_kaigi_signal_heights.is_empty()
+            && index.indexed_heights.len() == chain_len;
     }
     fn set_transaction_entrypoint_index_entry_from_finalized_bodyless_merge(
         &self,
@@ -1841,39 +2107,43 @@ impl Kura {
             // this height even though the canonical body has been pruned.
             Self::remove_transaction_entrypoint_height(&mut index, height);
             index.indexed_heights.insert(height);
+            index.inventories_by_height.entry(height).or_default();
         }
         if let Some(batch) = merge_entry.execution_batch.as_ref() {
-            Self::insert_merge_execution_index_heights(&mut index, height, batch);
+            Self::insert_merge_execution_index_heights(
+                &mut index,
+                height,
+                canonical_header.hash(),
+                batch,
+            );
         }
         index.incomplete_merge_heights.remove(&height);
-        index.complete =
-            index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == chain_len;
+        index.complete = index.incomplete_merge_heights.is_empty()
+            && index.incomplete_kaigi_signal_heights.is_empty()
+            && index.indexed_heights.len() == chain_len;
         Ok(())
-    }
-    fn truncate_transaction_heights<K: Ord>(
-        index: &mut BTreeMap<K, BTreeSet<NonZeroUsize>>,
-        keep: usize,
-    ) {
-        index.retain(|_, indexed_heights| {
-            indexed_heights.retain(|height| height.get() <= keep);
-            !indexed_heights.is_empty()
-        });
     }
     fn truncate_transaction_entrypoint_index(&self, keep: usize) {
         let mut index = self.transaction_entrypoint_index.lock();
-        index
-            .indexed_heights
-            .retain(|indexed_height| indexed_height.get() <= keep);
-        index
-            .incomplete_merge_heights
-            .retain(|indexed_height| indexed_height.get() <= keep);
-        Self::truncate_transaction_heights(&mut index.heights_by_entrypoint, keep);
-        Self::truncate_transaction_heights(&mut index.heights_by_offline_operation_id, keep);
-        Self::truncate_transaction_heights(&mut index.heights_by_authority, keep);
-        Self::truncate_transaction_heights(&mut index.heights_by_timestamp_ms, keep);
-        Self::truncate_transaction_heights(&mut index.heights_by_result_status, keep);
-        index.complete =
-            index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == keep;
+        Self::truncate_transaction_entrypoint_index_to(&mut index, keep);
+    }
+
+    fn truncate_transaction_entrypoint_index_to(
+        index: &mut TransactionEntrypointIndex,
+        keep: usize,
+    ) {
+        let removed_heights = index
+            .inventories_by_height
+            .keys()
+            .copied()
+            .filter(|height| height.get() > keep)
+            .collect::<Vec<_>>();
+        for height in removed_heights {
+            Self::remove_transaction_entrypoint_height(index, height);
+        }
+        index.complete = index.incomplete_merge_heights.is_empty()
+            && index.incomplete_kaigi_signal_heights.is_empty()
+            && index.indexed_heights.len() == keep;
     }
     fn set_block_height_index_entry(&self, height: usize, hash: HashOf<BlockHeader>) {
         let Some(height) = NonZeroUsize::new(height) else {
@@ -2482,7 +2752,7 @@ impl Kura {
             return Err(Error::EmptyStoreRoot);
         }
         if config.init_mode == InitMode::Strict {
-            Self::reject_retired_pipeline_roster_sidecars(&blocks_root)?;
+            Self::reject_retired_pipeline_artifacts(&blocks_root)?;
             Self::reject_retired_rollback_intents(&blocks_root)?;
         }
         let merge_cache_capacity =
@@ -2956,6 +3226,7 @@ impl Kura {
         }
         if !provisional_open {
             if config.init_mode == InitMode::Strict {
+                kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
                 kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
                 kura.recover_lane_block_execution_input_pairs_on_startup()?;
                 kura.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
@@ -3957,11 +4228,6 @@ impl Kura {
     }
     fn resolve_canonical_storage_before_mutation(&self) -> Result<()> {
         self.durable_mutation_authorized()?;
-        if self.emergency_fast_startup_enabled() {
-            return Err(Error::EmergencyFastAuxiliaryUnavailable {
-                subsystem: "canonical mutation",
-            });
-        }
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
@@ -5242,6 +5508,7 @@ impl Kura {
     /// # Errors
     /// Returns an [`Error`] if the snapshot changes the active primary storage
     /// paths or any restored lane storage cannot be validated or provisioned.
+    #[cfg(test)]
     pub fn restore_lane_segments(&self, lane_config: &LaneConfig) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -5290,6 +5557,7 @@ impl Kura {
             );
             return Ok(());
         }
+        self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_block_execution_input_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
@@ -5378,6 +5646,7 @@ impl Kura {
             );
             return Ok(());
         }
+        self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_block_execution_input_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
@@ -5710,6 +5979,7 @@ impl Kura {
         );
         Ok(())
     }
+    #[cfg(test)]
     fn prepare_lane_storage_resolved(&self, entry: &LaneConfigEntry) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let blocks_dir = entry.blocks_dir(&self.store_root);
@@ -7618,6 +7888,9 @@ impl Kura {
         namespace: &BoundProgressNamespace,
         kind: &str,
     ) -> bool {
+        if self.emergency_fast_startup_enabled() {
+            return false;
+        }
         for (index, directory) in namespace.directories.iter().enumerate() {
             let result = if index == 0 {
                 sync_indexed_sidecar_dir_handle(&directory.file)
@@ -7659,6 +7932,9 @@ impl Kura {
         ) && self.bound_progress_namespace_unchanged(namespace)
     }
     fn sync_bound_progress_sidecar(&self, bound: &BoundProgressSidecar, kind: &str) -> bool {
+        if self.emergency_fast_startup_enabled() {
+            return false;
+        }
         if let Err(err) = sync_indexed_sidecar_data(&bound.data) {
             iroha_logger::warn!(?err, path = ?bound.namespace.data_path, kind, "failed to sync progress sidecar payload");
             return false;
@@ -8932,6 +9208,7 @@ impl Kura {
                     .to_owned(),
             ));
         }
+        self.durable_mutation_authorized()?;
         let durable_count = self.exact_durable_blocks_count()?;
         {
             let _prune_guard = self.prune_lock.lock();
@@ -9391,6 +9668,17 @@ impl Kura {
                     continue;
                 };
                 let Some(reference) = Self::block_merge_reference(&block) else {
+                    // Strict startup begins with canonical hashes whose bodies are not yet
+                    // cached. Rebuild the ordinary projection while this authenticated scan
+                    // already has the exact retained body so the Kaigi signal index is complete
+                    // before Kura is published to callers.
+                    self.set_transaction_entrypoint_index_entry_with_merge(
+                        height.get(),
+                        &block,
+                        None,
+                        block_count,
+                        true,
+                    );
                     continue;
                 };
                 let entry = self.merge_entry_by_hash(reference.entry_hash)?.ok_or(
@@ -11950,19 +12238,17 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-    /// Start a thread that receives and stores new blocks
     /// Start the background block writer after all provisional startup authority is finalized.
     ///
     /// # Errors
-    /// Returns an error when the immutable local peer identity has not been
-    /// bound, while signed snapshot authentication is pending, or canonical
-    /// storage is fail-stop poisoned.
+    /// Returns an error in read-only emergency Fast mode, when the immutable
+    /// local peer identity has not been bound, while signed snapshot
+    /// authentication is pending, or canonical storage is fail-stop poisoned.
     pub fn start(kura: Arc<Self>, shutdown_signal: ShutdownSignal) -> Result<Child> {
+        kura.durable_mutation_authorized()?;
         if kura.local_peer_id.get().is_none() {
             return Err(Error::KuraReplicaLocalPeerUnbound);
         }
-        kura.ensure_snapshot_bootstrap_authenticated()?;
-        kura.ensure_canonical_storage_not_poisoned()?;
         let shutdown_notify_tx = kura.block_notify_tx.clone();
         let shutdown_signal_clone = shutdown_signal.clone();
         tokio::spawn(async move {
@@ -12868,6 +13154,127 @@ impl Kura {
         }
         heights
     }
+
+    /// Return a bounded chronological page of exact-schema Kaigi signal locators.
+    ///
+    /// The index stores only structural locations and transaction authorities.
+    /// An exclusive `after` position must name an exact candidate for the same
+    /// call. `anchor_height` excludes later appends. A partial index, pruning,
+    /// or poisoned canonical storage returns `Unavailable`; callers must not
+    /// fall back to a ledger scan.
+    pub(crate) fn get_kaigi_signal_candidate_locators(
+        &self,
+        call_id: &KaigiId,
+        anchor_height: usize,
+        after: Option<KaigiSignalCandidatePosition>,
+        limit: NonZeroUsize,
+    ) -> core::result::Result<KaigiSignalCandidateLocatorPage, KaigiSignalCandidateIndexError> {
+        if self.prune_recovery_is_required()
+            || self.canonical_storage_poisoned.load(Ordering::Acquire)
+        {
+            return Err(KaigiSignalCandidateIndexError::Unavailable);
+        }
+        let index = self.transaction_entrypoint_index.lock();
+        if self.prune_recovery_is_required()
+            || self.canonical_storage_poisoned.load(Ordering::Acquire)
+            || !index.complete
+            || (anchor_height > 0
+                && index
+                    .indexed_heights
+                    .last()
+                    .is_none_or(|height| height.get() < anchor_height))
+        {
+            return Err(KaigiSignalCandidateIndexError::Unavailable);
+        }
+        let page = Self::collect_kaigi_signal_candidate_locators(
+            &index,
+            call_id,
+            anchor_height,
+            after,
+            limit,
+        )?;
+        if self.prune_recovery_is_required()
+            || self.canonical_storage_poisoned.load(Ordering::Acquire)
+        {
+            return Err(KaigiSignalCandidateIndexError::Unavailable);
+        }
+        Ok(page)
+    }
+
+    fn collect_kaigi_signal_candidate_locators(
+        index: &TransactionEntrypointIndex,
+        call_id: &KaigiId,
+        anchor_height: usize,
+        after: Option<KaigiSignalCandidatePosition>,
+        limit: NonZeroUsize,
+    ) -> core::result::Result<KaigiSignalCandidateLocatorPage, KaigiSignalCandidateIndexError> {
+        let Some(by_height) = index.kaigi_signal_candidates.get(call_id) else {
+            return if after.is_some() {
+                Err(KaigiSignalCandidateIndexError::CursorMismatch)
+            } else {
+                Ok(KaigiSignalCandidateLocatorPage {
+                    candidates: Vec::new(),
+                    has_more: false,
+                })
+            };
+        };
+        let after_key =
+            after.map(|position| (position.execution_phase, position.transaction_index));
+        let after_height = after
+            .and_then(|position| usize::try_from(position.block_height).ok())
+            .and_then(NonZeroUsize::new);
+        if let Some(position) = after {
+            let Some(height) = after_height else {
+                return Err(KaigiSignalCandidateIndexError::CursorMismatch);
+            };
+            if height.get() > anchor_height || position.execution_phase > 1 {
+                return Err(KaigiSignalCandidateIndexError::CursorMismatch);
+            }
+            let Some(locator) = by_height
+                .get(&height)
+                .and_then(|by_offset| by_offset.get(&after_key.expect("cursor key exists")))
+            else {
+                return Err(KaigiSignalCandidateIndexError::CursorMismatch);
+            };
+            if locator.position != position {
+                return Err(KaigiSignalCandidateIndexError::CursorMismatch);
+            }
+        }
+        let Some(anchor_height) = NonZeroUsize::new(anchor_height) else {
+            return Ok(KaigiSignalCandidateLocatorPage {
+                candidates: Vec::new(),
+                has_more: false,
+            });
+        };
+        let lower_height = after_height.map_or(Bound::Unbounded, Bound::Included);
+        let mut candidates = Vec::new();
+        candidates
+            .try_reserve(limit.get())
+            .map_err(|_| KaigiSignalCandidateIndexError::Unavailable)?;
+        for (height, by_offset) in by_height.range((lower_height, Bound::Included(anchor_height))) {
+            let lower_offset = if Some(*height) == after_height {
+                Bound::Excluded(after_key.expect("cursor key exists"))
+            } else {
+                Bound::Unbounded
+            };
+            for locator in by_offset
+                .range((lower_offset, Bound::Unbounded))
+                .map(|(_, locator)| locator)
+            {
+                if candidates.len() == limit.get() {
+                    return Ok(KaigiSignalCandidateLocatorPage {
+                        candidates,
+                        has_more: true,
+                    });
+                }
+                candidates.push(locator.clone());
+            }
+        }
+        Ok(KaigiSignalCandidateLocatorPage {
+            candidates,
+            has_more: false,
+        })
+    }
     /// Return the exact durable height and bounded encoded payload length for a
     /// known canonical block hash.
     ///
@@ -13371,6 +13778,11 @@ impl Kura {
     /// Authorize a durable sidecar or journal mutation which does not require
     /// canonical block-stage recovery.
     fn durable_mutation_authorized(&self) -> Result<()> {
+        if self.emergency_fast_startup_enabled() {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "canonical mutation",
+            });
+        }
         self.ensure_snapshot_bootstrap_authenticated()?;
         self.ensure_canonical_storage_not_poisoned()
     }
@@ -17378,21 +17790,13 @@ impl Kura {
         let path = self.active_merge_path.lock().clone();
         Self::file_len_or_zero(&path)
     }
-    fn sidecar_tracked_bytes(
-        data_path: &Path,
-        index_path: &Path,
-        json_path: Option<&Path>,
-    ) -> Result<u64> {
+    fn sidecar_tracked_bytes(data_path: &Path, index_path: &Path) -> Result<u64> {
         let data_tmp = data_path.with_extension("norito.tmp");
         let index_tmp = index_path.with_extension("index.tmp");
-        let mut total = Self::file_len_or_zero(data_path)?
+        Ok(Self::file_len_or_zero(data_path)?
             .saturating_add(Self::file_len_or_zero(index_path)?)
             .saturating_add(Self::file_len_or_zero(&data_tmp)?)
-            .saturating_add(Self::file_len_or_zero(&index_tmp)?);
-        if let Some(path) = json_path {
-            total = total.saturating_add(Self::file_len_or_zero(path)?);
-        }
-        Ok(total)
+            .saturating_add(Self::file_len_or_zero(&index_tmp)?))
     }
     fn block_required_bytes(block: &SignedBlock) -> Result<u64> {
         let wire = block.canonical_wire()?;
@@ -20874,8 +21278,14 @@ impl Kura {
                 heights.last().is_some_and(|height| height.get() > target)
             };
             if contains_pruned_height(&index.indexed_heights)
+                || contains_pruned_height(&index.incomplete_merge_heights)
+                || contains_pruned_height(&index.incomplete_kaigi_signal_heights)
                 || index
                     .heights_by_entrypoint
+                    .values()
+                    .any(contains_pruned_height)
+                || index
+                    .heights_by_offline_operation_id
                     .values()
                     .any(contains_pruned_height)
                 || index
@@ -20890,6 +21300,15 @@ impl Kura {
                     .heights_by_result_status
                     .values()
                     .any(contains_pruned_height)
+                || index.kaigi_signal_candidates.values().any(|heights| {
+                    heights
+                        .last_key_value()
+                        .is_some_and(|(height, _)| height.get() > target)
+                })
+                || index
+                    .inventories_by_height
+                    .last_key_value()
+                    .is_some_and(|(height, _)| height.get() > target)
             {
                 return Err(Error::PruneIntentConflict(
                     "recovered transaction index still contains a pruned height".to_owned(),
@@ -23784,7 +24203,7 @@ impl Kura {
         }
         let mut accounting_complete = checkpoint.tracked_bytes_before.is_some();
         if let Some(before_bytes) = checkpoint.tracked_bytes_before {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => {
                     accounting_complete = false;
@@ -23855,7 +24274,7 @@ impl Kura {
                 .ok()?;
             Some(buf)
         });
-        let tracked_bytes_before = match Self::sidecar_tracked_bytes(data_path, index_path, None) {
+        let tracked_bytes_before = match Self::sidecar_tracked_bytes(data_path, index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
                 iroha_logger::warn!(
@@ -23885,7 +24304,7 @@ impl Kura {
     ) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let tracked_bytes_after_write =
-            Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path, None).ok();
+            Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path).ok();
         if checkpoint.data_existed {
             let data = std::fs::OpenOptions::new()
                 .create(true)
@@ -24041,7 +24460,7 @@ impl Kura {
         if let (Some(after_write), Some(before_write)) =
             (tracked_bytes_after_write, checkpoint.tracked_bytes_before)
             && let Ok(after_rollback) =
-                Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path, None)
+                Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path)
         {
             self.update_disk_usage_delta(after_write, after_rollback);
             if after_rollback != before_write {
@@ -24411,7 +24830,7 @@ impl Kura {
             );
         }
         drop(existing_pair);
-        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None).ok();
+        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path).ok();
         let payload = artifact.encode_framed()?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         if !Self::append_indexed_progress_sidecar(
@@ -24464,7 +24883,7 @@ impl Kura {
             ));
         }
         if let Some(before_bytes) = before_bytes
-            && let Ok(after_bytes) = Self::sidecar_tracked_bytes(&data_path, &index_path, None)
+            && let Ok(after_bytes) = Self::sidecar_tracked_bytes(&data_path, &index_path)
         {
             self.update_disk_usage_delta(before_bytes, after_bytes);
             accounting_mutation.finish();
@@ -24840,7 +25259,7 @@ impl Kura {
             }
             return Ok(());
         }
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
                 iroha_logger::warn!(
@@ -24889,7 +25308,7 @@ impl Kura {
         }
         let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => {
                     accounting_complete = false;
@@ -25187,23 +25606,25 @@ impl Kura {
         }
         #[cfg(test)]
         run_latest_certified_frontier_post_validation_hook_for_tests();
-        if let Err(error) = self.recover_certified_lane_block_pair_from_frontier_locked(
-            &entry,
-            &frontier_read.frontier.artifact,
-            authority,
-        ) {
-            iroha_logger::warn!(
-                ?error,
-                lane = %lane_id.as_u32(),
-                lane_block_height = frontier_read
-                    .frontier
-                    .artifact
-                    .proposal
-                    .descriptor
-                    .lane_block_height,
-                "failed to recover certified lane block pair from its durable frontier"
-            );
-            return None;
+        if !self.emergency_fast_startup_enabled() {
+            if let Err(error) = self.recover_certified_lane_block_pair_from_frontier_locked(
+                &entry,
+                &frontier_read.frontier.artifact,
+                authority,
+            ) {
+                iroha_logger::warn!(
+                    ?error,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height = frontier_read
+                        .frontier
+                        .artifact
+                        .proposal
+                        .descriptor
+                        .lane_block_height,
+                    "failed to recover certified lane block pair from its durable frontier"
+                );
+                return None;
+            }
         }
         if let Err(error) = self.confirm_latest_certified_lane_block_frontier_read_locked(
             &entry,
@@ -25250,6 +25671,13 @@ impl Kura {
     where
         F: FnMut(&CertifiedLaneBlockArtifact) -> bool,
     {
+        if self.emergency_fast_startup_enabled() {
+            return self
+                .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
+                    lane_id, 1, accept,
+                )
+                .pop();
+        }
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -25345,6 +25773,9 @@ impl Kura {
     where
         F: FnMut(&CertifiedLaneBlockArtifact) -> bool,
     {
+        if self.emergency_fast_startup_enabled() {
+            return None;
+        }
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -25430,6 +25861,11 @@ impl Kura {
     where
         F: FnMut(&CertifiedLaneBlockArtifact) -> bool,
     {
+        if self.emergency_fast_startup_enabled() {
+            return self.latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
+                lane_id, limit, accept,
+            );
+        }
         if limit == 0 || self.prune_recovery_is_required() {
             return Vec::new();
         }
@@ -25533,7 +25969,7 @@ impl Kura {
     where
         F: FnMut(&CertifiedLaneBlockArtifact) -> bool,
     {
-        if self.prune_recovery_is_required() {
+        if self.emergency_fast_startup_enabled() || self.prune_recovery_is_required() {
             return Vec::new();
         }
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -25607,6 +26043,8 @@ impl Kura {
         index_path: &Path,
         recover: bool,
     ) -> Option<CertifiedLaneBlockArtifact> {
+        let passive = self.emergency_fast_startup_enabled();
+        let recover = recover && !passive;
         if recover
             && !self.recover_bound_progress_sidecar_artifacts(
                 data_path,
@@ -25615,6 +26053,18 @@ impl Kura {
             )
         {
             return None;
+        }
+        if passive {
+            let namespace = self
+                .open_bound_progress_namespace(data_path, index_path)
+                .ok()?;
+            self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+                &namespace,
+                data_path,
+                index_path,
+                "certified lane block",
+            )
+            .ok()?;
         }
         let mut pair = match self.open_bound_progress_pair(data_path, index_path) {
             Ok(pair) => pair,
@@ -25630,7 +26080,9 @@ impl Kura {
         };
         match &mut pair {
             BoundProgressPair::Absent(namespace) => {
-                self.sync_bound_progress_absence(namespace, "certified lane block");
+                if !passive {
+                    self.sync_bound_progress_absence(namespace, "certified lane block");
+                }
                 None
             }
             BoundProgressPair::Present(bound) => {
@@ -25639,9 +26091,12 @@ impl Kura {
                     lane_block_height,
                     bound,
                 );
-                self.sync_bound_progress_sidecar(bound, "certified lane block")
-                    .then_some(artifact)
-                    .flatten()
+                let stable = if passive {
+                    self.bound_progress_sidecar_unchanged(bound)
+                } else {
+                    self.sync_bound_progress_sidecar(bound, "certified lane block")
+                };
+                stable.then_some(artifact).flatten()
             }
         }
     }
@@ -26652,7 +27107,6 @@ impl Kura {
     /// retirement, QC response, or recovery-record evidence; no caller may
     /// choose an arbitrary source/hash pair. Consuming the checked transition
     /// also prevents raw payload possession from minting persistence authority.
-    #[allow(dead_code)]
     fn authorize_autonomous_lifecycle_payload_custody_from_validated_evidence(
         payload: &LaneExecutablePayloadV1,
         binding: AutonomousLifecycleAttemptBindingV1,
@@ -27855,7 +28309,6 @@ impl Kura {
     }
     /// Build the exact full-body non-Queue bootstrap signature preimage.
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)]
     pub(crate) fn autonomous_lifecycle_bootstrap_signing_preimage_with_payload_custody(
         &self,
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
@@ -27907,7 +28360,6 @@ impl Kura {
     }
     /// Persist a signed bootstrap under one exact non-Queue payload-custody authority.
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)] // Called by source-specific audited persistence adapters.
     pub(crate) fn persist_autonomous_lifecycle_bootstrap_with_payload_custody(
         &self,
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
@@ -28190,7 +28642,6 @@ impl Kura {
     /// signatures. Unlike ProducerQueue, no ephemeral transport/QC token can
     /// survive a crash; the active route, process claim, exact bootstrap bytes,
     /// and signed custody binding are therefore the recovery fence.
-    #[allow(dead_code)] // Called when source-specific startup recovery is installed.
     pub(crate) fn authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody(
         &self,
         authority: AutonomousLifecycleBootstrapRecoveryAuthority,
@@ -31176,10 +31627,8 @@ impl Kura {
     ) -> Result<()> {
         let retirement_hash = retirement.digest()?;
         let descriptor = &payload.origin_proposal.descriptor;
-        let mut newer_attempts = BTreeMap::<
-            (u64, u64, u64),
-            AutonomousLaneBlockDurableRecord,
-        >::new();
+        let mut newer_attempts =
+            BTreeMap::<(u64, u64, u64), AutonomousLaneBlockDurableRecord>::new();
         for entrypoint_hash in &payload.entrypoint_hashes {
             let path = Self::autonomous_lane_entrypoint_claim_path(
                 &self.store_root,
@@ -31281,6 +31730,7 @@ impl Kura {
     fn complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
         &self,
         pending_canonical_bytes: u64,
+        current_attempt_view_recovery_bytes: Option<u64>,
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
         queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
@@ -31305,7 +31755,7 @@ impl Kura {
             .read_current_autonomous_lane_block_record_self_context_locked(
                 &entry,
                 payload.origin_proposal.descriptor.lane_block_height,
-                Some(pending_canonical_bytes),
+                current_attempt_view_recovery_bytes,
             )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
@@ -32658,6 +33108,7 @@ impl Kura {
         expected_epoch: u64,
         recover: bool,
     ) -> Option<AutonomousLaneBlockArtifact> {
+        let recover = recover && !self.emergency_fast_startup_enabled();
         if recover {
             let _prune_guard = self.prune_lock.lock();
             self.ensure_prune_recovery_not_required().ok()?;
@@ -34035,6 +34486,8 @@ impl Kura {
         lane_block_height: u64,
         repair_missing_sidecars: bool,
     ) -> Option<LaneBlockExecutionInputArtifact> {
+        let repair_missing_sidecars =
+            repair_missing_sidecars && !self.emergency_fast_startup_enabled();
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -34326,7 +34779,7 @@ impl Kura {
                 "overwriting stale lane execution preflight sidecar"
             );
         }
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
                 iroha_logger::warn!(
@@ -34356,7 +34809,7 @@ impl Kura {
         }
         let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => {
                     accounting_complete = false;
@@ -34389,7 +34842,7 @@ impl Kura {
         self.read_lane_block_execution_preflight_with_repair_policy(
             lane_id,
             lane_block_height,
-            true,
+            !self.emergency_fast_startup_enabled(),
         )
     }
     fn read_lane_block_execution_preflight_with_repair_policy(
@@ -37957,7 +38410,7 @@ impl Kura {
                 "overwriting stale lane application receipt after global evidence changed"
             );
         }
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
                 iroha_logger::warn!(
@@ -38030,7 +38483,7 @@ impl Kura {
         }
         let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => {
                     accounting_complete = false;
@@ -38074,6 +38527,12 @@ impl Kura {
     ) -> Option<LaneBlockApplicationReceiptArtifact> {
         if self.prune_recovery_is_required() {
             return None;
+        }
+        if self.emergency_fast_startup_enabled() {
+            return self.read_lane_block_application_receipt_without_sidecar_repair(
+                lane_id,
+                lane_block_height,
+            );
         }
         let artifact = self.read_active_lane_block_application_receipt_structural(
             lane_id,
@@ -38238,7 +38697,7 @@ impl Kura {
     pub fn direct_lane_block_application_receipts_snapshot(
         &self,
     ) -> Vec<LaneBlockApplicationReceiptArtifact> {
-        if self.prune_recovery_is_required() {
+        if self.emergency_fast_startup_enabled() || self.prune_recovery_is_required() {
             return Vec::new();
         }
         let Some(candidates) = self.active_lane_block_application_receipts_structural_snapshot()
@@ -38283,6 +38742,9 @@ impl Kura {
     fn active_lane_block_application_receipts_structural_snapshot(
         &self,
     ) -> Option<Vec<LaneBlockApplicationReceiptArtifact>> {
+        if self.emergency_fast_startup_enabled() {
+            return None;
+        }
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
             .lane_storage_entries
@@ -38410,6 +38872,7 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
         repair_sidecars: bool,
     ) -> bool {
+        let repair_sidecars = repair_sidecars && !self.emergency_fast_startup_enabled();
         let artifact = if repair_sidecars {
             self.read_lane_block_application_receipt(
                 proposal.descriptor.lane_id,
@@ -38469,6 +38932,8 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
         repair_missing_sidecar: bool,
     ) -> bool {
+        let repair_missing_sidecar =
+            repair_missing_sidecar && !self.emergency_fast_startup_enabled();
         let Some(preflight) = self.read_lane_block_execution_preflight_with_repair_policy(
             proposal.descriptor.lane_id,
             proposal.descriptor.lane_block_height,
@@ -38647,6 +39112,7 @@ impl Kura {
         )?;
         Ok(Some(frontier))
     }
+    #[cfg(test)]
     fn autonomous_auxiliary_lane_height(name: &str) -> Option<u64> {
         Self::autonomous_one_height_coordinate(name, AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX)
             .or_else(|| {
@@ -38661,22 +39127,7 @@ impl Kura {
                 .map(|(lane_height, _)| lane_height)
             })
     }
-    #[allow(dead_code)] // Reserved for a future durable whole-unit compaction intent.
-    fn remove_terminal_autonomous_auxiliary_files_locked(
-        &self,
-        entry: &LaneConfigEntry,
-        terminal_height: u64,
-    ) -> Result<bool> {
-        // Reuse the configured sidecar maintenance window as the per-pass
-        // mutation budget. The merge frontier and synced unlinks are the
-        // durable cursor, so this bounds each pass without bounding lifetime
-        // history.
-        self.remove_terminal_autonomous_auxiliary_files_with_budget_locked(
-            entry,
-            terminal_height,
-            self.lane_history_retention.get(),
-        )
-    }
+    #[cfg(test)]
     fn remove_terminal_autonomous_auxiliary_files_with_budget_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -38918,6 +39369,8 @@ impl Kura {
         index_path: &Path,
         recover: bool,
     ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        let passive = self.emergency_fast_startup_enabled();
+        let recover = recover && !passive;
         if recover
             && !self.recover_bound_progress_sidecar_artifacts(
                 data_path,
@@ -38926,6 +39379,18 @@ impl Kura {
             )
         {
             return None;
+        }
+        if passive {
+            let namespace = self
+                .open_bound_progress_namespace(data_path, index_path)
+                .ok()?;
+            self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+                &namespace,
+                data_path,
+                index_path,
+                "lane block application receipt",
+            )
+            .ok()?;
         }
         let mut pair = match self.open_bound_progress_pair(data_path, index_path) {
             Ok(pair) => pair,
@@ -38941,7 +39406,9 @@ impl Kura {
         };
         match &mut pair {
             BoundProgressPair::Absent(namespace) => {
-                self.sync_bound_progress_absence(namespace, "lane block application receipt");
+                if !passive {
+                    self.sync_bound_progress_absence(namespace, "lane block application receipt");
+                }
                 None
             }
             BoundProgressPair::Present(bound) => {
@@ -38950,9 +39417,12 @@ impl Kura {
                     lane_block_height,
                     bound,
                 );
-                self.sync_bound_progress_sidecar(bound, "lane block application receipt")
-                    .then_some(artifact)
-                    .flatten()
+                let stable = if passive {
+                    self.bound_progress_sidecar_unchanged(bound)
+                } else {
+                    self.sync_bound_progress_sidecar(bound, "lane block application receipt")
+                };
+                stable.then_some(artifact).flatten()
             }
         }
     }
@@ -39043,6 +39513,7 @@ impl Kura {
         lane_block_height: u64,
         recover: bool,
     ) -> Option<LaneBlockArtifact> {
+        let recover = recover && !self.emergency_fast_startup_enabled();
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id).ok()?;
         let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
@@ -39095,6 +39566,8 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
         repair_missing_sidecar: bool,
     ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
+        let repair_missing_sidecar =
+            repair_missing_sidecar && !self.emergency_fast_startup_enabled();
         let (artifact, block) = self.lane_block_payload_artifact_and_block_with_sidecar_repair(
             proposal,
             repair_missing_sidecar,
@@ -39150,6 +39623,8 @@ impl Kura {
         expected_epoch: u64,
         repair_missing_sidecar: bool,
     ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
+        let repair_missing_sidecar =
+            repair_missing_sidecar && !self.emergency_fast_startup_enabled();
         let artifact = self
             .read_autonomous_lane_block_artifact_with_recovery_policy(
                 proposal.descriptor.lane_id,
@@ -39267,6 +39742,8 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
         repair_missing_sidecar: bool,
     ) -> Option<(LaneBlockArtifact, Arc<SignedBlock>)> {
+        let repair_missing_sidecar =
+            repair_missing_sidecar && !self.emergency_fast_startup_enabled();
         let descriptor = &proposal.descriptor;
         {
             let _geometry_guard = self.lane_geometry_lock.lock();
@@ -39419,6 +39896,7 @@ impl Kura {
         if limit == 0 {
             return Vec::new();
         }
+        let repair_missing_sidecars = !self.emergency_fast_startup_enabled();
         let Some(height) = usize::try_from(proposal_height)
             .ok()
             .and_then(NonZeroUsize::new)
@@ -39468,6 +39946,7 @@ impl Kura {
                         );
                         None
                     }
+                    None if !repair_missing_sidecars => Some(artifact),
                     None if self.persist_recovered_lane_block_artifact(&artifact) => self
                         .read_lane_block_artifact(ownership.lane_id, ownership.lane_block_height)
                         .filter(|persisted| persisted == &artifact),
@@ -39515,6 +39994,9 @@ impl Kura {
     }
     #[cfg(test)]
     fn active_lane_block_artifacts_structural_snapshot(&self) -> Vec<LaneBlockArtifact> {
+        if self.emergency_fast_startup_enabled() {
+            return Vec::new();
+        }
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
             .lane_storage_entries
@@ -39602,6 +40084,10 @@ impl Kura {
     where
         F: FnMut(&LaneBlockArtifact) -> bool,
     {
+        if self.emergency_fast_startup_enabled() {
+            return self
+                .latest_lane_block_artifact_matching_without_sidecar_repair(lane_id, accept);
+        }
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -42706,7 +43192,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn read_block_index(&mut self, block_height: u64) -> Result<BlockIndex> {
+    pub(crate) fn read_block_index(&mut self, block_height: u64) -> Result<BlockIndex> {
         let mut index = BlockIndex {
             start: 0,
             length: 0,
@@ -42744,7 +43230,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// Returns any durable marker/journal integrity or underlying I/O error.
-    pub fn read_durable_index_count(&mut self) -> Result<u64> {
+    pub(crate) fn read_durable_index_count(&mut self) -> Result<u64> {
         self.read_exact_durable_index_count()
     }
     /// Read and validate the exact durable boundary without repair or fallback.
@@ -42855,7 +43341,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn read_block_hashes(
+    pub(crate) fn read_block_hashes(
         &mut self,
         start_block_height: u64,
         block_count: usize,
@@ -42899,7 +43385,7 @@ impl BlockStore {
     /// The most common reason this function fails is
     /// that you did not call `create_files_if_they_do_not_exist`.
     #[allow(clippy::integer_division)]
-    pub fn read_hashes_count(&mut self) -> Result<u64> {
+    pub(crate) fn read_hashes_count(&mut self) -> Result<u64> {
         let hashes_file = self.ensure_hashes_file()?;
         let len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
         Ok(len / SIZE_OF_BLOCK_HASH)
@@ -42970,7 +43456,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O errors when the metadata cannot be read.
-    pub fn data_file_len(&mut self) -> Result<u64> {
+    pub(crate) fn data_file_len(&mut self) -> Result<u64> {
         let data_file = self.ensure_data_file()?;
         data_file.try_io(|file| file.metadata().map(|meta| meta.len()))
     }
@@ -42978,7 +43464,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O errors when the metadata cannot be read.
-    pub fn index_file_len(&mut self) -> Result<u64> {
+    pub(crate) fn index_file_len(&mut self) -> Result<u64> {
         let index_file = self.ensure_index_file()?;
         index_file.try_io(|file| file.metadata().map(|meta| meta.len()))
     }
@@ -42986,7 +43472,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O errors when the metadata cannot be read.
-    pub fn hashes_file_len(&mut self) -> Result<u64> {
+    pub(crate) fn hashes_file_len(&mut self) -> Result<u64> {
         let hashes_file = self.ensure_hashes_file()?;
         hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))
     }
@@ -43017,7 +43503,13 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn write_block_index(&mut self, block_height: u64, start: u64, length: u64) -> Result<()> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub(crate) fn write_block_index(
+        &mut self,
+        block_height: u64,
+        start: u64,
+        length: u64,
+    ) -> Result<()> {
         let index_file = self.ensure_index_file()?;
         let start_location = block_height * BlockIndex::SIZE;
         let new_len = start_location + BlockIndex::SIZE;
@@ -43044,7 +43536,8 @@ impl BlockStore {
     ///
     /// Note that if there is an error, you can be quite sure all other
     /// read and write operations will also fail.
-    pub fn write_index_count(&mut self, new_count: u64) -> Result<()> {
+    #[cfg(test)]
+    pub(crate) fn write_index_count(&mut self, new_count: u64) -> Result<()> {
         let index_file = self.ensure_index_file()?;
         let new_byte_size = new_count * BlockIndex::SIZE;
         index_file.try_io(|file| file.set_len(new_byte_size))?;
@@ -43056,7 +43549,8 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn write_block_data(
+    #[cfg(test)]
+    pub(crate) fn write_block_data(
         &mut self,
         start_location_in_data_file: u64,
         block_data: &[u8],
@@ -43081,7 +43575,12 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn write_block_hash(&mut self, block_height: u64, hash: HashOf<BlockHeader>) -> Result<()> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub(crate) fn write_block_hash(
+        &mut self,
+        block_height: u64,
+        hash: HashOf<BlockHeader>,
+    ) -> Result<()> {
         let hashes_file = self.ensure_hashes_file()?;
         let start_location = block_height * SIZE_OF_BLOCK_HASH;
         let end = start_location + SIZE_OF_BLOCK_HASH;
@@ -43100,7 +43599,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn overwrite_block_hashes(&mut self, hashes: &[HashOf<BlockHeader>]) -> Result<()> {
+    pub(crate) fn overwrite_block_hashes(&mut self, hashes: &[HashOf<BlockHeader>]) -> Result<()> {
         let hashes_file = self.ensure_hashes_file()?;
         hashes_file.try_io(|file| {
             file.set_len(0)?;
@@ -43333,6 +43832,9 @@ impl BlockStore {
     /// Create the index and data files if they do not
     /// already exist.
     ///
+    /// This public entry point is for constructing an offline store. Live-node storage must be
+    /// initialized through [`Kura`], which owns the process lock and recovery authority.
+    ///
     /// # Errors
     /// Fails if any of the files don't exist and couldn't be
     /// created.
@@ -43355,6 +43857,9 @@ impl BlockStore {
     /// the data to the data file and then create a new index
     /// for it in the index file.
     ///
+    /// This public entry point is for offline store construction. Live nodes must append through
+    /// [`Kura::store_block`] so canonical mutation authorization cannot be bypassed.
+    ///
     /// # Errors
     /// Fails if any of the required platform-specific functions
     /// fail.
@@ -43369,7 +43874,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O and encoding errors.
-    pub fn append_block_batch(&mut self, blocks: &[Arc<SignedBlock>]) -> Result<()> {
+    pub(crate) fn append_block_batch(&mut self, blocks: &[Arc<SignedBlock>]) -> Result<()> {
         let start_height = self.read_index_count()?;
         self.append_block_batch_at(start_height, blocks, 0)
     }
@@ -43695,6 +44200,231 @@ include!("kura/test_fault_injection_controls.rs");
 include!("kura/file_error_support.rs");
 #[cfg(test)]
 pub(crate) mod tests {
+    fn kaigi_signal_test_call(name: &str) -> iroha_data_model::kaigi::KaigiId {
+        iroha_data_model::kaigi::KaigiId::new(
+            iroha_data_model::DomainId::try_new("kaigi", "universal").expect("test domain"),
+            name.parse().expect("test call name"),
+        )
+    }
+
+    fn kaigi_signal_test_locator(
+        height: usize,
+        execution_phase: u8,
+        transaction_index: u64,
+    ) -> super::KaigiSignalCandidateLocator {
+        use iroha_crypto::{Hash, HashOf};
+        use iroha_data_model::{block::BlockHeader, transaction::signed::TransactionEntrypoint};
+
+        let marker = u64::try_from(height)
+            .expect("test height fits u64")
+            .wrapping_mul(4)
+            .wrapping_add(u64::from(execution_phase));
+        super::KaigiSignalCandidateLocator {
+            position: super::KaigiSignalCandidatePosition {
+                block_height: u64::try_from(height).expect("test height fits u64"),
+                execution_phase,
+                transaction_index,
+                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    marker.to_le_bytes(),
+                )),
+                entrypoint_hash: HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                    Hash::new((marker ^ transaction_index).to_le_bytes()),
+                ),
+            },
+            authority: iroha_data_model::AccountId::new(
+                super::checked_keypair().public_key().clone(),
+            ),
+        }
+    }
+
+    fn insert_kaigi_signal_test_locator(
+        index: &mut super::TransactionEntrypointIndex,
+        call_id: &iroha_data_model::kaigi::KaigiId,
+        locator: super::KaigiSignalCandidateLocator,
+    ) {
+        let height = usize::try_from(locator.position.block_height)
+            .ok()
+            .and_then(std::num::NonZeroUsize::new)
+            .expect("test locator height is nonzero");
+        index
+            .inventories_by_height
+            .entry(height)
+            .or_default()
+            .kaigi_calls
+            .insert(call_id.clone());
+        index
+            .kaigi_signal_candidates
+            .entry(call_id.clone())
+            .or_default()
+            .entry(height)
+            .or_default()
+            .insert(
+                (
+                    locator.position.execution_phase,
+                    locator.position.transaction_index,
+                ),
+                locator,
+            );
+    }
+
+    #[test]
+    fn kaigi_signal_locator_pages_are_chronological_exclusive_and_call_bound() {
+        let call_id = kaigi_signal_test_call("page-order");
+        let other_call = kaigi_signal_test_call("other-call");
+        let mut index = super::TransactionEntrypointIndex::complete_empty();
+        for locator in [
+            kaigi_signal_test_locator(1, 1, 0),
+            kaigi_signal_test_locator(2, 1, 0),
+            kaigi_signal_test_locator(1, 0, 0),
+        ] {
+            insert_kaigi_signal_test_locator(&mut index, &call_id, locator);
+        }
+        let first = super::Kura::collect_kaigi_signal_candidate_locators(
+            &index,
+            &call_id,
+            2,
+            None,
+            std::num::NonZeroUsize::new(2).expect("nonzero page"),
+        )
+        .expect("first locator page");
+        assert!(first.has_more);
+        assert_eq!(first.candidates[0].position.execution_phase, 0);
+        assert_eq!(first.candidates[1].position.execution_phase, 1);
+        let after = first.candidates[1].position;
+        let second = super::Kura::collect_kaigi_signal_candidate_locators(
+            &index,
+            &call_id,
+            2,
+            Some(after),
+            std::num::NonZeroUsize::new(2).expect("nonzero page"),
+        )
+        .expect("second locator page");
+        assert!(!second.has_more);
+        assert_eq!(second.candidates.len(), 1);
+        assert_eq!(second.candidates[0].position.block_height, 2);
+        assert_eq!(
+            super::Kura::collect_kaigi_signal_candidate_locators(
+                &index,
+                &other_call,
+                2,
+                Some(after),
+                std::num::NonZeroUsize::new(1).expect("nonzero page"),
+            ),
+            Err(super::KaigiSignalCandidateIndexError::CursorMismatch),
+        );
+        let position = first.candidates[0].position;
+        assert!(
+            super::KaigiSignalCandidatePosition::new(
+                0,
+                position.execution_phase,
+                position.transaction_index,
+                position.block_hash,
+                position.entrypoint_hash,
+            )
+            .is_none()
+        );
+        assert!(
+            super::KaigiSignalCandidatePosition::new(
+                1,
+                2,
+                position.transaction_index,
+                position.block_hash,
+                position.entrypoint_hash,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn kaigi_signal_locator_pages_advance_beyond_five_hundred_carriers() {
+        let call_id = kaigi_signal_test_call("long-history");
+        let mut index = super::TransactionEntrypointIndex::complete_empty();
+        for height in 1..=501 {
+            insert_kaigi_signal_test_locator(
+                &mut index,
+                &call_id,
+                kaigi_signal_test_locator(height, 1, 0),
+            );
+        }
+        let first = super::Kura::collect_kaigi_signal_candidate_locators(
+            &index,
+            &call_id,
+            501,
+            None,
+            std::num::NonZeroUsize::new(500).expect("nonzero page"),
+        )
+        .expect("bounded first page");
+        assert_eq!(first.candidates.len(), 500);
+        assert!(first.has_more);
+        let second = super::Kura::collect_kaigi_signal_candidate_locators(
+            &index,
+            &call_id,
+            501,
+            first.candidates.last().map(|locator| locator.position),
+            std::num::NonZeroUsize::new(500).expect("nonzero page"),
+        )
+        .expect("bounded continuation");
+        assert_eq!(second.candidates.len(), 1);
+        assert_eq!(second.candidates[0].position.block_height, 501);
+        assert!(!second.has_more);
+    }
+
+    #[test]
+    fn kaigi_signal_reverse_inventories_follow_replacement_and_truncation() {
+        let call_id = kaigi_signal_test_call("lifecycle");
+        let replacement_call = kaigi_signal_test_call("replacement");
+        let mut index = super::TransactionEntrypointIndex::complete_empty();
+        for height in 1..=3 {
+            let height_key = std::num::NonZeroUsize::new(height).expect("nonzero height");
+            index.indexed_heights.insert(height_key);
+            insert_kaigi_signal_test_locator(
+                &mut index,
+                &call_id,
+                kaigi_signal_test_locator(height, 1, 0),
+            );
+        }
+        let height_two = std::num::NonZeroUsize::new(2).expect("nonzero height");
+        index.incomplete_kaigi_signal_heights.insert(height_two);
+        super::Kura::remove_transaction_entrypoint_height(&mut index, height_two);
+        assert!(!index.indexed_heights.contains(&height_two));
+        assert!(!index.incomplete_kaigi_signal_heights.contains(&height_two));
+        assert!(
+            index.kaigi_signal_candidates[&call_id]
+                .get(&height_two)
+                .is_none()
+        );
+        index.indexed_heights.insert(height_two);
+        insert_kaigi_signal_test_locator(
+            &mut index,
+            &replacement_call,
+            kaigi_signal_test_locator(2, 0, 7),
+        );
+        assert!(
+            index
+                .kaigi_signal_candidates
+                .contains_key(&replacement_call)
+        );
+        super::Kura::truncate_transaction_entrypoint_index_to(&mut index, 1);
+        assert_eq!(index.kaigi_signal_candidates[&call_id].len(), 1);
+        assert_eq!(
+            index.kaigi_signal_candidates[&call_id]
+                .first_key_value()
+                .map(|(height, _)| height.get()),
+            Some(1),
+        );
+        assert!(
+            !index
+                .kaigi_signal_candidates
+                .contains_key(&replacement_call)
+        );
+        assert_eq!(index.inventories_by_height.len(), 1);
+        assert!(
+            index
+                .inventories_by_height
+                .contains_key(&std::num::NonZeroUsize::new(1).expect("nonzero height"))
+        );
+    }
+
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/00_bounded_sidecar_read_tests.rs");
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");

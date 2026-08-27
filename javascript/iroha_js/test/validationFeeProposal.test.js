@@ -16,9 +16,10 @@ const nativeTest = makeNativeTest(test);
 const proposalOperator = AccountAddress.fromAccount({
   publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x23))),
 }).toI105();
-const validationFeeNetworkId = NetworkId.fromBytes(
+const validationFeeNetwork = NetworkId.fromBytes(
   Buffer.from("13".repeat(32), "hex"),
-).toString();
+);
+const validationFeeNetworkId = validationFeeNetwork.toString();
 
 function withNativeBinding(native, body) {
   const previous = globalThis.__IROHA_NATIVE_BINDING__;
@@ -307,7 +308,7 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
   );
 
   const draft = buildTransactionPayload({
-    chainId: "validation-fee-js-test",
+    networkId: validationFeeNetwork,
     authority,
     instructions: [decoded],
     feePayment: { payer: "authority", chargeLimits: [] },

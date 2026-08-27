@@ -36,7 +36,6 @@ fn test_handshake_config(kem_id: u8, sig_id: u8) -> SoranetHandshake {
             revocation_store_capacity: SoranetHandshakePow::default_revocation_store_capacity(),
             revocation_store_ttl_secs: SoranetHandshakePow::default_revocation_store_ttl(),
             revocation_store_path: SoranetHandshakePow::default_revocation_store_path(),
-            signed_ticket_public_key_hex: None,
             puzzle: SoranetHandshakePuzzle {
                 memory_kib: SoranetHandshakePuzzle::default_memory_kib(),
                 time_cost: SoranetHandshakePuzzle::default_time_cost(),

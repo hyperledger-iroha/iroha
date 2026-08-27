@@ -4,15 +4,14 @@ const END: &str = "<!-- END GENERATED HEADER POLICY -->";
 fn expected_header_policy() -> String {
     let zk = ivm::ivm_mode::ZK;
     let vec = ivm::ivm_mode::VECTOR;
-    let htm = ivm::ivm_mode::HTM;
-    let known_bits = zk | vec | htm;
+    let known_bits = zk | vec;
     let mut table = String::new();
     table.push_str("| Field | Policy |\n");
     table.push_str("|---|---|\n");
     table.push_str("| version_major | 1 |\n");
     table.push_str("| version_minor | 0 or 1 (deployable CNTR contracts require 1) |\n");
     table.push_str(&format!(
-        "| mode (known bits) | 0x{known_bits:02x} (ZK=0x{zk:02x}, VECTOR=0x{vec:02x}, HTM=0x{htm:02x}) |\n"
+        "| mode (known bits) | 0x{known_bits:02x} (ZK=0x{zk:02x}, VECTOR=0x{vec:02x}) |\n"
     ));
     table.push_str("| abi_version | 1 |\n");
     table.push_str(

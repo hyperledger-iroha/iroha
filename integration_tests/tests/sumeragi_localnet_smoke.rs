@@ -3490,8 +3490,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
     let mut npos = SumeragiNposParameters::default();
     npos.max_validators = 4;
     npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
-    npos.vrf_commit_window_blocks = 100;
-    npos.vrf_reveal_window_blocks = 40;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()

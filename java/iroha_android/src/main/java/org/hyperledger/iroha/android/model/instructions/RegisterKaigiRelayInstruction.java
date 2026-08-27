@@ -9,6 +9,12 @@ import java.util.Objects;
 public final class RegisterKaigiRelayInstruction implements InstructionTemplate {
 
   private static final String ACTION = "RegisterKaigiRelay";
+  private static final java.util.Set<String> ALLOWED_ARGUMENTS =
+      KaigiInstructionUtils.argumentSet(
+          "action",
+          "relay.relay_id",
+          "relay.hpke_public_key",
+          "relay.bandwidth_class");
 
   private final String relayId;
   private final String hpkePublicKeyBase64;
@@ -49,6 +55,7 @@ public final class RegisterKaigiRelayInstruction implements InstructionTemplate 
   }
 
   public static RegisterKaigiRelayInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireKnownArguments(arguments, ALLOWED_ARGUMENTS);
     KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setRelayId(KaigiInstructionUtils.require(arguments, "relay.relay_id"));
@@ -57,7 +64,7 @@ public final class RegisterKaigiRelayInstruction implements InstructionTemplate 
         KaigiInstructionUtils.parseNonNegativeInt(
             KaigiInstructionUtils.require(arguments, "relay.bandwidth_class"),
             "relay.bandwidth_class"));
-    return new RegisterKaigiRelayInstruction(builder, new LinkedHashMap<>(arguments));
+    return builder.build();
   }
 
   public static Builder builder() {
@@ -98,13 +105,13 @@ public final class RegisterKaigiRelayInstruction implements InstructionTemplate 
     }
 
     public Builder setHpkePublicKey(final byte[] hpkePublicKey) {
-      this.hpkePublicKeyBase64 = KaigiInstructionUtils.toBase64(hpkePublicKey);
-      return this;
+      return setHpkePublicKeyBase64(
+          KaigiInstructionUtils.toHpkePublicKeyBase64(hpkePublicKey, "hpkePublicKey"));
     }
 
     public Builder setHpkePublicKeyBase64(final String base64) {
       this.hpkePublicKeyBase64 =
-          KaigiInstructionUtils.requireBase64(base64, "hpkePublicKey");
+          KaigiInstructionUtils.requireHpkePublicKeyBase64(base64, "hpkePublicKey");
       return this;
     }
 

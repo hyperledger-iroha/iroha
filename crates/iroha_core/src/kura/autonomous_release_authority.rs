@@ -262,6 +262,7 @@ impl Kura {
         )?;
         self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
             pending_canonical_bytes,
+            Some(pending_canonical_bytes),
             payload,
             retirement,
             source_disposition,
@@ -723,6 +724,122 @@ impl Kura {
             retirement,
             exact_ordinary_fifo_preserved,
         )
+    }
+    /// Recreate the crash cut after a Complete replica outcome was synced but
+    /// before its disposition-bound claims were fully sealed.
+    #[cfg(test)]
+    pub(crate) fn downgrade_autonomous_lane_replica_complete_claim_suffix_for_test(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        suffix_len: usize,
+    ) -> Result<()> {
+        if suffix_len == 0 || suffix_len > payload.entrypoint_hashes.len() {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica Complete crash-cut suffix is empty or out of bounds",
+            ));
+        }
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(payload.origin_proposal.descriptor.lane_id)?;
+        self.require_active_lane_artifact(&entry, &payload.origin_proposal.descriptor)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        for entrypoint_hash in payload
+            .entrypoint_hashes
+            .iter()
+            .skip(payload.entrypoint_hashes.len() - suffix_len)
+        {
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.network_id,
+                entrypoint_hash,
+            );
+            let mut claim = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            if !claim.owns_payload(payload)
+                || !self.autonomous_lane_entrypoint_claim_path_matches(&claim, &path)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica Complete crash-cut claim differs from its payload or hash path",
+                ));
+            }
+            let AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(
+                retirement_hash,
+                queue_disposition,
+                _,
+            ) = claim.state
+            else {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica Complete crash-cut requires an already sealed claim suffix",
+                ));
+            };
+            claim.state = AutonomousLaneEntrypointClaimStateV1::ReplicaReleased(
+                retirement_hash,
+                queue_disposition,
+            );
+            let bytes = norito::encode_canonical(&claim).map_err(Error::NoritoFrame)?;
+            if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica Complete crash-cut claim exceeds its hard byte limit",
+                ));
+            }
+            let before = Self::file_len_or_zero(&path)?;
+            self.write_atomic_synced_replace(&path, &bytes)?;
+            let after = Self::file_len_or_zero(&path)?;
+            self.update_disk_usage_delta(before, after);
+        }
+        accounting_mutation.finish();
+        Ok(())
+    }
+    /// Count exact raw and Complete replica claims for one payload.
+    #[cfg(test)]
+    pub(crate) fn autonomous_lane_replica_claim_seal_counts_for_test(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+    ) -> Result<(usize, usize)> {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(payload.origin_proposal.descriptor.lane_id)?;
+        self.require_active_lane_artifact(&entry, &payload.origin_proposal.descriptor)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let mut raw = 0_usize;
+        let mut complete = 0_usize;
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.network_id,
+                entrypoint_hash,
+            );
+            let claim = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            if !claim.owns_payload(payload)
+                || !self.autonomous_lane_entrypoint_claim_path_matches(&claim, &path)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica claim seal count differs from its payload or hash path",
+                ));
+            }
+            match claim.state {
+                AutonomousLaneEntrypointClaimStateV1::ReplicaReleased(_, _) => raw += 1,
+                AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(_, _, _) => {
+                    complete += 1;
+                }
+                _ => {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "replica claim seal count found a non-replica claim",
+                    ));
+                }
+            }
+        }
+        Ok((raw, complete))
     }
     fn finalize_autonomous_lane_slot_release_inner(
         &self,

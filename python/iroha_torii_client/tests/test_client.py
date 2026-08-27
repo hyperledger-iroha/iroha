@@ -7,47 +7,36 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union, get_args, get_type_hints
+from typing import Any, Callable, Dict, List, Mapping, Optional, get_args, get_type_hints
 from urllib.parse import quote
 
 import pytest
 import requests
-
+from client_test_support import (
+    CANONICAL_OWNER,
+    CANONICAL_OWNER_HEADER,
+)
+from client_test_support import (
+    app_api_transaction_draft as _app_api_transaction_draft,
+)
+from client_test_support import (
+    authority_fee_payment as _authority_fee_payment,
+)
+from client_test_support import (
+    canonical_hash as _canonical_hash,
+)
+from client_test_support import (
+    sponsor_fee_payment as _sponsor_fee_payment,
+)
 from sumeragi_exact_json_test_support import (
     RecordingSession,
     StubResponse,
     sumeragi_exact_json_response_cases,
 )
-from client_test_support import (
-    CANONICAL_OWNER,
-    CANONICAL_OWNER_HEADER,
-    app_api_transaction_draft as _app_api_transaction_draft,
-    authority_fee_payment as _authority_fee_payment,
-    canonical_hash as _canonical_hash,
-    sponsor_fee_payment as _sponsor_fee_payment,
-)
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
-
-from offline_test_support import (  # noqa: E402
-    OFFLINE_NETWORK_ID,
-    OFFLINE_OPERATION_BYTES,
-    OFFLINE_OPERATION_ID,
-    OFFLINE_OTHER_NETWORK_ID,
-    OFFLINE_STATUS_URI,
-    OFFLINE_TRANSACTION_HASH,
-    offline_applied_top_up_status as _offline_applied_top_up_status,
-    offline_capability_payload as _offline_capability_payload,
-    offline_fixed_bytes as _offline_fixed_bytes,
-    offline_operation_reference as _offline_operation_reference,
-    offline_redeem_request as _offline_redeem_request,
-    offline_rejected_status as _offline_rejected_status,
-    offline_top_up_anchor as _offline_top_up_anchor,
-    offline_top_up_finality_proof as _offline_top_up_finality_proof,
-    offline_top_up_request as _offline_top_up_request,
-)
 
 import iroha_torii_client as torii_module  # noqa: E402
 import iroha_torii_client.client as client_module  # noqa: E402
@@ -80,7 +69,6 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     VpnSessionCreateRequest,
     build_canonical_request_headers,
     canonical_network_request_signature_message,
-    decode_pdp_commitment_header,
 )
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 from iroha_torii_client.native_amx import (  # noqa: E402
@@ -89,12 +77,55 @@ from iroha_torii_client.native_amx import (  # noqa: E402
     compute_native_amx_proposal_hash,
     compute_native_amx_validator_set_hash,
 )
+from offline_test_support import (  # noqa: E402
+    OFFLINE_NETWORK_ID,
+    OFFLINE_OPERATION_BYTES,
+    OFFLINE_OPERATION_ID,
+    OFFLINE_OTHER_NETWORK_ID,
+    OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+    OFFLINE_STATUS_URI,
+    OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+    OFFLINE_TRANSACTION_HASH,
+)
+from offline_test_support import (  # noqa: E402
+    offline_applied_top_up_status as _offline_applied_top_up_status,
+)
+from offline_test_support import (  # noqa: E402
+    offline_capability_payload as _offline_capability_payload,
+)
+from offline_test_support import (  # noqa: E402
+    offline_fixed_bytes as _offline_fixed_bytes,
+)
+from offline_test_support import (  # noqa: E402
+    offline_norito_frame as _offline_norito_frame,
+)
+from offline_test_support import (  # noqa: E402
+    offline_operation_reference as _offline_operation_reference,
+)
+from offline_test_support import (  # noqa: E402
+    offline_redeem_request as _offline_redeem_request,
+)
+from offline_test_support import (  # noqa: E402
+    offline_rejected_status as _offline_rejected_status,
+)
+from offline_test_support import (  # noqa: E402
+    offline_top_up_anchor as _offline_top_up_anchor,
+)
+from offline_test_support import (  # noqa: E402
+    offline_top_up_finality_proof as _offline_top_up_finality_proof,
+)
+from offline_test_support import (  # noqa: E402
+    offline_top_up_request as _offline_top_up_request,
+)
 
 CANONICAL_LARGE_FRACTION = "18446744073709551616.25"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
 CHECKSUM_INVALID_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF2"
 CHECKSUM_VALID_NON_UUID_V4_ASSET_DEFINITION_ID = "7EAD8EFYV3tk2BtyQaGhqhATjFy7"
+OTHER_CANONICAL_ACCOUNT = (
+    "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+)
 CHECKSUM_VALID_NON_RFC4122_ASSET_DEFINITION_ID = "7EAD8EFYUx1bhNP18PQmxXsySxi6"
 _NATIVE_AMX_VALIDATOR_SET = [
     "ea013094D37A1FCA72E8734CAAD4163678D82C36FE2CA70B80F5626E6591709E0D44831BE86CBA9BD0471C6D0D73FF9C4B54E0",
@@ -2184,6 +2215,104 @@ def test_list_peers_returns_typed_records() -> None:
         assert call["headers"][header]
 
 
+def _fee_quote_component(kind: str, asset: str, amount: str) -> Dict[str, Any]:
+    return {
+        "kind": {"kind": kind, "value": None},
+        "asset_definition_id": asset,
+        "max_amount": amount,
+    }
+
+
+def _fee_quote_capacity(
+    asset: str,
+    *,
+    vault: str,
+    reserve: str,
+    remaining: str,
+) -> Dict[str, Any]:
+    return {
+        "asset_definition_id": asset,
+        "vault_balance": vault,
+        "reserve_floor": reserve,
+        "block_remaining": remaining,
+        "program_epoch_remaining": remaining,
+        "beneficiary_epoch_remaining": remaining,
+    }
+
+
+def _i105_display_for(account_id: str, chain_discriminant: int) -> str:
+    controller = client_module._decode_canonical_i105_string(account_id)
+    return client_module._account_id_codec.encode_i105_account_id(
+        controller,
+        chain_discriminant,
+    )
+
+
+def _sponsored_fee_quote_fixture() -> tuple[Dict[str, Any], Dict[str, Any]]:
+    intent = _sponsor_fee_payment(100)
+    intent["value"]["charge_limits"] = [
+        _fee_quote_component("nexus", CANONICAL_ASSET_DEFINITION_ID, "1"),
+        _fee_quote_component("pipeline_gas", CANONICAL_ASSET_ID, "2"),
+    ]
+    draft = {"authority": CANONICAL_OWNER, "fee_payment": copy.deepcopy(intent)}
+    quote = {
+        "intent": copy.deepcopy(intent),
+        "observation": {
+            "ledger_time_ms": 10,
+            "next_block_height": 4,
+            "route_dataspace_id": 0,
+        },
+        "components": copy.deepcopy(intent["value"]["charge_limits"]),
+        "capacities": [
+            _fee_quote_capacity(
+                CANONICAL_ASSET_ID,
+                vault="3",
+                reserve="1",
+                remaining="2",
+            ),
+            _fee_quote_capacity(
+                CANONICAL_ASSET_DEFINITION_ID,
+                vault="2",
+                reserve="1",
+                remaining="1",
+            ),
+        ],
+        "decision": {
+            "status": "accepted",
+            "value": {
+                "debit_source": {
+                    "kind": "sponsor_program",
+                    "value": copy.deepcopy(intent["value"]["program_id"]),
+                },
+                "program_revision": 3,
+            },
+        },
+    }
+    return draft, quote
+
+
+def _authority_fee_quote_fixture() -> tuple[Dict[str, Any], Dict[str, Any]]:
+    intent = _authority_fee_payment()
+    draft = {"authority": CANONICAL_OWNER, "fee_payment": copy.deepcopy(intent)}
+    return draft, {
+        "intent": copy.deepcopy(intent),
+        "observation": {
+            "ledger_time_ms": 10,
+            "next_block_height": 4,
+            "route_dataspace_id": 0,
+        },
+        "components": [],
+        "capacities": [],
+        "decision": {
+            "status": "accepted",
+            "value": {
+                "debit_source": {"kind": "account", "value": CANONICAL_OWNER},
+                "program_revision": None,
+            },
+        },
+    }
+
+
 def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
     session = RecordingSession()
     quote = {
@@ -2195,7 +2324,13 @@ def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
         },
         "components": [],
         "capacities": [],
-        "decision": {"status": "accepted", "value": {"debit_source": {}}},
+        "decision": {
+            "status": "accepted",
+            "value": {
+                "debit_source": {"kind": "account", "value": CANONICAL_OWNER},
+                "program_revision": None,
+            },
+        },
     }
     session.queue(StubResponse(payload=quote))
     signed_messages: List[bytes] = []
@@ -2220,6 +2355,442 @@ def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
     assert len(signed_messages) == 1
 
 
+def test_fee_quote_accepts_parameterized_json_media_type() -> None:
+    draft, quote = _authority_fee_quote_fixture()
+    response = StubResponse(
+        payload=quote,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+    session = RecordingSession()
+    session.queue(response)
+
+    result = ToriiClient("https://node.test", session=session).quote_fees(
+        draft,
+        canonical_auth=_governance_auth(),
+    )
+
+    assert result == quote
+    assert response.was_closed
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/json; charset=utf-8, text/plain",
+        "text/plain",
+        "application/jſon",
+        "applıcation/json",
+        "applİcation/json",
+    ],
+    ids=[
+        "conflicting-folded-duplicate",
+        "plain-text",
+        "long-s-confusable",
+        "dotless-i-confusable",
+        "dotted-capital-i-confusable",
+    ],
+)
+def test_fee_quote_rejects_non_json_whole_field_media_type(
+    content_type: str,
+) -> None:
+    draft, quote = _authority_fee_quote_fixture()
+    response = StubResponse(
+        payload=quote,
+        headers={"Content-Type": content_type},
+    )
+    session = RecordingSession()
+    session.queue(response)
+
+    with pytest.raises(RuntimeError, match="Content-Type application/json"):
+        ToriiClient("https://node.test", session=session).quote_fees(
+            draft,
+            canonical_auth=_governance_auth(),
+        )
+    assert response.was_closed
+
+
+def test_fee_quote_uses_controller_identity_and_allows_alias_auth() -> None:
+    alternate_owner = _i105_display_for(CANONICAL_OWNER, 369)
+    draft, quote = _authority_fee_quote_fixture()
+    quote["decision"]["value"]["debit_source"]["value"] = alternate_owner
+    session = RecordingSession()
+    first_response = StubResponse(payload=quote)
+    second_response = StubResponse(payload=quote)
+    session.queue(first_response)
+    session.queue(second_response)
+    client = ToriiClient("https://node.test", session=session)
+
+    alternate_auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
+        account_id=alternate_owner,
+        signer=lambda _message: b"signature",
+    )
+    assert client.quote_fees(draft, canonical_auth=alternate_auth) == quote
+
+    alias_auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
+        account_id="payer@taira",
+        signer=lambda _message: b"signature",
+    )
+    assert client.quote_fees(draft, canonical_auth=alias_auth) == quote
+    assert session.calls[1]["headers"]["X-Iroha-Account"] == "payer@taira"
+    assert session.calls[0]["stream"] is True
+    assert first_response.was_closed
+    assert second_response.was_closed
+
+
+@pytest.mark.parametrize(
+    "response,pattern",
+    [
+        (
+            StubResponse(
+                raw=(
+                    b'{"intent":{"payer":"authority","value":'
+                    b'{"charge_limits":[],"gas_limit":null}},'
+                    b'"observation":{"ledger_time_ms":1,'
+                    b'"next_block_height":1,"route_dataspace_id":0},'
+                    b'"components":[],"capacities":[],"decision":'
+                    b'{"status":"accepted","value":{"debit_source":'
+                    b'{"kind":"account","value":"'
+                    + CANONICAL_OWNER.encode("utf-8")
+                    + b'"},"program_revision":null,"program_revision":null}}}'
+                ),
+                headers={"Content-Type": "application/json"},
+            ),
+            "duplicate JSON object member",
+        ),
+        (
+            StubResponse(
+                raw=b"{}",
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": str(64 * 1024 + 1),
+                },
+            ),
+            "65536-byte size bound",
+        ),
+    ],
+)
+def test_fee_quote_rejects_non_exact_bounded_json_response(
+    response: StubResponse,
+    pattern: str,
+) -> None:
+    session = RecordingSession()
+    session.queue(response)
+    client = ToriiClient("https://node.test", session=session)
+    auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"signature",
+    )
+
+    with pytest.raises(RuntimeError, match=pattern):
+        client.quote_fees(_authority_fee_quote_fixture()[0], canonical_auth=auth)
+    assert response.was_closed
+
+
+@pytest.mark.parametrize("extra_byte", [False, True])
+def test_fee_quote_enforces_actual_response_body_ceiling(extra_byte: bool) -> None:
+    draft, quote = _authority_fee_quote_fixture()
+    encoded = json.dumps(quote, separators=(",", ":")).encode("utf-8")
+    target_size = 64 * 1024 + int(extra_byte)
+    response = StubResponse(
+        raw=encoded + b" " * (target_size - len(encoded)),
+        headers={"Content-Type": "application/json"},
+    )
+    session = RecordingSession()
+    session.queue(response)
+    client = ToriiClient("https://node.test", session=session)
+    auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"signature",
+    )
+
+    if extra_byte:
+        with pytest.raises(RuntimeError, match="65536-byte size bound"):
+            client.quote_fees(draft, canonical_auth=auth)
+    else:
+        assert client.quote_fees(draft, canonical_auth=auth) == quote
+    assert response.was_closed
+
+
+def test_fee_quote_accepts_fee_free_sponsor_with_empty_capacities() -> None:
+    intent = _sponsor_fee_payment()
+    draft = {"authority": CANONICAL_OWNER, "fee_payment": copy.deepcopy(intent)}
+    quote = {
+        "intent": copy.deepcopy(intent),
+        "observation": {
+            "ledger_time_ms": 0,
+            "next_block_height": 1,
+            "route_dataspace_id": 0,
+        },
+        "components": [],
+        "capacities": [],
+        "decision": {
+            "status": "accepted",
+            "value": {
+                "debit_source": {
+                    "kind": "sponsor_program",
+                    "value": copy.deepcopy(intent["value"]["program_id"]),
+                },
+                "program_revision": 3,
+            },
+        },
+    }
+
+    assert client_module.validate_fee_quote_response_for_draft(draft, quote) == quote
+
+    alternate_owner = _i105_display_for(CANONICAL_OWNER, 369)
+    alternate_quote = copy.deepcopy(quote)
+    alternate_quote["intent"]["value"]["program_id"]["sponsor"] = alternate_owner
+    alternate_quote["decision"]["value"]["debit_source"]["value"][
+        "sponsor"
+    ] = alternate_owner
+    assert (
+        client_module.validate_fee_quote_response_for_draft(draft, alternate_quote)
+        == alternate_quote
+    )
+
+
+def test_fee_quote_aggregates_quantities_without_decimal_rounding() -> None:
+    intent = _sponsor_fee_payment(100)
+    intent["value"]["charge_limits"] = [
+        _fee_quote_component("nexus", CANONICAL_ASSET_ID, "0.1"),
+        _fee_quote_component("pipeline_gas", CANONICAL_ASSET_ID, "0.2"),
+    ]
+    draft = {"authority": CANONICAL_OWNER, "fee_payment": copy.deepcopy(intent)}
+    quote = {
+        "intent": copy.deepcopy(intent),
+        "observation": {
+            "ledger_time_ms": 10,
+            "next_block_height": 4,
+            "route_dataspace_id": 0,
+        },
+        "components": copy.deepcopy(intent["value"]["charge_limits"]),
+        "capacities": [
+            _fee_quote_capacity(
+                CANONICAL_ASSET_ID,
+                vault="0.4",
+                reserve="0.1",
+                remaining="0.3",
+            )
+        ],
+        "decision": {
+            "status": "accepted",
+            "value": {
+                "debit_source": {
+                    "kind": "sponsor_program",
+                    "value": copy.deepcopy(intent["value"]["program_id"]),
+                },
+                "program_revision": 3,
+            },
+        },
+    }
+
+    assert client_module.validate_fee_quote_response_for_draft(draft, quote) == quote
+
+
+def test_fee_quote_may_replace_only_the_requested_charge_maxima() -> None:
+    requested = _authority_fee_payment(100)
+    requested["value"]["charge_limits"] = [
+        _fee_quote_component("nexus", CANONICAL_ASSET_ID, "5")
+    ]
+    quoted = copy.deepcopy(requested)
+    quoted["value"]["charge_limits"][0]["max_amount"] = "3"
+    draft = {"authority": CANONICAL_OWNER, "fee_payment": requested}
+    quote = _authority_fee_quote_fixture()[1]
+    quote["intent"] = quoted
+    quote["components"] = copy.deepcopy(quoted["value"]["charge_limits"])
+
+    assert client_module.validate_fee_quote_response_for_draft(draft, quote) == quote
+
+
+def test_fee_quote_rejects_quantity_aggregate_overflow() -> None:
+    maximum = str((1 << 511) - 1)
+    intent = _sponsor_fee_payment()
+    intent["value"]["charge_limits"] = [
+        _fee_quote_component("nexus", CANONICAL_ASSET_ID, maximum),
+        _fee_quote_component("pipeline_gas", CANONICAL_ASSET_ID, maximum),
+    ]
+    draft = {"authority": CANONICAL_OWNER, "fee_payment": copy.deepcopy(intent)}
+    quote = {
+        "intent": copy.deepcopy(intent),
+        "observation": {
+            "ledger_time_ms": 0,
+            "next_block_height": 1,
+            "route_dataspace_id": 0,
+        },
+        "components": copy.deepcopy(intent["value"]["charge_limits"]),
+        "capacities": [
+            _fee_quote_capacity(
+                CANONICAL_ASSET_ID,
+                vault=maximum,
+                reserve="0",
+                remaining=maximum,
+            )
+        ],
+        "decision": {
+            "status": "accepted",
+            "value": {
+                "debit_source": {
+                    "kind": "sponsor_program",
+                    "value": copy.deepcopy(intent["value"]["program_id"]),
+                },
+                "program_revision": 3,
+            },
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="signed 512-bit quantity domain"):
+        client_module.validate_fee_quote_response_for_draft(draft, quote)
+
+
+@pytest.mark.parametrize(
+    "case,mutate",
+    [
+        ("unknown response field", lambda quote: quote.__setitem__("legacy", True)),
+        ("missing response field", lambda quote: quote.pop("observation")),
+        (
+            "missing observation field",
+            lambda quote: quote["observation"].pop("route_dataspace_id"),
+        ),
+        (
+            "zero next height",
+            lambda quote: quote["observation"].__setitem__("next_block_height", 0),
+        ),
+        (
+            "non-integer observation",
+            lambda quote: quote["observation"].__setitem__("ledger_time_ms", True),
+        ),
+        (
+            "u64 overflow",
+            lambda quote: quote["observation"].__setitem__(
+                "route_dataspace_id", 1 << 64
+            ),
+        ),
+        (
+            "intent missing gas slot",
+            lambda quote: quote["intent"]["value"].pop("gas_limit"),
+        ),
+        (
+            "component differs from intent",
+            lambda quote: quote["components"][0].__setitem__("max_amount", "2"),
+        ),
+        (
+            "component has unknown field",
+            lambda quote: quote["components"][0].__setitem__("legacy", None),
+        ),
+        ("capacities absent for charges", lambda quote: quote["capacities"].clear()),
+        ("capacity missing for one asset", lambda quote: quote["capacities"].pop()),
+        ("capacities out of order", lambda quote: quote["capacities"].reverse()),
+        (
+            "duplicate capacity asset",
+            lambda quote: quote["capacities"][1].__setitem__(
+                "asset_definition_id", CANONICAL_ASSET_ID
+            ),
+        ),
+        (
+            "unrelated capacity asset",
+            lambda quote: quote["capacities"][0].__setitem__(
+                "asset_definition_id", "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            ),
+        ),
+        (
+            "insufficient vault",
+            lambda quote: quote["capacities"][0].__setitem__("vault_balance", "2"),
+        ),
+        (
+            "insufficient block window",
+            lambda quote: quote["capacities"][0].__setitem__("block_remaining", "1"),
+        ),
+        (
+            "insufficient program epoch",
+            lambda quote: quote["capacities"][0].__setitem__(
+                "program_epoch_remaining", "1"
+            ),
+        ),
+        (
+            "insufficient beneficiary epoch",
+            lambda quote: quote["capacities"][0].__setitem__(
+                "beneficiary_epoch_remaining", "1"
+            ),
+        ),
+        (
+            "capacity missing field",
+            lambda quote: quote["capacities"][0].pop("reserve_floor"),
+        ),
+        (
+            "empty debit source",
+            lambda quote: quote["decision"]["value"].__setitem__("debit_source", {}),
+        ),
+        (
+            "unsupported decision",
+            lambda quote: quote["decision"].__setitem__("status", "rejected"),
+        ),
+        (
+            "missing decision revision",
+            lambda quote: quote["decision"]["value"].pop("program_revision"),
+        ),
+        (
+            "wrong decision program",
+            lambda quote: quote["decision"]["value"]["debit_source"]["value"].__setitem__(
+                "name", "other"
+            ),
+        ),
+        (
+            "wrong decision revision",
+            lambda quote: quote["decision"]["value"].__setitem__(
+                "program_revision", 4
+            ),
+        ),
+    ],
+)
+def test_fee_quote_rejects_semantic_tamper_matrix(
+    case: str,
+    mutate: Callable[[Dict[str, Any]], Any],
+) -> None:
+    draft, quote = _sponsored_fee_quote_fixture()
+    mutate(quote)
+
+    with pytest.raises(RuntimeError):
+        client_module.validate_fee_quote_response_for_draft(draft, quote)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda quote: quote["decision"]["value"]["debit_source"].__setitem__(
+            "value", "not-an-account"
+        ),
+        lambda quote: quote["decision"]["value"].__setitem__("program_revision", 1),
+        lambda quote: quote["decision"]["value"].__setitem__(
+            "debit_source",
+            {
+                "kind": "sponsor_program",
+                "value": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+            },
+        ),
+        lambda quote: quote["capacities"].append(
+            _fee_quote_capacity(
+                CANONICAL_ASSET_ID,
+                vault="0",
+                reserve="0",
+                remaining="0",
+            )
+        ),
+    ],
+)
+def test_authority_fee_quote_requires_exact_decision_and_no_capacities(
+    mutate: Callable[[Dict[str, Any]], Any],
+) -> None:
+    draft, quote = _authority_fee_quote_fixture()
+    mutate(quote)
+
+    with pytest.raises(RuntimeError):
+        client_module.validate_fee_quote_response_for_draft(draft, quote)
+
+
 def test_fee_quote_rejects_authority_substitution_before_dispatch() -> None:
     session = RecordingSession()
     client = ToriiClient(
@@ -2229,11 +2800,11 @@ def test_fee_quote_rejects_authority_substitution_before_dispatch() -> None:
     )
     auth = ToriiCanonicalRequestAuth(
         network_id=GOVERNANCE_NETWORK_ID,
-        account_id="another-account",
+        account_id=OTHER_CANONICAL_ACCOUNT,
         signer=lambda _message: b"signature",
     )
 
-    with pytest.raises(ValueError, match="must equal the exact payload authority"):
+    with pytest.raises(ValueError, match="must identify the payload authority"):
         client.quote_fees(
             {"authority": CANONICAL_OWNER},
             canonical_auth=auth,
@@ -2296,8 +2867,9 @@ def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
             payload={
                 "id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
                 "payout_account": CANONICAL_OWNER,
-                "lifecycle": "active",
-            }
+                "lifecycle": {"state": "active", "value": None},
+            },
+            headers={"Content-Type": 'Application/JSON; note="é"'},
         )
     )
     auth = ToriiCanonicalRequestAuth(
@@ -2314,12 +2886,72 @@ def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
         canonical_auth=auth,
     )
 
-    assert result["lifecycle"] == "active"
+    assert result["lifecycle"] == {"state": "active", "value": None}
     assert result["payout_account"] == CANONICAL_OWNER
     assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
         "program_id": f"{CANONICAL_OWNER}/retail"
     }
     assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_OWNER_HEADER
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/json; charset=utf-8, text/plain",
+        "text/plain",
+    ],
+    ids=["conflicting-folded-duplicate", "plain-text"],
+)
+def test_fee_sponsor_program_lookup_requires_json_whole_field_media_type(
+    content_type: str,
+) -> None:
+    response = StubResponse(
+        payload={
+            "id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+            "payout_account": CANONICAL_OWNER,
+            "lifecycle": {"state": "active", "value": None},
+        },
+        headers={"Content-Type": content_type},
+    )
+    session = RecordingSession()
+    session.queue(response)
+
+    with pytest.raises(RuntimeError, match="Content-Type application/json"):
+        ToriiClient("https://node.test", session=session).get_fee_sponsor_program(
+            f"{CANONICAL_OWNER}/retail",
+            canonical_auth=_governance_auth(),
+        )
+    assert response.was_closed
+
+
+def test_fee_sponsor_program_lookup_pins_sponsor_by_controller_identity() -> None:
+    alternate_owner = _i105_display_for(CANONICAL_OWNER, 369)
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "id": {"sponsor": alternate_owner, "name": "retail"},
+                "payout_account": CANONICAL_OWNER,
+                "lifecycle": {"state": "active", "value": None},
+            }
+        )
+    )
+    client = ToriiClient("https://node.test", session=session)
+    auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"signature",
+    )
+
+    result = client.get_fee_sponsor_program(
+        f"{CANONICAL_OWNER}/retail",
+        canonical_auth=auth,
+    )
+
+    assert result["id"] == {"sponsor": alternate_owner, "name": "retail"}
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
+        "program_id": f"{CANONICAL_OWNER}/retail"
+    }
 
 
 def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
@@ -2328,7 +2960,8 @@ def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
         StubResponse(
             payload={
                 "id": {"sponsor": CANONICAL_OWNER, "name": "other"},
-                "lifecycle": "active",
+                "payout_account": CANONICAL_OWNER,
+                "lifecycle": {"state": "active", "value": None},
             }
         )
     )
@@ -2343,6 +2976,227 @@ def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
         client.get_fee_sponsor_program(
             f"{CANONICAL_OWNER}/retail",
             canonical_auth=auth,
+        )
+
+
+def test_fee_sponsor_program_lookup_response_bound_precedes_status_and_decode() -> None:
+    maximum_bytes = 64 * 1024
+    payload = {
+        "id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+        "payout_account": CANONICAL_OWNER,
+        "lifecycle": {"state": "active", "value": None},
+    }
+    prefix = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    exact = prefix + b" " * (maximum_bytes - len(prefix))
+    oversized = exact + b" "
+
+    for status_code in (200, 503):
+        exact_response = StubResponse(
+            status_code=status_code,
+            raw=exact,
+            headers={"Content-Type": "application/json"},
+        )
+        exact_session = RecordingSession()
+        exact_session.queue(exact_response)
+        exact_client = ToriiClient("https://node.test", session=exact_session)
+        if status_code == 200:
+            result = exact_client.get_fee_sponsor_program(
+                f"{CANONICAL_OWNER}/retail",
+                canonical_auth=_governance_auth(),
+            )
+            assert result["id"]["name"] == "retail"
+        else:
+            with pytest.raises(RuntimeError, match="unexpected status 503"):
+                exact_client.get_fee_sponsor_program(
+                    f"{CANONICAL_OWNER}/retail",
+                    canonical_auth=_governance_auth(),
+                )
+        assert exact_response.was_closed
+        assert exact_session.calls[0]["stream"] is True
+
+        oversized_response = StubResponse(
+            status_code=status_code,
+            raw=oversized,
+            headers={"Content-Type": "application/json"},
+        )
+        oversized_session = RecordingSession()
+        oversized_session.queue(oversized_response)
+        with pytest.raises((RuntimeError, ValueError), match="65536-byte size bound"):
+            ToriiClient(
+                "https://node.test", session=oversized_session
+            ).get_fee_sponsor_program(
+                f"{CANONICAL_OWNER}/retail",
+                canonical_auth=_governance_auth(),
+            )
+        assert oversized_response.was_closed
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unknown-root",
+        "non-object-lifecycle",
+        "unknown-lifecycle",
+        "non-null-lifecycle-value",
+        "zero-active-revision",
+        "zero-staged-revision",
+        "zero-activation-revision",
+        "zero-activation-height",
+        "null-active-revision",
+        "null-staged-revision",
+        "null-activation",
+    ],
+)
+def test_fee_sponsor_program_lookup_rejects_noncanonical_typed_record(
+    mutation: str,
+) -> None:
+    payload: Dict[str, Any] = {
+        "id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+        "payout_account": CANONICAL_OWNER,
+        "lifecycle": {"state": "active", "value": None},
+    }
+    if mutation == "unknown-root":
+        payload["legacy"] = True
+    elif mutation == "non-object-lifecycle":
+        payload["lifecycle"] = "active"
+    elif mutation == "unknown-lifecycle":
+        payload["lifecycle"] = {"state": "legacy", "value": None}
+    elif mutation == "non-null-lifecycle-value":
+        payload["lifecycle"] = {"state": "active", "value": {}}
+    elif mutation == "zero-active-revision":
+        payload["active_revision"] = 0
+    elif mutation == "zero-staged-revision":
+        payload["staged_revision"] = 0
+    elif mutation == "zero-activation-revision":
+        payload["scheduled_activation"] = {
+            "revision": 0,
+            "activate_at_height": 1,
+        }
+    elif mutation == "zero-activation-height":
+        payload["scheduled_activation"] = {
+            "revision": 1,
+            "activate_at_height": 0,
+        }
+    elif mutation == "null-active-revision":
+        payload["active_revision"] = None
+    elif mutation == "null-staged-revision":
+        payload["staged_revision"] = None
+    elif mutation == "null-activation":
+        payload["scheduled_activation"] = None
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+
+    with pytest.raises(RuntimeError):
+        ToriiClient("https://node.test", session=session).get_fee_sponsor_program(
+            f"{CANONICAL_OWNER}/retail",
+            canonical_auth=_governance_auth(),
+        )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        (
+            b'{"id":{"sponsor":"'
+            + CANONICAL_OWNER.encode("utf-8")
+            + b'","name":"retail","name":"retail"},'
+            + b'"payout_account":"'
+            + CANONICAL_OWNER.encode("utf-8")
+            + b'","lifecycle":{"state":"active","value":null}}'
+        ),
+        b'{"id":{"sponsor":"invalid","name":"\x80"}}',
+    ],
+    ids=["duplicate-key", "malformed-utf8"],
+)
+def test_fee_sponsor_program_lookup_rejects_ambiguous_json_bytes(raw: bytes) -> None:
+    response = StubResponse(
+        raw=raw,
+        headers={"Content-Type": "application/json"},
+    )
+    session = RecordingSession()
+    session.queue(response)
+
+    with pytest.raises(RuntimeError, match="invalid JSON|valid UTF-8"):
+        ToriiClient("https://node.test", session=session).get_fee_sponsor_program(
+            f"{CANONICAL_OWNER}/retail",
+            canonical_auth=_governance_auth(),
+        )
+    assert response.was_closed
+
+
+def test_fee_sponsor_program_lookup_rejects_ambiguous_physical_content_type() -> None:
+    class RawHeaderFields:
+        def getlist(self, name: str) -> List[str]:
+            assert name == "Content-Type"
+            return ['application/json; profile="a', 'b"']
+
+    class RawResponse:
+        headers = RawHeaderFields()
+
+        @staticmethod
+        def close() -> None:
+            return None
+
+    response = StubResponse(
+        payload={
+            "id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+            "payout_account": CANONICAL_OWNER,
+            "lifecycle": {"state": "active", "value": None},
+        },
+        headers={"Content-Type": 'application/json; profile="a,b"'},
+    )
+    response.raw = RawResponse()
+    session = RecordingSession()
+    session.queue(response)
+
+    with pytest.raises(RuntimeError, match="Content-Type application/json"):
+        ToriiClient("https://node.test", session=session).get_fee_sponsor_program(
+            f"{CANONICAL_OWNER}/retail",
+            canonical_auth=_governance_auth(),
+        )
+    assert response.was_closed
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "x" * 256,
+        "e\u0301",
+        "retail\u0091",
+        "retail\u202e",
+    ],
+    ids=["overlong", "non-nfc", "unicode-control", "bidi-control"],
+)
+def test_fee_sponsor_program_lookup_rejects_noncanonical_program_name(
+    name: str,
+) -> None:
+    client = ToriiClient("https://node.test", session=RecordingSession())
+    with pytest.raises(ValueError, match="program_id must be canonical"):
+        client.get_fee_sponsor_program(
+            f"{CANONICAL_OWNER}/{name}",
+            canonical_auth=_governance_auth(),
+        )
+
+
+@pytest.mark.parametrize("name", ["x" * 256, "retail\u202e"])
+def test_fee_sponsor_program_lookup_rejects_noncanonical_response_name(
+    name: str,
+) -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "id": {"sponsor": CANONICAL_OWNER, "name": name},
+                "payout_account": CANONICAL_OWNER,
+                "lifecycle": {"state": "active", "value": None},
+            }
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="response.id is not canonical"):
+        ToriiClient("https://node.test", session=session).get_fee_sponsor_program(
+            f"{CANONICAL_OWNER}/retail",
+            canonical_auth=_governance_auth(),
         )
 
 
@@ -2750,6 +3604,11 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         instructions=[instruction],
         creation_time_ms=123,
         fee_payment=_sponsor_fee_payment(),
+        validation_fee_policy_version=7,
+        validation_fee_policy_hash="0X" + "AB" * 32,
+        validation_fee_hijiri_fee_quote_hash="0X" + "CD" * 32,
+        validation_fee_instruction_index=1,
+        validation_fee_transfer_entry_index=2,
     )
     assert isinstance(result, MultisigResponse)
     assert result.ok is True
@@ -2769,6 +3628,11 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         "multisig_account_alias": "cbdc@banka",
         "creation_time_ms": 123,
         "fee_payment": _sponsor_fee_payment(),
+        "validation_fee_policy_version": "7",
+        "validation_fee_policy_hash": "ab" * 32,
+        "validation_fee_hijiri_fee_quote_hash": "cd" * 32,
+        "validation_fee_instruction_index": "1",
+        "validation_fee_transfer_entry_index": "2",
     }
 
 
@@ -2867,6 +3731,129 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
             fee_payment=_authority_fee_payment(),
             creation_time_ms=-1,
         )
+    with pytest.raises(ValueError, match="Hijiri quote hash requires policy metadata"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            validation_fee_hijiri_fee_quote_hash="cd" * 32,
+            **kwargs,
+        )
+    with pytest.raises(RuntimeError, match="64 hex characters"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            validation_fee_policy_version=7,
+            validation_fee_policy_hash="ab" * 32,
+            validation_fee_hijiri_fee_quote_hash="not-a-hash",
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ({"validation_fee_policy_version": 7}, "must be provided together"),
+        ({"validation_fee_policy_hash": "ab" * 32}, "must be provided together"),
+        ({"validation_fee_instruction_index": 0}, "instruction index requires policy metadata"),
+        (
+            {"validation_fee_transfer_entry_index": 0},
+            "transfer entry index requires policy metadata",
+        ),
+        (
+            {
+                "validation_fee_policy_version": 7,
+                "validation_fee_policy_hash": "ab" * 32,
+                "validation_fee_transfer_entry_index": 0,
+            },
+            "transfer entry index requires instruction index",
+        ),
+    ],
+)
+def test_propose_multisig_rejects_invalid_validation_fee_dependencies(
+    metadata: dict[str, object],
+    message: str,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(ValueError, match=message):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
+            **metadata,
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "validation_fee_policy_version",
+        "validation_fee_instruction_index",
+        "validation_fee_transfer_entry_index",
+    ],
+)
+@pytest.mark.parametrize("invalid", [-1, 1 << 64, True])
+def test_propose_multisig_rejects_validation_fee_values_outside_u64(
+    field: str,
+    invalid: object,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    metadata: dict[str, object] = {
+        "validation_fee_policy_version": 7,
+        "validation_fee_policy_hash": "ab" * 32,
+        "validation_fee_instruction_index": 0,
+        "validation_fee_transfer_entry_index": 0,
+    }
+    metadata[field] = invalid
+
+    with pytest.raises((TypeError, ValueError), match="unsigned 64-bit integer"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
+            **metadata,
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("validation_fee_policy_hash", "ab" * 31),
+        ("validation_fee_policy_hash", "ab" * 15 + "  " + "cd" * 16),
+        ("validation_fee_policy_hash", "g0" * 32),
+        ("validation_fee_hijiri_fee_quote_hash", "cd" * 31),
+        ("validation_fee_hijiri_fee_quote_hash", "cd" * 15 + "  " + "ab" * 16),
+        ("validation_fee_hijiri_fee_quote_hash", "g0" * 32),
+    ],
+)
+def test_propose_multisig_rejects_noncanonical_validation_fee_hashes(
+    field: str,
+    invalid: str,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    metadata = {
+        "validation_fee_policy_version": 7,
+        "validation_fee_policy_hash": "ab" * 32,
+        field: invalid,
+    }
+
+    with pytest.raises(RuntimeError, match="hex"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
+            **metadata,
+        )
+
+    assert session.calls == []
 
 
 def test_propose_multisig_rejects_malformed_response_fields() -> None:
@@ -4947,12 +5934,10 @@ def test_get_sumeragi_diagnostics_enforces_finalized_identity_pair_and_order() -
         _get_sumeragi_diagnostics(payload)
 
 
-def test_get_sumeragi_diagnostics_parses_npos_windows_and_byte_seed() -> None:
+def test_get_sumeragi_diagnostics_parses_npos_epoch_and_byte_seed() -> None:
     payload = _sumeragi_diagnostics_payload()
     payload["npos"] = {
         "epoch_length_blocks": 100,
-        "vrf_commit_deadline_offset": 20,
-        "vrf_reveal_deadline_offset": 40,
         "epoch_seed": [1] * 32,
         "prf_height": 10,
         "prf_view": 2,
@@ -4963,9 +5948,15 @@ def test_get_sumeragi_diagnostics_parses_npos_windows_and_byte_seed() -> None:
     assert npos is not None
     assert npos.epoch_seed == (1,) * 32
 
-    payload["npos"]["vrf_penalty_epoch"] = 1
-    with pytest.raises(RuntimeError, match="contains unknown field vrf_penalty_epoch"):
-        _get_sumeragi_diagnostics(payload)
+    for retired in (
+        "vrf_commit_deadline_offset",
+        "vrf_reveal_deadline_offset",
+        "vrf_penalty_epoch",
+    ):
+        hostile = copy.deepcopy(payload)
+        hostile["npos"][retired] = 1
+        with pytest.raises(RuntimeError, match=f"contains unknown field {retired}"):
+            _get_sumeragi_diagnostics(hostile)
 
 
 def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tampering() -> None:
@@ -7349,7 +8340,7 @@ def test_submit_kagemusha_top_up_sends_exact_norito_and_idempotency_key() -> Non
         StubResponse(
             status_code=202,
             payload=_offline_operation_reference(),
-            headers={"Location": OFFLINE_STATUS_URI},
+            headers={"Location": OFFLINE_STATUS_URI, "Retry-After": "1"},
         )
     )
     client = ToriiClient("http://node.test", session=session)
@@ -7377,7 +8368,7 @@ def test_submit_kagemusha_redeem_uses_only_the_final_route() -> None:
         StubResponse(
             status_code=202,
             payload=_offline_operation_reference(kind={"kind": "redeem", "value": None}),
-            headers={"Location": OFFLINE_STATUS_URI},
+            headers={"Location": OFFLINE_STATUS_URI, "Retry-After": "1"},
         )
     )
     client = ToriiClient("http://node.test", session=session)
@@ -7420,8 +8411,47 @@ def test_kagemusha_command_validation_rejects_noncanonical_inputs_before_network
             f" {OFFLINE_OPERATION_ID}",
         ):
             with pytest.raises(RuntimeError, match="operation_id"):
-                request_type(norito=b"x", operation_id=operation_id)
+                schema_name = (
+                    OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME
+                    if request_type is KagemushaTopUpRequestV4
+                    else OFFLINE_REDEEM_REQUEST_SCHEMA_NAME
+                )
+                request_type(
+                    norito=_offline_norito_frame(schema_name),
+                    operation_id=operation_id,
+                )
     assert session.calls == []
+
+
+def test_kagemusha_command_requires_exact_schema_bound_norito_frame() -> None:
+    top_up = _offline_norito_frame(OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME)
+    redeem = _offline_norito_frame(OFFLINE_REDEEM_REQUEST_SCHEMA_NAME)
+
+    assert KagemushaTopUpRequestV4(top_up, OFFLINE_OPERATION_ID).norito == top_up
+    assert KagemushaRedeemRequestV4(redeem, OFFLINE_OPERATION_ID).norito == redeem
+    with pytest.raises(ValueError, match="schema hash did not match"):
+        KagemushaTopUpRequestV4(redeem, OFFLINE_OPERATION_ID)
+    with pytest.raises(ValueError, match="schema hash did not match"):
+        KagemushaRedeemRequestV4(top_up, OFFLINE_OPERATION_ID)
+
+    corrupted = bytearray(top_up)
+    corrupted[-1] ^= 0xFF
+    with pytest.raises(ValueError, match="CRC64 mismatch"):
+        KagemushaTopUpRequestV4(bytes(corrupted), OFFLINE_OPERATION_ID)
+
+    compressed = bytearray(top_up)
+    compressed[22] = 1
+    with pytest.raises(ValueError, match="uncompressed"):
+        KagemushaTopUpRequestV4(bytes(compressed), OFFLINE_OPERATION_ID)
+
+    without_alignment_padding = top_up[:40] + top_up[48:]
+    with pytest.raises(ValueError, match="exact type requires 8"):
+        KagemushaTopUpRequestV4(without_alignment_padding, OFFLINE_OPERATION_ID)
+
+    alternate_flags = bytearray(top_up)
+    alternate_flags[39] = 0
+    with pytest.raises(ValueError, match="exact type requires 0x02"):
+        KagemushaTopUpRequestV4(bytes(alternate_flags), OFFLINE_OPERATION_ID)
 
 
 def test_offline_acceptance_cross_checks_reference_and_location() -> None:
@@ -7440,7 +8470,11 @@ def test_offline_acceptance_cross_checks_reference_and_location() -> None:
     ]
     for payload, location in cases:
         session = RecordingSession()
-        headers = {"Location": location} if location is not None else {}
+        headers = (
+            {"Location": location, "Retry-After": "1"}
+            if location is not None
+            else {"Retry-After": "1"}
+        )
         session.queue(StubResponse(status_code=202, payload=payload, headers=headers))
         client = ToriiClient("http://node.test", session=session)
         with pytest.raises(RuntimeError):
@@ -7451,12 +8485,75 @@ def test_offline_acceptance_cross_checks_reference_and_location() -> None:
         StubResponse(
             status_code=202,
             payload=_offline_operation_reference(),
-            headers={"Content-Type": "text/plain", "Location": OFFLINE_STATUS_URI},
+            headers={
+                "Content-Type": "text/plain",
+                "Location": OFFLINE_STATUS_URI,
+                "Retry-After": "1",
+            },
         )
     )
     wrong_media_client = ToriiClient("http://node.test", session=wrong_media_session)
     with pytest.raises(RuntimeError, match="Content-Type application/json"):
         wrong_media_client.submit_kagemusha_top_up(_offline_top_up_request())
+
+
+@pytest.mark.parametrize(
+    "retry_after",
+    [None, "0", "soon", str(1 << 64), "9" * 10_000],
+)
+def test_offline_acceptance_requires_positive_u64_retry_after(
+    retry_after: Optional[str],
+) -> None:
+    headers = {"Location": OFFLINE_STATUS_URI}
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload=_offline_operation_reference(),
+            headers=headers,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="Retry-After"):
+        ToriiClient("http://node.test", session=session).submit_kagemusha_top_up(
+            _offline_top_up_request()
+        )
+
+
+def test_offline_pending_timestamps_must_be_positive() -> None:
+    reference_session = RecordingSession()
+    reference_session.queue(
+        StubResponse(
+            status_code=202,
+            payload=_offline_operation_reference(submitted_at_ms=0),
+            headers={"Location": OFFLINE_STATUS_URI, "Retry-After": "1"},
+        )
+    )
+    with pytest.raises(RuntimeError, match="submitted_at_ms"):
+        ToriiClient(
+            "http://node.test", session=reference_session
+        ).submit_kagemusha_top_up(_offline_top_up_request())
+
+    status_session = RecordingSession()
+    status_session.queue(
+        StubResponse(
+            payload={
+                "state": "pending",
+                "value": {
+                    "operation_id": OFFLINE_OPERATION_ID,
+                    "kind": {"kind": "top_up", "value": None},
+                    "transaction_hash": OFFLINE_TRANSACTION_HASH,
+                    "submitted_at_ms": 0,
+                },
+            }
+        )
+    )
+    with pytest.raises(RuntimeError, match="submitted_at_ms"):
+        ToriiClient(
+            "http://node.test", session=status_session
+        ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
 
 
 def test_get_kagemusha_operation_status_parses_all_tagged_states() -> None:
@@ -8059,6 +9156,33 @@ def test_offline_error_messages_require_exact_non_control_text() -> None:
             ToriiClient(
                 "http://node.test", session=session
             ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+
+    accepted_session = RecordingSession()
+    accepted_session.queue(
+        StubResponse(
+            payload=_offline_rejected_status(
+                {"code": "offline_operation_rejected", "message": "😀" * 1024}
+            )
+        )
+    )
+    accepted = ToriiClient(
+        "http://node.test", session=accepted_session
+    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+    assert isinstance(accepted, OfflineRejectedOperation)
+    assert len(accepted.error.message) == 1024
+
+    oversized_session = RecordingSession()
+    oversized_session.queue(
+        StubResponse(
+            payload=_offline_rejected_status(
+                {"code": "offline_operation_rejected", "message": "x" * 1025}
+            )
+        )
+    )
+    with pytest.raises(RuntimeError, match="1024-character/4096-byte"):
+        ToriiClient(
+            "http://node.test", session=oversized_session
+        ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
 
 
 def test_offline_error_details_are_closed_and_typed() -> None:

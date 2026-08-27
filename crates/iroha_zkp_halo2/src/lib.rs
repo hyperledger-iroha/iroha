@@ -288,7 +288,7 @@ pub mod norito_helpers {
                 actual: r_rounds,
             });
         }
-        if n == 0 || (n & (n - 1)) != 0 {
+        if n < 2 || (n & (n - 1)) != 0 {
             return Err(Error::InvalidN(n));
         }
         let expected = n.trailing_zeros() as usize;

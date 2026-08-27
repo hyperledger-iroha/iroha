@@ -3407,6 +3407,7 @@ impl Kura {
         if self.store_root.as_os_str().is_empty() {
             return Ok(LaneGeometryGcSummary::default());
         }
+        self.durable_mutation_authorized()?;
         self.ensure_nonzero_lineage_root(lineage_root)?;
         if snapshot_height == 0
             || snapshot_block_hash.is_none()
@@ -10504,19 +10505,17 @@ impl Kura {
                                 .map_err(|message| {
                                     Self::invalid_lane_artifact_error(claim_path.clone(), message)
                                 })?;
-                            let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(
-                                &claim_path,
-                            );
+                            let temp_path =
+                                Self::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
                             if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
                                 return Err(self.geometry_error(
                                     ErrorKind::WouldBlock,
                                     "lane attempt cannot archive with a staged successor claim",
                                 ));
                             }
-                            if !self.autonomous_lane_entrypoint_claim_path_matches(
-                                &claim,
-                                &claim_path,
-                            ) {
+                            if !self
+                                .autonomous_lane_entrypoint_claim_path_matches(&claim, &claim_path)
+                            {
                                 return Err(Self::invalid_lane_artifact_error(
                                     claim_path,
                                     "prearchive entrypoint claim has a mismatched hash path",
@@ -10584,8 +10583,7 @@ impl Kura {
                                 .and_then(|attempts_at_height| {
                                     attempts_at_height.iter().find_map(
                                         |(newer_pointer, newer_artifact, _, _)| {
-                                            (newer_pointer.proposal_height
-                                                == claim.proposal_height
+                                            (newer_pointer.proposal_height == claim.proposal_height
                                                 && newer_pointer.network_id == claim.network_id
                                                 && newer_pointer.epoch == claim.epoch)
                                                 .then_some(&newer_artifact.executable_payload)

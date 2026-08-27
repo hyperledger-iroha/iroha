@@ -8,7 +8,7 @@ import unicodedata
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 
 from ._account_id import decode_canonical_i105_account_id
 
@@ -759,7 +759,11 @@ class GovernanceSccpSourceEmitter:
             GovernanceSccpSourceEmitterKind.TRON: GovernanceSccpTronSourceEmitter.from_payload,
             GovernanceSccpSourceEmitterKind.SOLANA: GovernanceSccpSolanaSourceEmitter.from_payload,
         }[emitter]
-        return cls(emitter, parser(record["identity"], f"{context}.identity"))
+        identity = cast(
+            GovernanceSccpSourceEmitterIdentity,
+            parser(record["identity"], f"{context}.identity"),
+        )
+        return cls(emitter, identity)
 
 
 @dataclass(frozen=True)
@@ -1402,7 +1406,11 @@ class GovernanceSccpDestinationDeployment:
                 GovernanceSccpSolanaDestinationDeployment.from_payload
             ),
         }[family]
-        return cls(family, parser(record["deployment"], f"{context}.deployment"))
+        deployment = cast(
+            GovernanceSccpDestinationDeploymentValue,
+            parser(record["deployment"], f"{context}.deployment"),
+        )
+        return cls(family, deployment)
 
 
 @dataclass(frozen=True)
@@ -1774,7 +1782,11 @@ class GovernanceSccpRouteAction:
             ),
             GovernanceSccpRouteActionKind.REMOVE: GovernanceSccpRouteKey.from_payload,
         }[action]
-        return cls(action, parser(record["route"], f"{context}.route"))
+        route = cast(
+            GovernanceSccpRouteActionValue,
+            parser(record["route"], f"{context}.route"),
+        )
+        return cls(action, route)
 
 
 @dataclass(frozen=True)
@@ -2384,7 +2396,8 @@ class GovernanceProposalKind:
             kind.MUSUBI_REGISTRY_GOVERNANCE: GovernanceProposalMusubiRegistryGovernance.from_payload,
             kind.SORAFS_PROVIDER_GOVERNANCE: GovernanceProposalSorafsProviderGovernance.from_payload,
         }[kind]
-        return cls(kind, parser(record["payload"]))
+        payload = cast(GovernanceProposalPayload, parser(record["payload"]))
+        return cls(kind, payload)
 
 
 class GovernanceProposalLifecycleStatus(str, Enum):

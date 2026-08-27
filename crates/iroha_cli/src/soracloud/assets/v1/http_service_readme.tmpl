@@ -148,8 +148,11 @@ prints alongside the live Torii payload.
 iroha soracloud service config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 iroha soracloud service secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --target-version <VERSION> --torii-url http://127.0.0.1:8080
-iroha soracloud service rollout --container ./container_manifest.json --service ./service_manifest.json --rollout-handle <handle> --governance-tx-hash <hash> --torii-url http://127.0.0.1:8080
 ```
+
+Inrou upgrades are atomic exact-revision replacements in the first release.
+Rollout handles and canary traffic transitions apply only to deterministic IVM
+services, not this hosted HTTP service.
 
 Other service-bound Soracloud commands, including `hf join`,
 `hf status`, `hf lease-renew`, `hf lease-leave`, `training-job-*`,
@@ -157,7 +160,7 @@ Other service-bound Soracloud commands, including `hf join`,
 `model upload-register`, and `model upload-status`, also accept the same `--container` plus
 `--service` manifest pair instead of a manual `--service-name` where a
 service name applies. The manifest-pair forms of those commands, plus
-`config-*`, `secret-*`, `rollback`, and `rollout`, also attach the same
+`config-*`, `secret-*`, and `rollback`, also attach the same
 `service_plan` projection that `plan` reports.
 
 The generated service name will resolve under `https://__SORACLOUD_PACKAGE_NAME__.sora/api/v1`.

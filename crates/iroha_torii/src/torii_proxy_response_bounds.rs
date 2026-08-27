@@ -57,6 +57,8 @@ impl core::fmt::Display for BoundedReqwestBodyError {
     }
 }
 #[cfg(any(feature = "app_api", feature = "connect"))]
+impl std::error::Error for BoundedReqwestBodyError {}
+#[cfg(any(feature = "app_api", feature = "connect"))]
 fn validate_reqwest_response_content_length(
     declared: Option<u64>,
     max_body_bytes: usize,

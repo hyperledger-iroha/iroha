@@ -748,6 +748,10 @@ pub(crate) async fn handle_post_evidence_erasure(
             Err(response) => return response,
         };
     let account = verified.account.to_string();
+    let now_unix_ms = match healthy_network_time_now_ms() {
+        Ok(now_unix_ms) => now_unix_ms,
+        Err(response) => return response,
+    };
     let (erasure, receipt) = match service.erase(
         &request.case_id,
         &request.round_id,
@@ -755,7 +759,7 @@ pub(crate) async fn handle_post_evidence_erasure(
         &account,
         idempotency_key,
         request_digest(&method, &uri, &body, &account),
-        network_time_now_ms(),
+        now_unix_ms,
     ) {
         Ok(outcome) => outcome,
         Err(error) => return service_error(error),
@@ -1634,6 +1638,23 @@ fn network_time_now_ms() -> u64 {
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or_default()
 }
+fn healthy_network_time_now_ms() -> Result<u64, Response> {
+    healthy_network_time_ms(iroha_core::time::now())
+}
+fn healthy_network_time_ms(status: iroha_core::time::NetworkTimeStatus) -> Result<u64, Response> {
+    if !status.health.healthy || status.fallback {
+        return Err(fixed_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "network_time_unhealthy",
+        ));
+    }
+    status
+        .now
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .ok_or_else(|| fixed_error(StatusCode::SERVICE_UNAVAILABLE, "network_time_unavailable"))
+}
 const EVIDENCE_VIEWER_HTML: &str = include_str!("assets/evidence_viewer_v1/index.html");
 const EVIDENCE_VIEWER_CSS: &str = include_str!("assets/evidence_viewer_v1/app.css");
 const EVIDENCE_VIEWER_JS: &str = include_str!("assets/evidence_viewer_v1/app.js");
@@ -1656,6 +1677,25 @@ mod tests {
         let response = require_canonical_auth(&state, &headers, &method, &uri, body)
             .expect_err("foreign-network evidence authorization must fail closed");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    #[test]
+    fn irreversible_erasure_time_fails_closed_on_nts_fallback() {
+        let status = iroha_core::time::NetworkTimeStatus {
+            now: UNIX_EPOCH,
+            offset_ms: 0,
+            confidence_ms: 0,
+            sample_count: 0,
+            peer_count: 0,
+            fallback: true,
+            health: iroha_core::time::NtsHealth {
+                min_samples_ok: false,
+                offset_ok: true,
+                confidence_ok: true,
+                healthy: false,
+            },
+        };
+        let response = healthy_network_time_ms(status).expect_err("fallback time must fail closed");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
     #[test]
     fn embedded_viewer_is_no_store_and_disables_offline_execution() {

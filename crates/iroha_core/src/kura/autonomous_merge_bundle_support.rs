@@ -2619,7 +2619,7 @@ impl Kura {
                 "injected autonomous merge bundle publication failure",
             ));
         }
-        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
+        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         #[cfg(test)]
         if FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_APPEND_DATA_SYNC.with(|flag| flag.replace(false)) {
@@ -2664,7 +2664,7 @@ impl Kura {
                 "autonomous merge bundle changed before durable readback",
             ));
         }
-        let after_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
+        let after_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
         self.update_disk_usage_delta(before_bytes, after_bytes);
         accounting_mutation.finish();
         #[cfg(test)]

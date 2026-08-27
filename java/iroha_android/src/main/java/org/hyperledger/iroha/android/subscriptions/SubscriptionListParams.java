@@ -8,7 +8,7 @@ public final class SubscriptionListParams {
 
   private final String ownedBy;
   private final String provider;
-  private final String status;
+  private final SubscriptionStatus status;
   private final Long limit;
   private final Long offset;
 
@@ -28,7 +28,7 @@ public final class SubscriptionListParams {
     return provider;
   }
 
-  public String status() {
+  public SubscriptionStatus status() {
     return status;
   }
 
@@ -49,7 +49,7 @@ public final class SubscriptionListParams {
       params.put("provider", provider);
     }
     if (status != null) {
-      params.put("status", status);
+      params.put("status", status.slug());
     }
     if (limit != null) {
       params.put("limit", String.valueOf(limit));
@@ -67,7 +67,7 @@ public final class SubscriptionListParams {
   public static final class Builder {
     private String ownedBy;
     private String provider;
-    private String status;
+    private SubscriptionStatus status;
     private Long limit;
     private Long offset;
 
@@ -84,21 +84,7 @@ public final class SubscriptionListParams {
     }
 
     public Builder status(final SubscriptionStatus status) {
-      this.status = status == null ? null : status.slug();
-      return this;
-    }
-
-    public Builder status(final String status) {
-      if (status == null) {
-        this.status = null;
-        return this;
-      }
-      final String trimmed = status.trim();
-      if (trimmed.isEmpty()) {
-        this.status = null;
-        return this;
-      }
-      this.status = SubscriptionStatus.fromString(trimmed).slug();
+      this.status = status;
       return this;
     }
 

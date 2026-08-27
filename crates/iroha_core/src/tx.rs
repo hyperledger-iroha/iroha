@@ -59,6 +59,7 @@ use iroha_macro::FromVariant;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 use std::{
+    any::TypeId,
     borrow::Cow,
     collections::BTreeSet,
     sync::{Arc, LazyLock, OnceLock},
@@ -249,6 +250,7 @@ use iroha_data_model::{metadata::Metadata as TelemetryMetadata, name::Name as Te
 #[derive(Debug)]
 pub struct AcceptedTransaction<'tx> {
     entrypoint: Cow<'tx, TransactionEntrypoint>,
+    validation_time: Option<Duration>,
     entrypoint_hash: OnceLock<HashOf<TransactionEntrypoint>>,
     signed_hash: OnceLock<HashOf<SignedTransaction>>,
     encoded_len: OnceLock<usize>,
@@ -262,6 +264,7 @@ impl Clone for AcceptedTransaction<'_> {
     fn clone(&self) -> Self {
         Self {
             entrypoint: Cow::Owned(self.entrypoint().clone()),
+            validation_time: self.validation_time,
             entrypoint_hash: clone_once_lock(&self.entrypoint_hash),
             signed_hash: clone_once_lock(&self.signed_hash),
             encoded_len: clone_once_lock(&self.encoded_len),
@@ -569,7 +572,14 @@ fn duration_since_epoch_with_fallback(result: Result<Duration, SystemTimeError>)
     }
 }
 fn current_unix_time() -> Duration {
-    duration_since_epoch_with_fallback(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH))
+    unix_time_from_network_status(crate::time::now())
+}
+fn unix_time_from_network_status(status: crate::time::NetworkTimeStatus) -> Duration {
+    duration_since_epoch_with_fallback(status.now.duration_since(SystemTime::UNIX_EPOCH))
+}
+fn capture_network_admission() -> (Duration, crate::time::NetworkTimeAdmissionSnapshot) {
+    let snapshot = crate::time::admission_snapshot();
+    (unix_time_from_network_status(snapshot.status), snapshot)
 }
 impl DecodedVersionedSignedTransaction {
     /// Decode a versioned signed transaction and prepare admission metadata once.
@@ -648,7 +658,7 @@ impl DecodedVersionedSignedTransaction {
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<AcceptedTransaction<'static>, AcceptTransactionFail> {
-        let now = current_unix_time();
+        let (now, nts_snapshot) = capture_network_admission();
         AcceptedTransaction::validate_with_now_and_prepared_metadata(
             &self.tx,
             expected_network_id,
@@ -658,11 +668,11 @@ impl DecodedVersionedSignedTransaction {
             now,
             &self.prepared,
         )?;
-        enforce_nts_health_for_time_sensitive(&self.tx)?;
-        Ok(AcceptedTransaction::from_external_with_prepared_metadata(
-            self.tx,
-            self.prepared,
-        ))
+        enforce_nts_health_for_time_sensitive(&self.tx, nts_snapshot)?;
+        Ok(
+            AcceptedTransaction::from_external_with_prepared_metadata(self.tx, self.prepared)
+                .with_validation_time(now),
+        )
     }
     /// Validate and accept the decoded signed transaction after deterministic Ed25519 precheck.
     ///
@@ -676,7 +686,7 @@ impl DecodedVersionedSignedTransaction {
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<AcceptedTransaction<'static>, AcceptTransactionFail> {
-        let now = current_unix_time();
+        let (now, nts_snapshot) = capture_network_admission();
         AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
             &self.tx,
             expected_network_id,
@@ -686,11 +696,11 @@ impl DecodedVersionedSignedTransaction {
             now,
             &self.prepared,
         )?;
-        enforce_nts_health_for_time_sensitive(&self.tx)?;
-        Ok(AcceptedTransaction::from_external_with_prepared_metadata(
-            self.tx,
-            self.prepared,
-        ))
+        enforce_nts_health_for_time_sensitive(&self.tx, nts_snapshot)?;
+        Ok(
+            AcceptedTransaction::from_external_with_prepared_metadata(self.tx, self.prepared)
+                .with_validation_time(now),
+        )
     }
 }
 fn reject_retired_heartbeat_metadata(tx: &SignedTransaction) -> Result<(), TransactionLimitError> {
@@ -717,25 +727,50 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         let trigger = &register.object;
         return is_time_sensitive_executable(trigger.action().executable());
     }
-    any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>()
-        || any.is::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>()
-        || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
-        || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
-        || any.is::<iroha_data_model::isi::social::SendToTwitter>()
-        || any.is::<iroha_data_model::isi::repo::RepoInstructionBox>()
-        || any.is::<iroha_data_model::isi::settlement::SettlementInstructionBox>()
-        || any.is::<iroha_data_model::isi::staking::ExitPublicLaneValidator>()
-        || any.is::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>()
-        || any.is::<iroha_data_model::isi::staking::FinalizePublicLaneUnbond>()
-        || any.is::<iroha_data_model::isi::ExecuteTrigger>()
-        || any.is::<iroha_data_model::isi::CustomInstruction>()
-        || any.is::<iroha_data_model::isi::governance::ProposeDeployContract>()
-        || any.is::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>()
-        || any.is::<iroha_data_model::isi::governance::CastZkBallot>()
-        || any.is::<iroha_data_model::isi::governance::CastPlainBallot>()
-        || any.is::<iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1>()
-        || any.is::<iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1>()
-        || any.is::<iroha_data_model::isi::ministry::SubmitAgendaProposal>()
+    is_time_sensitive_instruction_type(any.type_id())
+}
+fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
+    macro_rules! matches_any_type {
+        ($($ty:ty),+ $(,)?) => {
+            false $(|| type_id == TypeId::of::<$ty>())+
+        };
+    }
+    matches_any_type!(
+        iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
+        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
+        iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4,
+        iroha_data_model::isi::offline::EnableKagemushaRecursiveIssuanceV4,
+        iroha_data_model::isi::offline::CancelKagemushaRecursiveReleaseV4,
+        iroha_data_model::isi::offline::DeactivateKagemushaRecursiveIssuanceV4,
+        iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4,
+        iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4,
+        iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,
+        iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy,
+        iroha_data_model::isi::oracle::RecordTwitterBinding,
+        iroha_data_model::isi::social::ClaimTwitterFollowReward,
+        iroha_data_model::isi::social::SendToTwitter,
+        iroha_data_model::isi::repo::RepoInstructionBox,
+        iroha_data_model::isi::settlement::SettlementInstructionBox,
+        iroha_data_model::isi::staking::ExitPublicLaneValidator,
+        iroha_data_model::isi::staking::SchedulePublicLaneUnbond,
+        iroha_data_model::isi::staking::FinalizePublicLaneUnbond,
+        iroha_data_model::isi::ExecuteTrigger,
+        iroha_data_model::isi::CustomInstruction,
+        ProposeRuntimeUpgrade,
+        ActivateRuntimeUpgrade,
+        CancelRuntimeUpgrade,
+        iroha_data_model::isi::governance::ProposeDeployContract,
+        iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
+        iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
+        iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
+        iroha_data_model::isi::governance::ProposeValidationFeePolicy,
+        iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
+        iroha_data_model::isi::governance::CastZkBallot,
+        iroha_data_model::isi::governance::CastPlainBallot,
+        iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
+        iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
+        iroha_data_model::isi::ministry::SubmitAgendaProposal,
+    )
 }
 fn is_time_sensitive_executable(executable: &Executable) -> bool {
     match executable {
@@ -749,8 +784,7 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
             }
             ExecutableBatchItem::ContractCall(_) => true,
         }),
-        Executable::IvmProved(proved) => proved.overlay.iter().any(is_time_sensitive_instruction),
-        Executable::Ivm(_) => true,
+        Executable::Ivm(_) | Executable::IvmProved(_) => true,
     }
 }
 #[derive(Clone, Copy)]
@@ -927,13 +961,26 @@ fn enforce_time_sensitive_with_nts(
 }
 fn enforce_nts_health_for_time_sensitive(
     tx: &SignedTransaction,
+    snapshot: crate::time::NetworkTimeAdmissionSnapshot,
 ) -> Result<(), AcceptTransactionFail> {
     if !is_time_sensitive_executable(tx.instructions()) {
         return Ok(());
     }
-    let status = crate::time::now();
-    let mode = crate::time::enforcement_mode();
-    enforce_time_sensitive_with_nts(tx, status, mode)
+    enforce_time_sensitive_with_nts(tx, snapshot.status, snapshot.enforcement_mode)
+}
+fn enforce_nts_health_for_entrypoint(
+    tx: &TransactionEntrypoint,
+    snapshot: crate::time::NetworkTimeAdmissionSnapshot,
+) -> Result<(), AcceptTransactionFail> {
+    match tx {
+        TransactionEntrypoint::External(signed) => {
+            enforce_nts_health_for_time_sensitive(signed, snapshot)
+        }
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            enforce_nts_health_for_time_sensitive(reveal.signed_transaction(), snapshot)
+        }
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => Ok(()),
+    }
 }
 fn validate_proof_attachment_shapes(tx: &SignedTransaction) -> Result<(), AcceptTransactionFail> {
     let Some(attachments) = tx.attachments() else {
@@ -961,6 +1008,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     fn from_entrypoint(entrypoint: Cow<'tx, TransactionEntrypoint>) -> Self {
         Self {
             entrypoint,
+            validation_time: None,
             entrypoint_hash: OnceLock::new(),
             signed_hash: OnceLock::new(),
             encoded_len: OnceLock::new(),
@@ -969,6 +1017,15 @@ impl<'tx> AcceptedTransaction<'tx> {
             payload_hash: OnceLock::new(),
             single_ed25519_key: OnceLock::new(),
         }
+    }
+    fn with_validation_time(mut self, validation_time: Duration) -> Self {
+        self.validation_time = Some(validation_time);
+        self
+    }
+    /// Return the exact clock instant used for ingress envelope validation.
+    #[must_use]
+    pub(crate) fn validation_time(&self) -> Option<Duration> {
+        self.validation_time
     }
     fn from_external_with_cached_bytes(
         tx: SignedTransaction,
@@ -1537,7 +1594,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<(), AcceptTransactionFail> {
-        let now = current_unix_time();
+        let (now, nts_snapshot) = capture_network_admission();
         Self::validate_with_now(
             tx,
             expected_network_id,
@@ -1546,7 +1603,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             crypto,
             now,
         )?;
-        enforce_nts_health_for_time_sensitive(tx)?;
+        enforce_nts_health_for_time_sensitive(tx, nts_snapshot)?;
         Ok(())
     }
     #[allow(clippy::too_many_lines)]
@@ -1885,16 +1942,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                         })
                     })?;
                 let code = &proved.bytecode.as_ref()[parsed.code_offset..];
-                let decoded = ivm::ivm_cache::global_get_with_meta(code, &parsed.metadata)
-                    .map_err(|err| {
-                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                            reason: format!("Failed to decode IVM instructions: {err}"),
-                        })
-                    })?;
-                let decoded_bytes = decoded
-                    .iter()
-                    .try_fold(0u64, |acc, op| acc.checked_add(u64::from(op.len)))
-                    .unwrap_or(u64::MAX);
+                let decoded = ivm::ivm_cache::global_get(code).map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: format!("Failed to decode IVM instructions: {err}"),
+                    })
+                })?;
+                let decoded_bytes = u64::try_from(code.len()).unwrap_or(u64::MAX);
                 if decoded_bytes > ivm_bytecode_size_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
                         TransactionLimitError {
@@ -1951,16 +2004,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                         })
                     })?;
                 let code = &smart_contract.as_ref()[parsed.code_offset..];
-                let decoded = ivm::ivm_cache::global_get_with_meta(code, &parsed.metadata)
-                    .map_err(|err| {
-                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                            reason: format!("Failed to decode IVM instructions: {err}"),
-                        })
-                    })?;
-                let decoded_bytes = decoded
-                    .iter()
-                    .try_fold(0u64, |acc, op| acc.checked_add(u64::from(op.len)))
-                    .unwrap_or(u64::MAX);
+                let decoded = ivm::ivm_cache::global_get(code).map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: format!("Failed to decode IVM instructions: {err}"),
+                    })
+                })?;
+                let decoded_bytes = u64::try_from(code.len()).unwrap_or(u64::MAX);
                 if decoded_bytes > ivm_bytecode_size_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
                         TransactionLimitError {
@@ -2184,7 +2233,6 @@ impl AcceptedTransaction<'static> {
                     crypto,
                     now,
                 )?;
-                enforce_nts_health_for_time_sensitive(signed)?;
             }
             TransactionEntrypoint::SealedCommitment(commitment) => {
                 validate_sealed_commitment_stateless(commitment, expected_network_id, limits)?;
@@ -2199,7 +2247,6 @@ impl AcceptedTransaction<'static> {
                     crypto,
                     now,
                 )?;
-                enforce_nts_health_for_time_sensitive(signed)?;
             }
             TransactionEntrypoint::Time(_) => {
                 return Err(AcceptTransactionFail::TransactionLimit(
@@ -2222,8 +2269,9 @@ impl AcceptedTransaction<'static> {
         genesis_account: &AccountId,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate_genesis(&tx, max_clock_drift, genesis_account, crypto)
-            .map(|()| Self::from_external_with_hot_cache(tx))
+        let now = current_unix_time();
+        Self::validate_genesis_with_now(&tx, max_clock_drift, genesis_account, crypto, now)?;
+        Ok(Self::from_external_with_hot_cache(tx).with_validation_time(now))
     }
     /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
     ///
@@ -2237,8 +2285,17 @@ impl AcceptedTransaction<'static> {
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate(&tx, expected_network_id, max_clock_drift, limits, crypto)
-            .map(|()| Self::from_external_with_hot_cache(tx))
+        let (now, nts_snapshot) = capture_network_admission();
+        Self::validate_with_now(
+            &tx,
+            expected_network_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+        )?;
+        enforce_nts_health_for_time_sensitive(&tx, nts_snapshot)?;
+        Ok(Self::from_external_with_hot_cache(tx).with_validation_time(now))
     }
     /// Accept transaction using caller-provided canonical signed-transaction bytes.
     ///
@@ -2254,10 +2311,23 @@ impl AcceptedTransaction<'static> {
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate(&tx, expected_network_id, max_clock_drift, limits, crypto)
-            .map(|()| Self::from_external_with_cached_bytes(tx, Some(signed_bytes)))
+        let (now, nts_snapshot) = capture_network_admission();
+        Self::validate_with_now(
+            &tx,
+            expected_network_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+        )?;
+        enforce_nts_health_for_time_sensitive(&tx, nts_snapshot)?;
+        Ok(Self::from_external_with_cached_bytes(tx, Some(signed_bytes)).with_validation_time(now))
     }
-    /// Accept transaction using a caller-provided [`TimeSource`] for admission-time checks.
+    /// Accept transaction using a caller-provided [`TimeSource`] for envelope checks.
+    ///
+    /// Time-sensitive instruction policy is still evaluated from one live NTS
+    /// snapshot; the caller-provided clock is intentionally used only for the
+    /// creation-time and TTL checks.
     ///
     /// # Errors
     ///
@@ -2279,8 +2349,8 @@ impl AcceptedTransaction<'static> {
             crypto,
             now,
         )?;
-        enforce_nts_health_for_time_sensitive(&tx)?;
-        Ok(Self::from_external_with_hot_cache(tx))
+        enforce_nts_health_for_time_sensitive(&tx, crate::time::admission_snapshot())?;
+        Ok(Self::from_external_with_hot_cache(tx).with_validation_time(now))
     }
     /// Accept any directly submitted transaction entrypoint.
     ///
@@ -2294,7 +2364,7 @@ impl AcceptedTransaction<'static> {
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
-        let now = current_unix_time();
+        let (now, nts_snapshot) = capture_network_admission();
         Self::validate_entrypoint_with_now(
             &tx,
             expected_network_id,
@@ -2303,16 +2373,20 @@ impl AcceptedTransaction<'static> {
             crypto,
             now,
         )?;
+        enforce_nts_health_for_entrypoint(&tx, nts_snapshot)?;
         Ok(match tx {
             TransactionEntrypoint::External(signed) => Self::from_external_with_hot_cache(signed),
             other => Self::from_entrypoint(Cow::Owned(other)),
-        })
+        }
+        .with_validation_time(now))
     }
     /// Accept an entrypoint at one explicit validation instant.
     ///
     /// Durable recovery uses the persisted enqueue instant to prove that an acknowledged
     /// entrypoint passed the same chain, signature, crypto-policy, clock, and limit checks as
-    /// ingress before classifying its current terminal state.
+    /// ingress before classifying its current terminal state. It deliberately does not
+    /// re-evaluate live NTS health: the durable record proves prior ingress admission, and a
+    /// restarting sampler must not invalidate acknowledged queue state.
     ///
     /// # Errors
     ///
@@ -2336,7 +2410,8 @@ impl AcceptedTransaction<'static> {
         Ok(match tx {
             TransactionEntrypoint::External(signed) => Self::from_external_with_hot_cache(signed),
             other => Self::from_entrypoint(Cow::Owned(other)),
-        })
+        }
+        .with_validation_time(validation_time))
     }
     /// Accept an already-decoded gossip entrypoint and seed its canonical entrypoint frame bytes.
     ///
@@ -2384,7 +2459,7 @@ impl AcceptedTransaction<'static> {
         prepared: Option<&PreparedTransactionMetadata>,
         single_ed25519_prechecked: bool,
     ) -> Result<Self, AcceptTransactionFail> {
-        let now = current_unix_time();
+        let (now, nts_snapshot) = capture_network_admission();
         match &tx {
             TransactionEntrypoint::External(signed) => {
                 if let Some(prepared) = prepared {
@@ -2409,7 +2484,6 @@ impl AcceptedTransaction<'static> {
                             prepared,
                         )?;
                     }
-                    enforce_nts_health_for_time_sensitive(signed)?;
                 } else {
                     Self::validate_entrypoint_with_now(
                         &tx,
@@ -2432,6 +2506,7 @@ impl AcceptedTransaction<'static> {
                 )?;
             }
         }
+        enforce_nts_health_for_entrypoint(&tx, nts_snapshot)?;
         let accepted = Self::from_entrypoint_with_cached_entrypoint_bytes(
             tx,
             entrypoint_bytes,
@@ -2450,7 +2525,7 @@ impl AcceptedTransaction<'static> {
             let _ = accepted.signed_hash.set(prepared.signed_hash);
             let _ = accepted.entrypoint_hash.set(prepared.entrypoint_hash);
         }
-        Ok(accepted)
+        Ok(accepted.with_validation_time(now))
     }
 }
 impl<'tx> From<AcceptedTransaction<'tx>> for SignedTransaction {
@@ -2554,6 +2629,11 @@ impl StateBlock<'_> {
                     )),
                 ));
             }
+        }
+        if let Some(context) = lifecycle_entrypoint.as_ref() {
+            context
+                .validate_stage_expiry_horizon(state_transaction.block_height())
+                .map_err(TransactionRejectionReason::Validation)?;
         }
         let mut sequence_to_commit = None;
         if let Some(seq) = tx_sequence_value {
@@ -3218,15 +3298,13 @@ impl StateBlock<'_> {
         let decoded = if code.is_empty() {
             None
         } else {
-            Some(
-                ivm::ivm_cache::global_get_with_meta(code, &meta).map_err(|err| {
-                    TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                        iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(
-                            err.to_string(),
-                        ),
-                    ))
-                })?,
-            )
+            Some(ivm::ivm_cache::global_get(code).map_err(|err| {
+                TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+                    iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(
+                        err.to_string(),
+                    ),
+                ))
+            })?)
         };
         let inst_cap = state_transaction.pipeline.ivm_max_decoded_instructions;
         let bytes_cap = state_transaction.pipeline.ivm_max_decoded_bytes;
@@ -3247,10 +3325,7 @@ impl StateBlock<'_> {
                 }
             }
             if bytes_cap != 0 {
-                let decoded_bytes = decoded
-                    .iter()
-                    .try_fold(0u64, |acc, op| acc.checked_add(u64::from(op.len)))
-                    .unwrap_or(u64::MAX);
+                let decoded_bytes = u64::try_from(code.len()).unwrap_or(u64::MAX);
                 if decoded_bytes > bytes_cap {
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::IvmAdmission(
@@ -5374,6 +5449,25 @@ pub mod tests {
         assert_eq!(actual, Duration::ZERO);
     }
     #[test]
+    fn admission_time_uses_the_network_time_snapshot() {
+        let expected = Duration::from_secs(42);
+        let status = crate::time::NetworkTimeStatus {
+            now: SystemTime::UNIX_EPOCH + expected,
+            offset_ms: 10,
+            confidence_ms: 1,
+            sample_count: 3,
+            peer_count: 3,
+            fallback: false,
+            health: crate::time::NtsHealth {
+                min_samples_ok: true,
+                offset_ok: true,
+                confidence_ok: true,
+                healthy: true,
+            },
+        };
+        assert_eq!(super::unix_time_from_network_status(status), expected);
+    }
+    #[test]
     fn validate_genesis_with_now_uses_supplied_timestamp() {
         let far_future = Duration::from_secs(10_000_000_000);
         let (_handle, time_source) = TimeSource::new_mock(far_future);
@@ -5396,6 +5490,29 @@ pub mod tests {
             far_future,
         )
         .expect("genesis validation should use provided timestamp");
+    }
+    #[test]
+    fn accepted_genesis_records_its_validation_time() {
+        let now = super::current_unix_time();
+        let (_handle, time_source) = TimeSource::new_mock(now);
+        let tx = TransactionBuilder::new_genesis_with_time_source(
+            GENESIS_ACCOUNT.id.clone(),
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::DEBUG,
+            "genesis validation timestamp".to_string(),
+        )])
+        .sign(&GENESIS_ACCOUNT.key);
+        let accepted = AcceptedTransaction::accept_genesis(
+            tx,
+            Duration::from_secs(60),
+            &GENESIS_ACCOUNT.id,
+            &iroha_config::parameters::actual::Crypto::default(),
+        )
+        .expect("genesis transaction should be accepted");
+        assert!(accepted.validation_time().is_some());
     }
     #[test]
     fn validate_genesis_with_now_rejects_invalid_transaction_signature() {
@@ -7541,7 +7658,7 @@ pub mod tests {
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         handle.advance(Duration::from_secs(1));
-        AcceptedTransaction::accept_with_time_source(
+        let accepted = AcceptedTransaction::accept_with_time_source(
             signed.clone(),
             &test_network_id(),
             Duration::from_secs(0),
@@ -7550,6 +7667,7 @@ pub mod tests {
             &time_source,
         )
         .expect("transaction should be accepted with mock clock");
+        assert_eq!(accepted.validation_time(), Some(Duration::from_secs(6)));
         let err = AcceptedTransaction::accept(
             signed,
             &test_network_id(),
@@ -7832,6 +7950,34 @@ pub mod tests {
         assert!(super::is_time_sensitive_instruction(&boxed));
     }
     #[test]
+    fn time_sensitive_type_table_covers_offline_and_governance_operations() {
+        let classified = [
+            TypeId::of::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>(),
+            TypeId::of::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(),
+            TypeId::of::<iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4>(),
+            TypeId::of::<iroha_data_model::isi::offline::EnableKagemushaRecursiveIssuanceV4>(),
+            TypeId::of::<iroha_data_model::isi::offline::CancelKagemushaRecursiveReleaseV4>(),
+            TypeId::of::<iroha_data_model::isi::offline::DeactivateKagemushaRecursiveIssuanceV4>(),
+            TypeId::of::<iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4>(),
+            TypeId::of::<iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4>(),
+            TypeId::of::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>(),
+            TypeId::of::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>(),
+            TypeId::of::<ProposeRuntimeUpgrade>(),
+            TypeId::of::<ActivateRuntimeUpgrade>(),
+            TypeId::of::<CancelRuntimeUpgrade>(),
+            TypeId::of::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>(),
+            TypeId::of::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>(),
+            TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>(),
+            TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle>(),
+        ];
+        for type_id in classified {
+            assert!(super::is_time_sensitive_instruction_type(type_id));
+        }
+        assert!(!super::is_time_sensitive_instruction_type(
+            TypeId::of::<Log>()
+        ));
+    }
+    #[test]
     fn time_sensitive_executable_detects_sensitive_and_safe() {
         let (authority, _keypair) = gen_account_in("wonderland");
         let attempt = iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
@@ -7863,6 +8009,36 @@ pub mod tests {
             iroha_data_model::transaction::executable::IvmBytecode::from_compiled(vec![0xCA]),
         );
         assert!(super::is_time_sensitive_executable(&ivm));
+        let proved = Executable::IvmProved(iroha_data_model::transaction::IvmProved {
+            bytecode: iroha_data_model::transaction::executable::IvmBytecode::from_compiled(vec![
+                0xCA,
+            ]),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        });
+        assert!(
+            super::is_time_sensitive_executable(&proved),
+            "proved bytecode remains time-sensitive even with an empty overlay"
+        );
+        let runtime_upgrade = ProposeRuntimeUpgradeProposal {
+            manifest: RuntimeUpgradeManifest {
+                name: "runtime.upgrade.nts.test".into(),
+                description: "NTS time-sensitive governance fixture".into(),
+                abi_version: 1,
+                abi_hash: [7; 32],
+                added_syscalls: Vec::new(),
+                added_pointer_types: Vec::new(),
+                start_height: 42,
+                end_height: 84,
+                sbom_digests: Vec::new(),
+                slsa_attestation: Vec::new(),
+                provenance: Vec::new(),
+            },
+        };
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            runtime_upgrade
+        )));
     }
     #[test]
     fn nts_enforcement_rejects_time_sensitive_when_unhealthy() {
@@ -7929,6 +8105,40 @@ pub mod tests {
         );
     }
     #[test]
+    fn nts_enforcement_rejects_low_level_runtime_upgrade_when_unhealthy() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let tx = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([ProposeRuntimeUpgrade {
+            manifest_bytes: vec![0xCA, 0xFE],
+        }])
+        .sign(keypair.private_key());
+        let snapshot = crate::time::NetworkTimeAdmissionSnapshot {
+            status: crate::time::NetworkTimeStatus {
+                now: SystemTime::UNIX_EPOCH,
+                offset_ms: 0,
+                confidence_ms: 0,
+                sample_count: 0,
+                peer_count: 0,
+                fallback: true,
+                health: crate::time::NtsHealth {
+                    min_samples_ok: false,
+                    offset_ok: true,
+                    confidence_ok: true,
+                    healthy: false,
+                },
+            },
+            enforcement_mode: iroha_config::parameters::actual::NtsEnforcementMode::Reject,
+        };
+        assert!(matches!(
+            super::enforce_nts_health_for_time_sensitive(&tx, snapshot),
+            Err(AcceptTransactionFail::NetworkTimeUnhealthy { .. })
+        ));
+    }
+    #[test]
     fn nts_enforcement_skips_non_sensitive_transactions() {
         let (authority, keypair) = gen_account_in("wonderland");
         let tx = TransactionBuilder::new(
@@ -7938,7 +8148,55 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "ok".into())])
         .sign(keypair.private_key());
-        assert!(super::enforce_nts_health_for_time_sensitive(&tx).is_ok());
+        assert!(
+            super::enforce_nts_health_for_time_sensitive(&tx, crate::time::admission_snapshot(),)
+                .is_ok()
+        );
+    }
+    #[test]
+    fn durable_replay_validation_does_not_reapply_live_nts_policy() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let trigger_id: iroha_data_model::trigger::TriggerId =
+            "nts-replay-trigger".parse().expect("trigger id");
+        let tx = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([iroha_data_model::isi::ExecuteTrigger::new(trigger_id)])
+        .sign(keypair.private_key());
+        let validation_time = tx.creation_time();
+        let reject_snapshot = crate::time::NetworkTimeAdmissionSnapshot {
+            status: crate::time::NetworkTimeStatus {
+                now: SystemTime::UNIX_EPOCH + validation_time,
+                offset_ms: 0,
+                confidence_ms: 0,
+                sample_count: 0,
+                peer_count: 0,
+                fallback: true,
+                health: crate::time::NtsHealth {
+                    min_samples_ok: false,
+                    offset_ok: true,
+                    confidence_ok: true,
+                    healthy: false,
+                },
+            },
+            enforcement_mode: iroha_config::parameters::actual::NtsEnforcementMode::Reject,
+        };
+        assert!(matches!(
+            super::enforce_nts_health_for_time_sensitive(&tx, reject_snapshot),
+            Err(AcceptTransactionFail::NetworkTimeUnhealthy { .. })
+        ));
+
+        AcceptedTransaction::accept_entrypoint_at_time(
+            TransactionEntrypoint::External(tx),
+            &test_network_id(),
+            Duration::ZERO,
+            TransactionParameters::default(),
+            &iroha_config::parameters::actual::Crypto::default(),
+            validation_time,
+        )
+        .expect("durable replay must use the persisted admission instant without live NTS gating");
     }
     #[test]
     fn fraud_policy_rejects_insufficient_band() {

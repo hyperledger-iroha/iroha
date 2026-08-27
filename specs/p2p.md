@@ -218,7 +218,7 @@ p2p_scion_outbound_total 0
 - When `p2p_proxy` is set and the target host is not exempted, the dialer tunnels via:
   - HTTP `CONNECT host:port` for `http://...` / `https://...`
     - `http://...` uses plaintext TCP to the proxy.
-    - `https://...` wraps the proxy connection in pinned TLS before issuing `CONNECT`. Stock builds include the mandatory `iroha_p2p/p2p_tls` transport.
+    - `https://...` wraps the proxy connection in pinned TLS before issuing `CONNECT`. TLS support is an unconditional part of `iroha_p2p`.
   - SOCKS5 `CONNECT` for `socks5://...` / `socks5h://...`
 - Notes:
   - Basic authentication is supported via `user:pass@...` in the proxy URL.
@@ -233,7 +233,9 @@ Iroha can optionally use a relay hub to improve reachability when some peers are
 
 Every relay envelope carries an end-to-end origin signature over a
 domain-separated commitment to the origin, final target, priority, and
-canonical application payload. Hubs preserve that signature and may only
+canonical application payload. First-release node and target identities are
+BLS-normal, so relay admission has one fixed 96-byte signature geometry and no
+per-algorithm verification branch. Hubs preserve that signature and may only
 decrement the unsigned hop-limit (`relay_ttl`). Receivers verify the signature
 against the origin peer key before forwarding or local delivery, so selecting a
 hub grants routing authority but never grants authority to impersonate another
@@ -429,8 +431,8 @@ Operator guidance:
   starve peer updates.
 
 Network-bound signatures are mandatory. Every inbound and outbound peer
-handshake signs one canonical V1 claim containing the identity algorithm and
-public key, advertised address, relay/consensus/confidential/crypto/trust
+handshake signs one canonical V1 claim containing the BLS-normal node public
+key, advertised address, relay/consensus/confidential/crypto/trust
 capabilities, configured `NetworkId`, full 256-bit session binding, and the
 mandatory TLS/QUIC certificate fingerprint. The network start API requires a `NetworkId`;
 changing any advertised claim, replaying it into another session or transport,
@@ -487,7 +489,7 @@ admission API.
 
 ### Mandatory TLS-over-TCP
 
-- Stock builds include `iroha_p2p/p2p_tls`; a build without it fails network startup before binding the configured listener.
+- TLS-over-TCP is compiled unconditionally; there is no feature or supported build profile that removes it.
 - `[network].address` is the TLS 1.3 listener and outbound TCP dials always upgrade to TLS 1.3 with the exact `iroha-p2p/1` ALPN. There is no plaintext listener, retry, or runtime downgrade knob.
 - Identity remains authenticated by the canonical V5 application handshake, which binds the certificate fingerprint and configured `NetworkId`; rustls separately verifies possession of the self-signed certificate key.
 - Requesting QUIC without compiled support, or failing to initialize its dialer or listener, aborts startup. A runtime QUIC connection failure may fall back only to this authenticated TLS path.
@@ -574,11 +576,16 @@ key fails the handshake.
 The final mutual BLS application hello signs a canonical
 `iroha:p2p:identity-binding:v1|` claim over the full session-key hash,
 `NetworkId`, complete V5 frame binding, mandatory TLS/QUIC fingerprint, identity
-algorithm and public key, advertised address, and all relay, consensus,
+public key, advertised address, and all relay, consensus,
 confidential, crypto, and trust capabilities. Thus a captured certificate or
 proof cannot authenticate a new challenge, handshake transcript, session, or
 transport. The mandatory SoraNet ML-KEM-derived session key remains the sole
 P2P content-encryption key.
+
+After AEAD authentication, an encrypted stream frame is one atomic batch. Any
+invalid inner header, truncated object, decode failure, topic-cap violation, or
+message-count overflow discards the whole batch and closes the peer connection;
+decoded prefixes are never delivered from a malformed batch.
 
 After V5 authentication and SoraNet key establishment, hello frames carry
 identity, consensus caps, and confidential caps (enabled/assume_valid/backend

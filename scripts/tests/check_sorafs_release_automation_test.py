@@ -508,6 +508,8 @@ def test_runtime_provider_deployment_markers_track_split_broker_modules() -> Non
     markers = automation.RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS
 
     assert markers["crates/irohad/src/runtime_provider_broker.rs"] == (
+        "mod api;",
+        "mod launcher;",
         'include!("runtime_provider_broker/protocol.rs");',
     )
     assert markers["crates/irohad/src/runtime_provider_broker/platform.rs"] == (

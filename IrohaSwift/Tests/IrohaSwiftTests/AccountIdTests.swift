@@ -3,13 +3,16 @@ import XCTest
 
 @available(macOS 10.15, iOS 13.0, *)
 final class AccountIdTests: XCTestCase {
+    private func validEd25519PublicKey(seed: UInt8) throws -> Data {
+        try Keypair(privateKeyBytes: Data(repeating: seed, count: 32)).publicKey
+    }
 
     func testDefaultNetworkPrefix() {
         XCTAssertEqual(AccountId.defaultNetworkPrefix, 0x02F1)
     }
 
-    func testMakeProducesI105Format() {
-        let publicKey = Data(repeating: 0xAB, count: 32)
+    func testMakeProducesI105Format() throws {
+        let publicKey = try validEd25519PublicKey(seed: 0xAB)
         let accountId = AccountId.make(publicKey: publicKey)
 
         XCTAssertFalse(accountId.hasPrefix("ed0120"))
@@ -18,7 +21,7 @@ final class AccountIdTests: XCTestCase {
     }
 
     func testMakeI105ProducesValidFormat() throws {
-        let publicKey = Data(repeating: 0xAB, count: 32)
+        let publicKey = try validEd25519PublicKey(seed: 0xAB)
         let accountId = try AccountId.makeI105(publicKey: publicKey)
 
         // i105 format should NOT start with ed0120
@@ -31,7 +34,7 @@ final class AccountIdTests: XCTestCase {
     }
 
     func testMakeI105WithCustomNetworkPrefix() throws {
-        let publicKey = Data(repeating: 0xCD, count: 32)
+        let publicKey = try validEd25519PublicKey(seed: 0xCD)
         let customPrefix: UInt16 = 753
 
         let accountId = try AccountId.makeI105(publicKey: publicKey, networkPrefix: customPrefix
@@ -71,7 +74,7 @@ final class AccountIdTests: XCTestCase {
     }
 
     func testMakeAndMakeI105ProduceSameFormat() throws {
-        let publicKey = Data(repeating: 0xEF, count: 32)
+        let publicKey = try validEd25519PublicKey(seed: 0xEF)
 
         let accountId = AccountId.make(publicKey: publicKey)
         let i105AccountId = try AccountId.makeI105(publicKey: publicKey)
@@ -82,7 +85,7 @@ final class AccountIdTests: XCTestCase {
     }
 
     func testNormalizeForComparisonLeavesAccountAliasesUntouched() throws {
-        let publicKey = Data(repeating: 0x11, count: 32)
+        let publicKey = try validEd25519PublicKey(seed: 0x11)
         let i105 = try AccountId.makeI105(publicKey: publicKey)
         let alias = "alice@dataspace"
         let scopedAlias = "alice@banka.dataspace"

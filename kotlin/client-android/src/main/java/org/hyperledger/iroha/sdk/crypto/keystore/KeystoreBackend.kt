@@ -48,11 +48,14 @@ interface KeystoreBackend {
      * recorded certificates. The Android implementation will populate this with the StrongBox/TEE
      * attestation chain.
      */
+    @Throws(KeyManagementException::class)
     fun attestation(alias: String): KeyAttestation? = null
 
     /**
-     * Generates fresh attestation material for `alias` using the provided challenge. Providers
-     * that do not support attestation should return null.
+     * Requests backend-generated attestation material for `alias` using the provided challenge.
+     * Providers that do not support challenge-bound generation must fail explicitly for a
+     * non-empty challenge. Android Keystore can bind a challenge only while creating a key and
+     * cannot re-attest an existing alias.
      */
     @Throws(KeyManagementException::class)
     fun generateAttestation(alias: String, challenge: ByteArray): KeyAttestation? = null

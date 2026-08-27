@@ -1880,8 +1880,6 @@ function parseSumeragiNposDiagnostics(value) {
   const context = "sumeragi diagnostics.npos";
   const fields = [
     "epoch_length_blocks",
-    "vrf_commit_deadline_offset",
-    "vrf_reveal_deadline_offset",
     "epoch_seed",
     "prf_height",
     "prf_view",
@@ -1892,19 +1890,6 @@ function parseSumeragiNposDiagnostics(value) {
     `${context}.epoch_length_blocks`,
     { positive: true },
   );
-  const commit = parseSumeragiUnsigned(
-    record.vrf_commit_deadline_offset,
-    `${context}.vrf_commit_deadline_offset`,
-    { positive: true },
-  );
-  const reveal = parseSumeragiUnsigned(
-    record.vrf_reveal_deadline_offset,
-    `${context}.vrf_reveal_deadline_offset`,
-    { positive: true },
-  );
-  if (!(commit < reveal && reveal <= epochLength)) {
-    throw new RangeError(`${context} windows must be strictly ordered within the epoch`);
-  }
   const epochSeed = parseSumeragiByteVector(
     record.epoch_seed,
     32,
@@ -1915,8 +1900,6 @@ function parseSumeragiNposDiagnostics(value) {
   }
   return Object.freeze({
     epoch_length_blocks: epochLength,
-    vrf_commit_deadline_offset: commit,
-    vrf_reveal_deadline_offset: reveal,
     epoch_seed: epochSeed,
     prf_height: parseSumeragiUnsigned(record.prf_height, `${context}.prf_height`),
     prf_view: parseSumeragiUnsigned(record.prf_view, `${context}.prf_view`),

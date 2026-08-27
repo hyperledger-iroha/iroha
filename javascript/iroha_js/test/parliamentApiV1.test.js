@@ -55,7 +55,7 @@ const ID = (byte) => byte.toString(16).padStart(2, "0").repeat(32);
 const CONTRACT_ADDRESS =
   "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
 const RUST_INVALID_ZERO_KEY_ACCOUNT =
-  "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6";
+  ["sora", "uﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"].join("");
 const NETWORK_ID = NetworkId.fromBytes(Uint8Array.from([
   ...Array(31).fill(0),
   1,
@@ -725,6 +725,50 @@ test("ToriiClient exposes all six canonical authenticated Parliament paths", asy
   assert.equal(calls[4].options.body, undefined);
   const transitionBody = JSON.parse(calls[5].options.body);
   assert.deepEqual(Object.keys(transitionBody), ["version", "governance_attempt_id", "transition"]);
+});
+
+test("ToriiClient typed proposal reads use the strict local V1 parser", async () => {
+  const proposals = parliamentProposalFixtures();
+  const client = new ToriiClient("https://example.invalid");
+  client.getGovernanceProposal = async () => ({
+    found: true,
+    proposal: {
+      proposer: ACCOUNTS[0],
+      kind: proposals.shift(),
+      created_height: 1,
+      status: "Proposed",
+    },
+  });
+  const variants = [];
+  while (proposals.length > 0) {
+    const result = await client.getGovernanceProposalTyped(PROPOSAL_ID);
+    variants.push(result.proposal.kind.variant);
+  }
+  assert.deepEqual(variants, [
+    "DeployContract",
+    "RuntimeUpgrade",
+    "SccpRouteGovernance",
+    "ValidationFeePolicy",
+    "ValidationFeePayoutLifecycle",
+    "MusubiRegistryGovernance",
+    "SorafsProviderGovernance",
+  ]);
+
+  const malformed = structuredClone(parliamentProposalFixtures()[0]);
+  malformed.payload.future = null;
+  client.getGovernanceProposal = async () => ({
+    found: true,
+    proposal: {
+      proposer: ACCOUNTS[0],
+      kind: malformed,
+      created_height: 1,
+      status: "Proposed",
+    },
+  });
+  await assert.rejects(
+    client.getGovernanceProposalTyped(PROPOSAL_ID),
+    /unsupported fields/u,
+  );
 });
 
 function fixtureAccountId(label) {

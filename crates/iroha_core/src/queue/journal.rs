@@ -222,7 +222,7 @@ pub struct QueuePlanJournalRecordV1 {
     pub routing_plan: RoutingPlan,
     /// Exact coherent committed generation that admitted `routing_plan`.
     pub admission_context: QueuePlanAdmissionContextV1,
-    /// Canonical ingress enqueue timestamp in milliseconds.
+    /// Canonical ingress envelope-validation timestamp in milliseconds.
     pub enqueue_timestamp_ms: u64,
     /// Global exact-network/request identity for a globally certified admission.
     ///

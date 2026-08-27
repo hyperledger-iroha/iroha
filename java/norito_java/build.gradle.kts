@@ -21,6 +21,10 @@ repositories {
     mavenCentral()
 }
 
+dependencies {
+    implementation("com.github.luben:zstd-jni:1.5.7-7")
+}
+
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.release.set(21)

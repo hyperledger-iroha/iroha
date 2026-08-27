@@ -1339,16 +1339,18 @@ impl ArcString {
 }
 fn load_row_usage(path: &Path) -> Result<RowUsageSnapshot, String> {
     let data = fs::read(path).map_err(|err| format!("read {}: {err}", display_path(path)))?;
-    let value: Value =
-        json::from_slice(&data).map_err(|err| format!("parse {}: {err}", display_path(path)))?;
-    let batches = value
-        .get("batches")
-        .cloned()
-        .unwrap_or_else(|| value.clone());
     let source = path
         .file_name()
         .and_then(|value| value.to_str().map(str::to_owned))
         .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    parse_row_usage(&data, source).map_err(|err| format!("parse {}: {err}", display_path(path)))
+}
+fn parse_row_usage(data: &[u8], source: String) -> Result<RowUsageSnapshot, json::Error> {
+    let value: Value = json::from_slice(data)?;
+    let batches = value
+        .get("batches")
+        .cloned()
+        .unwrap_or_else(|| value.clone());
     Ok(RowUsageSnapshot { source, batches })
 }
 fn detect_hostname() -> Option<String> {
@@ -1737,11 +1739,12 @@ mod tests {
         );
     }
     #[test]
-    fn load_row_usage_picks_batches_block_when_present() {
-        let dir = env::temp_dir();
-        let path = dir.join("fastpq_cuda_bench_row_usage.json");
-        fs::write(&path, r#"{ "batches": [{ "id": 1 }] }"#).expect("write row usage");
-        let snapshot = load_row_usage(&path).expect("load snapshot");
+    fn parse_row_usage_picks_batches_block_when_present() {
+        let snapshot = parse_row_usage(
+            br#"{ "batches": [{ "id": 1 }] }"#,
+            "fastpq_cuda_bench_row_usage.json".to_owned(),
+        )
+        .expect("parse snapshot");
         assert_eq!(snapshot.source, "fastpq_cuda_bench_row_usage.json");
         assert_eq!(
             snapshot
@@ -1752,6 +1755,18 @@ mod tests {
                 .and_then(Value::as_i64),
             Some(1)
         );
-        let _ = fs::remove_file(&path);
+    }
+    #[test]
+    fn load_row_usage_reports_source_filename() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lookup_grand_product.json");
+        let snapshot = load_row_usage(&path).expect("load row usage fixture");
+        assert_eq!(snapshot.source, "lookup_grand_product.json");
+    }
+    #[test]
+    fn load_row_usage_parse_error_retains_full_path() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let error = load_row_usage(&path).expect_err("TOML is not row-usage JSON");
+        assert!(error.starts_with(&format!("parse {}:", display_path(&path))));
     }
 }

@@ -9,7 +9,7 @@ from typing import List, Optional
 from urllib.parse import quote
 
 import pytest
-
+import requests
 from client_test_support import CANONICAL_OWNER, canonical_hash
 from sumeragi_exact_json_test_support import RecordingSession, StubResponse
 
@@ -135,6 +135,14 @@ def test_kaigi_relay_summary_requires_a_32_byte_fingerprint(fingerprint: object)
     with pytest.raises(RuntimeError, match=r"(?:64 lowercase hex characters|string)"):
         ToriiClient._parse_kaigi_relay_summary(
             _relay_summary_payload(hpke_fingerprint_hex=fingerprint),
+            context="kaigi relay summary",
+        )
+
+
+def test_kaigi_relay_summary_requires_the_iroha_hash_marker() -> None:
+    with pytest.raises(RuntimeError, match="Iroha Hash marker bit"):
+        ToriiClient._parse_kaigi_relay_summary(
+            _relay_summary_payload(hpke_fingerprint_hex="aa" * 32),
             context="kaigi relay summary",
         )
 
@@ -335,26 +343,56 @@ def test_kaigi_relay_health_rejects_impossible_current_status_total() -> None:
         )
 
 
+def test_kaigi_relay_health_requires_strictly_sorted_domains() -> None:
+    with pytest.raises(RuntimeError, match="strictly sorted by domain"):
+        ToriiClient._parse_kaigi_relay_health_snapshot(
+            {
+                "healthy_total": 0,
+                "degraded_total": 0,
+                "unavailable_total": 0,
+                "reports_total": 3,
+                "registrations_total": 3,
+                "failovers_total": 3,
+                "domains": [
+                    {
+                        "domain": "zeta",
+                        "registrations_total": 1,
+                        "manifest_updates_total": 0,
+                        "failovers_total": 1,
+                        "health_reports_total": 1,
+                    },
+                    {
+                        "domain": "alpha",
+                        "registrations_total": 2,
+                        "manifest_updates_total": 0,
+                        "failovers_total": 2,
+                        "health_reports_total": 2,
+                    },
+                ],
+            },
+            context="kaigi relay health snapshot",
+        )
+
+
 def test_list_kaigi_relays_parses_summary() -> None:
     signed_messages: List[bytes] = []
     session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "total": 1,
-                "items": [
-                    {
-                        "relay_id": CANONICAL_OWNER,
-                        "domain": "kaigi.core",
-                        "bandwidth_class": 3,
-                        "hpke_fingerprint_hex": "ab" * 32,
-                        "status": "healthy",
-                        "reported_at_ms": 123,
-                    }
-                ],
-            }
-        )
+    response = StubResponse(
+        payload={
+            "total": 1,
+            "items": [
+                {
+                    "relay_id": CANONICAL_OWNER,
+                    "domain": "kaigi.core",
+                    "bandwidth_class": 3,
+                    "hpke_fingerprint_hex": "ab" * 32,
+                    "status": "healthy",
+                    "reported_at_ms": 123,
+                }
+            ],
+        }
     )
+    session.queue(response)
     client = ToriiClient(
         "http://node.test",
         session=session,
@@ -371,6 +409,8 @@ def test_list_kaigi_relays_parses_summary() -> None:
     assert session.calls[0]["url"].endswith("/v1/kaigi/relays")
     assert session.calls[0]["headers"]["Accept"] == "application/json"
     assert session.calls[0]["allow_redirects"] is False
+    assert session.calls[0]["stream"] is True
+    assert response.was_closed is True
     assert "X-Iroha-Operator-Signature" in session.calls[0]["headers"]
     exact_prefix = b"".join(
         (
@@ -397,32 +437,32 @@ def test_list_kaigi_relays_parses_summary() -> None:
 def test_get_kaigi_relay_returns_detail_and_none_on_404() -> None:
     relay_id = CANONICAL_OWNER
     session = RecordingSession()
-    session.queue(StubResponse(status_code=404))
-    session.queue(
-        StubResponse(
-            payload={
-                "relay": {
-                    "relay_id": relay_id,
-                    "domain": "kaigi.core",
-                    "bandwidth_class": 3,
-                    "hpke_fingerprint_hex": HPKE_FINGERPRINT_HEX,
-                    "status": "healthy",
-                    "reported_at_ms": 123,
-                },
-                "hpke_public_key_b64": HPKE_PUBLIC_KEY_B64,
-                "reported_call": {"domain_id": "kaigi.core", "call_name": "register"},
-                "reported_by": relay_id,
-                "notes": "Primary relay",
-                "metrics": {
-                    "domain": "kaigi.core",
-                    "registrations_total": 5,
-                    "manifest_updates_total": 7,
-                    "failovers_total": 1,
-                    "health_reports_total": 9,
-                },
-            }
-        )
+    not_found_response = StubResponse(status_code=404)
+    detail_response = StubResponse(
+        payload={
+            "relay": {
+                "relay_id": relay_id,
+                "domain": "kaigi.core",
+                "bandwidth_class": 3,
+                "hpke_fingerprint_hex": HPKE_FINGERPRINT_HEX,
+                "status": "healthy",
+                "reported_at_ms": 123,
+            },
+            "hpke_public_key_b64": HPKE_PUBLIC_KEY_B64,
+            "reported_call": {"domain_id": "kaigi.core", "call_name": "register"},
+            "reported_by": relay_id,
+            "notes": "Primary relay",
+            "metrics": {
+                "domain": "kaigi.core",
+                "registrations_total": 5,
+                "manifest_updates_total": 7,
+                "failovers_total": 1,
+                "health_reports_total": 9,
+            },
+        }
     )
+    session.queue(not_found_response)
+    session.queue(detail_response)
     client = ToriiClient(
         "http://node.test",
         session=session,
@@ -438,31 +478,33 @@ def test_get_kaigi_relay_returns_detail_and_none_on_404() -> None:
     assert detail.reported_call is not None
     assert detail.reported_call.call_name == "register"
     assert session.calls[1]["url"].endswith(f"/v1/kaigi/relays/{quote(relay_id, safe='')}")
+    assert [call["stream"] for call in session.calls] == [True, True]
+    assert not_found_response.was_closed is True
+    assert detail_response.was_closed is True
 
 
 def test_get_kaigi_relays_health_snapshot() -> None:
     session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "healthy_total": 2,
-                "degraded_total": 1,
-                "unavailable_total": 0,
-                "reports_total": 4,
-                "registrations_total": 5,
-                "failovers_total": 1,
-                "domains": [
-                    {
-                        "domain": "kaigi.core",
-                        "registrations_total": 5,
-                        "manifest_updates_total": 3,
-                        "failovers_total": 1,
-                        "health_reports_total": 4,
-                    }
-                ],
-            }
-        )
+    response = StubResponse(
+        payload={
+            "healthy_total": 2,
+            "degraded_total": 1,
+            "unavailable_total": 0,
+            "reports_total": 4,
+            "registrations_total": 5,
+            "failovers_total": 1,
+            "domains": [
+                {
+                    "domain": "kaigi.core",
+                    "registrations_total": 5,
+                    "manifest_updates_total": 3,
+                    "failovers_total": 1,
+                    "health_reports_total": 4,
+                }
+            ],
+        }
     )
+    session.queue(response)
     client = ToriiClient(
         "http://node.test",
         session=session,
@@ -474,6 +516,78 @@ def test_get_kaigi_relays_health_snapshot() -> None:
     assert snapshot.healthy_total == 2
     assert snapshot.domains[0].domain == "kaigi.core"
     assert session.calls[0]["url"].endswith("/v1/kaigi/relays/health")
+    assert session.calls[0]["stream"] is True
+    assert response.was_closed is True
+
+
+@pytest.mark.parametrize("content_length", ["33", "1", None])
+def test_kaigi_relay_reads_enforce_declared_and_actual_response_bounds(
+    content_length: Optional[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(client_module, "_KAIGI_RELAY_RESPONSE_MAX_BYTES", 32)
+    headers = {"Content-Type": "application/json"}
+    if content_length is not None:
+        headers["Content-Length"] = content_length
+    response = StubResponse(raw=b"x" * 33, headers=headers)
+    session = RecordingSession()
+    session.queue(response)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    with pytest.raises(ValueError, match="32-byte size bound"):
+        client.list_kaigi_relays()
+
+    assert response.was_closed is True
+    assert len(session.calls) == 1
+    assert session.calls[0]["stream"] is True
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        (b"\xff", "UTF-8 JSON"),
+        (b"[]", "JSON object"),
+        (b'{"total":0,"total":0,"items":[]}', "duplicate field"),
+    ],
+)
+def test_kaigi_relay_reads_require_strict_json_objects(raw: bytes, message: str) -> None:
+    response = StubResponse(raw=raw, headers={"Content-Type": "application/json"})
+    session = RecordingSession()
+    session.queue(response)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        client.list_kaigi_relays()
+
+    assert response.was_closed is True
+
+
+def test_kaigi_relay_error_response_is_bounded_and_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(client_module, "_KAIGI_RELAY_RESPONSE_MAX_BYTES", 16)
+    response = StubResponse(status_code=503, raw=b"x" * 17)
+    session = RecordingSession()
+    session.queue(response)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    with pytest.raises(ValueError, match="16-byte size bound"):
+        client.list_kaigi_relays()
+
+    assert response.was_closed is True
+    assert len(session.calls) == 1
 
 
 def test_kaigi_relay_reads_require_fresh_operator_auth_before_dispatch() -> None:
@@ -504,6 +618,99 @@ def test_kaigi_relay_reads_require_fresh_operator_auth_before_dispatch() -> None
     with pytest.raises(ValueError, match="Session.cookies"):
         cookie_client.list_kaigi_relays()
     assert cookie_session.calls == []
+
+
+def test_kaigi_relay_reads_reject_retired_iso_profile_before_signing() -> None:
+    signed_messages: List[bytes] = []
+    session = RecordingSession()
+    session.headers["X-Iroha-Iso-Profile"] = "legacy-profile"
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(signed_messages),
+    )
+
+    with pytest.raises(ValueError, match="X-Iroha-Iso-Profile"):
+        client.list_kaigi_relays()
+
+    assert signed_messages == []
+    assert session.calls == []
+
+
+def test_kaigi_relay_reads_reject_ambient_netrc_before_signing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signed_messages: List[bytes] = []
+    session = RecordingSession()
+    original_headers = dict(session.headers)
+    monkeypatch.setattr(
+        requests.sessions,
+        "get_netrc_auth",
+        lambda *_args, **_kwargs: ("ambient-user", "ambient-secret"),
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(signed_messages),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="prepared transport authentication header Authorization",
+    ):
+        client.list_kaigi_relays()
+
+    assert signed_messages == []
+    assert session.calls == []
+    assert session.trust_env is True
+    assert session.auth is None
+    assert dict(session.headers) == original_headers
+
+
+def test_kaigi_relay_reads_reject_ambient_proxy_before_signing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signed_messages: List[bytes] = []
+    session = RecordingSession()
+    original_proxies = dict(session.proxies)
+    monkeypatch.setattr(
+        requests.sessions,
+        "get_environ_proxies",
+        lambda *_args, **_kwargs: {"http": "http://ambient-proxy.test:8080"},
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(signed_messages),
+    )
+
+    with pytest.raises(ValueError, match="ambient environment proxies"):
+        client.list_kaigi_relays()
+
+    assert signed_messages == []
+    assert session.calls == []
+    assert session.trust_env is True
+    assert session.proxies == original_proxies
+
+
+def test_kaigi_relay_reads_reject_configured_proxy_auth_before_signing() -> None:
+    signed_messages: List[bytes] = []
+    session = RecordingSession()
+    session.trust_env = False
+    session.proxies["http"] = "http://proxy-user:proxy-secret@proxy.test:8080"
+    original_proxies = dict(session.proxies)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(signed_messages),
+    )
+
+    with pytest.raises(ValueError, match="proxy authentication"):
+        client.list_kaigi_relays()
+
+    assert signed_messages == []
+    assert session.calls == []
+    assert session.proxies == original_proxies
 
 
 def test_kaigi_relay_operator_read_is_one_shot() -> None:

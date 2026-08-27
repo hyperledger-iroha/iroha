@@ -13,9 +13,20 @@ import { pathToFileURL } from "node:url";
 
 import * as productionPrivacyCapabilities from "../src/privacyCapabilities.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
-import { ToriiClient } from "../src/toriiClient.js";
+import {
+  LocalSigningContext,
+  ToriiClient,
+} from "../src/toriiClient.js";
+import { NetworkId } from "../src/networkId.js";
 
 const TEST_NATIVE_BINDING = Symbol.for("iroha.test.exact12.native-binding");
+const TEST_CANONICAL_AUTH = Object.freeze({
+  accountId: "privacy-test@fixture.test",
+  privateKey: Buffer.alloc(32, 0x0b),
+});
+const TEST_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
+  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+);
 const SUBJECT_ROOT = mkdtempSync(join(tmpdir(), "iroha-exact12-native-authority-"));
 writeFileSync(join(SUBJECT_ROOT, "package.json"), '{"type":"module"}\n');
 
@@ -431,6 +442,7 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
   await withNative(fakeNative(), async () => {
     const calls = [];
     const node = new ToriiClient("https://privacy.example.test", {
+      localSigningContext: TEST_LOCAL_SIGNING_CONTEXT,
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
         return new Response(ARCHIVE, {
@@ -439,7 +451,9 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
         });
       },
     });
-    const manifest = await getPrivacyExact12CapabilityManifestV1(node);
+    const manifest = await getPrivacyExact12CapabilityManifestV1(node, {
+      canonicalAuth: TEST_CANONICAL_AUTH,
+    });
     assert.equal(manifest.committed_height, 42n);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, "https://privacy.example.test/v1/privacy/capabilities");

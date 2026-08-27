@@ -625,7 +625,7 @@ pub struct QueuePlanDurableAdmissionV1 {
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
     /// Real signed-transaction hash when the entrypoint contains one.
     pub signed_transaction_hash: Option<HashOf<iroha_data_model::transaction::SignedTransaction>>,
-    /// Exact queue timestamp persisted in the journal record.
+    /// Exact ingress envelope-validation timestamp persisted in the journal record.
     pub enqueue_timestamp_ms: u64,
     /// Domain-separated digest of the canonical `QueuePlanJournalRecordV1` bytes that crossed the
     /// sync boundary.
@@ -3612,9 +3612,9 @@ pub struct Queue {
     tx_encoded_len: DashMap<EntrypointHash, usize>,
     /// Cached proposal gas cost per queued transaction hash.
     tx_gas_cost: DashMap<EntrypointHash, u64>,
-    /// Local enqueue timestamp in milliseconds for tracked transactions.
+    /// Canonical admission timestamp in milliseconds for tracked transactions.
     tx_enqueued_at_ms: DashMap<EntrypointHash, u64>,
-    /// Local enqueue timestamp in milliseconds for hashes still waiting in `tx_hashes`.
+    /// Canonical admission timestamp in milliseconds for hashes still waiting in `tx_hashes`.
     queued_tx_enqueued_at_ms: DashMap<EntrypointHash, u64>,
     /// Stable FIFO ordinal for every tracked transaction, including lane-owned reservations.
     fifo_order_by_hash: DashMap<EntrypointHash, LaneQueueFifoOrderV1>,
@@ -14391,13 +14391,28 @@ impl Queue {
         )?;
         Self::queue_plan_admission_context_in_view(&state_view, &routing_plan)
     }
-    /// Sample the queue time source once for a shared global admission binding.
+    /// Sample the queue time source once for a synthetic global admission binding.
     ///
     /// The returned value must be carried unchanged to every durable authority; authorities must
-    /// not replace it with their own local clock sample.
+    /// not replace it with their own local clock sample. Production ingress has an already
+    /// accepted transaction and must use [`Self::queue_plan_admission_timestamp_ms_for`] so
+    /// restart replay uses the exact original validation instant.
     #[must_use]
     pub fn queue_plan_admission_timestamp_ms(&self) -> u64 {
         Self::duration_to_millis(self.time_source.get_unix_time())
+    }
+    /// Return the exact envelope-validation instant for a QueuePlan binding.
+    ///
+    /// Production ingress should use this instead of resampling the queue clock:
+    /// durable replay must validate the envelope at the same instant that originally
+    /// admitted it. The queue clock is used only for accepted values that predate the
+    /// captured-validation-time invariant, such as synthetic genesis fixtures.
+    #[must_use]
+    pub fn queue_plan_admission_timestamp_ms_for(
+        &self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> u64 {
+        self.validation_timestamp_ms(transaction)
     }
     /// Recover the exact still-owned durable admission claim for a public retry.
     ///
@@ -15451,7 +15466,7 @@ impl Queue {
                         reason: error.to_string(),
                     },
                 })?;
-            let enqueued_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
+            let enqueued_at_ms = self.validation_timestamp_ms(checked.as_accepted());
             #[cfg(feature = "telemetry")]
             let pending_teu = Self::compute_teu_weight(checked.as_accepted());
             return Ok(PreparedQueueAdmission {
@@ -15841,7 +15856,7 @@ impl Queue {
                     reason: error.to_string(),
                 },
             })?;
-        let enqueued_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
+        let enqueued_at_ms = self.validation_timestamp_ms(checked.as_accepted());
         #[cfg(feature = "telemetry")]
         let pending_teu = Self::compute_teu_weight(checked.as_accepted());
         Ok(PreparedQueueAdmission {
@@ -16697,7 +16712,7 @@ impl Queue {
             })?;
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
-        let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
+        let enqueue_at_ms = self.validation_timestamp_ms(checked.as_accepted());
         let prepared = PreparedQueueAdmission {
             checked,
             hash,
@@ -17624,6 +17639,12 @@ impl Queue {
     }
     fn duration_to_millis(duration: Duration) -> u64 {
         u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+    }
+    fn validation_timestamp_ms(&self, tx: &AcceptedTransaction<'_>) -> u64 {
+        Self::duration_to_millis(
+            tx.validation_time()
+                .unwrap_or_else(|| self.time_source.get_unix_time()),
+        )
     }
     fn pressure_age_budget_ms_from_block_time(block_time: Duration) -> u64 {
         Self::duration_to_millis(block_time)
@@ -23638,6 +23659,23 @@ pub mod tests {
         assert_eq!(Queue::compute_tx_encoded_len(&tx), expected);
     }
     #[test]
+    fn durable_admission_timestamp_uses_the_acceptance_clock() {
+        let (_acceptance_handle, acceptance_clock) =
+            TimeSource::new_mock(Duration::from_millis(731));
+        let transaction = accepted_tx_by_someone(&acceptance_clock);
+        let (_queue_handle, queue_clock) = TimeSource::new_mock(Duration::from_millis(911));
+        let queue = Queue::test(config_factory(), &queue_clock);
+
+        assert_eq!(
+            transaction.validation_time(),
+            Some(Duration::from_millis(731))
+        );
+        assert_eq!(
+            queue.queue_plan_admission_timestamp_ms_for(&transaction),
+            731
+        );
+    }
+    #[test]
     fn retained_byte_cost_floor_scales_with_incoming_count() {
         let one = Queue::retained_byte_cost_floor_for_transactions(1);
         assert!(one > 0, "each incoming tx must carry a non-zero floor");
@@ -24017,10 +24055,11 @@ pub mod tests {
             LiveQueryStore::start_test(),
         );
         install_single_validator_topology_for_queue_test(&mut state, 0x95);
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(731));
+        let (_queue_time_handle, queue_time_source) =
+            TimeSource::new_mock(Duration::from_millis(911));
         let queue = Queue::test_with_router_for_routes(
             config_factory(),
-            &time_source,
+            &queue_time_source,
             Arc::new(StaticRouter {
                 lane: LaneId::SINGLE,
                 dataspace: DataSpaceId::UNIVERSAL,
@@ -24033,7 +24072,9 @@ pub mod tests {
         let empty_journal_len = std::fs::metadata(&journal_path)
             .expect("strict claim journal baseline metadata")
             .len();
-        let tx = accepted_tx_by_someone(&time_source);
+        let (_acceptance_time_handle, acceptance_time_source) =
+            TimeSource::new_mock(Duration::from_millis(731));
+        let tx = accepted_tx_by_someone(&acceptance_time_source);
         register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let entrypoint = tx.entrypoint().clone();
         let entrypoint_hash = entrypoint.hash();
@@ -24082,6 +24123,10 @@ pub mod tests {
         assert_eq!(claim.signed_transaction_hash, signed_transaction_hash);
         assert_eq!(claim.entrypoint_hash, entrypoint_hash);
         assert_eq!(
+            claim.enqueue_timestamp_ms, 731,
+            "durable replay must use the exact acceptance clock, not the queue clock"
+        );
+        assert_eq!(
             claim.journal_record_digest,
             queue_plan_journal_record_claim_digest(
                 entrypoint,
@@ -24109,6 +24154,7 @@ pub mod tests {
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].routing_plan, claim.routing_plan);
         assert_eq!(persisted[0].admission_context, claim.context);
+        assert_eq!(persisted[0].enqueue_timestamp_ms, 731);
         assert_eq!(
             persisted[0]
                 .claim_digest()

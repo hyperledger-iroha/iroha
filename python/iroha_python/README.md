@@ -150,8 +150,8 @@ calling the codec.
 ## Kagemusha lifecycle support
 
 The Python package intentionally exposes no offline-spend lifecycle. The first-release typed
-Kagemusha lifecycle is supported by the Swift SDK; Python keeps only generic online transaction,
-query, and privacy primitives.
+Kagemusha lifecycle is supported by the Swift and JVM SDKs; Python keeps only generic online
+transaction, query, and privacy primitives.
 
 
 ## Native Privacy Bridge
@@ -270,6 +270,9 @@ anchor_height, nonce_hex = ToriiClient.solve_account_faucet_pow(account_id, puzz
 prepared_response = client.prepare_account_faucet(
     account_id,
     binding=public_reset_binding,
+    fee_payment=selected_fee_payment,
+    expected_asset_definition_id=configured_faucet_asset_definition_id,
+    expected_amount=configured_faucet_amount,
     expected_authority=configured_faucet_authority,
     network_id=network_id,
     pow_anchor_height=anchor_height,
@@ -278,10 +281,23 @@ prepared_response = client.prepare_account_faucet(
 prepared = prepared_response.json()  # persist before the mutating request
 response = client.submit_prepared_account_faucet(
     prepared,
+    expected_fee_payment=selected_fee_payment,
+    expected_asset_definition_id=configured_faucet_asset_definition_id,
+    expected_amount=configured_faucet_amount,
     expected_authority=configured_faucet_authority,
     network_id=network_id,
 )
 ```
+
+Load `configured_faucet_asset_definition_id` and `configured_faucet_amount`
+from independent trusted configuration, never from the prepared response. Both
+values are mandatory on prepare and submit, and the amount must be a canonical
+positive quantity string.
+
+The first-release faucet claim carries `pow_anchor_height` as a direct positive
+integer and `pow_nonce_hex` as 1–32 bytes of canonical lowercase hexadecimal.
+Neither field accepts `null`, and signed transcripts use those direct values
+without optional-value wrappers.
 
 Faucet puzzles use the first-release `scrypt-leading-zero-bits-v1` algorithm
 and `iroha:accounts:faucet:pow:v1` challenge domain with mandatory positive
@@ -1867,10 +1883,12 @@ and dispatch once with redirects and retries disabled. Tokens and precomputed
 operator headers, session authentication, and cookies are rejected. Typed
 responses require Torii's exact first-release fields and integer spellings;
 relay details also verify that the decoded HPKE key hashes to the advertised
-fingerprint. List and health fail closed at Torii's hard relay diagnostic cap
-rather than materializing an unbounded registry. Keep the operator key
-runtime-only; the Kaigi SSE feed retains its separate streaming authentication
-contract.
+marked fingerprint. All three reads stream strict UTF-8 JSON objects through a
+64 MiB post-transfer byte bound and close the response on every outcome. List
+and health require canonical ordering and fail closed at Torii's hard relay
+diagnostic cap rather than materializing an unbounded registry. Keep the
+operator key runtime-only; the Kaigi SSE feed retains its separate streaming
+authentication contract.
 
 For configuration changes, the client now mirrors the `/v1/configuration` contract so
 admin scripts can stage updates without hand-editing JSON blobs. For example:
@@ -2407,13 +2425,12 @@ no environment variables need to be exported.
   34.10-2012 parameter sets, BLS normal/small, and SM2. The helpers cover
   random and seeded key generation, private-key import, signing, verification,
   and bare or algorithm-prefixed multihash import/export.
-- Keep compatibility-specific Ed25519 account-id helpers and raw SM2 helpers
+- Provide algorithm-specific Ed25519 account-id helpers and raw SM2 helpers
   (`generate_sm2_keypair`, `derive_sm2_keypair_from_seed`, `load_sm2_keypair`,
   `sign_sm2`, `verify_sm2`, `sm2_public_key_multihash`) alongside the generic
-  payload-based API. `sm2_fixture_from_seed` still surfaces the canonical
-  deterministic fixture so SDK parity tests can assert the shared
-  seed/distid/ZA/signature bytes even when the native module is unavailable
-  (falls back to the bundled vector).
+  payload-based API. `sm2_fixture_from_seed` exercises the required native
+  implementation so SDK parity tests assert the shared
+  seed/distid/ZA/signature bytes without a bundled-vector fallback.
 - Provide confidential key-derivation helpers (`derive_confidential_keyset`,
   hex variants, and a `ConfidentialKeyset` wrapper) so wallets can obtain
   `nk`/`ivk`/`ovk`/`fvk` alongside the spend key locally.

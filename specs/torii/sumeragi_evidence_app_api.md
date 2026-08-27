@@ -97,9 +97,9 @@ All former `/v1/sumeragi/vrf/*` HTTP routes are retired. In particular,
 `/v1/sumeragi/vrf/commit`, `/v1/sumeragi/vrf/reveal`,
 `/v1/sumeragi/vrf/epoch/{epoch}`, and
 `/v1/sumeragi/vrf/penalties/{epoch}` return `404 Not Found`; the corresponding
-operator CLI snapshot commands are also retired. The active `VrfCommit` and
-`VrfReveal` messages remain part of the authenticated consensus peer protocol,
-not a Torii mutation or snapshot surface.
+operator CLI snapshot commands are also retired. The `VrfCommit` and
+`VrfReveal` peer messages are retired as well; randomness uses the canonical
+global threshold-beacon protocol.
 
 ## Proof & Pipeline SSE (`GET /v1/events/sse`)
 

@@ -456,8 +456,14 @@ function capabilities() {
       max_bls_aggregate_checks_per_block: 4016,
       max_bls_signer_contributions_per_transaction: 131713,
       max_bls_signer_contributions_per_block: 526852,
+      max_ed25519_signature_checks_per_transaction: 65536,
+      max_ed25519_signature_checks_per_block: 262144,
+      max_ed25519_validator_key_checks_per_transaction: 198656,
+      max_ed25519_validator_key_checks_per_block: 794624,
       max_bn254_pairing_checks_per_transaction: 1,
       max_bn254_pairing_checks_per_block: 4,
+      max_bls12_381_pairing_checks_per_transaction: 1,
+      max_bls12_381_pairing_checks_per_block: 4,
     },
     proof_submit_path: "/v1/bridge/proofs/submit",
     native_message_submit_path: "/v1/bridge/messages",
@@ -983,7 +989,10 @@ test("capabilities reject every reversed per-proof, transaction, and block limit
     ["max_secp256k1_recoveries_per_transaction", "max_secp256k1_recoveries_per_block", /transaction resource limits/u],
     ["max_bls_aggregate_checks_per_transaction", "max_bls_aggregate_checks_per_block", /transaction resource limits/u],
     ["max_bls_signer_contributions_per_transaction", "max_bls_signer_contributions_per_block", /transaction resource limits/u],
+    ["max_ed25519_signature_checks_per_transaction", "max_ed25519_signature_checks_per_block", /transaction resource limits/u],
+    ["max_ed25519_validator_key_checks_per_transaction", "max_ed25519_validator_key_checks_per_block", /transaction resource limits/u],
     ["max_bn254_pairing_checks_per_transaction", "max_bn254_pairing_checks_per_block", /transaction resource limits/u],
+    ["max_bls12_381_pairing_checks_per_transaction", "max_bls12_381_pairing_checks_per_block", /transaction resource limits/u],
   ];
   for (const [lowerField, upperField, expected] of orderedRelations) {
     const reversed = structuredClone(capabilities());

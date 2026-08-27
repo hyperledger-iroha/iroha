@@ -30,7 +30,6 @@ daemon = [
     "iroha_crypto/consensus",
     "iroha_crypto/pqc",
     "iroha_data_model/json",
-    "ivm/runtime",
     "norito/node-codec",
 ]
 # Build the standalone external signer only in release lanes that request it.
@@ -118,7 +117,7 @@ iroha_crypto = { workspace = true, default-features = false }
 iroha_torii = { workspace = true, default-features = false }
 iroha_genesis = { workspace = true }
 iroha_version = { workspace = true }
-ivm = { workspace = true, default-features = false }
+ivm = { workspace = true }
 iroha_p2p = { workspace = true }
 mv = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }

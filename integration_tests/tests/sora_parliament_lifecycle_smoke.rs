@@ -1689,8 +1689,6 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let mut npos = SumeragiNposParameters::default();
     npos.epoch_length_blocks = NonZeroU64::new(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
         .expect("mandatory NPoS epoch length is non-zero");
-    npos.vrf_commit_window_blocks = 2;
-    npos.vrf_reveal_window_blocks = 2;
     npos.validate()
         .map_err(|error| eyre!("invalid mandatory NPoS fixture: {error}"))?;
 
@@ -1834,8 +1832,6 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold() -> 
     let mut npos = SumeragiNposParameters::default();
     npos.epoch_length_blocks = NonZeroU64::new(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
         .expect("mandatory NPoS epoch length is non-zero");
-    npos.vrf_commit_window_blocks = 2;
-    npos.vrf_reveal_window_blocks = 2;
     npos.validate()
         .map_err(|error| eyre!("invalid fail-closed NPoS fixture: {error}"))?;
 

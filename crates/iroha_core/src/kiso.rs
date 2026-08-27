@@ -3,7 +3,9 @@
 //! Currently the API exposed by [`KisoHandle`] works only with [`ConfigGetDTO`], because no any
 //! part of Iroha is interested in the whole state. However, the API could be extended in future.
 //!
-//! Mutable node-local settings are relayed through [`tokio::sync::watch`] channels.
+//! Mutable node-local settings publish committed snapshots through
+//! [`tokio::sync::watch`] channels. Runtime-validated `SoraNet` updates use an
+//! acknowledged request channel before publication.
 //! Consensus-relevant settings, including confidential gas, are deliberately absent
 //! from the runtime update surface.
 use eyre::Result;
@@ -48,6 +50,7 @@ impl KisoHandle {
             logger_update,
             network_acl_update,
             soranet_handshake_update,
+            soranet_handshake_applier: None,
         };
         (
             Self {
@@ -72,8 +75,8 @@ impl KisoHandle {
     }
     /// Update the configuration state and notify subscribers.
     ///
-    /// Works in a fire-and-forget way, i.e. completion of this task doesn't mean that updates are applied. However,
-    /// subsequent call of [`Self::get_dto()`] will return an updated state.
+    /// The response is returned only after local validation and the registered
+    /// runtime applier, if any, has accepted the update.
     ///
     /// # Errors
     /// If communication with actor fails.
@@ -125,6 +128,27 @@ impl KisoHandle {
         let receiver = rx.await?;
         Ok(receiver)
     }
+    /// Register the single live `SoraNet` handshake runtime applier.
+    ///
+    /// Proposed handshake updates are sent through the returned receiver and
+    /// are not committed until the receiver acknowledges their exact result.
+    ///
+    /// # Errors
+    /// Returns an error if communication with the actor fails or an applier is
+    /// already registered.
+    pub async fn register_soranet_handshake_runtime_applier(
+        &self,
+    ) -> Result<mpsc::Receiver<SoranetHandshakeApplyRequest>, Error> {
+        let (requests, receiver) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
+        let (respond_to, response) = oneshot::channel();
+        let msg = Message::RegisterSoranetHandshakeApplier {
+            requests,
+            respond_to,
+        };
+        let _ = self.actor.send(msg).await;
+        response.await??;
+        Ok(receiver)
+    }
     /// Lightweight mock handle used in tests to avoid spinning up the full actor and watchers.
     ///
     /// The mock serves `get_dto` requests from the provided configuration snapshot and acknowledges
@@ -165,6 +189,7 @@ async fn run_mock_actor(
     let (network_acl_tx, _) = watch::channel(network_acl);
     let (handshake_tx, _) = watch::channel(soranet_handshake);
     let mut dto_snapshot = dto;
+    let mut soranet_handshake_applier = None;
     while let Some(msg) = actor_receiver.recv().await {
         match msg {
             Message::GetDTO { respond_to } => {
@@ -201,6 +226,20 @@ async fn run_mock_actor(
             Message::SubscribeOnSoranetHandshake { respond_to } => {
                 let _ = respond_to.send(handshake_tx.subscribe());
             }
+            Message::RegisterSoranetHandshakeApplier {
+                requests,
+                respond_to,
+            } => {
+                let result = if soranet_handshake_applier.is_some() {
+                    Err(Error::Validation(
+                        "SoraNet handshake runtime applier is already registered".to_owned(),
+                    ))
+                } else {
+                    soranet_handshake_applier = Some(requests);
+                    Ok(())
+                };
+                let _ = respond_to.send(result);
+            }
         }
     }
 }
@@ -221,6 +260,18 @@ enum Message {
     SubscribeOnSoranetHandshake {
         respond_to: oneshot::Sender<watch::Receiver<ActualSoranetHandshake>>,
     },
+    RegisterSoranetHandshakeApplier {
+        requests: mpsc::Sender<SoranetHandshakeApplyRequest>,
+        respond_to: oneshot::Sender<Result<(), Error>>,
+    },
+}
+/// One proposed `SoraNet` handshake runtime update and its exact response.
+#[derive(Debug)]
+pub struct SoranetHandshakeApplyRequest {
+    /// Candidate configuration staged by Kiso but not yet committed.
+    pub handshake: ActualSoranetHandshake,
+    /// Runtime acceptance or rejection of this exact candidate.
+    pub respond_to: oneshot::Sender<std::result::Result<(), String>>,
 }
 /// Possible errors might occur while working with [`KisoHandle`]
 #[derive(thiserror::Error, displaydoc::Display, Debug)]
@@ -229,6 +280,8 @@ pub enum Error {
     Communication(#[from] oneshot::error::RecvError),
     /// Configuration validation failed: {0}
     Validation(String),
+    /// SoraNet handshake runtime update failed: {0}
+    SoranetHandshakeRuntime(String),
 }
 struct Actor {
     handle: mpsc::Receiver<Message>,
@@ -240,21 +293,22 @@ struct Actor {
     logger_update: watch::Sender<LoggerConfig>,
     network_acl_update: watch::Sender<NetworkAcl>,
     soranet_handshake_update: watch::Sender<ActualSoranetHandshake>,
+    soranet_handshake_applier: Option<mpsc::Sender<SoranetHandshakeApplyRequest>>,
 }
 impl Actor {
     async fn run(&mut self) {
         while let Some(msg) = self.handle.recv().await {
-            self.handle_message(msg)
+            self.handle_message(msg).await
         }
     }
-    fn handle_message(&mut self, msg: Message) {
+    async fn handle_message(&mut self, msg: Message) {
         match msg {
             Message::GetDTO { respond_to } => {
                 let dto = ConfigGetDTO::from(&self.state);
                 let _ = respond_to.send(dto);
             }
             Message::UpdateWithDTO { dto, respond_to } => {
-                let result = self.apply_config_update(*dto);
+                let result = self.apply_config_update(*dto).await;
                 let _ = respond_to.send(result);
             }
             Message::SubscribeOnLogLevel { respond_to } => {
@@ -266,10 +320,24 @@ impl Actor {
             Message::SubscribeOnSoranetHandshake { respond_to } => {
                 let _ = respond_to.send(self.soranet_handshake_update.subscribe());
             }
+            Message::RegisterSoranetHandshakeApplier {
+                requests,
+                respond_to,
+            } => {
+                let result = if self.soranet_handshake_applier.is_some() {
+                    Err(Error::Validation(
+                        "SoraNet handshake runtime applier is already registered".to_owned(),
+                    ))
+                } else {
+                    self.soranet_handshake_applier = Some(requests);
+                    Ok(())
+                };
+                let _ = respond_to.send(result);
+            }
         }
     }
     #[allow(clippy::too_many_lines)]
-    fn apply_config_update(&mut self, dto: ConfigUpdateDTO) -> Result<(), Error> {
+    async fn apply_config_update(&mut self, dto: ConfigUpdateDTO) -> Result<(), Error> {
         let ConfigUpdateDTO {
             logger,
             network_acl,
@@ -367,6 +435,13 @@ impl Actor {
             }
             next.compute = compute;
         }
+        if notify_soranet_handshake {
+            Self::apply_soranet_handshake_runtime(
+                self.soranet_handshake_applier.clone(),
+                next.network.soranet_handshake.clone(),
+            )
+            .await?;
+        }
         self.state = next;
         let _ = self.logger_update.send_replace(self.state.logger.clone());
         if notify_network_acl {
@@ -379,6 +454,36 @@ impl Actor {
                 .send_replace(self.state.network.soranet_handshake.clone());
         }
         Ok(())
+    }
+    async fn apply_soranet_handshake_runtime(
+        applier: Option<mpsc::Sender<SoranetHandshakeApplyRequest>>,
+        handshake: ActualSoranetHandshake,
+    ) -> Result<(), Error> {
+        let Some(applier) = applier else {
+            return Err(Error::SoranetHandshakeRuntime(
+                "runtime applier is not registered".to_owned(),
+            ));
+        };
+        let (respond_to, response) = oneshot::channel();
+        applier
+            .send(SoranetHandshakeApplyRequest {
+                handshake,
+                respond_to,
+            })
+            .await
+            .map_err(|_| {
+                Error::SoranetHandshakeRuntime(
+                    "runtime applier closed before accepting the update".to_owned(),
+                )
+            })?;
+        response
+            .await
+            .map_err(|_| {
+                Error::SoranetHandshakeRuntime(
+                    "runtime applier closed before acknowledging the update".to_owned(),
+                )
+            })?
+            .map_err(Error::SoranetHandshakeRuntime)
     }
     fn apply_soranet_handshake_update(
         handshake: &mut ActualSoranetHandshake,
@@ -596,8 +701,8 @@ mod tests {
         parameters::{
             actual::{
                 Acceleration, BlockSync, Common, Concurrency, Confidential, Connect,
-                DataspaceGossip, FraudMonitoring, Genesis, Governance, Hijiri, IsoBridge, Ivm,
-                Kura, LiveQueryStore, Logger, Network, Nexus, Queue, Root, Settlement,
+                DataspaceGossip, FraudMonitoring, Genesis, Governance, IsoBridge, Ivm, Kura,
+                LiveQueryStore, Logger, Network, Nexus, Queue, Root, Settlement,
                 SoranetHandshake as ActualSoranetHandshake, SoranetPow, SoranetPrivacy, Streaming,
                 StreamingSoranet, Sumeragi, TieredState, Torii, TransactionGossiper, TrustedPeers,
             },
@@ -660,7 +765,6 @@ mod tests {
                     time_cost,
                     lanes,
                 }),
-                signed_ticket_public_key_hex: None,
             }
         }
         let invalid = [
@@ -797,8 +901,6 @@ mod tests {
                 trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
                 trust_penalty_unknown_peer: defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
                 trust_min_score: defaults::network::TRUST_MIN_SCORE,
-                debug_packet_loss_inbound_percent: 0,
-                debug_packet_loss_outbound_percent: 0,
                 trust_gossip: defaults::network::TRUST_GOSSIP,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
@@ -1606,7 +1708,6 @@ mod tests {
                     iroha_config::parameters::defaults::norito::ALLOW_GPU_COMPRESSION,
                 max_archive_len: iroha_config::parameters::defaults::norito::MAX_ARCHIVE_LEN,
             },
-            hijiri: Hijiri::new(None),
             fraud_monitoring: FraudMonitoring::new(
                 iroha_config::parameters::defaults::fraud_monitoring::ENABLED,
                 Vec::new(),
@@ -2013,6 +2114,21 @@ mod tests {
             .subscribe_on_soranet_handshake_updates()
             .await
             .expect("subscribe handshake watcher");
+        let mut runtime_requests = kiso
+            .register_soranet_handshake_runtime_applier()
+            .await
+            .expect("register handshake runtime applier");
+        let runtime = tokio::spawn(async move {
+            for _ in 0..2 {
+                runtime_requests
+                    .recv()
+                    .await
+                    .expect("runtime proposal")
+                    .respond_to
+                    .send(Ok(()))
+                    .expect("Kiso request should remain active");
+            }
+        });
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
                 level: Level::INFO,
@@ -2035,7 +2151,6 @@ mod tests {
                     ticket_ttl_secs: Some(240),
                     outbound_mint_capacity: None,
                     inbound_verify_capacity: None,
-                    signed_ticket_public_key_hex: None,
                     puzzle: Some(SoranetHandshakePuzzleUpdate {
                         enabled: Some(true),
                         memory_kib: Some(131_072),
@@ -2145,7 +2260,6 @@ mod tests {
                         ticket_ttl_secs: None,
                         outbound_mint_capacity: None,
                         inbound_verify_capacity: None,
-                        signed_ticket_public_key_hex: None,
                         puzzle: None,
                     }),
                 }),
@@ -2181,7 +2295,6 @@ mod tests {
                         ticket_ttl_secs: None,
                         outbound_mint_capacity: None,
                         inbound_verify_capacity: None,
-                        signed_ticket_public_key_hex: None,
                         puzzle: Some(SoranetHandshakePuzzleUpdate {
                             enabled: Some(false),
                             memory_kib: None,
@@ -2205,10 +2318,24 @@ mod tests {
             dto.network.soranet_handshake.pow.puzzle.is_some(),
             "rejected update must not disable the puzzle gate"
         );
+        runtime.await.expect("runtime responder task");
     }
     #[tokio::test]
     async fn soranet_handshake_watch_updates_without_subscribers() {
         let (kiso, _) = KisoHandle::start(test_config());
+        let mut runtime_requests = kiso
+            .register_soranet_handshake_runtime_applier()
+            .await
+            .expect("register handshake runtime applier");
+        let runtime = tokio::spawn(async move {
+            runtime_requests
+                .recv()
+                .await
+                .expect("runtime proposal")
+                .respond_to
+                .send(Ok(()))
+                .expect("Kiso request should remain active");
+        });
         let updated_pow = SoranetHandshakePowUpdate {
             required: Some(true),
             difficulty: Some(9),
@@ -2217,7 +2344,6 @@ mod tests {
             ticket_ttl_secs: Some(45),
             outbound_mint_capacity: None,
             inbound_verify_capacity: None,
-            signed_ticket_public_key_hex: None,
             puzzle: Some(SoranetHandshakePuzzleUpdate {
                 enabled: Some(true),
                 memory_kib: Some(32 * 1024),
@@ -2255,6 +2381,136 @@ mod tests {
         assert_eq!(snapshot.pow.difficulty, 9);
         assert_eq!(snapshot.pow.ticket_ttl.as_secs(), 45);
         assert!(snapshot.pow.puzzle.is_some());
+        runtime.await.expect("runtime responder task");
+    }
+    #[tokio::test]
+    async fn soranet_runtime_ack_precedes_commit_and_publication() {
+        let (kiso, _) = KisoHandle::start(test_config());
+        let mut runtime_requests = kiso
+            .register_soranet_handshake_runtime_applier()
+            .await
+            .expect("register runtime applier");
+        let mut handshake_updates = kiso
+            .subscribe_on_soranet_handshake_updates()
+            .await
+            .expect("subscribe committed handshake updates");
+        let runtime = tokio::spawn(async move {
+            let accepted = runtime_requests
+                .recv()
+                .await
+                .expect("accepted runtime proposal");
+            assert_eq!(accepted.handshake.pow.difficulty, 6);
+            accepted
+                .respond_to
+                .send(Ok(()))
+                .expect("accepted Kiso request should remain active");
+
+            let rejected = runtime_requests
+                .recv()
+                .await
+                .expect("rejected runtime proposal");
+            assert_eq!(rejected.handshake.pow.difficulty, 7);
+            rejected
+                .respond_to
+                .send(Err("pow.revocation_store_path restart required".to_owned()))
+                .expect("rejected Kiso request should remain active");
+        });
+        let handshake_update = |difficulty| ConfigUpdateDTO {
+            logger: LoggerDTO {
+                level: Level::INFO,
+                filter: None,
+            },
+            network_acl: None,
+            network: None,
+            soranet_handshake: Some(SoranetHandshakeUpdate {
+                descriptor_commit_hex: None,
+                client_capabilities_hex: None,
+                relay_capabilities_hex: None,
+                kem_id: None,
+                sig_id: None,
+                resume_hash_hex: None,
+                pow: Some(SoranetHandshakePowUpdate {
+                    required: None,
+                    difficulty: Some(difficulty),
+                    max_future_skew_secs: None,
+                    min_ticket_ttl_secs: None,
+                    ticket_ttl_secs: None,
+                    outbound_mint_capacity: None,
+                    inbound_verify_capacity: None,
+                    puzzle: None,
+                }),
+            }),
+            transport: None,
+            compute_pricing: None,
+        };
+
+        kiso.update_with_dto(handshake_update(6))
+            .await
+            .expect("runtime-accepted update should commit");
+        handshake_updates
+            .changed()
+            .await
+            .expect("accepted update should be published");
+        assert_eq!(handshake_updates.borrow_and_update().pow.difficulty, 6);
+        assert_eq!(
+            kiso.get_dto()
+                .await
+                .expect("accepted config snapshot")
+                .network
+                .soranet_handshake
+                .pow
+                .difficulty,
+            6
+        );
+
+        let error = kiso
+            .update_with_dto(handshake_update(7))
+            .await
+            .expect_err("runtime rejection must reject the Kiso update");
+        assert!(matches!(
+            error,
+            Error::SoranetHandshakeRuntime(message) if message.contains("restart required")
+        ));
+        assert_eq!(
+            kiso.get_dto()
+                .await
+                .expect("post-rejection config snapshot")
+                .network
+                .soranet_handshake
+                .pow
+                .difficulty,
+            6,
+            "runtime rejection must leave Kiso state unchanged"
+        );
+        assert!(
+            !handshake_updates
+                .has_changed()
+                .expect("committed handshake watch should remain open"),
+            "runtime rejection must not publish the staged snapshot"
+        );
+
+        kiso.update_with_dto(ConfigUpdateDTO {
+            logger: LoggerDTO {
+                level: Level::DEBUG,
+                filter: None,
+            },
+            network_acl: None,
+            network: None,
+            soranet_handshake: None,
+            transport: None,
+            compute_pricing: None,
+        })
+        .await
+        .expect("unrelated update must not require the handshake applier");
+        assert_eq!(
+            kiso.get_dto()
+                .await
+                .expect("logger config snapshot")
+                .logger
+                .level,
+            Level::DEBUG
+        );
+        runtime.await.expect("runtime responder task");
     }
     #[tokio::test]
     async fn soranet_sm_policy_update_rejects_relaxation() {
@@ -2310,8 +2566,8 @@ mod tests {
         assert!(dto.network.require_sm_handshake_match);
         assert!(dto.network.require_sm_openssl_preview_match);
     }
-    #[test]
-    fn config_update_is_atomic_on_handshake_error() {
+    #[tokio::test]
+    async fn config_update_is_atomic_on_handshake_error() {
         let config = test_config();
         let (logger_tx, logger_rx) = watch::channel(config.logger.clone());
         let (network_acl_tx, network_acl_rx) = watch::channel(Actor::snapshot_network_acl(&config));
@@ -2323,6 +2579,7 @@ mod tests {
             logger_update: logger_tx,
             network_acl_update: network_acl_tx,
             soranet_handshake_update: handshake_tx,
+            soranet_handshake_applier: None,
         };
         let initial_logger_level = actor.state.logger.level;
         let initial_allowlist_only = actor.state.network.allowlist_only;
@@ -2366,6 +2623,7 @@ mod tests {
                 transport: None,
                 compute_pricing: None,
             })
+            .await
             .expect_err("handshake validation should fail");
         assert!(
             matches!(err, Error::Validation(msg) if msg.contains("invalid hex in client_capabilities_hex"))
@@ -2412,8 +2670,8 @@ mod tests {
         assert_eq!(handshake_snapshot.kem_id, initial_kem_id);
         assert_eq!(handshake_snapshot.sig_id, initial_sig_id);
     }
-    #[test]
-    fn config_update_is_atomic_on_transport_error() {
+    #[tokio::test]
+    async fn config_update_is_atomic_on_transport_error() {
         let config = test_config();
         let (logger_tx, logger_rx) = watch::channel(config.logger.clone());
         let (network_acl_tx, network_acl_rx) = watch::channel(Actor::snapshot_network_acl(&config));
@@ -2425,6 +2683,7 @@ mod tests {
             logger_update: logger_tx,
             network_acl_update: network_acl_tx,
             soranet_handshake_update: handshake_tx,
+            soranet_handshake_applier: None,
         };
         let initial_logger_level = actor.state.logger.level;
         let initial_allowlist_only = actor.state.network.allowlist_only;
@@ -2464,6 +2723,7 @@ mod tests {
                 }),
                 compute_pricing: None,
             })
+            .await
             .expect_err("transport validation should fail");
         assert!(
             matches!(err, Error::Validation(msg) if msg.contains("invalid transport.norito_rpc.stage"))
@@ -2500,8 +2760,8 @@ mod tests {
             actor.state.network.soranet_handshake.kem_id
         );
     }
-    #[test]
-    fn compute_pricing_updates_enforce_delta_bounds() {
+    #[tokio::test]
+    async fn compute_pricing_updates_enforce_delta_bounds() {
         let config = test_config();
         let (logger_tx, _) = watch::channel(config.logger.clone());
         let (network_acl_tx, _) = watch::channel(Actor::snapshot_network_acl(&config));
@@ -2513,6 +2773,7 @@ mod tests {
             logger_update: logger_tx,
             network_acl_update: network_acl_tx,
             soranet_handshake_update: handshake_tx,
+            soranet_handshake_applier: None,
         };
         let family = defaults::compute::default_price_family();
         let mut invalid = actor
@@ -2539,6 +2800,7 @@ mod tests {
                     default_price_family: None,
                 }),
             })
+            .await
             .expect_err("delta beyond bounds should be rejected");
         assert!(matches!(err, Error::Validation(msg) if msg.contains("delta")));
         let mut ok = actor
@@ -2569,6 +2831,7 @@ mod tests {
                     default_price_family: None,
                 }),
             })
+            .await
             .expect("delta within bounds should apply");
         assert_eq!(actor.state.compute.price_families.get(&family), Some(&ok));
     }

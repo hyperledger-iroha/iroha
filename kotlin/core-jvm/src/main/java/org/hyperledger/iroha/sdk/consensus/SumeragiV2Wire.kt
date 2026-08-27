@@ -932,12 +932,12 @@ object SumeragiV2Wire {
         }
     }
 
-    /** Archive-signed certified body response with a distinct frozen-QC signer citation. */
+    /** Archive-signed certified body response carrying the responder's current network identity. */
     class CertifiedBodyResponse(
         @JvmField val requestHash: Hash32,
         @JvmField val manifest: PayloadManifest,
         body: ByteArray,
-        @JvmField val citedResponder: Long,
+        @JvmField val responder: PeerIdPayload,
         signature: ByteArray,
     ) : WireValue() {
         private val bodyValue = body.copyOf()
@@ -950,7 +950,7 @@ object SumeragiV2Wire {
             requestHash.bytes(),
             manifest.encode(),
             byteVector(bodyValue),
-            u32(citedResponder),
+            responder.bytes(),
             byteVector(signatureValue),
         )
 
@@ -963,9 +963,7 @@ object SumeragiV2Wire {
                             PayloadManifest.decode(it.remainingBytes())
                         },
                         reader.field("body_response.body") { it.byteVectorOnly("body_response.body") },
-                        reader.field("body_response.cited_responder") {
-                            it.u32Only("body_response.cited_responder")
-                        },
+                        PeerIdPayload(reader.compactField("body_response.responder")),
                         reader.field("body_response.signature") {
                             it.byteVectorOnly("body_response.signature")
                         },

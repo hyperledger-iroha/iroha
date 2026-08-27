@@ -95,7 +95,10 @@ pub enum SccpRouteGovernanceActionV1 {
     /// Append and select the next native source trust anchor without deleting history.
     #[codec(index = 4)]
     AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1),
-    /// Remove a never-used staged route.
+    /// Remove a never-used staged non-TRON route.
+    ///
+    /// Registered TRON routes remain retained because the immutable contract
+    /// address is part of the native replay boundary.
     #[codec(index = 5)]
     Remove(crate::bridge::SccpRouteKeyV1),
 }

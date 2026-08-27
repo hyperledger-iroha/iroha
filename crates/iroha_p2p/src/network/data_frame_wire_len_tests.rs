@@ -38,17 +38,13 @@ impl message::ClassifyTopic for DeniedDummy {
         false
     }
 }
-fn assert_relay_origin_signature_roundtrip(
-    algorithm: Algorithm,
-    seed_tag: u8,
-    expected_signature_len: usize,
-) {
-    let key_pair = KeyPair::try_from_seed(vec![seed_tag; 32], algorithm)
-        .unwrap_or_else(|error| panic!("derive deterministic {algorithm:?} key pair: {error}"));
-    assert_eq!(key_pair.algorithm(), algorithm);
-    let target_key_pair =
-        KeyPair::try_from_seed(vec![seed_tag.wrapping_add(0x40); 32], Algorithm::Ed25519)
-            .expect("derive deterministic relay target");
+fn node_key_pair(seed_tag: u8) -> KeyPair {
+    KeyPair::try_from_seed(vec![seed_tag; 32], Algorithm::BlsNormal)
+        .expect("derive deterministic BLS-normal node key")
+}
+fn assert_relay_origin_signature_roundtrip(seed_tag: u8) {
+    let key_pair = node_key_pair(seed_tag);
+    let target_key_pair = node_key_pair(seed_tag.wrapping_add(0x40));
     let target = PeerId::from(target_key_pair.public_key().clone());
     let payload = DynamicDummy {
         body: vec![seed_tag, 0xC0, 0xDE],
@@ -60,20 +56,15 @@ fn assert_relay_origin_signature_roundtrip(
         message::Priority::High,
         payload.clone(),
     )
-    .unwrap_or_else(|error| panic!("sign {algorithm:?} relay origin: {error}"));
+    .expect("sign BLS-normal relay origin");
     assert_eq!(
         frame.origin_signature.len(),
-        expected_signature_len,
-        "{algorithm:?} signature width changed"
-    );
-    assert_eq!(
-        relay_origin_signature_len(&frame.origin),
-        Some(expected_signature_len),
-        "{algorithm:?} transport geometry must use the exact signature width"
+        RELAY_ORIGIN_SIGNATURE_BYTES,
+        "BLS-normal signature width changed"
     );
     frame
         .verify_origin_signature()
-        .unwrap_or_else(|error| panic!("verify fresh {algorithm:?} relay: {error}"));
+        .expect("verify fresh BLS-normal relay");
     let materialized_wire_len = crate::peer::materialized_data_message_wire_len(frame.clone())
         .expect("materialize signed relay frame");
     assert_eq!(
@@ -85,7 +76,7 @@ fn assert_relay_origin_signature_roundtrip(
             &payload,
         ),
         materialized_wire_len,
-        "{algorithm:?} estimated wire geometry must match the signed frame"
+        "estimated wire geometry must match the signed frame"
     );
     assert_eq!(
         data_frame_wire_len_from_payload_len::<DynamicDummy>(
@@ -94,91 +85,92 @@ fn assert_relay_origin_signature_roundtrip(
             payload.encoded_len(),
         ),
         materialized_wire_len,
-        "{algorithm:?} payload-length geometry must match the signed frame"
+        "payload-length geometry must match the signed frame"
     );
     let encoded = frame.encode();
     let (decoded, used) =
         <RelayMessage<DynamicDummy> as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
-            .unwrap_or_else(|error| panic!("decode {algorithm:?} relay: {error}"));
+            .expect("decode BLS-normal relay");
     assert_eq!(used, encoded.len());
     assert_eq!(decoded.origin, frame.origin);
     assert_eq!(decoded.origin_signature, frame.origin_signature);
-    assert_eq!(decoded.origin_signature.len(), expected_signature_len);
+    assert_eq!(decoded.origin_signature.len(), RELAY_ORIGIN_SIGNATURE_BYTES);
     assert_eq!(decoded.ttl, frame.ttl);
     assert_eq!(decoded.priority, frame.priority);
     assert_eq!(decoded.payload.body, payload.body);
     match &decoded.target {
         RelayTarget::Direct(decoded_target) => assert_eq!(decoded_target, &target),
-        RelayTarget::Broadcast => panic!("decoded {algorithm:?} relay lost its target"),
+        RelayTarget::Broadcast => panic!("decoded relay lost its target"),
     }
     decoded
         .verify_origin_signature()
-        .unwrap_or_else(|error| panic!("verify round-tripped {algorithm:?} relay: {error}"));
+        .expect("verify round-tripped BLS-normal relay");
+    let mut signature_truncated = decoded.clone();
+    signature_truncated.origin_signature.pop();
+    assert!(
+        signature_truncated.verify_origin_signature().is_err(),
+        "relay signatures must have the exact BLS-normal width"
+    );
     let mut payload_tampered = decoded;
     payload_tampered.payload.body.push(0xFF);
     assert!(
         payload_tampered.verify_origin_signature().is_err(),
-        "{algorithm:?} relay signature must bind the immutable payload"
+        "relay signature must bind the immutable payload"
     );
-}
-#[test]
-fn relay_origin_signature_roundtrips_with_ed25519() {
-    assert_relay_origin_signature_roundtrip(Algorithm::Ed25519, 0x11, 64);
-}
-#[test]
-fn relay_origin_signature_roundtrips_with_secp256k1() {
-    assert_relay_origin_signature_roundtrip(Algorithm::Secp256k1, 0x12, 64);
 }
 #[test]
 fn relay_origin_signature_roundtrips_with_bls_normal() {
-    assert_relay_origin_signature_roundtrip(Algorithm::BlsNormal, 0x13, 96);
+    assert_relay_origin_signature_roundtrip(0x13);
 }
 #[test]
-fn relay_origin_signature_roundtrips_with_bls_small() {
-    assert_relay_origin_signature_roundtrip(Algorithm::BlsSmall, 0x14, 48);
-}
-#[test]
-fn relay_origin_signature_roundtrips_with_ml_dsa_65() {
-    assert_relay_origin_signature_roundtrip(
+fn relay_origin_signature_rejects_non_node_algorithms() {
+    let node_key_pair = node_key_pair(0x20);
+    for algorithm in [
+        Algorithm::Ed25519,
+        Algorithm::Secp256k1,
+        Algorithm::BlsSmall,
         Algorithm::MlDsa,
-        0x15,
-        MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-    );
-}
-#[cfg(feature = "gost")]
-#[test]
-fn relay_origin_signature_roundtrips_with_gost_256_param_set_a() {
-    assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetA, 0x21, 64);
-}
-#[cfg(feature = "gost")]
-#[test]
-fn relay_origin_signature_roundtrips_with_gost_256_param_set_b() {
-    assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetB, 0x22, 64);
-}
-#[cfg(feature = "gost")]
-#[test]
-fn relay_origin_signature_roundtrips_with_gost_256_param_set_c() {
-    assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetC, 0x23, 64);
-}
-#[cfg(feature = "gost")]
-#[test]
-fn relay_origin_signature_roundtrips_with_gost_512_param_set_a() {
-    assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_512ParamSetA, 0x24, 128);
-}
-#[cfg(feature = "gost")]
-#[test]
-fn relay_origin_signature_roundtrips_with_gost_512_param_set_b() {
-    assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_512ParamSetB, 0x25, 128);
-}
-#[cfg(feature = "sm")]
-#[test]
-fn relay_origin_signature_roundtrips_with_sm2() {
-    assert_relay_origin_signature_roundtrip(Algorithm::Sm2, 0x31, 64);
+    ] {
+        let key_pair = KeyPair::try_from_seed(vec![0x21; 32], algorithm)
+            .expect("derive non-node rejection key");
+        assert!(
+            RelayMessage::try_new(
+                &key_pair,
+                RelayTarget::Broadcast,
+                1,
+                message::Priority::Low,
+                Dummy { tag: 7 },
+            )
+            .is_err(),
+            "{algorithm:?} must not sign a node relay envelope"
+        );
+        let unsupported_target = PeerId::from(key_pair.public_key().clone());
+        assert!(
+            RelayMessage::try_new(
+                &node_key_pair,
+                RelayTarget::Direct(unsupported_target.clone()),
+                1,
+                message::Priority::Low,
+                Dummy { tag: 7 },
+            )
+            .is_err(),
+            "{algorithm:?} must not identify a direct relay target"
+        );
+        assert_eq!(
+            data_frame_wire_len_from_payload_len::<Dummy>(
+                &PeerId::from(node_key_pair.public_key().clone()),
+                Some(&unsupported_target),
+                Dummy { tag: 7 }.encoded_len(),
+            ),
+            usize::MAX,
+            "unsupported target geometry must fail closed"
+        );
+    }
 }
 #[test]
 fn data_frame_wire_len_matches_manual_envelope() {
-    let origin = PeerId::from(KeyPair::random().public_key().clone());
-    let target = PeerId::from(KeyPair::random().public_key().clone());
+    let origin = PeerId::from(node_key_pair(0x31).public_key().clone());
+    let target = PeerId::from(node_key_pair(0x32).public_key().clone());
     let payload = Dummy { tag: 7 };
     let direct = data_frame_wire_len(&origin, Some(&target), 8, message::Priority::High, &payload);
     let direct_from_len = data_frame_wire_len_from_payload_len::<Dummy>(
@@ -219,14 +211,8 @@ fn data_frame_wire_len_matches_manual_envelope() {
     );
 }
 #[test]
-fn data_frame_wire_len_from_payload_len_matches_varint_boundaries_and_large_peer_ids() {
-    let key_pair = KeyPair::from_seed(vec![0x51; 32], Algorithm::MlDsa);
-    let (_, raw_key) = key_pair
-        .public_key()
-        .try_to_bytes()
-        .expect("generated ML-DSA key is canonical");
-    let raw_key_bytes = raw_key.len();
-    assert_eq!(raw_key_bytes, 1_952, "ML-DSA-65 key width changed");
+fn data_frame_wire_len_from_payload_len_matches_varint_boundaries() {
+    let key_pair = node_key_pair(0x51);
     let origin = PeerId::from(key_pair.public_key().clone());
     let target = origin.clone();
     for body_len in [0, 1, 127, 128, 16_383, 16_384] {
@@ -252,14 +238,9 @@ fn data_frame_wire_len_from_payload_len_matches_varint_boundaries_and_large_peer
             "direct frame geometry diverged at body length {body_len}"
         );
         assert_eq!(
-            data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-                raw_key_bytes,
-                Some(raw_key_bytes),
-                MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                payload_len,
-            ),
+            direct_data_frame_wire_len_from_payload_len::<DynamicDummy>(payload_len),
             direct,
-            "synthetic direct peer geometry diverged at body length {body_len}"
+            "canonical direct peer geometry diverged at body length {body_len}"
         );
         assert_eq!(
             data_frame_wire_len_from_payload_len::<DynamicDummy>(&origin, None, payload_len,),
@@ -267,14 +248,9 @@ fn data_frame_wire_len_from_payload_len_matches_varint_boundaries_and_large_peer
             "broadcast frame geometry diverged at body length {body_len}"
         );
         assert_eq!(
-            data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-                raw_key_bytes,
-                None,
-                MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                payload_len,
-            ),
+            broadcast_data_frame_wire_len_from_payload_len::<DynamicDummy>(payload_len),
             broadcast,
-            "synthetic broadcast peer geometry diverged at body length {body_len}"
+            "canonical broadcast peer geometry diverged at body length {body_len}"
         );
         assert!(direct > broadcast);
     }
@@ -284,136 +260,15 @@ fn data_frame_wire_len_from_payload_len_matches_varint_boundaries_and_large_peer
         "payload-length overflow must fail closed"
     );
     assert_eq!(
-        data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-            usize::MAX,
-            None,
-            MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-            0,
-        ),
+        broadcast_data_frame_wire_len_from_payload_len::<DynamicDummy>(usize::MAX),
         usize::MAX,
-        "origin key-length overflow must fail closed"
-    );
-    assert_eq!(
-        data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-            raw_key_bytes,
-            None,
-            MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-            usize::MAX,
-        ),
-        usize::MAX,
-        "synthetic payload-length overflow must fail closed"
-    );
-    assert_eq!(
-        data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-            raw_key_bytes,
-            Some(usize::MAX),
-            MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-            0,
-        ),
-        usize::MAX,
-        "target key-length overflow must fail closed"
-    );
-    assert_ne!(
-        data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-            iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-            Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-            MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-            0,
-        ),
-        usize::MAX,
-        "protocol-maximum public-key geometry must remain representable"
-    );
-}
-#[cfg(feature = "sm")]
-#[test]
-fn data_frame_wire_len_matches_materialized_maximum_sm2_peer_ids() {
-    let distid = "x".repeat(u16::MAX as usize / 8);
-    let private = iroha_crypto::Sm2PrivateKey::from_seed(&distid, b"p2p-maximum-sm2-peer")
-        .expect("maximum SM2 distinguishing identifier is accepted");
-    let key_payload = iroha_crypto::sm::encode_sm2_public_key_payload(
-        &distid,
-        &private.public_key().to_sec1_bytes(false),
-    )
-    .expect("encode maximum canonical SM2 public key payload");
-    let public_key = iroha_crypto::PublicKey::from_bytes(Algorithm::Sm2, &key_payload)
-        .expect("maximum canonical SM2 public key is accepted");
-    let (_, raw_key) = public_key
-        .try_to_bytes()
-        .expect("maximum SM2 public key has canonical bytes");
-    assert_eq!(raw_key.len(), iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
-    let origin = PeerId::from(public_key);
-    let target = origin.clone();
-    assert!(
-        origin.encoded_len() > 16_384,
-        "the real PeerId fixture must cross the compact-length boundary missed by ML-DSA"
-    );
-    let payload = DynamicDummy {
-        body: vec![0x5A; 128],
-    };
-    let payload_len = payload.encoded_len();
-    let direct_frame = RelayMessage::new(
-        origin.clone(),
-        RelayTarget::Direct(target.clone()),
-        u8::MAX,
-        message::Priority::High,
-        payload.clone(),
-    );
-    let direct_materialized = crate::peer::materialized_data_message_wire_len(direct_frame)
-        .expect("materialize maximum-SM2 direct comparator");
-    assert_eq!(
-        data_frame_wire_len(
-            &origin,
-            Some(&target),
-            u8::MAX,
-            message::Priority::High,
-            &payload
-        ),
-        direct_materialized
-    );
-    assert_eq!(
-        data_frame_wire_len_from_payload_len::<DynamicDummy>(&origin, Some(&target), payload_len,),
-        direct_materialized
-    );
-    assert_eq!(
-        data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-            iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-            Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-            64,
-            payload_len,
-        ),
-        direct_materialized
-    );
-    let broadcast_frame = RelayMessage::new(
-        origin.clone(),
-        RelayTarget::Broadcast,
-        0,
-        message::Priority::Low,
-        payload.clone(),
-    );
-    let broadcast_materialized = crate::peer::materialized_data_message_wire_len(broadcast_frame)
-        .expect("materialize maximum-SM2 broadcast comparator");
-    assert_eq!(
-        data_frame_wire_len(&origin, None, 0, message::Priority::Low, &payload),
-        broadcast_materialized
-    );
-    assert_eq!(
-        data_frame_wire_len_from_payload_len::<DynamicDummy>(&origin, None, payload_len),
-        broadcast_materialized
-    );
-    assert_eq!(
-        data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-            iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-            None,
-            64,
-            payload_len,
-        ),
-        broadcast_materialized
+        "canonical broadcast payload-length overflow must fail closed"
     );
 }
 #[test]
 fn relay_message_decode_from_slice_roundtrip() {
-    let origin = PeerId::from(KeyPair::random().public_key().clone());
-    let target = PeerId::from(KeyPair::random().public_key().clone());
+    let origin = PeerId::from(node_key_pair(0x61).public_key().clone());
+    let target = PeerId::from(node_key_pair(0x62).public_key().clone());
     let payload = Dummy { tag: 42 };
     let frame = RelayMessage::new(
         origin.clone(),
@@ -438,8 +293,8 @@ fn relay_message_decode_from_slice_roundtrip() {
 }
 #[test]
 fn relay_message_decode_from_slice_roundtrip_with_dynamic_payload() {
-    let origin = PeerId::from(KeyPair::random().public_key().clone());
-    let target = PeerId::from(KeyPair::random().public_key().clone());
+    let origin = PeerId::from(node_key_pair(0x63).public_key().clone());
+    let target = PeerId::from(node_key_pair(0x64).public_key().clone());
     let payload = DynamicDummy {
         body: vec![1u8, 2, 3, 4],
     };
@@ -466,8 +321,8 @@ fn relay_message_decode_from_slice_roundtrip_with_dynamic_payload() {
 }
 #[test]
 fn relay_envelope_delegates_policy_to_exact_nested_payload() {
-    let origin = PeerId::from(KeyPair::random().public_key().clone());
-    let target = PeerId::from(KeyPair::random().public_key().clone());
+    let origin = PeerId::from(node_key_pair(0x65).public_key().clone());
+    let target = PeerId::from(node_key_pair(0x66).public_key().clone());
     let nested = DynamicDummy {
         body: vec![1, 3, 3, 7],
     };
@@ -501,7 +356,7 @@ fn relay_envelope_delegates_policy_to_exact_nested_payload() {
 }
 #[test]
 fn relay_payload_extractor_rejects_truncated_or_trailing_layouts() {
-    let origin = PeerId::from(KeyPair::random().public_key().clone());
+    let origin = PeerId::from(node_key_pair(0x67).public_key().clone());
     let frame = RelayMessage::new(
         origin,
         RelayTarget::Broadcast,
@@ -536,7 +391,7 @@ fn relay_payload_extractor_rejects_truncated_or_trailing_layouts() {
 }
 #[test]
 fn relay_message_preserves_outbound_admission_policy() {
-    let origin = PeerId::from(KeyPair::random().public_key().clone());
+    let origin = PeerId::from(node_key_pair(0x68).public_key().clone());
     let frame = RelayMessage::new(
         origin,
         RelayTarget::Broadcast,

@@ -2,7 +2,7 @@
 //!
 //! These tests assert that summing the static gas costs for a sequence of instructions equals the
 //! gas consumed by the VM during execution for simple programs without branches or syscalls. This
-//! guards the contract that the canonical gas table in `ivm::gas::cost_of[_with_params]` matches
+//! guards the contract that the canonical gas table in `ivm::gas::cost_of` matches
 //! the interpreter’s runtime accounting across scalar, memory, and vector-heavy programs.
 fn cost_of(word: u32) -> u64 {
     ivm::cost_of(word).expect("valid opcode must have gas cost")
@@ -112,7 +112,7 @@ fn gas_scales_with_vector_length_for_vadd32() {
     let vl = 2usize;
     let expected: u64 = [v1, v2, v3, halt]
         .into_iter()
-        .map(|w| ivm::cost_of_with_params(w, vl, 0).expect("valid opcode must have gas cost"))
+        .map(|w| ivm::cost_of_with_vector_len(w, vl).expect("valid opcode must have gas cost"))
         .sum();
     let gas_limit = 10_000;
     let mut vm = ivm::IVM::new(gas_limit);

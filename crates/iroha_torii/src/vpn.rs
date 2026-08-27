@@ -40,7 +40,7 @@ use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -48,7 +48,8 @@ const SUPPORTED_EXIT_CLASSES: [&str; 3] = ["standard", "low-latency", "high-secu
 const DEFAULT_TUNNEL_ADDRESSES: [&str; 2] = ["10.208.0.2/32", "fd53:7261:6574::2/128"];
 // Runtime VPN state is deliberately bounded independently of the number of
 // registered accounts. At most one quote and one session are retained per
-// account, and a full cache fails closed instead of evicting unrelated users.
+// account. Ordered expiry indexes reclaim terminal entries without scanning;
+// a cache containing only live entries fails closed instead of evicting users.
 const VPN_RUNTIME_ACCOUNT_CAPACITY: usize = 4_096;
 /// Maximum request body accepted by any first-release VPN mutation route.
 pub(crate) const VPN_MUTATION_REQUEST_MAX_BYTES_V1: usize = 16 * 1_024;
@@ -481,16 +482,18 @@ pub(crate) struct VpnQuoteRecord {
     pub directory_snapshot_digest: [u8; 32],
     pub relay_trust_valid_until_ms: u64,
 }
-/// Reverse indexes, in-flight reservations, and bounds for the compound VPN runtime caches.
+/// Reverse/expiry indexes, in-flight reservations, and VPN runtime-cache bounds.
 ///
 /// The enclosing `vpn_state_lock` protects these indexes together with every
 /// mutation of `vpn_quotes`, `vpn_sessions`, and `vpn_used_payments`. Keeping
-/// the indexes behind the same lock makes replacement and exact removal atomic
-/// without requiring request-time scans of the record maps.
+/// the indexes behind the same lock makes replacement, expiry, and exact
+/// removal atomic without requiring request-time scans of the record maps.
 #[derive(Debug)]
 pub(crate) struct VpnRuntimeState {
     quote_ids_by_account: HashMap<AccountId, String>,
     session_ids_by_account: HashMap<AccountId, String>,
+    quote_expirations: BTreeSet<(u64, String)>,
+    session_expirations: BTreeSet<(u64, String)>,
     settling_session_ids: HashSet<String>,
     quote_capacity: usize,
     session_capacity: usize,
@@ -506,6 +509,8 @@ impl Default for VpnRuntimeState {
         Self {
             quote_ids_by_account: HashMap::new(),
             session_ids_by_account: HashMap::new(),
+            quote_expirations: BTreeSet::new(),
+            session_expirations: BTreeSet::new(),
             settling_session_ids: HashSet::new(),
             quote_capacity: VPN_RUNTIME_ACCOUNT_CAPACITY,
             session_capacity: VPN_RUNTIME_ACCOUNT_CAPACITY,
@@ -1213,7 +1218,33 @@ fn remove_quote_by_id_locked(
     {
         state.quote_ids_by_account.remove(account_key);
     }
+    state
+        .quote_expirations
+        .remove(&(record.quote_expires_at_ms, record.quote_id.clone()));
     Some(record)
+}
+
+fn reclaim_expired_quotes_locked(
+    app: &SharedAppState,
+    state: &mut VpnRuntimeState,
+    current_ms: u64,
+) {
+    while let Some((expires_at_ms, quote_id)) = state
+        .quote_expirations
+        .first()
+        .filter(|(expires_at_ms, _)| *expires_at_ms <= current_ms)
+        .cloned()
+    {
+        state
+            .quote_expirations
+            .remove(&(expires_at_ms, quote_id.clone()));
+        let Some(record) = app.vpn_quotes.get(&quote_id).map(|entry| entry.clone()) else {
+            continue;
+        };
+        if record.quote_expires_at_ms == expires_at_ms {
+            let _ = remove_quote_by_id_locked(app, state, &quote_id);
+        }
+    }
 }
 fn quote_for_account_locked(
     app: &SharedAppState,
@@ -1265,8 +1296,10 @@ fn insert_quote_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
     record: VpnQuoteRecord,
+    current_ms: u64,
 ) -> Result<(), Error> {
     validate_quote_record_projection(&record, app.state.network_id_ref())?;
+    reclaim_expired_quotes_locked(app, state, current_ms);
     let existing = quote_for_account_locked(app, state, &record.account_id);
     if existing.is_none() && state.quote_ids_by_account.len() >= state.quote_capacity {
         return Err(not_permitted_error(
@@ -1286,6 +1319,9 @@ fn insert_quote_locked(
     state
         .quote_ids_by_account
         .insert(record.account_id.clone(), record.quote_id.clone());
+    state
+        .quote_expirations
+        .insert((record.quote_expires_at_ms, record.quote_id.clone()));
     app.vpn_quotes.insert(record.quote_id.clone(), record);
     Ok(())
 }
@@ -1317,11 +1353,48 @@ fn remove_session_record_locked(
     {
         state.session_ids_by_account.remove(account_key);
     }
+    state
+        .session_expirations
+        .remove(&(expected.expires_at_ms, expected.session_id.clone()));
     app.vpn_used_payments.remove(&expected.payment_tx_hash);
     if let Some(record) = removed.as_ref() {
         app.vpn_used_payments.remove(&record.payment_tx_hash);
     }
     removed
+}
+
+fn reclaim_expired_sessions_locked(
+    app: &SharedAppState,
+    state: &mut VpnRuntimeState,
+    current_ms: u64,
+) {
+    let mut reserved_expirations = Vec::new();
+    while let Some((expires_at_ms, session_id)) = state
+        .session_expirations
+        .first()
+        .filter(|(expires_at_ms, _)| *expires_at_ms <= current_ms)
+        .cloned()
+    {
+        state
+            .session_expirations
+            .remove(&(expires_at_ms, session_id.clone()));
+        let Some(record) = app.vpn_sessions.get(&session_id).map(|entry| entry.clone()) else {
+            continue;
+        };
+        if record.expires_at_ms != expires_at_ms {
+            continue;
+        }
+        if state.settling_session_ids.contains(&session_id) {
+            // Keep the entry out of the ordered set during this sweep so later
+            // expired sessions can still be reclaimed. Restoring it afterward
+            // preserves expiry tracking if the wall clock moves backward before
+            // the reservation drop path runs.
+            reserved_expirations.push((expires_at_ms, session_id));
+            continue;
+        }
+        let _ = remove_session_record_locked(app, state, &record);
+    }
+    state.session_expirations.extend(reserved_expirations);
 }
 fn session_for_account_locked(
     app: &SharedAppState,
@@ -1430,14 +1503,23 @@ impl Drop for VpnSettlementReservation {
         }
         let mut state = lock_vpn_runtime(&self.app);
         state.settling_session_ids.remove(&self.session_id);
+        if let Some(record) = self
+            .app
+            .vpn_sessions
+            .get(&self.session_id)
+            .map(|entry| entry.clone())
+        {
+            let _ = expire_session_record_locked(&self.app, &mut state, &record, now_ms());
+        }
     }
 }
 fn insert_session_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
     record: VpnSessionRecord,
-    _current_ms: u64,
+    current_ms: u64,
 ) -> Result<(), Error> {
+    reclaim_expired_sessions_locked(app, state, current_ms);
     let existing = session_for_account_locked(app, state, &record.account_id);
     if existing.is_none() && state.session_ids_by_account.len() >= state.session_capacity {
         return Err(not_permitted_error(
@@ -1469,6 +1551,9 @@ fn insert_session_locked(
     state
         .session_ids_by_account
         .insert(record.account_id.clone(), record.session_id.clone());
+    state
+        .session_expirations
+        .insert((record.expires_at_ms, record.session_id.clone()));
     app.vpn_sessions.insert(record.session_id.clone(), record);
     Ok(())
 }
@@ -2305,7 +2390,7 @@ pub(crate) async fn handle_create_vpn_quote(
     let mut vpn_state = lock_vpn_runtime(&app);
     expire_quote_for_account_locked(&app, &mut vpn_state, &record.account_id, current_ms);
     expire_session_for_account_locked(&app, &mut vpn_state, &record.account_id, current_ms);
-    insert_quote_locked(&app, &mut vpn_state, record)?;
+    insert_quote_locked(&app, &mut vpn_state, record, current_ms)?;
     Ok((StatusCode::CREATED, crate::utils::JsonBody(response)).into_response())
 }
 pub(crate) async fn handle_create_vpn_session(

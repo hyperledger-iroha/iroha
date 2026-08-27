@@ -4,8 +4,6 @@ import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
-import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
-import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
@@ -13,11 +11,14 @@ import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKeyAdmission
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.MultisigSignature
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
@@ -636,6 +637,47 @@ class TransactionFixtureParityTest {
     }
 
     @Test
+    fun `signed transaction multisig adapter enforces protocol ML-DSA-65 key shape`() {
+        val payload = AndroidFixtureSupport.loadPayloadFixtures()
+            .single { it.name == "transfer_asset" }
+            .materializePayload()
+        val payloadBytes = adapter.encodeTransaction(payload)
+        val memberPublicKey = ByteArray(MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH) {
+            ((it % 251) + 1).toByte()
+        }
+        val memberSignature = ByteArray(64) { ((0x40 + it) and 0xFF).toByte() }
+        val signed = SignedTransaction.builder()
+            .setEncodedPayload(payloadBytes)
+            .setSignature(ByteArray(64) { (it + 1).toByte() })
+            .setPublicKey(ByteArray(0))
+            .setSchemaName(SIGNED_SCHEMA)
+            .setMultisigSignatures(
+                listOf(MultisigSignature.fromCurveId(0x02, memberPublicKey, memberSignature)),
+            )
+            .build()
+
+        val encoded = SignedTransactionEncoder.encode(signed)
+        val decoded = SignedTransactionEncoder.decode(encoded)
+        val decodedSignature = assertNotNull(decoded.multisigSignatures().orElse(null))
+            .signatures
+            .single()
+        assertEquals(0x02, decodedSignature.curveId)
+        assertContentEquals(memberPublicKey, decodedSignature.publicKey())
+        assertContentEquals(encoded, SignedTransactionEncoder.encode(decoded))
+
+        val encodedKeyElements = encodeByteVectorElements(memberPublicKey)
+        val keyOffset = indexOfSubsequence(encoded, encodedKeyElements)
+        assertTrue(keyOffset >= 0, "encoded signed transaction must contain the ML-DSA-65 key")
+        val allZeroKeyWire = encoded.copyOf()
+        for (index in memberPublicKey.indices) {
+            allZeroKeyWire[keyOffset + index * 2 + 1] = 0
+        }
+        assertFailsWith<NoritoException> {
+            SignedTransactionEncoder.decode(allZeroKeyWire)
+        }
+    }
+
+    @Test
     fun `signed transaction decoder rejects adversarial envelopes`() {
         val fixture = AndroidFixtureSupport.loadManifestFixtures().first()
         val signedBytes = Base64.getDecoder().decode(fixture.signedBase64)
@@ -953,6 +995,30 @@ class TransactionFixtureParityTest {
         for (byte in bytes) {
             append("%02x".format(byte.toInt() and 0xFF))
         }
+    }
+
+    private fun indexOfSubsequence(haystack: ByteArray, needle: ByteArray): Int {
+        if (needle.isEmpty() || needle.size > haystack.size) return -1
+        for (start in 0..haystack.size - needle.size) {
+            var matches = true
+            for (offset in needle.indices) {
+                if (haystack[start + offset] != needle[offset]) {
+                    matches = false
+                    break
+                }
+            }
+            if (matches) return start
+        }
+        return -1
+    }
+
+    private fun encodeByteVectorElements(bytes: ByteArray): ByteArray {
+        val encoded = ByteArray(bytes.size * 2)
+        for (index in bytes.indices) {
+            encoded[index * 2] = 1
+            encoded[index * 2 + 1] = bytes[index]
+        }
+        return encoded
     }
 
     private fun sampleAuthority(fill: Int): String = AccountAddress

@@ -64,7 +64,8 @@ preimages.
 
 Account roles on a value-moving route are not interchangeable. An irreversible
 external-to-Taira burn recipient is limited to the exact `test...` I105 spelling
-of a canonical, non-weak single-key Ed25519 account. A proof-authenticated
+of a canonical single-key Ed25519 account in the prime-order subgroup. Both
+small-order and mixed-torsion points are rejected. A proof-authenticated
 Taira-to-external sender may be a canonical single-key or multisig `AccountId`,
 but every controller key must be Ed25519 or compressed secp256k1 in V1. Core
 checks the typed controller and exact discriminant-`369` spelling before moving
@@ -187,11 +188,24 @@ amountMultiplier)`.
 
 The TRON source route uses the exact
 `transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI. Successful execution
-requires `expectedNonce == transferNonce`, then writes that same value into the
-canonical payload before incrementing storage. Native admission reconstructs
-the complete ABI call from the payload recipient, scaled amount, and nonce, so
-the retired two-argument selector, a stale or future nonce, and an exhausted
-`uint64` nonce all fail closed.
+requires `expectedNonce == transferNonces(caller)`, writes that same value into
+the canonical payload, and increments only the caller's counter. Different
+senders may safely use the same nonce because the canonical payload and message
+id also commit the sender address. Native admission reconstructs the complete
+ABI call from the payload recipient, scaled amount, sender, and nonce, so the
+retired two-argument selector, a stale or future caller nonce, and an exhausted
+per-caller `uint64` nonce all fail closed.
+
+Every retained TRON revision in one exact lane must use a distinct source route
+address. Native transaction inclusion authenticates the call address and
+arguments but not the emitted route-revision/configuration fields, while the
+route contract stores those fields immutably. A legitimate successor therefore
+requires a fresh deployment address; registry validation rejects address reuse
+across staged, active, draining, paused, and retired revisions so one finalized
+transaction cannot be relabeled under another revision. A registered TRON
+revision remains permanently retained even while staged, preventing route
+removal from forgetting the address replay boundary before a successor is
+registered.
 
 Deployment tooling precomputes the route address, deploys the wrapped token
 with that exact immutable bridge, then deploys the route at the precomputed
@@ -286,6 +300,11 @@ cryptography-free `bsc_native_finality_work_estimate` and
 header counts, secp256k1 recovery counts, and conservative BSC aggregate/signing
 contribution bounds so consensus admission can reserve per-transaction and
 per-block native-verifier work before dispatching cryptography.
+For `H` BSC continuation headers, the complete contribution bound is
+`64 × (H + 5 + ceil((H + 1) / 1000))`: `H` possible attestations, five active/
+recent/pending anchor-context rosters, and every epoch roster that can occur in
+the contiguous anchor-plus-continuation interval. At the 1,004-header maximum
+this is 64,704 contributions.
 
 ## Deterministic verifier-work limits
 
@@ -649,6 +668,9 @@ CARGO_TARGET_DIR=/absolute/operator/path/sccp-validator-target \
 ```
 
 Do not enable `test-fixtures` in production workflows or Make targets.
+`dev-tools` is the required target-selection feature and the only accepted
+production validator feature. It remains in the build identity; an empty,
+duplicated, additional, historical, or unknown feature set is invalid.
 
 One canonical `sccp-release-evidence-v1` document contains:
 

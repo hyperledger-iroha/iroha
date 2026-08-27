@@ -47,6 +47,15 @@ const ED25519_TORSION_ENCODINGS = [
   "0000000000000000000000000000000000000000000000000000000000000000",
   "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
 ];
+const ED25519_MIXED_TORSION_ENCODINGS = JSON.parse(
+  fs.readFileSync(
+    path.join(REPO, "fixtures", "crypto", "ed25519_public_key_admission_v1.json"),
+    "utf8",
+  ),
+).vectors
+  .filter((vector) => vector.name.startsWith("mixed-torsion-"))
+  .map((vector) => vector.key_hex);
+assert.equal(ED25519_MIXED_TORSION_ENCODINGS.length, 2);
 const CANONICAL_SORA_I105 =
   "sorauﾛ1PYﾛ9ｵﾆﾘﾐ3Yf8wﾜｿﾋﾉajｼｱ6eﾑbHｱﾜｶBｳdUｺcヰｲnﾌNP21YC";
 // I105 checksums cover canonical AccountAddress bytes, while the named
@@ -757,6 +766,7 @@ function invalidI105Values() {
     Buffer.from(`f0${"ff".repeat(30)}7f`, "hex"),
     Buffer.alloc(32, 0x02),
     ...ED25519_TORSION_ENCODINGS.map((value) => Buffer.from(value, "hex")),
+    ...ED25519_MIXED_TORSION_ENCODINGS.map((value) => Buffer.from(value, "hex")),
     Buffer.from(`01${"00".repeat(30)}80`, "hex"),
   ];
   const values = [
@@ -2112,6 +2122,7 @@ async function main() {
   const provider = new ethers.BrowserProvider(tronEip1193Provider);
   assert.equal((await provider.getNetwork()).chainId, 0xcd8690dcn);
   const signer = await provider.getSigner(0);
+  const tronOutsider = await provider.getSigner(1);
   const tronVerifier = await deploy(signer, tronVerifierArtifact, [
     g1,
     g2,
@@ -2472,12 +2483,58 @@ async function main() {
     ).wait();
     assert.equal(await tronToken.balanceOf(recipientAddress), 3n * SCALE);
   }
-  const tronNonceBeforeInvalidBurns = await tronBridge.transferNonce();
+  const tronOutsiderAddress = await tronOutsider.getAddress();
+  await (await tronToken.approve(tronOutsiderAddress, SCALE)).wait();
+  await (
+    await tronToken
+      .connect(tronOutsider)
+      .transferFrom(await signer.getAddress(), tronOutsiderAddress, SCALE)
+  ).wait();
+  assert.equal(
+    await tronToken.allowance(await signer.getAddress(), tronOutsiderAddress),
+    0n,
+  );
+  await assert.rejects(
+    tronToken.approve(tronOutsiderAddress, 2n * SCALE),
+    rejectedWith("Clear allowance first"),
+  );
+  await (await tronToken.approve(tronOutsiderAddress, 0n)).wait();
+  await (await tronToken.approve(tronOutsiderAddress, 2n * SCALE)).wait();
+  assert.equal(
+    await tronToken.allowance(await signer.getAddress(), tronOutsiderAddress),
+    2n * SCALE,
+  );
+  await (await tronToken.approve(tronOutsiderAddress, 0n)).wait();
+
+  const tronBurnAccount = await signer.getAddress();
+  assert.equal(await tronBridge.transferNonces(tronOutsiderAddress), 0n);
+  assert.equal(await tronBridge.transferNonces(tronBurnAccount), 0n);
+  const outsiderFirstMessageId = await tronBridge
+    .connect(tronOutsider)
+    .transferToTaira.staticCall(CANONICAL_I105_BYTES, SCALE, 0n);
+  const signerFirstMessageId = await tronBridge.transferToTaira.staticCall(
+    CANONICAL_I105_BYTES,
+    SCALE,
+    0n,
+  );
+  assert.notEqual(outsiderFirstMessageId, signerFirstMessageId);
+  await (
+    await tronBridge
+      .connect(tronOutsider)
+      .transferToTaira(CANONICAL_I105_BYTES, SCALE, 0n)
+  ).wait();
+  assert.equal(await tronBridge.transferNonces(tronOutsiderAddress), 1n);
+  assert.equal(await tronBridge.transferNonces(tronBurnAccount), 0n);
+  await (
+    await tronBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE, 0n)
+  ).wait();
+  assert.equal(await tronBridge.transferNonces(tronBurnAccount), 1n);
+
+  const tronNonceBeforeInvalidBurns = await tronBridge.transferNonces(tronBurnAccount);
   await assert.rejects(
     tronBridge.transferToTaira(CANONICAL_I105_BYTES, 1n, tronNonceBeforeInvalidBurns),
     rejectedWith("Amount is not aligned to Taira scale"),
   );
-  const tronBurnAccount = await signer.getAddress();
   const tronBalanceBeforeInvalidBurns = await tronToken.balanceOf(tronBurnAccount);
   await assert.rejects(
     tronBridge.transferToTaira(
@@ -2494,7 +2551,10 @@ async function main() {
     );
   }
   assert.equal(await tronToken.balanceOf(tronBurnAccount), tronBalanceBeforeInvalidBurns);
-  assert.equal(await tronBridge.transferNonce(), tronNonceBeforeInvalidBurns);
+  assert.equal(
+    await tronBridge.transferNonces(tronBurnAccount),
+    tronNonceBeforeInvalidBurns,
+  );
   const tronSourceReceipt = await (
     await tronBridge.transferToTaira(
       CANONICAL_I105_BYTES,
@@ -2536,9 +2596,10 @@ async function main() {
   );
   assert.equal(
     await tronToken.balanceOf(await signer.getAddress()),
-    2n * SCALE,
+    0n,
   );
-  assert.equal(await tronBridge.transferNonce(), 1n);
+  assert.equal(await tronBridge.transferNonces(tronBurnAccount), 2n);
+  assert.equal(await tronBridge.transferNonces(tronOutsiderAddress), 1n);
   await tronEip1193Provider.disconnect();
   }
 

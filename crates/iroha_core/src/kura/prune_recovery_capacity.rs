@@ -19,36 +19,6 @@ impl Kura {
             "pipeline recovery sidecar",
             remaining.pipeline,
         )?;
-        if directory.exists() {
-            for entry in
-                std::fs::read_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?
-            {
-                let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
-                let path = entry.path();
-                let Some(height) = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .and_then(|name| name.strip_prefix("block_"))
-                    .and_then(|name| name.strip_suffix(".json"))
-                    .and_then(|height| height.parse::<u64>().ok())
-                else {
-                    continue;
-                };
-                if height > target_height {
-                    let file_type = entry
-                        .file_type()
-                        .map_err(|err| Error::IO(err, path.clone()))?;
-                    if !file_type.is_file() && !file_type.is_symlink() {
-                        return Err(Error::PruneIntentConflict(format!(
-                            "pipeline JSON suffix entry {} is not removable as a file",
-                            path.display()
-                        )));
-                    }
-                    std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))?;
-                }
-            }
-            sync_dir(&directory).map_err(|err| Error::IO(err, directory))?;
-        }
         self.pipeline_sidecar_queue
             .lock()
             .retain(|sidecar| sidecar.height <= target_height);
@@ -71,27 +41,6 @@ impl Kura {
             require_compact,
             true,
         )?;
-        if directory.exists() {
-            for entry in
-                std::fs::read_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?
-            {
-                let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
-                let path = entry.path();
-                let future_json = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .and_then(|name| name.strip_prefix("block_"))
-                    .and_then(|name| name.strip_suffix(".json"))
-                    .and_then(|height| height.parse::<u64>().ok())
-                    .is_some_and(|height| height > max_height);
-                if future_json {
-                    return Err(Error::PruneIntentConflict(format!(
-                        "pipeline JSON sidecar extends above canonical height {max_height}: {}",
-                        path.display()
-                    )));
-                }
-            }
-        }
         Ok(())
     }
     fn preflight_recovered_prune_capacity_before_mutation(

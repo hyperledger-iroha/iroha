@@ -527,6 +527,7 @@ fn durable_store_fixture(marker: u8) -> DurableStoreFixture {
         &manifest,
         &durable_receipt,
         &validate_pending,
+        &verified.context().roster[0].validator,
     )
     .expect("build exact certified Store replay evidence");
     let candidate = replay_evidence
@@ -755,9 +756,14 @@ fn durable_validate_fixture_from_material(
         pending.exact_effect_identity(),
         store_pending.exact_effect_identity()
     );
-    let (_store_evidence, replay_evidence) =
-        certified_pipeline_replay_evidence_for_test(tag, &manifest, &durable_receipt, &pending)
-            .expect("build exact certified Validate replay evidence");
+    let (_store_evidence, replay_evidence) = certified_pipeline_replay_evidence_for_test(
+        tag,
+        &manifest,
+        &durable_receipt,
+        &pending,
+        &verified.context().roster[0].validator,
+    )
+    .expect("build exact certified Validate replay evidence");
     let replay_evidence = DurableValidateReplayEvidenceV1::certified(replay_evidence);
     let candidate = replay_evidence
         .project_installed_validate_candidate(
@@ -1159,6 +1165,7 @@ fn persist_durable_validate_fixture_into_store(
             &durable,
             &pending,
             certificate,
+            &fixture.verified.context().roster[0].validator,
         )
         .expect("bind persisted Validate replay to its exact body receipt");
     let replay_evidence = DurableValidateReplayEvidenceV1::certified(validate_replay);
@@ -1281,6 +1288,7 @@ fn durable_validate_store_fixture_from_existing(
             &durable,
             &pending,
             certificate,
+            &fixture.verified.context().roster[0].validator,
         )
         .expect("bind persisted Validate replay to its exact body receipt");
     let replay_evidence = DurableValidateReplayEvidenceV1::certified(validate_replay);

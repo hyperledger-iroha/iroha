@@ -489,13 +489,37 @@ finally:
     require_no_macos_extended_acl = real_require_no_macos_extended_acl
 if sys.platform == 'darwin':
     try:
+        (descriptor, _) = pin_regular_metadata(
+            SOURCE_GIT,
+            'self-test ACL-free macOS input',
+            require_single_link=False,
+        )
+        try:
+            # SOURCE_GIT already passed the production custody check above and
+            # provides a stable clean control even when the host automatically
+            # labels newly created temporary files with protected provenance.
+            require_no_macos_extended_acl(descriptor, 'self-test ACL-free macOS input')
+        finally:
+            os.close(descriptor)
         with tempfile.TemporaryDirectory(prefix='kagemusha-acl-custody-self-test-') as temporary:
             acl_path = Path(temporary) / 'acl-input'
             acl_path.write_bytes(b'root-custody-acl-test')
             acl_path.chmod(384)
+            added_xattr = subprocess.run(
+                ['/usr/bin/xattr', '-w', 'iroha.kagemusha.self-test', '1', str(acl_path)], cwd=Path('/'),
+                env={'LANG': 'C', 'LC_ALL': 'C', 'PATH': '/usr/bin:/bin'},
+                stdin=subprocess.DEVNULL, check=False, capture_output=True, close_fds=True)
+            if added_xattr.returncode != 0:
+                raise ValueError('could not install the macOS xattr custody fixture')
             (descriptor, _) = pin_regular_metadata(acl_path, 'self-test macOS ACL input')
             try:
-                require_no_macos_extended_acl(descriptor, 'self-test ACL-free macOS input')
+                expect_value_error(
+                    lambda: require_no_macos_extended_acl(
+                        descriptor, 'self-test extended-attribute macOS input'
+                    ),
+                    'self-test failed to reject a macOS extended attribute',
+                    'must not have unbound extended attributes',
+                )
             finally:
                 os.close(descriptor)
             added_acl = subprocess.run(['/bin/chmod', '+a', 'everyone allow read', str(acl_path)], cwd=Path('/'), env={'LANG': 'C',
@@ -875,10 +899,37 @@ ATTESTATION_STATIC_MUTATIONS = (
         '    for certificate in certificates[2:]:',
         'reject an incomplete physical-lab Android time profile', D_ANDROID_CHAIN),
     (ANDROID_DEVICE_LAB_SLOT,
-        'evaluation_time_ms=time.time_ns() // 1_000_000,',
-        'evaluation_time_ms=time.time_ns() // 1_000_000_000,',
+        'evaluation_time_ms = time.time_ns() // 1_000_000',
+        'evaluation_time_ms = time.time_ns() // 1_000_000_000',
         'reject second-rounded physical-lab X.509 validation',
-        ('evaluation_time_ms=time.time_ns() // 1_000_000,',)),
+        ('single-clock Android status freshness and certificate-time validation',)),
+    (ANDROID_DEVICE_LAB_SLOT,
+        'evaluation_time_ms = time.time_ns() // 1_000_000',
+        'evaluation_time_ms = time.time_ns() // 1_000_000 - 86_400_000',
+        'reject an offset physical-lab validation clock',
+        ('single-clock Android status freshness and certificate-time validation',)),
+    (ANDROID_DEVICE_LAB_SLOT,
+        '        evaluation_time_ms = time.time_ns() // 1_000_000\n',
+        '        if False:\n'
+        '            evaluation_time_ms = time.time_ns() // 1_000_000\n'
+        '        evaluation_time_ms = time.time_ns() // 1_000_000 - 86_400_000\n',
+        'reject a dead canonical clock decoy before an offset live clock',
+        ('single-clock Android status freshness and certificate-time validation',)),
+    (ANDROID_DEVICE_LAB_SLOT,
+        'or evaluation_time_ms < response_date_ms',
+        'or False',
+        'reject Android status validation before its authenticated response time',
+        ('single-clock Android status freshness and certificate-time validation',)),
+    (ANDROID_DEVICE_LAB_SLOT,
+        'or evaluation_time_ms >= fresh_until_ms',
+        'or False',
+        'reject stale Android status during certificate-chain validation',
+        ('single-clock Android status freshness and certificate-time validation',)),
+    (ANDROID_DEVICE_LAB_SLOT,
+        'evaluation_time_ms=evaluation_time_ms,',
+        'evaluation_time_ms=time.time_ns() // 1_000_000,',
+        'reject split clocks for Android status and certificate validation',
+        ('single-clock Android status freshness and certificate-time validation',)),
     (ANDROID_CERT,
         'if len(serial_value) > 20:', 'if len(serial_value) > 21:',
         'reject overlong Android certificate serials',
@@ -1466,8 +1517,8 @@ static_mutations = (
         'reject a signature detached from the canonical receipt payload',
         D_CATALOG_SIGNATURE),
     (CATALOG_VALIDATOR_QUALIFICATION_COMPONENT,
-        '            verify_kagemusha_catalog_sealed_paths_v1(&self.seal.paths, 0)?;\n        }\n        let current_time_ms = current_unix_time_ms_v1()?;',
-        '            // final sealed-path recheck removed\n        }\n        let current_time_ms = current_unix_time_ms_v1()?;',
+        '            verify_kagemusha_catalog_sealed_paths_v1(&self.seal.paths, 0)?;\n            let current_time_ms = current_unix_time_ms_v1()?;',
+        '            // final sealed-path recheck removed\n            let current_time_ms = current_unix_time_ms_v1()?;',
         'reject signing without a final sealed-path recheck',
         D_FINAL_RECHECK),
     (CATALOG_VALIDATOR_QUALIFICATION_COMPONENT,
@@ -1875,6 +1926,26 @@ static_mutations = (
         '                && status.resolved_from == "state"',
         '                && status.resolved_from == "cache"',
         'reject cache-resolved Applied as transaction finality',
+        ('closed global/state finality classification',)),
+    (KAGEMUSHA_ROLLOUT_COMPONENT,
+        '                && status.resolved_from == "state"\n                && status.status.kind == "Rejected"',
+        '                && status.status.kind == "Rejected"',
+        'reject non-state Rejected as transaction finality',
+        ('closed global/state finality classification',)),
+    (KAGEMUSHA_ROLLOUT_COMPONENT,
+        '                && status.resolved_from == "state"\n                && status.status.kind == "Rejected"',
+        '                && status.resolved_from == "cache"\n                && status.status.kind == "Rejected"',
+        'reject cache-resolved Rejected as transaction finality',
+        ('closed global/state finality classification',)),
+    (KAGEMUSHA_ROLLOUT_COMPONENT,
+        '                && status.resolved_from == "state"\n                && status.status.kind == "Expired"',
+        '                && status.status.kind == "Expired"',
+        'reject non-state Expired as transaction finality',
+        ('closed global/state finality classification',)),
+    (KAGEMUSHA_ROLLOUT_COMPONENT,
+        '                && status.resolved_from == "state"\n                && status.status.kind == "Expired"',
+        '                && status.resolved_from == "cache"\n                && status.status.kind == "Expired"',
+        'reject cache-resolved Expired as transaction finality',
         ('closed global/state finality classification',)),
     (KAGEMUSHA_ROLLOUT_COMPONENT,
         '                    stage: "proof-anchored Applied result reporting",',

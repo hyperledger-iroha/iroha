@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "wire_name": "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+  "wire_name": "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey",
   "rust_record_type": "iroha_data_model::confidential::VerifyingKeyRecord",
   "request": {
     "backend": "halo2/ipa",

@@ -15107,7 +15107,7 @@ mod kagemusha_bridge_tests {
         assert!(one_bytes.len() <= OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES);
         assert_eq!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES,
-            12_507
+            12_519
         );
         assert!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES
@@ -17939,6 +17939,11 @@ mod kagemusha_bridge_tests {
         peer_payment: iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
         verify_local: KagemushaRecursiveSpendVerifyLocalRequestV4,
         verify_result: iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4,
+        partial_redeem_local: KagemushaRecursiveSpendRedeemLocalRequestV4,
+        partial_redeem_result:
+            iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4,
+        redeem_local: KagemushaRecursiveSpendRedeemLocalRequestV4,
+        redeem_result: iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4,
         acknowledgement_payload:
             iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2,
         acknowledgement_signature_raw: Vec<u8>,
@@ -17953,7 +17958,10 @@ mod kagemusha_bridge_tests {
     ) -> ProductionDsAcceptanceLifecycleV1 {
         use iroha_core::zk::{
             ZK_BACKEND_HALO2_IPA,
-            confidential_v2::{confidential_transfer_v2_vk_box, kagemusha_topup_shield_v2_vk_box},
+            confidential_v2::{
+                confidential_transfer_v2_vk_box, confidential_unshield_v3_vk_box,
+                kagemusha_topup_shield_v2_vk_box,
+            },
             hash_vk,
         };
         use iroha_data_model::offline::{
@@ -18274,11 +18282,191 @@ mod kagemusha_bridge_tests {
         );
         let peer_payment = KagemushaRecursiveSpendPeerPaymentV4::from_split_result(&split_result)
             .expect("project production DS recipient payment");
-        let redeem_shape = KagemushaRecursiveSpendRedeemLocalRequestV4 {
+        let sender_change_bundle = split_result
+            .change_bundle
+            .as_ref()
+            .expect("production DS sender change bundle");
+        let sender_change_membership_witness = split_result
+            .change_membership_witness
+            .as_ref()
+            .expect("production DS sender change membership witness");
+        let sender_change_topup_provenance = split_result
+            .change_topup_provenance
+            .as_ref()
+            .expect("production DS sender change top-up provenance");
+        let partial_redeem_operation_id = [0x9a; 32];
+        let partial_redeem_amount =
+            KagemushaScaledAmountV2::new(100, 2).expect("production DS partial redemption amount");
+        let partial_change_amount = KagemushaScaledAmountV2::new(200, 2)
+            .expect("production DS partial redemption change amount");
+        let partial_change_preparation = prepare_kagemusha_redemption_change_opening_v4(
+            sender_change_bundle,
+            &change_opening,
+            partial_change_amount,
+            &partial_redeem_operation_id,
+            &[0x9b; 32],
+        )
+        .expect("prepare production DS redemption change");
+        let partial_redeem_frontier = kagemusha_output_membership_frontier_from_witness_v4(
+            sender_change_bundle,
+            sender_change_membership_witness,
+        )
+        .expect("derive production DS partial-redemption frontier");
+        let partial_change_output_membership = kagemusha_output_membership_paths_from_frontier_v4(
+            &partial_redeem_frontier,
+            None,
+            Some(partial_change_preparation.output.note_commitment),
+        )
+        .expect("derive production DS redemption-change membership paths");
+        let partial_redeem_local = KagemushaRecursiveSpendRedeemLocalRequestV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
+            bundle: sender_change_bundle.clone(),
+            topup_provenance: sender_change_topup_provenance.clone(),
+            input_opening: change_opening.clone(),
+            input_membership_witness: sender_change_membership_witness.clone(),
+            recipient: sample_account(0x9c),
+            public_amount: partial_redeem_amount,
+            change_opening: Some(partial_change_preparation.opening.clone()),
+            unshield_verifier_id: VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+            ),
+            unshield_verifier_commitment: hash_vk(
+                &confidential_unshield_v3_vk_box().expect("production DS unshield verifying key"),
+            ),
+            block_height: 43,
+            operation_id: partial_redeem_operation_id,
+            change_output_membership: Some(partial_change_output_membership.clone()),
+        };
+        partial_redeem_local
+            .validate_shape()
+            .expect("production DS partial redemption bridge shape");
+        let mut partial_without_change_membership = partial_redeem_local.clone();
+        partial_without_change_membership.change_output_membership = None;
+        assert!(
+            partial_without_change_membership.validate_shape().is_err(),
+            "partial redemption must carry its proof-bound change membership paths"
+        );
+        let partial_redeem_archive = Zeroizing::new(
+            norito::to_bytes(&partial_redeem_local)
+                .expect("encode production DS partial redemption"),
+        );
+        let mut partial_redeem_ptr = ptr::null_mut();
+        let mut partial_redeem_len = 0;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_redeem_v4(
+                    partial_redeem_archive.as_ptr(),
+                    partial_redeem_archive.len() as c_ulong,
+                    &mut partial_redeem_ptr,
+                    &mut partial_redeem_len,
+                )
+            },
+            0,
+            "production C ABI must build a genuine partial redemption with private change"
+        );
+        let partial_redeem_result_bytes =
+            unsafe { slice::from_raw_parts(partial_redeem_ptr, partial_redeem_len as usize) }
+                .to_vec();
+        connect_norito_free(partial_redeem_ptr);
+        let partial_redeem_result = decode_canonical_kagemusha_recursive_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4,
+        >(&partial_redeem_result_bytes)
+        .expect("decode production DS partial redemption");
+        partial_redeem_result
+            .validate_public_binding()
+            .expect("production DS partial redemption binding");
+        assert_eq!(partial_redeem_result.unsigned.bundle, *sender_change_bundle);
+        assert_eq!(partial_redeem_result.unsigned.amount, partial_redeem_amount);
+        assert_eq!(
+            sender_change_bundle
+                .statement
+                .current_note
+                .amount
+                .atomic_units,
+            partial_redeem_amount.atomic_units + partial_change_amount.atomic_units
+        );
+        assert_eq!(
+            partial_redeem_result
+                .unsigned
+                .redemption
+                .change_output
+                .as_ref(),
+            Some(&partial_change_preparation.output)
+        );
+        let partial_change_branch = partial_redeem_result
+            .unsigned
+            .offline_change
+            .as_ref()
+            .expect("production DS partial redemption change branch");
+        let partial_change_bundle = partial_redeem_result
+            .offline_change_bundle
+            .as_ref()
+            .expect("production DS partial redemption change bundle");
+        let partial_change_membership_witness = partial_redeem_result
+            .offline_change_membership_witness
+            .as_ref()
+            .expect("production DS partial redemption change membership witness");
+        let partial_change_topup_provenance = partial_redeem_result
+            .offline_change_topup_provenance
+            .as_ref()
+            .expect("production DS partial redemption change top-up provenance");
+        assert_eq!(partial_change_branch.bundle, *partial_change_bundle);
+        assert_eq!(
+            partial_change_bundle.statement.current_note,
+            partial_change_preparation.output
+        );
+        assert_eq!(
+            partial_change_bundle.statement.final_root,
+            partial_change_output_membership.final_root
+        );
+        assert_eq!(
+            partial_change_bundle.statement.next_zero_leaf_index,
+            partial_change_output_membership.dummy_leaf_index
+        );
+        assert_eq!(
+            partial_change_bundle.statement.proof_step_count,
+            sender_change_bundle.statement.proof_step_count + 1
+        );
+        assert_eq!(
+            partial_change_bundle.statement.peer_hop_count,
+            sender_change_bundle.statement.peer_hop_count
+        );
+        assert_eq!(
+            partial_change_membership_witness.leaf_index,
+            partial_change_output_membership
+                .change
+                .as_ref()
+                .expect("production DS partial change leaf")
+                .leaf_index
+        );
+        assert_eq!(
+            partial_change_topup_provenance,
+            sender_change_topup_provenance
+        );
+        let validated_partial_change_frontier =
+            validate_kagemusha_recursive_spend_branch_against_installed_v4(
+                partial_change_bundle,
+                partial_change_topup_provenance,
+                partial_change_membership_witness,
+                &partial_change_preparation.opening,
+                43,
+                installed,
+            )
+            .expect("validate spendable production DS partial-redemption change");
+        assert_eq!(
+            validated_partial_change_frontier,
+            KagemushaOutputMembershipFrontierV4 {
+                version: KAGEMUSHA_OUTPUT_MEMBERSHIP_FRONTIER_VERSION_V4,
+                leaf_index: partial_change_output_membership.dummy_leaf_index,
+                zero_path: partial_change_output_membership.dummy_path.clone(),
+            }
+        );
+        let redeem_local = KagemushaRecursiveSpendRedeemLocalRequestV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
             bundle: peer_payment.recipient_bundle.clone(),
             topup_provenance: peer_payment.topup_provenance.clone(),
-            input_opening: sender_opening.clone(),
+            input_opening: fixture.fresh_recipient_opening.clone(),
             input_membership_witness: peer_payment.recipient_membership_witness.clone(),
             recipient: sample_account(0x97),
             public_amount: peer_payment.recipient_bundle.statement.current_note.amount,
@@ -18287,20 +18475,59 @@ mod kagemusha_bridge_tests {
                 ZK_BACKEND_HALO2_IPA,
                 iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
             ),
-            unshield_verifier_commitment: [0x98; 32],
+            unshield_verifier_commitment: hash_vk(
+                &confidential_unshield_v3_vk_box().expect("production DS unshield verifying key"),
+            ),
             block_height: 43,
             operation_id: [0x99; 32],
             change_output_membership: None,
         };
-        redeem_shape
+        redeem_local
             .validate_shape()
             .expect("production DS redeem bridge shape");
-        let finalized_height = redeem_shape.topup_provenance.topup_finality_evidence[0]
+        let finalized_height = redeem_local.topup_provenance.topup_finality_evidence[0]
             .topup_anchor
             .finalized_height;
-        let mut future_finality = redeem_shape;
+        let mut future_finality = redeem_local.clone();
         future_finality.block_height = finalized_height - 1;
         assert!(future_finality.validate_shape().is_err());
+        let redeem_archive = Zeroizing::new(
+            norito::to_bytes(&redeem_local).expect("encode production DS full redemption"),
+        );
+        let mut redeem_ptr = ptr::null_mut();
+        let mut redeem_len = 0;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_redeem_v4(
+                    redeem_archive.as_ptr(),
+                    redeem_archive.len() as c_ulong,
+                    &mut redeem_ptr,
+                    &mut redeem_len,
+                )
+            },
+            0,
+            "production C ABI must build a genuine recipient-owned full redemption"
+        );
+        let redeem_result_bytes =
+            unsafe { slice::from_raw_parts(redeem_ptr, redeem_len as usize) }.to_vec();
+        connect_norito_free(redeem_ptr);
+        let redeem_result = decode_canonical_kagemusha_recursive_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4,
+        >(&redeem_result_bytes)
+        .expect("decode production DS full redemption");
+        redeem_result
+            .validate_public_binding()
+            .expect("production DS full redemption binding");
+        assert_eq!(redeem_result.unsigned.bundle, peer_payment.recipient_bundle);
+        assert_eq!(
+            redeem_result.unsigned.amount,
+            redeem_result.unsigned.bundle.statement.current_note.amount
+        );
+        assert_eq!(redeem_result.operation_id, redeem_local.operation_id);
+        assert!(redeem_result.unsigned.offline_change.is_none());
+        assert!(redeem_result.offline_change_bundle.is_none());
+        assert!(redeem_result.offline_change_membership_witness.is_none());
+        assert!(redeem_result.offline_change_topup_provenance.is_none());
         let verify_local = KagemushaRecursiveSpendVerifyLocalRequestV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
             request: KagemushaRecursiveSpendVerifyRequestV4 {
@@ -18465,6 +18692,10 @@ mod kagemusha_bridge_tests {
             peer_payment,
             verify_local,
             verify_result,
+            partial_redeem_local,
+            partial_redeem_result,
+            redeem_local,
+            redeem_result,
             acknowledgement_payload,
             acknowledgement_signature_raw,
             acknowledgement,
@@ -18472,10 +18703,16 @@ mod kagemusha_bridge_tests {
         }
     }
     fn production_ds_acceptance_file_secret_v1(kind: &str, declared_secret: bool) -> bool {
-        if kind == "recursive_init_result_v4" {
+        if matches!(
+            kind,
+            "recursive_init_result_v4"
+                | "recursive_split_result_v4"
+                | "recursive_peer_payment_v4"
+                | "recursive_partial_redeem_result_v4"
+        ) {
             assert!(
                 declared_secret,
-                "recursive_init_result_v4 embeds the private membership witness"
+                "{kind} embeds a private membership witness"
             );
         }
         declared_secret
@@ -19712,20 +19949,48 @@ mod kagemusha_bridge_tests {
             "assertion",
             "expected/split-result-v4.norito",
             &lifecycle.split_result,
-            false
+            true
         );
         archive!(
             "recursive_peer_payment_v4",
             "assertion",
             "expected/peer-payment-v4.norito",
             &lifecycle.peer_payment,
-            false
+            true
         );
         archive!(
             "recursive_verify_result_v4",
             "assertion",
             "expected/verify-result-v4.norito",
             &lifecycle.verify_result,
+            false
+        );
+        archive!(
+            "recursive_partial_redeem_local_v4",
+            "input",
+            "sender/partial-redeem-local-v4.norito",
+            &lifecycle.partial_redeem_local,
+            true
+        );
+        archive!(
+            "recursive_partial_redeem_result_v4",
+            "input",
+            "sender/partial-redeem-result-v4.norito",
+            &lifecycle.partial_redeem_result,
+            true
+        );
+        archive!(
+            "recursive_redeem_local_v4",
+            "input",
+            "receiver/redeem-local-v4.norito",
+            &lifecycle.redeem_local,
+            true
+        );
+        archive!(
+            "recursive_redeem_build_result_v4",
+            "assertion",
+            "expected/redeem-build-result-v4.norito",
+            &lifecycle.redeem_result,
             false
         );
         archive!(
@@ -19856,7 +20121,7 @@ mod kagemusha_bridge_tests {
                 "\"activation_height\":{},",
                 "\"withdrawal_height\":{}",
                 "}},",
-                "\"amounts_atomic\":{{\"topup\":\"1000\",\"reference_request\":\"625\",\"fresh_request\":\"700\",\"sender_change\":\"300\"}},",
+                "\"amounts_atomic\":{{\"topup\":\"1000\",\"reference_request\":\"625\",\"fresh_request\":\"700\",\"sender_change\":\"300\",\"partial_redeemed\":\"100\",\"redemption_change\":\"200\",\"redeemed\":\"700\"}},",
                 "\"requests\":{{",
                 "\"reference_request_id_hex\":\"{}\",",
                 "\"reference_request_digest_hex\":\"{}\",",
@@ -20221,6 +20486,38 @@ mod kagemusha_bridge_tests {
         });
     }
     #[test]
+    fn production_ds_acceptance_source_executes_full_and_partial_redemptions() {
+        let source = bridge_source();
+        let lifecycle = source
+            .split_once("fn production_ds_acceptance_lifecycle_v1(")
+            .expect("production acceptance lifecycle")
+            .1
+            .split_once("fn production_ds_acceptance_file_secret_v1(")
+            .expect("end of production acceptance lifecycle")
+            .0;
+        for required in [
+            "input_opening: fixture.fresh_recipient_opening.clone()",
+            "confidential_unshield_v3_vk_box()",
+            "connect_norito_kagemusha_recursive_spend_redeem_v4(",
+            "decode production DS full redemption",
+            "redeem_result.unsigned.offline_change.is_none()",
+            "redeem_result.offline_change_bundle.is_none()",
+            "prepare_kagemusha_redemption_change_opening_v4(",
+            "decode production DS partial redemption",
+            "partial_redeem_result.unsigned.offline_change",
+            "validate_kagemusha_recursive_spend_branch_against_installed_v4(",
+        ] {
+            assert!(
+                lifecycle.contains(required),
+                "production acceptance redemption legs omit `{required}`"
+            );
+        }
+        assert!(
+            !lifecycle.contains("unshield_verifier_commitment: [0x98; 32]"),
+            "production acceptance must not use a fabricated unshield verifier commitment"
+        );
+    }
+    #[test]
     fn taira_release_export_requires_same_key_step_one_to_step_two_regression() {
         let source = bridge_source();
         let helper = source
@@ -20415,19 +20712,22 @@ mod kagemusha_bridge_tests {
         assert!(!exporter.contains("bytes: bytes.clone()"));
     }
     #[test]
-    fn recursive_spend_v4_acceptance_inventory_marks_init_result_secret() {
-        assert!(production_ds_acceptance_file_secret_v1(
+    fn recursive_spend_v4_acceptance_inventory_marks_membership_results_secret() {
+        for kind in [
             "recursive_init_result_v4",
-            true
-        ));
-        assert!(
-            std::panic::catch_unwind(|| production_ds_acceptance_file_secret_v1(
-                "recursive_init_result_v4",
-                false
-            ))
-            .is_err(),
-            "the inventory builder must fail closed if the embedded membership witness is public"
-        );
+            "recursive_split_result_v4",
+            "recursive_peer_payment_v4",
+            "recursive_partial_redeem_result_v4",
+        ] {
+            assert!(production_ds_acceptance_file_secret_v1(kind, true));
+            assert!(
+                std::panic::catch_unwind(|| {
+                    production_ds_acceptance_file_secret_v1(kind, false)
+                })
+                .is_err(),
+                "the inventory builder must fail closed if `{kind}` exposes its membership witness"
+            );
+        }
         let exporter = bridge_source()
             .split_once("fn export_production_ds_acceptance_bundle_v1")
             .expect("production acceptance exporter")
@@ -20444,6 +20744,29 @@ mod kagemusha_bridge_tests {
             .0;
         assert!(init_result_entry.contains("&lifecycle.init_result"));
         assert!(init_result_entry.trim_end().ends_with("true"));
+        for (kind, value) in [
+            ("recursive_split_result_v4", "&lifecycle.split_result"),
+            ("recursive_peer_payment_v4", "&lifecycle.peer_payment"),
+        ] {
+            let entry = exporter
+                .split_once(&format!("\"{kind}\""))
+                .unwrap_or_else(|| panic!("{kind} inventory entry"))
+                .1
+                .split_once(");")
+                .unwrap_or_else(|| panic!("end of {kind} inventory entry"))
+                .0;
+            assert!(entry.contains(value));
+            assert!(entry.trim_end().ends_with("true"));
+        }
+        let partial_result_entry = exporter
+            .split_once("\"recursive_partial_redeem_result_v4\"")
+            .expect("partial redemption result inventory entry")
+            .1
+            .split_once(");")
+            .expect("end of partial redemption result inventory entry")
+            .0;
+        assert!(partial_result_entry.contains("&lifecycle.partial_redeem_result"));
+        assert!(partial_result_entry.trim_end().ends_with("true"));
     }
     #[cfg(all(feature = "privacy-production-enabled", unix))]
     fn canonical_acceptance_export_test_root() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -24605,6 +24928,16 @@ mod accel_tests {
         assert_eq!(output.public_bytes(), expected_public_bytes);
     }
     #[test]
+    fn keypair_from_empty_mldsa_seed_fails_without_outputs() {
+        let _guard = chain_guard();
+        let output = call_keypair_from_seed(Algorithm::MlDsa, &[]);
+        assert_eq!(output.status, ERR_CONNECT_KEYPAIR);
+        assert!(output.private_ptr.is_null());
+        assert_eq!(output.private_len, 0);
+        assert!(output.public_ptr.is_null());
+        assert_eq!(output.public_len, 0);
+    }
+    #[test]
     fn connect_open_app_metadata_roundtrip() {
         let _guard = chain_guard();
         let app_pk = [0x22u8; 32];
@@ -28336,6 +28669,16 @@ mod tests {
         assert!(encoded_json.contains(&exact_field));
         let genesis = encoded_json.replacen(&exact_field, "\"network_id\":\"genesis\"", 1);
         assert!(norito::json::from_str::<ConnectAccountOnboardingPlanBodyV1>(&genesis).is_err());
+        let missing_owner_auto_renew =
+            encoded_json.replacen("\"owner_auto_renew_instruction\":null,", "", 1);
+        assert_ne!(missing_owner_auto_renew, encoded_json);
+        assert!(
+            norito::json::from_str::<ConnectAccountOnboardingPlanBodyV1>(
+                &missing_owner_auto_renew,
+            )
+            .is_err(),
+            "the exact V1 owner_auto_renew_instruction slot must be present even when null"
+        );
         for retired in ["chain", "chainId", "chain_id"] {
             let replaced = encoded_json.replacen(
                 &exact_field,

@@ -660,7 +660,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/01_prune_capacity_support.rs',
         'kura/tests/01a_retained_eviction_and_rewrite_tail.rs',
         'kura/tests/02_replacement_and_preflight.rs',
-        'kura/tests/02a_unauthenticated_preflight.rs',
+        'kura/tests/02a_fresh_single_lane_preflight.rs',
         'kura/tests/03_preflight_and_merge_entry.rs',
         'kura/tests/03a_preflight_and_merge_entry_tail.rs',
         'kura/tests/04_merge_log_and_associations.rs',
@@ -2848,7 +2848,6 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "network::tests::actor_progress_retries_exactly_once_on_peer_writer_replacement",
     "network::tests::actor_progress_retry_round_robin_bypasses_partitioned_target",
     "network::tests::cap_one_blocked_source_cannot_prevent_live_source_service",
-    "network::tests::actor_progress_lease_survives_debug_packet_loss_until_delivery_retries",
     "network::tests::actor_broadcast_retry_targets_only_failed_peers",
     "network::tests::reliable_subscriber_is_single_consumer_under_clone_budget_pressure",
     "network::tests::reconnecting_peer_cannot_multiply_retained_source_credits",
@@ -4493,7 +4492,11 @@ def _transport_geometry_refresh_resistant_errors(
             "p2p_network",
             "relay_message_wire_payload_len",
             """
-let origin_signature_len = byte_sequence_wire_len(origin_signature_bytes)?;
+let origin_len = peer_id_wire_len_from_raw_key_bytes(RELAY_NODE_PUBLIC_KEY_BYTES, flags)?;
+let target_len = relay_target_wire_len(direct.then_some(RELAY_NODE_PUBLIC_KEY_BYTES), flags)?;
+let ttl_len = core::mem::size_of::<u8>();
+let priority_len = core::mem::size_of::<u32>();
+let origin_signature_len = byte_sequence_wire_len(RELAY_ORIGIN_SIGNATURE_BYTES)?;
 let field_lens = [
     origin_len,
     target_len,
@@ -4522,19 +4525,42 @@ let frame_retention = self
             "receiver decode scratch must be reserved before taking the source-owned ciphertext lease",
         ),
         (
-            "p2p_network",
-            "handle_service_message",
+            "p2p_peer",
+            "parse_next_encrypted_frame",
             """
-let task = connected_from::<WireMessage<T>, E>(
-    self.public_address.clone(),
-    self.key_pair.clone(),
-    self.soranet_transport_key_pair.clone(),
-    Connection::from_split(conn_id, read, write),
-    service_message_sender,
-    self.idle_timeout,
-    self.network_id.clone(),
+ParsedFrame::Malformed(context) => {
+    self.last_malformed_payload = Some(context);
+    return Err(Error::MalformedPayloadFrame);
+}
 """,
-            "inbound stream handoff must carry separate validated node and transport identities plus the canonical network identity",
+            "an authenticated malformed frame must fail atomically before any decoded prefix is delivered",
+        ),
+        (
+            "p2p_peer",
+            "connected_from",
+            """
+let peer = state::ConnectedFrom {
+    our_public_address,
+    key_pair,
+    soranet_transport_key_pair,
+    soranet_transport_certificate,
+    connection,
+    network_id,
+""",
+            "inbound peer construction must retain separate validated node and transport identities, their cached certificate, and the canonical network identity",
+        ),
+        (
+            "p2p_network",
+            "start_tls_listener",
+            """
+let peer_task = connected_from::<T, E>(
+    public_address,
+    key_pair,
+    soranet_transport_key_pair,
+    soranet_transport_certificate,
+    Connection::from_split_with_binding(
+""",
+            "mandatory TLS inbound handoff must carry separate validated node and transport identities plus their cached certificate",
         ),
         (
             "p2p_network",
@@ -4651,20 +4677,20 @@ _PRODUCTION_P2P_FRAME_GEOMETRY_ITEM_SHA256 = {
     "peer_id_wire_len_from_raw_key_bytes": (
         "b13f1926dab04641ff700941aaf854a29a0205e4828831da3f207a0930829844"
     ),
-    "peer_id_raw_key_bytes": (
-        "8f3464a658389a9eed4a02b26e3117aebe9c11283d825736ea6ef5fe797ec09e"
-    ),
     "relay_target_wire_len": (
         "84837f33c9793445071c17cdc11de01ddc1b7b57e061896afd381252743d3c05"
     ),
     "relay_message_wire_payload_len": (
-        "9b1634e5ca74ca51e435b2e2f85220545782d1d2fdda1397f79199634b5ec617"
+        "e354e0de75bfcb827e1cca70b082392c61316d40bb87ca689ea67918ecdfb009"
     ),
-    "data_frame_wire_len_from_payload_len_with_peer_key_bytes": (
-        "6a7f400c67afbc25c834fdb17f782baf374017cca082295f88bbfda501199fb1"
+    "direct_data_frame_wire_len_from_payload_len": (
+        "fa559993ed02666615d9443ef67b6f801f4c52e74d33e39681bed9a283fe2d38"
+    ),
+    "broadcast_data_frame_wire_len_from_payload_len": (
+        "074e4bf40cbdca31a2bd6b5c33bfd0d0a81acec64b33d55954bb42db16fbcf24"
     ),
     "data_frame_wire_len_from_payload_len": (
-        "33df4c34f2034f666dfe403b97869e498094f42a6fe35c5ce0ab75164fe0bcbe"
+        "28e6cf55cea091e8229a2aa4b7a1a47e7f5052679dcad8ab029f15dd2beebd78"
     ),
     "validate_transport_queue_geometry": (
         "2b43cba3a15fb667169280663e960cb6fabf5ccde7272d4276b6480041c66632"
@@ -4680,7 +4706,7 @@ _PRODUCTION_P2P_RUN_FRAME_ITEM_SHA256 = {
         "4d66d6b2dc3c139c4df54c7c9d7b7640691ce3aa0765a44298b689e63d360e21"
     ),
     "checked_encoded_frame_len": (
-        "e7d2ca074d7c7eb85d16608018e4e8d30950bc2278edbe52e3a63e31c2b15935"
+        "1355646a778b09fa26e4b9f3de58d3fbce4353845790e12afdd8cf7db7cdd888"
     ),
 }
 _PRODUCTION_P2P_QUIC_FRAME_ITEM_SHA256 = {
@@ -4693,7 +4719,7 @@ _PRODUCTION_P2P_RECEIVER_FRAME_ITEM_SHA256 = {
         "cb0e506080c0985c5f81c5c567250e143d072f2f23e06b4072cb3d2b739a8212"
     ),
     "parse_next_encrypted_frame": (
-        "576e689feed5c363d31dad75e8afdfd2936066a4f8c91ff71b087594001e7619"
+        "88a4e66c149185fa41ac6415c4c24ce864b5cc62f476d1296f0d3a7b3288d055"
     ),
 }
 _PRODUCTION_P2P_SOURCE_OWNERSHIP_ITEM_SHA256 = {
@@ -4738,7 +4764,7 @@ _PRODUCTION_P2P_START_FRAME_ITEM_SHA256 = {
         "5afecc8ebea95afccf327303e006b5e8bbbacb5f42fbe60e3d7b0db1fd42ed8c"
     ),
     "start_with_crypto_and_initial_authorities": (
-        "2000afd1abd8a3aef80f653f726a7bbe3124b63b38209b32cc6c49dcc0ca219a"
+        "13bf08e9a78d04eb50aa7eddcb834692bbc861767892eb145417bf709805c02f"
     ),
 }
 _PRODUCTION_P2P_RELIABLE_PEER_ITEM_SHA256 = {
@@ -4793,7 +4819,7 @@ _PRODUCTION_P2P_RELIABLE_PEER_ITEM_SHA256 = {
     "next_peer_stream_io": (
         "178e60084380d1ac3b9abf5cdcc866748d8de270d215846f85dcc63a7c3b9539"
     ),
-    "run": "3829bbd4b883bd592ebdca24e928fb44007a7e0e39295dd9c19fc4e42c356bb1",
+    "run": "0b53d79641d9b497ae34691faa4cf2dfeaeed02d28fa58fea00daa6f827cc299",
     "reattach_reply_route": (
         "120803740de09553bb9112a556cceed7e2db414f4f5da3a9691a7886b5264be0"
     ),

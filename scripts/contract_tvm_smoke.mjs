@@ -156,6 +156,7 @@ function validateManifest(manifest) {
     "sccpPayloadHash",
     "sourceEventDigest",
     "sourceLaneHash",
+    "transferNonces",
     "transferToTaira",
   ]);
   requireFunctions(token, ["balanceOf", "burnFrom", "mint", "totalSupply"]);
@@ -978,7 +979,9 @@ await expectConfirmedTvmFailure(
 );
 assert.equal(asInteger(await token.balanceOf(ownerAddress).call()), 3n * SCALE);
 
-const nonceBeforeFailedBurns = asInteger(await bridge.transferNonce().call());
+const nonceBeforeFailedBurns = asInteger(
+  await bridge.transferNonces(ownerAddress).call(),
+);
 const balanceBeforeFailedBurns = asInteger(await token.balanceOf(ownerAddress).call());
 await expectConfirmedTvmFailure(
   () =>
@@ -1032,7 +1035,10 @@ await expectConfirmedTvmFailure(
     ),
   "unauthorized direct token burn",
 );
-assert.equal(asInteger(await bridge.transferNonce().call()), nonceBeforeFailedBurns);
+assert.equal(
+  asInteger(await bridge.transferNonces(ownerAddress).call()),
+  nonceBeforeFailedBurns,
+);
 assert.equal(asInteger(await token.balanceOf(ownerAddress).call()), balanceBeforeFailedBurns);
 
 const sourceReceipt = await sendAndConfirmTvm(
@@ -1066,7 +1072,10 @@ assert.equal(emittedSource.payloadHash, expectedSourcePayloadHash);
 assert.equal(emittedSource.routeConfigHash, expectedRouteConfigHash);
 assert.deepEqual(emittedSource.payload, expectedSourcePayload);
 assert.equal(await bridge.usedSourceMessages(expectedSourceMessageId).call(), true);
-assert.equal(asInteger(await bridge.transferNonce().call()), nonceBeforeFailedBurns + 1n);
+assert.equal(
+  asInteger(await bridge.transferNonces(ownerAddress).call()),
+  nonceBeforeFailedBurns + 1n,
+);
 assert.equal(asInteger(await token.balanceOf(ownerAddress).call()), 2n * SCALE);
 
 process.stdout.write(

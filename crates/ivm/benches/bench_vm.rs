@@ -2,14 +2,14 @@
 use criterion::{BatchSize, Criterion};
 use ivm::{
     ByteMerkleTree, IVM, ProgramMetadata, encoding, instruction,
-    kotodama::wide as kwide,
     parallel::{Block, State, StateAccessSet, Transaction},
 };
 fn loop_program() -> Vec<u8> {
     let mut prog = ProgramMetadata::default().encode();
-    prog.extend_from_slice(&kwide::encode_addi(1, 0, 1).to_le_bytes());
-    let branch = kwide::encode_branch_checked(instruction::wide::control::BLT, 1, 2, -1)
-        .expect("loop branch");
+    prog.extend_from_slice(
+        &encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 0, 1).to_le_bytes(),
+    );
+    let branch = encoding::wide::encode_branch(instruction::wide::control::BLT, 1, 2, -1);
     prog.extend_from_slice(&branch.to_le_bytes());
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     prog

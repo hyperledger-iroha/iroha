@@ -27,6 +27,10 @@ fn builtin_query_wire_ids_match_v1_golden_inventory() {
 fn builtin_query_runtime_registry_has_no_type_name_aliases() {
     let registry = build_builtin_query_registry();
     for (type_name, wire_id) in builtin_query_runtime_assignments() {
+        assert!(
+            wire_id.starts_with("iroha.query.v1::iterable::"),
+            "built-in wire identifier `{wire_id}` must use the canonical V1 iterable-query namespace"
+        );
         assert_eq!(registry.wire_id(type_name), Some(wire_id));
         assert_ne!(
             type_name, wire_id,
@@ -44,7 +48,8 @@ fn builtin_query_runtime_registry_has_no_type_name_aliases() {
 }
 #[test]
 fn builtin_query_decode_accepts_only_the_canonical_wire_id() {
-    const WIRE_ID: &str =
+    const WIRE_ID: &str = "iroha.query.v1::iterable::domain::Domain";
+    const RETIRED_RUST_PATH_ID: &str =
         "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>";
     type DomainQuery = ErasedIterQuery<Domain>;
     let builtin = QueryRegistry::new().register_with_id::<DomainQuery>(WIRE_ID);
@@ -67,6 +72,10 @@ fn builtin_query_decode_accepts_only_the_canonical_wire_id() {
     assert!(
         decode_query_from_registries(type_name, &payload, &builtin, None).is_none(),
         "the concrete Rust type name must not remain a decode alias"
+    );
+    assert!(
+        decode_query_from_registries(RETIRED_RUST_PATH_ID, &payload, &builtin, None).is_none(),
+        "the retired Rust-path wire identifier must not remain a decode alias"
     );
 }
 #[test]

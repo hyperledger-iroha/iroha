@@ -102,6 +102,20 @@ class RecordingSession(requests.Session):
         )
         return self._response
 
+    def send(
+        self, request: requests.PreparedRequest, **kwargs: Any
+    ) -> requests.Response:
+        self.calls.append(
+            {
+                "method": request.method,
+                "url": request.url,
+                "params": {},
+                "headers": dict(request.headers),
+                "data": request.body,
+            }
+        )
+        return self._response
+
 
 def _client_with_session() -> tuple[ToriiClient, RecordingSession]:
     session = RecordingSession()
@@ -893,6 +907,8 @@ def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:
         ("   ", "non-empty string"),
         (" ed25519", "surrounding whitespace"),
         ("ed25519 ", "surrounding whitespace"),
+        ("\u00a0ML-DSA-65\u00a0", "surrounding whitespace"),
+        ("\u2003ML-DSA-65\u2003", "surrounding whitespace"),
     ],
 )
 def test_account_address_rejects_blank_or_padded_signing_algorithm_aliases(
@@ -918,10 +934,17 @@ def test_account_address_rejects_non_string_signing_algorithm_aliases(algorithm:
     "algorithm",
     [
         "future-curve",
+        "ed 25519",
         "ed\t25519",
+        "ed.25519",
+        "ed/25519",
+        "ed@25519",
+        "ed#25519",
         "ed\u200b25519",
         "\u0435d25519",
         "ml\uff0ddsa",
+        "ML-DSA-44",
+        "ML_DSA_87",
         "gost256\u0430",
     ],
 )
@@ -931,6 +954,47 @@ def test_account_address_rejects_confusable_signing_algorithm_aliases(algorithm:
             public_key=bytes([0x11] * 32),
             algorithm=algorithm,
         )
+
+
+def test_mldsa_account_address_uses_extended_protocol_key_encoding() -> None:
+    public_key = bytes([0xA5]) * 1_952
+    for algorithm in ("mldsa", "ML-DSA-65", "ML_DSA_65", "ML_DSA-65"):
+        address = AccountAddress.from_account(
+            public_key=public_key,
+            algorithm=algorithm,
+        )
+        canonical = address.canonical_bytes()
+        assert canonical[1:5] == b"\x02\x02\x07\xA0"
+        assert canonical[5:] == public_key
+        assert AccountAddress.from_canonical_bytes(canonical).canonical_bytes() == canonical
+        literal = address.to_i105(0)
+        assert AccountAddress.from_i105(literal, 0).canonical_bytes() == canonical
+
+
+@pytest.mark.parametrize(
+    "public_key",
+    [
+        b"",
+        bytes([0x20]) * 32,
+        bytes([0x44]) * 1_312,
+        bytes([0x65]) * 1_951,
+        bytes([0x65]) * 1_953,
+        bytes([0x87]) * 2_592,
+        bytes(1_952),
+    ],
+)
+def test_mldsa_account_address_rejects_non_protocol_key_material(
+    public_key: bytes,
+) -> None:
+    with pytest.raises(AccountAddressError, match="1952-byte ML-DSA-65"):
+        AccountAddress.from_account(public_key=public_key, algorithm="ML-DSA-65")
+
+
+def test_account_address_rejects_noncanonical_short_extended_controller() -> None:
+    public_key = bytes([0x11]) * 32
+    canonical = b"\x02\x02\x01\x00\x20" + public_key
+    with pytest.raises(AccountAddressError, match="compact controller tag"):
+        AccountAddress.from_canonical_bytes(canonical)
 
 
 def test_account_identity_constructors_expose_only_the_domainless_api() -> None:

@@ -40,7 +40,7 @@ blake3 = "1.8.2"
 hex = { workspace = true }
 base64 = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
-ivm = { path = "../ivm", default-features = false, features = ["runtime"] }
+ivm = { path = "../ivm" }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "net", "io-util", "fs"] }
 tonic = { version = "0.14.6", features = ["transport"] }

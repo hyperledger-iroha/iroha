@@ -14,6 +14,7 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Date;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -30,6 +31,8 @@ public final class AttestationVerifier {
 
   private final Set<TrustAnchor> trustAnchors;
   private final boolean requireStrongBox;
+  private final AndroidAttestationRevocationPolicyV1 revocationPolicy;
+  private final long evaluationTimeEpochMillis;
 
   private AttestationVerifier(final Builder builder) {
     if (builder.trustedRoots.isEmpty()) {
@@ -41,6 +44,15 @@ public final class AttestationVerifier {
     }
     this.trustAnchors = Collections.unmodifiableSet(new LinkedHashSet<>(anchors));
     this.requireStrongBox = builder.requireStrongBox;
+    if (builder.revocationPolicy == null) {
+      throw new IllegalStateException(
+          "A governed Android attestation revocation policy is required");
+    }
+    if (builder.evaluationTimeEpochMillis == null) {
+      throw new IllegalStateException("An explicit attestation evaluation time is required");
+    }
+    this.revocationPolicy = builder.revocationPolicy;
+    this.evaluationTimeEpochMillis = builder.evaluationTimeEpochMillis;
   }
 
   /** Creates a verifier that trusts the supplied root certificates. */
@@ -48,18 +60,34 @@ public final class AttestationVerifier {
     return new Builder();
   }
 
-  /** Validates {@code attestation} against the configured policy. */
+  /** Creates a verifier builder with its mandatory revocation inputs preconfigured. */
+  public static Builder builder(
+      final AndroidAttestationRevocationPolicyV1 revocationPolicy,
+      final long evaluationTimeEpochMillis) {
+    return new Builder()
+        .setRevocationPolicy(revocationPolicy)
+        .setEvaluationTimeEpochMillis(evaluationTimeEpochMillis);
+  }
+
+  /** Retained for binary compatibility; always fails closed because a challenge is required. */
   public AttestationResult verify(final KeyAttestation attestation)
       throws AttestationVerificationException {
-    return verify(attestation, null);
+    throw new AttestationVerificationException(
+        "Expected attestation challenge must be non-empty");
   }
 
   /**
-   * Validates {@code attestation} and checks that the embedded challenge matches {@code
-   * expectedChallenge} when provided.
+   * Validates {@code attestation} and checks that the embedded challenge matches the required,
+   * non-empty {@code expectedChallenge}.
    */
   public AttestationResult verify(final KeyAttestation attestation, final byte[] expectedChallenge)
       throws AttestationVerificationException {
+    if (expectedChallenge == null || expectedChallenge.length == 0) {
+      throw new AttestationVerificationException(
+          "Expected attestation challenge must be non-empty");
+    }
+    final byte[] challenge = expectedChallenge.clone();
+    revocationPolicy.validateAt(evaluationTimeEpochMillis);
     Objects.requireNonNull(attestation, "attestation");
     final List<X509Certificate> chain = decodeChain(attestation);
     if (chain.isEmpty()) {
@@ -67,11 +95,11 @@ public final class AttestationVerifier {
     }
     final X509Certificate leaf = chain.get(0);
 
-    validateCertificatePath(chain);
+    final Set<TrustAnchor> activeTrustAnchors = validateRevocationStatus(chain);
+    validateCertificatePath(chain, activeTrustAnchors);
 
     final KeyDescription description = parseKeyDescription(leaf);
-    if (expectedChallenge != null
-        && !MessageDigest.isEqual(expectedChallenge, description.attestationChallenge)) {
+    if (!MessageDigest.isEqual(challenge, description.attestationChallenge)) {
       throw new AttestationVerificationException("Attestation challenge mismatch");
     }
     if (requireStrongBox
@@ -112,7 +140,44 @@ public final class AttestationVerifier {
     return certificates;
   }
 
-  private void validateCertificatePath(final List<X509Certificate> chain)
+  private Set<TrustAnchor> validateRevocationStatus(final List<X509Certificate> chain)
+      throws AttestationVerificationException {
+    for (final X509Certificate certificate : chain) {
+      if (isRevoked(certificate)) {
+        throw new AttestationVerificationException(
+            "Attestation certificate is rejected by the governed revocation status");
+      }
+    }
+
+    final Set<TrustAnchor> activeAnchors = new LinkedHashSet<>();
+    for (final TrustAnchor anchor : trustAnchors) {
+      final X509Certificate certificate = anchor.getTrustedCert();
+      if (certificate == null || !isRevoked(certificate)) {
+        activeAnchors.add(anchor);
+      }
+    }
+    if (activeAnchors.isEmpty()) {
+      throw new AttestationVerificationException(
+          "All configured attestation trust anchors are revoked");
+    }
+    return activeAnchors;
+  }
+
+  private boolean isRevoked(final X509Certificate certificate)
+      throws AttestationVerificationException {
+    final byte[] tbsDigest;
+    try {
+      tbsDigest =
+          MessageDigest.getInstance("SHA-256").digest(certificate.getTBSCertificate());
+    } catch (final Exception ex) {
+      throw new AttestationVerificationException(
+          "Unable to hash attestation certificate TBS bytes", ex);
+    }
+    return revocationPolicy.rejects(certificate.getSerialNumber(), tbsDigest);
+  }
+
+  private void validateCertificatePath(
+      final List<X509Certificate> chain, final Set<TrustAnchor> activeTrustAnchors)
       throws AttestationVerificationException {
     final CertificateFactory factory;
     try {
@@ -123,7 +188,7 @@ public final class AttestationVerifier {
 
     final CertPath certPath;
     try {
-      certPath = factory.generateCertPath(certificatesForPath(chain));
+      certPath = factory.generateCertPath(certificatesForPath(chain, activeTrustAnchors));
     } catch (final CertificateException ex) {
       throw new AttestationVerificationException("Failed to construct attestation CertPath", ex);
     }
@@ -137,11 +202,13 @@ public final class AttestationVerifier {
 
     final PKIXParameters parameters;
     try {
-      parameters = new PKIXParameters(trustAnchors);
+      parameters = new PKIXParameters(activeTrustAnchors);
     } catch (final Exception ex) {
       throw new AttestationVerificationException("Invalid PKIX parameters", ex);
     }
+    // The governed, freshness-checked offline snapshot above is the sole revocation source.
     parameters.setRevocationEnabled(false);
+    parameters.setDate(new Date(evaluationTimeEpochMillis));
 
     try {
       validator.validate(certPath, parameters);
@@ -153,12 +220,13 @@ public final class AttestationVerifier {
     }
   }
 
-  private List<X509Certificate> certificatesForPath(final List<X509Certificate> chain) {
+  private List<X509Certificate> certificatesForPath(
+      final List<X509Certificate> chain, final Set<TrustAnchor> activeTrustAnchors) {
     if (chain.size() < 2) {
       return chain;
     }
     final X509Certificate trailingCertificate = chain.get(chain.size() - 1);
-    for (final TrustAnchor anchor : trustAnchors) {
+    for (final TrustAnchor anchor : activeTrustAnchors) {
       final X509Certificate trusted = anchor.getTrustedCert();
       if (trusted != null && sameTrustAnchorCertificate(trailingCertificate, trusted)) {
         // The configured trust anchor is not part of the PKIX CertPath. Android
@@ -225,6 +293,8 @@ public final class AttestationVerifier {
   public static final class Builder {
     private final Set<X509Certificate> trustedRoots = new LinkedHashSet<>();
     private boolean requireStrongBox = false;
+    private AndroidAttestationRevocationPolicyV1 revocationPolicy;
+    private Long evaluationTimeEpochMillis;
 
     private Builder() {}
 
@@ -251,6 +321,19 @@ public final class AttestationVerifier {
     /** Requires StrongBox-backed attestation when {@code enabled} is {@code true}. */
     public Builder requireStrongBox(final boolean enabled) {
       this.requireStrongBox = enabled;
+      return this;
+    }
+
+    /** Configures the mandatory governed revocation snapshot. */
+    public Builder setRevocationPolicy(
+        final AndroidAttestationRevocationPolicyV1 revocationPolicy) {
+      this.revocationPolicy = Objects.requireNonNull(revocationPolicy, "revocationPolicy");
+      return this;
+    }
+
+    /** Configures the explicit epoch-millisecond time used for freshness and PKIX checks. */
+    public Builder setEvaluationTimeEpochMillis(final long evaluationTimeEpochMillis) {
+      this.evaluationTimeEpochMillis = evaluationTimeEpochMillis;
       return this;
     }
 

@@ -96,6 +96,7 @@ final class PreparedTransactionSignatureV1Tests: XCTestCase {
       receipt: onboarding.receipt,
       binding: onboarding.binding,
       semanticHashHex: onboardingSemanticHash,
+      expectedFeePayment: onboarding.feePayment,
       expectedAuthority: onboardingVector.signerAccountId,
       expectedNetworkId: onboardingVector.networkId
     )
@@ -141,10 +142,12 @@ final class PreparedTransactionSignatureV1Tests: XCTestCase {
     )
     XCTAssertEqual(faucetVector.networkId, onboardingVector.networkId)
     XCTAssertEqual(inspected.payload.networkId, faucetVector.networkId)
+    let faucetPolicy = try policy(for: faucet, authority: faucetVector.signerAccountId)
     try faucet.validate(
       claim: faucet.claim,
       binding: faucet.binding,
-      expectedAuthority: faucetVector.signerAccountId,
+      expectedFeePayment: faucet.feePayment,
+      policy: faucetPolicy,
       expectedNetworkId: faucetVector.networkId
     )
   }
@@ -173,6 +176,7 @@ final class PreparedTransactionSignatureV1Tests: XCTestCase {
         receipt: valid.receipt,
         binding: valid.binding,
         semanticHashHex: valid.semanticHashHex,
+        expectedFeePayment: valid.feePayment,
         expectedAuthority: vector.signerAccountId,
         expectedNetworkId: vector.networkId
       )
@@ -200,11 +204,47 @@ final class PreparedTransactionSignatureV1Tests: XCTestCase {
       ToriiAccountFaucetPreparedTransactionV1.self,
       response: faucetVector.response
     )
+    let faucetPolicy = try policy(for: faucet, authority: faucetVector.signerAccountId)
+    let substitutedAuthorityPolicy = try policy(for: faucet, authority: vector.signerAccountId)
     XCTAssertThrowsError(
       try faucet.validate(
         claim: faucet.claim,
         binding: faucet.binding,
-        expectedAuthority: vector.signerAccountId,
+        expectedFeePayment: faucet.feePayment,
+        policy: substitutedAuthorityPolicy,
+        expectedNetworkId: faucetVector.networkId
+      )
+    )
+    let substitutedAsset = try XCTUnwrap(
+      AssetDefinitionAddressCodec.definitionLiteral(
+        uuidBytes: Data(repeating: 0xa5, count: 16)
+      )
+    )
+    let substitutedAssetPolicy = try ToriiAccountFaucetPolicyV1(
+      faucetAuthority: faucetVector.signerAccountId,
+      assetDefinitionId: substitutedAsset,
+      amount: KotodamaQuantity(faucet.amount)
+    )
+    XCTAssertThrowsError(
+      try faucet.validate(
+        claim: faucet.claim,
+        binding: faucet.binding,
+        expectedFeePayment: faucet.feePayment,
+        policy: substitutedAssetPolicy,
+        expectedNetworkId: faucetVector.networkId
+      )
+    )
+    let substitutedAmountPolicy = try ToriiAccountFaucetPolicyV1(
+      faucetAuthority: faucetVector.signerAccountId,
+      assetDefinitionId: faucet.assetDefinitionId,
+      amount: KotodamaQuantity("6")
+    )
+    XCTAssertThrowsError(
+      try faucet.validate(
+        claim: faucet.claim,
+        binding: faucet.binding,
+        expectedFeePayment: faucet.feePayment,
+        policy: substitutedAmountPolicy,
         expectedNetworkId: faucetVector.networkId
       )
     )
@@ -215,7 +255,8 @@ final class PreparedTransactionSignatureV1Tests: XCTestCase {
       try faucet.validate(
         claim: faucet.claim,
         binding: faucet.binding,
-        expectedAuthority: faucetVector.signerAccountId,
+        expectedFeePayment: faucet.feePayment,
+        policy: faucetPolicy,
         expectedNetworkId: wrongNetwork
       )
     )
@@ -234,9 +275,21 @@ final class PreparedTransactionSignatureV1Tests: XCTestCase {
       try substitutedFee.validate(
         claim: faucet.claim,
         binding: faucet.binding,
-        expectedAuthority: faucetVector.signerAccountId,
+        expectedFeePayment: faucet.feePayment,
+        policy: faucetPolicy,
         expectedNetworkId: faucetVector.networkId
       )
+    )
+  }
+
+  private func policy(
+    for faucet: ToriiAccountFaucetPreparedTransactionV1,
+    authority: String
+  ) throws -> ToriiAccountFaucetPolicyV1 {
+    try ToriiAccountFaucetPolicyV1(
+      faucetAuthority: authority,
+      assetDefinitionId: faucet.assetDefinitionId,
+      amount: KotodamaQuantity(faucet.amount)
     )
   }
 

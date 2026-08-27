@@ -10,7 +10,11 @@ from typing import Any, Final
 from .numeric_v1 import MAX_MANTISSA_BYTES, KotodamaQuantity, NumericV1Codec
 
 CANCEL_ASSET_LOCK_WIRE_ID_V1: Final[str] = "iroha.instruction.v1::escrow::CancelAssetLock"
-"""Schema type name for the first-release bare cancellation archive."""
+"""Canonical wire identifier for the first-release cancellation instruction."""
+
+_CANCEL_ASSET_LOCK_SCHEMA_NAME_V1: Final[str] = (
+    "iroha_data_model::isi::escrow::CancelAssetLock"
+)
 
 _FRAME_HEADER_BYTES: Final[int] = 40
 _COMPACT_LENGTH_FLAG: Final[int] = 0x02
@@ -23,7 +27,7 @@ _MAX_CANONICAL_ARCHIVE_BYTES: Final[int] = 148
 _U64_MASK: Final[int] = (1 << 64) - 1
 _CRC64_POLY: Final[int] = 0xC96C_5795_D787_0F42
 _SCHEMA_HASH: Final[bytes] = hashlib.sha256(
-    b"norito:v1:type-name\0" + CANCEL_ASSET_LOCK_WIRE_ID_V1.encode("ascii")
+    b"norito:v1:type-name\0" + _CANCEL_ASSET_LOCK_SCHEMA_NAME_V1.encode("ascii")
 ).digest()[:16]
 _CANONICAL_HASH_LITERAL_RE: Final[re.Pattern[str]] = re.compile(
     r"hash:([0-9A-F]{64})#([0-9A-F]{4})\Z",

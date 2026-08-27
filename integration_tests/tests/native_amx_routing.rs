@@ -384,8 +384,6 @@ fn localnet_builder() -> NetworkBuilder {
     let mut npos = SumeragiNposParameters::default();
     npos.max_validators = PEERS as u32;
     npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
-    npos.vrf_commit_window_blocks = 100;
-    npos.vrf_reveal_window_blocks = 40;
     NetworkBuilder::new()
         .with_peers(PEERS)
         .with_auto_populated_trusted_peers()

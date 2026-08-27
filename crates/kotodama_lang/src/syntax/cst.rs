@@ -84,6 +84,15 @@ impl GreenNode {
         }
     }
 }
+fn drop_green_elements_iterative(elements: Vec<GreenElement>) {
+    let mut pending = elements;
+    while let Some(element) = pending.pop() {
+        if let GreenElement::Node(node) = element {
+            let GreenNode { children, .. } = *node;
+            pending.extend(children);
+        }
+    }
+}
 /// Complete lossless concrete syntax tree for one source file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SyntaxTree {
@@ -138,9 +147,11 @@ impl SyntaxTree {
         }
     }
     /// Consume the tree and return its tokens without recursively dropping nested green nodes.
-    pub(crate) fn into_tokens(self) -> Vec<GreenToken> {
-        let Self { source: _, root } = self;
-        let mut pending = root.children.into_iter().rev().collect::<Vec<_>>();
+    pub(crate) fn into_tokens(mut self) -> Vec<GreenToken> {
+        let mut pending = std::mem::take(&mut self.root.children)
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>();
         let mut tokens = Vec::new();
         while let Some(element) = pending.pop() {
             match element {
@@ -154,8 +165,52 @@ impl SyntaxTree {
         tokens
     }
 }
+impl Drop for SyntaxTree {
+    fn drop(&mut self) {
+        drop_green_elements_iterative(std::mem::take(&mut self.root.children));
+    }
+}
 pub(crate) struct GreenTokenIter<'tree> {
     pending: Vec<&'tree GreenElement>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deeply_nested_tree(depth: usize) -> SyntaxTree {
+        let mut node = GreenNode::new(
+            SyntaxKind::Ident,
+            0,
+            vec![GreenElement::Token(GreenToken::source(
+                SyntaxKind::Ident,
+                TextRange::new(0, 1),
+            ))],
+        );
+        for _ in 0..depth {
+            node = GreenNode::new(
+                SyntaxKind::IfExpr,
+                0,
+                vec![GreenElement::Node(Box::new(node))],
+            );
+        }
+        SyntaxTree::new(SourceId(1), node)
+    }
+
+    #[test]
+    fn deep_tree_consumption_and_drop_are_iterative() {
+        std::thread::Builder::new()
+            .name("kotodama-cst-drop-depth".into())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let tokens = deeply_nested_tree(4_096).into_tokens();
+                assert_eq!(tokens.len(), 1);
+                drop(deeply_nested_tree(4_096));
+            })
+            .expect("spawn small-stack CST worker")
+            .join()
+            .expect("small-stack CST worker");
+    }
 }
 impl<'tree> Iterator for GreenTokenIter<'tree> {
     type Item = &'tree GreenToken;

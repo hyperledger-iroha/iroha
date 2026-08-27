@@ -120,11 +120,11 @@ use iroha_p2p::network::{
 use iroha_p2p::{
     Post, Priority,
     network::{
-        NetworkActorAdmissionError, NetworkActorAdmissionRejection, NetworkActorAdmissionTicket,
-        NetworkReplyFlushAck, NetworkReplyFlushAckStatus, NetworkReplyRoute,
-        NetworkReplyRouteError, NetworkReplyRouteSourceUpdate, NetworkReplyRoutes,
-        NetworkReplyRoutesObservedMergeReceipt, NetworkReplyRoutesStrictMergeReceipt,
-        NetworkReplySourceKey, ReliableProgressClass,
+        ConfiguredPeerBatch, NetworkActorAdmissionError, NetworkActorAdmissionRejection,
+        NetworkActorAdmissionTicket, NetworkReplyFlushAck, NetworkReplyFlushAckStatus,
+        NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteSourceUpdate,
+        NetworkReplyRoutes, NetworkReplyRoutesObservedMergeReceipt,
+        NetworkReplyRoutesStrictMergeReceipt, NetworkReplySourceKey, ReliableProgressClass,
         message::{ClassifyTopic as _, ProgressReconstruction},
         reliable_progress_class,
     },

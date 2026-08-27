@@ -11,7 +11,7 @@ use blake3::{Hash, Hasher};
 #[cfg(feature = "manifest")]
 use iroha_data_model::{
     da::{
-        manifest::DaManifestV1,
+        manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
         types::{BlobClass, ExtraMetadata, MetadataEncryption, MetadataVisibility},
     },
     name::Name,
@@ -1213,6 +1213,14 @@ const TAIKAI_CACHE_HINT_MAX_BYTES: usize = 4 * 1024;
 #[cfg(feature = "manifest")]
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PlanFromManifestError {
+    /// Manifest used a version outside the sole first-release layout.
+    #[error("unsupported DA manifest version {actual}; expected {expected}")]
+    UnsupportedVersion {
+        /// Version carried by the manifest.
+        actual: u16,
+        /// Sole supported first-release version.
+        expected: u16,
+    },
     /// Manifest did not contain any chunk commitments.
     #[error("manifest does not contain any chunk commitments")]
     EmptyChunks,
@@ -1222,6 +1230,38 @@ pub enum PlanFromManifestError {
     /// Manifest chunk size exceeded host bounds when converting to usize.
     #[error("manifest chunk_size {0} exceeds host limits")]
     ChunkSizeTooLarge(u32),
+    /// Manifest erasure geometry omitted source shards.
+    #[error("manifest erasure profile must include at least one data shard")]
+    ZeroDataShards,
+    /// Manifest stripe geometry did not match its erasure profile and payload.
+    #[error("manifest {field} is {actual}; canonical value is {expected}")]
+    NonCanonicalStripeLayout {
+        /// Stripe-layout field that failed validation.
+        field: &'static str,
+        /// Canonical value derived from the payload and erasure profile.
+        expected: u32,
+        /// Value carried by the manifest.
+        actual: u32,
+    },
+    /// Manifest chunk inventory did not contain the exact data/parity layout.
+    #[error("manifest has {actual} chunk commitments; canonical layout requires {expected}")]
+    NonCanonicalChunkCount {
+        /// Canonical count derived from data, global-parity, and stripe-parity geometry.
+        expected: usize,
+        /// Count carried by the manifest.
+        actual: usize,
+    },
+    /// A commitment field disagreed with the canonical RS16 inventory position.
+    #[error("manifest chunk at inventory position {chunk_index} has non-canonical `{field}`")]
+    NonCanonicalChunk {
+        /// Position in the ordered commitment inventory.
+        chunk_index: usize,
+        /// Commitment field that disagreed with the canonical value.
+        field: &'static str,
+    },
+    /// Manifest chunk-layout arithmetic exceeded supported integer bounds.
+    #[error("manifest chunk layout overflow while computing {0}")]
+    ChunkLayoutOverflow(&'static str),
     /// Manifest omitted a required Taikai metadata field.
     #[error("manifest missing required Taikai metadata `{0}`")]
     MissingTaikaiMetadata(&'static str),
@@ -1249,21 +1289,31 @@ pub enum PlanFromManifestError {
     InvalidPlan(#[from] CarPlanValidationError),
 }
 /// Build a [`CarBuildPlan`] directly from a canonical DA manifest.
+///
+/// The complete RS16 commitment inventory is validated in producer order. Only
+/// data commitments enter the returned payload plan; global and stripe parity
+/// commitments remain authenticated manifest material for reconstruction.
 #[cfg(feature = "manifest")]
 pub fn build_plan_from_da_manifest(
     manifest: &DaManifestV1,
 ) -> Result<CarBuildPlan, PlanFromManifestError> {
+    if manifest.version != DaManifestV1::VERSION {
+        return Err(PlanFromManifestError::UnsupportedVersion {
+            actual: manifest.version,
+            expected: DaManifestV1::VERSION,
+        });
+    }
     if manifest.chunks.is_empty() {
         return Err(PlanFromManifestError::EmptyChunks);
     }
     if manifest.chunk_size == 0 {
         return Err(PlanFromManifestError::ZeroChunkSize);
     }
-    let chunk_count = manifest.chunks.len();
-    if chunk_count > CAR_PLAN_MAX_CHUNKS {
+    let manifest_chunk_count = manifest.chunks.len();
+    if manifest_chunk_count > CAR_PLAN_MAX_CHUNKS {
         return Err(PlanFromManifestError::InvalidPlan(
             CarPlanValidationError::TooManyChunks {
-                count: chunk_count,
+                count: manifest_chunk_count,
                 maximum: CAR_PLAN_MAX_CHUNKS,
             },
         ));
@@ -1284,13 +1334,21 @@ pub fn build_plan_from_da_manifest(
         max_size: chunk_size,
         break_mask: 1,
     };
-    preflight_da_manifest_chunks(manifest, chunk_size)?;
+    let data_chunk_count = preflight_da_manifest_chunks(manifest, chunk_size)?;
     let payload_digest = Hash::from(*manifest.blob_hash.as_ref());
     let taikai_hint = taikai_segment_hint_from_manifest(manifest)?;
-    preflight_manifest_plan_heap(chunk_count, taikai_hint.as_ref())?;
+    preflight_manifest_plan_heap(data_chunk_count, taikai_hint.as_ref())?;
     let mut chunks = Vec::new();
-    try_reserve_manifest(&mut chunks, chunk_count, "manifest CAR chunk inventory")?;
-    for chunk in &manifest.chunks {
+    try_reserve_manifest(
+        &mut chunks,
+        data_chunk_count,
+        "manifest CAR data chunk inventory",
+    )?;
+    for chunk in manifest
+        .chunks
+        .iter()
+        .filter(|chunk| chunk.role == ChunkRole::Data)
+    {
         chunks.push(CarChunk {
             offset: chunk.offset,
             length: chunk.length,
@@ -1312,7 +1370,7 @@ pub fn build_plan_from_da_manifest(
     files.push(FilePlan {
         path,
         first_chunk: 0,
-        chunk_count: chunks.len(),
+        chunk_count: data_chunk_count,
         size: manifest.total_size,
     });
     let plan = CarBuildPlan {
@@ -1410,7 +1468,7 @@ fn preflight_manifest_plan_heap(
 fn preflight_da_manifest_chunks(
     manifest: &DaManifestV1,
     chunk_size: usize,
-) -> Result<(), PlanFromManifestError> {
+) -> Result<usize, PlanFromManifestError> {
     if manifest.total_size == 0 {
         return Err(PlanFromManifestError::InvalidPlan(
             CarPlanValidationError::EmptyPayloadHasChunks {
@@ -1418,77 +1476,175 @@ fn preflight_da_manifest_chunks(
             },
         ));
     }
-    let profile_limit = u32::try_from(chunk_size)
-        .map_err(|_| PlanFromManifestError::ChunkSizeTooLarge(manifest.chunk_size))?;
-    let mut expected_offset = 0u64;
-    for (chunk_index, chunk) in manifest.chunks.iter().enumerate() {
-        if chunk.length == 0 {
-            return Err(PlanFromManifestError::InvalidPlan(
-                CarPlanValidationError::ZeroLengthChunk { chunk_index },
-            ));
-        }
-        if chunk.length > profile_limit {
-            return Err(PlanFromManifestError::InvalidPlan(
-                CarPlanValidationError::ChunkTooLarge {
-                    chunk_index,
-                    length: chunk.length,
-                    limit: profile_limit,
-                },
-            ));
-        }
-        if chunk.offset != expected_offset {
-            return Err(PlanFromManifestError::InvalidPlan(
-                CarPlanValidationError::NonContiguousChunk {
-                    chunk_index,
-                    expected: expected_offset,
-                    actual: chunk.offset,
-                },
-            ));
-        }
-        let chunk_length = usize::try_from(chunk.length).map_err(|_| {
-            PlanFromManifestError::InvalidPlan(CarPlanValidationError::EstimateOverflow {
-                context: "manifest chunk length host width",
-            })
-        })?;
-        if chunk_index + 1 < manifest.chunks.len() && chunk_length < chunk_size {
-            return Err(PlanFromManifestError::InvalidPlan(
-                CarPlanValidationError::ChunkBelowProfileMinimum {
-                    chunk_index,
-                    length: chunk.length,
-                    minimum: chunk_size,
-                },
-            ));
-        }
-        expected_offset = chunk.offset.checked_add(u64::from(chunk.length)).ok_or(
-            PlanFromManifestError::InvalidPlan(CarPlanValidationError::ChunkRangeOverflow {
-                chunk_index,
-            }),
-        )?;
-    }
-    if expected_offset != manifest.total_size {
-        return Err(PlanFromManifestError::InvalidPlan(
-            CarPlanValidationError::ContentLengthMismatch {
-                expected: manifest.total_size,
-                actual: expected_offset,
-            },
-        ));
-    }
     let chunk_size_u64 = u64::try_from(chunk_size)
         .map_err(|_| PlanFromManifestError::ChunkSizeTooLarge(manifest.chunk_size))?;
-    let maximum_count =
+    let data_chunk_count =
         usize::try_from(manifest.total_size.div_ceil(chunk_size_u64)).map_err(|_| {
             PlanFromManifestError::InvalidPlan(CarPlanValidationError::EstimateOverflow {
                 context: "manifest canonical chunk count",
             })
         })?;
-    if manifest.chunks.len() > maximum_count {
+    if data_chunk_count > CAR_PLAN_MAX_CHUNKS {
         return Err(PlanFromManifestError::InvalidPlan(
-            CarPlanValidationError::TooManyFileChunks {
-                file_index: 0,
-                maximum: maximum_count,
-                actual: manifest.chunks.len(),
+            CarPlanValidationError::TooManyChunks {
+                count: data_chunk_count,
+                maximum: CAR_PLAN_MAX_CHUNKS,
             },
         ));
+    }
+    let data_shards = usize::from(manifest.erasure_profile.data_shards);
+    if data_shards == 0 {
+        return Err(PlanFromManifestError::ZeroDataShards);
+    }
+    let parity_shards = usize::from(manifest.erasure_profile.parity_shards);
+    let row_parity_stripes = usize::from(manifest.erasure_profile.row_parity_stripes);
+    let source_stripes = data_chunk_count.div_ceil(data_shards);
+    let shards_per_stripe = data_shards.checked_add(parity_shards).ok_or(
+        PlanFromManifestError::ChunkLayoutOverflow("shards per stripe"),
+    )?;
+    let total_stripes = source_stripes
+        .checked_add(row_parity_stripes)
+        .ok_or(PlanFromManifestError::ChunkLayoutOverflow("total stripes"))?;
+    let expected_shards_per_stripe = u32::try_from(shards_per_stripe)
+        .map_err(|_| PlanFromManifestError::ChunkLayoutOverflow("shards per stripe host width"))?;
+    if manifest.shards_per_stripe != expected_shards_per_stripe {
+        return Err(PlanFromManifestError::NonCanonicalStripeLayout {
+            field: "shards_per_stripe",
+            expected: expected_shards_per_stripe,
+            actual: manifest.shards_per_stripe,
+        });
+    }
+    let expected_total_stripes = u32::try_from(total_stripes)
+        .map_err(|_| PlanFromManifestError::ChunkLayoutOverflow("total stripes host width"))?;
+    if manifest.total_stripes != expected_total_stripes {
+        return Err(PlanFromManifestError::NonCanonicalStripeLayout {
+            field: "total_stripes",
+            expected: expected_total_stripes,
+            actual: manifest.total_stripes,
+        });
+    }
+    let global_parity_count = source_stripes.checked_mul(parity_shards).ok_or(
+        PlanFromManifestError::ChunkLayoutOverflow("global parity chunk count"),
+    )?;
+    let stripe_parity_count = row_parity_stripes.checked_mul(shards_per_stripe).ok_or(
+        PlanFromManifestError::ChunkLayoutOverflow("stripe parity chunk count"),
+    )?;
+    let expected_chunk_count = data_chunk_count
+        .checked_add(global_parity_count)
+        .and_then(|count| count.checked_add(stripe_parity_count))
+        .ok_or(PlanFromManifestError::ChunkLayoutOverflow(
+            "manifest chunk count",
+        ))?;
+    if manifest.chunks.len() != expected_chunk_count {
+        return Err(PlanFromManifestError::NonCanonicalChunkCount {
+            expected: expected_chunk_count,
+            actual: manifest.chunks.len(),
+        });
+    }
+    let mut cursor = 0usize;
+    let mut data_offset = 0u64;
+    let mut remaining_data_chunks = data_chunk_count;
+    let mut global_parity_offset = manifest.total_size;
+    for stripe in 0..source_stripes {
+        let stripe_group = u32::try_from(stripe)
+            .map_err(|_| PlanFromManifestError::ChunkLayoutOverflow("source stripe id"))?;
+        let stripe_data_chunks = remaining_data_chunks.min(data_shards);
+        for _ in 0..stripe_data_chunks {
+            let remaining_bytes = manifest.total_size.checked_sub(data_offset).ok_or(
+                PlanFromManifestError::ChunkLayoutOverflow("data chunk remaining length"),
+            )?;
+            let expected_length = u32::try_from(remaining_bytes.min(chunk_size_u64))
+                .map_err(|_| PlanFromManifestError::ChunkLayoutOverflow("data chunk length"))?;
+            validate_da_manifest_chunk(
+                &manifest.chunks[cursor],
+                cursor,
+                ChunkRole::Data,
+                stripe_group,
+                data_offset,
+                expected_length,
+            )?;
+            data_offset = data_offset.checked_add(u64::from(expected_length)).ok_or(
+                PlanFromManifestError::ChunkLayoutOverflow("data chunk offset"),
+            )?;
+            cursor += 1;
+        }
+        remaining_data_chunks -= stripe_data_chunks;
+        for _ in 0..parity_shards {
+            validate_da_manifest_chunk(
+                &manifest.chunks[cursor],
+                cursor,
+                ChunkRole::GlobalParity,
+                stripe_group,
+                global_parity_offset,
+                manifest.chunk_size,
+            )?;
+            global_parity_offset = global_parity_offset.checked_add(chunk_size_u64).ok_or(
+                PlanFromManifestError::ChunkLayoutOverflow("global parity offset"),
+            )?;
+            cursor += 1;
+        }
+    }
+    if data_offset != manifest.total_size || remaining_data_chunks != 0 {
+        return Err(PlanFromManifestError::ChunkLayoutOverflow(
+            "data chunk coverage",
+        ));
+    }
+    for column in 0..shards_per_stripe {
+        let column_group = u32::try_from(column)
+            .map_err(|_| PlanFromManifestError::ChunkLayoutOverflow("stripe parity column id"))?;
+        for row in 0..row_parity_stripes {
+            let parity_position = row
+                .checked_mul(shards_per_stripe)
+                .and_then(|base| base.checked_add(column))
+                .ok_or(PlanFromManifestError::ChunkLayoutOverflow(
+                    "stripe parity position",
+                ))?;
+            let parity_position = u64::try_from(parity_position).map_err(|_| {
+                PlanFromManifestError::ChunkLayoutOverflow("stripe parity position host width")
+            })?;
+            let parity_bytes = parity_position.checked_mul(chunk_size_u64).ok_or(
+                PlanFromManifestError::ChunkLayoutOverflow("stripe parity byte offset"),
+            )?;
+            let expected_offset = global_parity_offset.checked_add(parity_bytes).ok_or(
+                PlanFromManifestError::ChunkLayoutOverflow("stripe parity offset"),
+            )?;
+            validate_da_manifest_chunk(
+                &manifest.chunks[cursor],
+                cursor,
+                ChunkRole::StripeParity,
+                column_group,
+                expected_offset,
+                manifest.chunk_size,
+            )?;
+            cursor += 1;
+        }
+    }
+    debug_assert_eq!(cursor, manifest.chunks.len());
+    Ok(data_chunk_count)
+}
+#[cfg(feature = "manifest")]
+fn validate_da_manifest_chunk(
+    chunk: &ChunkCommitment,
+    chunk_index: usize,
+    expected_role: ChunkRole,
+    expected_group: u32,
+    expected_offset: u64,
+    expected_length: u32,
+) -> Result<(), PlanFromManifestError> {
+    let expected_index = u32::try_from(chunk_index)
+        .map_err(|_| PlanFromManifestError::ChunkLayoutOverflow("chunk index"))?;
+    let expected_parity = !matches!(expected_role, ChunkRole::Data);
+    for (matches, field) in [
+        (chunk.index == expected_index, "index"),
+        (chunk.role == expected_role, "role"),
+        (chunk.parity == expected_parity, "parity"),
+        (chunk.group_id == expected_group, "group_id"),
+        (chunk.offset == expected_offset, "offset"),
+        (chunk.length == expected_length, "length"),
+    ] {
+        if !matches {
+            return Err(PlanFromManifestError::NonCanonicalChunk { chunk_index, field });
+        }
     }
     Ok(())
 }
@@ -6823,7 +6979,15 @@ mod tests {
             nexus::LaneId,
         };
         let chunk_digest = ChunkDigest::new([0xAA; 32]);
-        let chunk = ChunkCommitment::new_with_role(0, 0, 8, chunk_digest, ChunkRole::Data, 0);
+        let data_chunk = ChunkCommitment::new_with_role(0, 0, 8, chunk_digest, ChunkRole::Data, 0);
+        let parity_chunk = ChunkCommitment::new_with_role(
+            1,
+            8,
+            8,
+            ChunkDigest::new([0xBB; 32]),
+            ChunkRole::GlobalParity,
+            0,
+        );
         let metadata = ExtraMetadata {
             items: vec![
                 MetadataEntry::new(
@@ -6879,7 +7043,7 @@ mod tests {
                 )),
             },
             rent_quote: DaRentQuote::default(),
-            chunks: vec![chunk],
+            chunks: vec![data_chunk, parity_chunk],
             ipa_commitment: BlobDigest::new([0x33; 32]),
             metadata,
             issued_at_unix: 123,
@@ -6896,7 +7060,7 @@ mod tests {
             plan.payload_digest.as_bytes(),
             BlakeHash::from(*manifest.blob_hash.as_ref()).as_bytes()
         );
-        assert_eq!(plan.chunks.len(), manifest.chunks.len());
+        assert_eq!(plan.chunks.len(), 1);
         assert_eq!(plan.chunks[0].offset, manifest.chunks[0].offset);
         assert_eq!(plan.chunks[0].length, manifest.chunks[0].length);
         assert_eq!(
@@ -6912,7 +7076,7 @@ mod tests {
         assert_eq!(hint.rendition, "main-1080p");
         assert_eq!(hint.sequence, 42);
         assert_eq!(plan.files.len(), 1);
-        assert_eq!(plan.files[0].chunk_count, manifest.chunks.len());
+        assert_eq!(plan.files[0].chunk_count, 1);
         assert_eq!(plan.files[0].size, manifest.total_size);
     }
     #[cfg(feature = "manifest")]
@@ -7059,20 +7223,52 @@ mod tests {
     #[test]
     fn manifest_plan_preflight_rejects_geometry_before_construction() {
         let mut manifest = sample_manifest();
+        manifest.version += 1;
+        assert_eq!(
+            build_plan_from_da_manifest(&manifest),
+            Err(PlanFromManifestError::UnsupportedVersion {
+                actual: DaManifestV1::VERSION + 1,
+                expected: DaManifestV1::VERSION,
+            })
+        );
+        let mut manifest = sample_manifest();
+        manifest.erasure_profile.data_shards = 0;
+        assert_eq!(
+            build_plan_from_da_manifest(&manifest),
+            Err(PlanFromManifestError::ZeroDataShards)
+        );
+        let mut manifest = sample_manifest();
+        manifest.total_stripes += 1;
+        assert!(matches!(
+            build_plan_from_da_manifest(&manifest),
+            Err(PlanFromManifestError::NonCanonicalStripeLayout {
+                field: "total_stripes",
+                ..
+            })
+        ));
+        let mut manifest = sample_manifest();
+        manifest.shards_per_stripe += 1;
+        assert!(matches!(
+            build_plan_from_da_manifest(&manifest),
+            Err(PlanFromManifestError::NonCanonicalStripeLayout {
+                field: "shards_per_stripe",
+                ..
+            })
+        ));
+        let mut manifest = sample_manifest();
         manifest.chunks[0].offset = 1;
         assert!(matches!(
             build_plan_from_da_manifest(&manifest),
-            Err(PlanFromManifestError::InvalidPlan(
-                CarPlanValidationError::NonContiguousChunk { chunk_index: 0, .. }
-            ))
+            Err(PlanFromManifestError::NonCanonicalChunk {
+                chunk_index: 0,
+                field: "offset"
+            })
         ));
         let mut manifest = sample_manifest();
         manifest.total_size += 1;
         assert!(matches!(
             build_plan_from_da_manifest(&manifest),
-            Err(PlanFromManifestError::InvalidPlan(
-                CarPlanValidationError::ContentLengthMismatch { .. }
-            ))
+            Err(PlanFromManifestError::NonCanonicalChunkCount { .. })
         ));
         let mut manifest = sample_manifest();
         manifest.chunk_size = CHUNK_STORE_MAX_CHUNK_BYTES + 1;
@@ -7081,6 +7277,97 @@ mod tests {
             Err(PlanFromManifestError::InvalidPlan(
                 CarPlanValidationError::ChunkProfileTooLarge { .. }
             ))
+        ));
+    }
+    #[cfg(feature = "manifest")]
+    #[test]
+    fn manifest_plan_rejects_noncanonical_commitment_fields() {
+        let mut invalid = sample_manifest();
+        invalid.chunks[0].index = 9;
+        assert!(matches!(
+            build_plan_from_da_manifest(&invalid),
+            Err(PlanFromManifestError::NonCanonicalChunk {
+                chunk_index: 0,
+                field: "index"
+            })
+        ));
+
+        let mut invalid = sample_manifest();
+        invalid.chunks[0].parity = true;
+        assert!(matches!(
+            build_plan_from_da_manifest(&invalid),
+            Err(PlanFromManifestError::NonCanonicalChunk {
+                chunk_index: 0,
+                field: "parity"
+            })
+        ));
+
+        let mut invalid = sample_manifest();
+        invalid.chunks[1].role = ChunkRole::LocalParity;
+        assert!(matches!(
+            build_plan_from_da_manifest(&invalid),
+            Err(PlanFromManifestError::NonCanonicalChunk {
+                chunk_index: 1,
+                field: "role"
+            })
+        ));
+
+        let mut invalid = sample_manifest();
+        invalid.chunks[1].group_id = 1;
+        assert!(matches!(
+            build_plan_from_da_manifest(&invalid),
+            Err(PlanFromManifestError::NonCanonicalChunk {
+                chunk_index: 1,
+                field: "group_id"
+            })
+        ));
+
+        let mut invalid = sample_manifest();
+        invalid.chunks[1].offset += 1;
+        assert!(matches!(
+            build_plan_from_da_manifest(&invalid),
+            Err(PlanFromManifestError::NonCanonicalChunk {
+                chunk_index: 1,
+                field: "offset"
+            })
+        ));
+    }
+    #[cfg(feature = "manifest")]
+    #[test]
+    fn manifest_plan_accepts_authoritative_row_parity_order_and_offsets() {
+        use iroha_data_model::da::{manifest::ChunkCommitment, types::ChunkDigest};
+
+        let mut manifest = sample_manifest();
+        manifest.erasure_profile.row_parity_stripes = 2;
+        manifest.total_stripes = 3;
+        for (index, group_id, offset) in [
+            (2, 0, 16),
+            (3, 0, 40),
+            (4, 1, 24),
+            (5, 1, 48),
+            (6, 2, 32),
+            (7, 2, 56),
+        ] {
+            manifest.chunks.push(ChunkCommitment::new_with_role(
+                index,
+                offset,
+                8,
+                ChunkDigest::new([index as u8; 32]),
+                ChunkRole::StripeParity,
+                group_id,
+            ));
+        }
+
+        let plan = build_plan_from_da_manifest(&manifest).expect("canonical row parity plan");
+        assert_eq!(plan.chunks.len(), 1);
+
+        manifest.chunks[3].offset -= 1;
+        assert!(matches!(
+            build_plan_from_da_manifest(&manifest),
+            Err(PlanFromManifestError::NonCanonicalChunk {
+                chunk_index: 3,
+                field: "offset"
+            })
         ));
     }
     #[cfg(feature = "manifest")]
@@ -7129,7 +7416,7 @@ mod tests {
         };
         manifest.client_blob_id = BlobDigest::new([0x55; 32]);
         let plan = build_plan_from_da_manifest(&manifest).expect("plan");
-        assert_eq!(plan.chunks.len(), manifest.chunks.len());
+        assert_eq!(plan.chunks.len(), 1);
     }
     #[test]
     fn chunk_store_ingest_matches_fixture() {

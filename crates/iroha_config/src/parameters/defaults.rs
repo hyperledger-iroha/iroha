@@ -897,7 +897,7 @@ pub mod network {
     /// Maximum encrypted frame size for peer messages in bytes.
     ///
     /// The recommended maximal Sumeragi v2 `CertifiedBodyResponse` occupies
-    /// 16,811,581 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
+    /// 16,828,108 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
     /// Rounding the cap up to 17 MiB leaves just under 1 MiB for those bounded
     /// layers while keeping every retained frame allocation finite.
     /// The encrypted ceiling includes AEAD expansion in addition to the full
@@ -2468,8 +2468,8 @@ pub mod torii {
         pub const POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT: u64 = 0;
         /// Maximum number of adaptive difficulty bits added on top of the base difficulty.
         pub const POW_ADAPTIVE_MAX_EXTRA_BITS: u8 = 0;
-        /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
-        pub const POW_VRF_SEED_ENABLED: bool = false;
+        /// Whether verified finalized global-beacon seeds are mixed into faucet challenges.
+        pub const POW_BEACON_SEED_ENABLED: bool = false;
     }
     /// Kagemusha command-submission defaults.
     pub mod kagemusha_commands {
@@ -2815,6 +2815,8 @@ pub mod torii {
     }
     /// Default poll interval (seconds) for Taikai anchor uploads.
     pub const DA_TAIKAI_ANCHOR_POLL_INTERVAL_SECS: u64 = 30;
+    /// Absolute deadline for one Taikai anchor upload and signed receipt.
+    pub const DA_TAIKAI_ANCHOR_REQUEST_TIMEOUT_SECS: u64 = 15;
     /// ISO 20022 bridge disabled by default.
     pub const ISO_BRIDGE_ENABLED: bool = false;
     /// Maximum request body accepted by an ISO 20022 submission endpoint.
@@ -3630,10 +3632,29 @@ pub mod zk {
         pub const MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION: NonZeroU32 = nonzero!(131_713_u32);
         /// Maximum BLS public-key contributions committed in one block.
         pub const MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK: NonZeroU32 = nonzero!(526_852_u32);
+        /// Maximum Ed25519 signature checks in one transaction.
+        ///
+        /// A TON V1 native proof carries at most 64 masterchain continuations with at most
+        /// 1,024 signatures apiece.
+        pub const MAX_ED25519_SIGNATURE_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(65_536_u32);
+        /// Maximum Ed25519 signature checks committed in one block.
+        pub const MAX_ED25519_SIGNATURE_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(262_144_u32);
+        /// Maximum TON Ed25519 validator-key checks in one transaction.
+        ///
+        /// This is the native verifier's exact V1 upper bound: two 1,024-key anchor rosters plus
+        /// three possible 1,024-key roster passes for each of 64 continuation blocks.
+        pub const MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION: NonZeroU32 =
+            nonzero!(198_656_u32);
+        /// Maximum TON Ed25519 validator-key checks committed in one block.
+        pub const MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(794_624_u32);
         /// Maximum BN254 Groth16 pairing-product checks in one transaction.
         pub const MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
         /// Maximum BN254 Groth16 pairing-product checks committed in one block.
         pub const MAX_BN254_PAIRING_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
+        /// Maximum BLS12-381 Groth16 pairing-product checks in one transaction.
+        pub const MAX_BLS12_381_PAIRING_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
+        /// Maximum BLS12-381 Groth16 pairing-product checks committed in one block.
+        pub const MAX_BLS12_381_PAIRING_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
     }
     /// FASTPQ prover defaults.
     pub mod fastpq {
@@ -3743,9 +3764,13 @@ pub mod zk {
 }
 /// Sumeragi (consensus) defaults
 pub mod sumeragi {
+    use iroha_config_base::util::Bytes;
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
-        block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT, merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
+        block::consensus_v2::{
+            MAX_DA_ENCODED_PAYLOAD_BYTES, MAX_EXECUTED_BLOCK_WIRE_BYTES, MAX_VALIDATORS_PER_HEIGHT,
+        },
+        merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
     };
     use nonzero_ext::nonzero;
     use std::{
@@ -3764,6 +3789,12 @@ pub mod sumeragi {
     pub const BLOCK_MAX_TRANSACTIONS: NonZeroUsize = nonzero!(512_usize);
     /// Maximum canonical block-body size in bytes.
     pub const BLOCK_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(16_usize * 1024 * 1024);
+    /// Smallest per-height durable-body budget that can hold one maximum
+    /// checksummed frame plus conservative envelope headroom.
+    pub const BODY_STORE_MIN_BYTES_PER_HEIGHT: u64 =
+        MAX_EXECUTED_BLOCK_WIRE_BYTES + MAX_DA_ENCODED_PAYLOAD_BYTES + 1024 * 1024;
+    /// Aggregate final body-frame bytes retained for one active height.
+    pub const BODY_STORE_MAX_BYTES_PER_HEIGHT: Bytes<u64> = Bytes(1024 * 1024 * 1024);
     /// Proposal queue scan budget relative to the transaction limit.
     pub const PROPOSAL_QUEUE_SCAN_MULTIPLIER: NonZeroUsize = nonzero!(4_usize);
     /// Serialized reducer command FIFO capacity.
@@ -3986,10 +4017,6 @@ pub mod sumeragi {
     pub mod npos {
         /// Epoch length in blocks.
         pub const EPOCH_LENGTH_BLOCKS: u64 = 3_600;
-        /// VRF commitment window size from epoch start.
-        pub const VRF_COMMIT_WINDOW_BLOCKS: u64 = 100;
-        /// VRF reveal window size after the commitment window.
-        pub const VRF_REVEAL_WINDOW_BLOCKS: u64 = 40;
         /// Exact bounded `3f + 1` ceiling for an epoch committee.
         pub const MAX_VALIDATORS: u32 = 31;
         /// Minimum validator self-bond.

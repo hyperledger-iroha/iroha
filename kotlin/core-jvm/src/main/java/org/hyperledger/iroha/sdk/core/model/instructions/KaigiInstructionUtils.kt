@@ -12,6 +12,30 @@ private const val CALL_NAME_KEY = "call_name"
 /** Shared helpers for flattening Kaigi instruction payloads to argument maps. */
 object KaigiInstructionUtils {
 
+    /** Maximum number of relay hops accepted by the Kaigi V1 manifest format. */
+    const val KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: Int = 8
+
+    /** Maximum decoded size of a Kaigi V1 relay HPKE public key. */
+    const val KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: Int = 4 * 1024
+
+    fun requireKnownArguments(
+        arguments: Map<String, String>,
+        allowedArguments: Set<String>,
+        vararg allowedPrefixes: String,
+    ) {
+        val unknownArguments = arguments.keys.filter { key ->
+            key !in allowedArguments && allowedPrefixes.none { prefix ->
+                key.startsWith(prefix) && key.length > prefix.length
+            }
+        }
+        require(unknownArguments.isEmpty()) {
+            "Unknown instruction argument(s): ${unknownArguments.sorted().joinToString()}"
+        }
+    }
+
+    fun immutableArguments(arguments: Map<String, String>): Map<String, String> =
+        java.util.Collections.unmodifiableMap(LinkedHashMap(arguments))
+
     fun requireAction(arguments: Map<String, String>, expected: String) {
         val actual = require(arguments, "action")
         require(actual == expected) {
@@ -51,18 +75,19 @@ object KaigiInstructionUtils {
     ) {
         if (metadata.isEmpty()) return
         val effectivePrefix = if (prefix.endsWith(".")) prefix else "$prefix."
-        for ((key, value) in metadata) {
+        for ((key, value) in metadata.toSortedMap()) {
             target["$effectivePrefix$key"] = value
         }
     }
 
     fun canonicalizeHash(bytes: ByteArray): String = HashLiteral.canonicalize(bytes)
 
-    fun canonicalizeHash(value: String): String = HashLiteral.canonicalize(value)
+    fun canonicalizeHash(value: String): String =
+        HashLiteral.canonicalize(HashLiteral.decode(value))
 
     fun canonicalizeOptionalHash(value: String?): String? {
         if (value.isNullOrBlank()) return null
-        return HashLiteral.canonicalizeOptional(value)
+        return canonicalizeHash(value)
     }
 
     fun canonicalizeOptionalHash(value: ByteArray?): String? {
@@ -131,11 +156,32 @@ object KaigiInstructionUtils {
         return Base64.encode(bytes)
     }
 
+    fun toHpkePublicKeyBase64(bytes: ByteArray, fieldName: String): String {
+        require(bytes.isNotEmpty()) { "$fieldName must not be empty" }
+        require(bytes.size <= KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1) {
+            "$fieldName must not exceed $KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 bytes"
+        }
+        return Base64.encode(bytes)
+    }
+
     fun requireBase64(value: String?, fieldName: String): String {
+        return requireBase64(value, fieldName, null)
+    }
+
+    fun requireHpkePublicKeyBase64(value: String?, fieldName: String): String {
+        return requireBase64(value, fieldName, KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1)
+    }
+
+    private fun requireBase64(
+        value: String?,
+        fieldName: String,
+        maxDecodedBytes: Int?,
+    ): String {
         if (value.isNullOrBlank()) {
             throw IllegalArgumentException("$fieldName must not be blank")
         }
         val trimmed = value.trim()
+        require(trimmed == value) { "$fieldName must use canonical base64 syntax" }
         val decoded: ByteArray
         try {
             decoded = Base64.decode(trimmed)
@@ -145,7 +191,13 @@ object KaigiInstructionUtils {
         if (decoded.isEmpty()) {
             throw IllegalArgumentException("$fieldName must decode to non-empty bytes")
         }
-        return trimmed
+        if (maxDecodedBytes != null && decoded.size > maxDecodedBytes) {
+            throw IllegalArgumentException(
+                "$fieldName must not exceed $maxDecodedBytes decoded bytes",
+            )
+        }
+        require(Base64.encode(decoded) == value) { "$fieldName must use canonical base64 syntax" }
+        return value
     }
 
     fun parsePrivacyMode(arguments: Map<String, String>, prefix: String): PrivacyMode {
@@ -209,11 +261,19 @@ object KaigiInstructionUtils {
             if (index !in 0 until hopArgumentCount) {
                 throw IllegalArgumentException("Relay manifest hop index is out of bounds: $key")
             }
+            if (index >= KAIGI_RELAY_MANIFEST_MAX_HOPS_V1) {
+                throw IllegalArgumentException(
+                    "relay manifest must not contain more than " +
+                        "$KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 hops",
+                )
+            }
             val hop = hopsByIndex.getOrPut(index) { RelayManifestHop(null, null, null) }
             when (val attribute = tail.substring(separator + 1)) {
                 "relay_id" -> hopsByIndex[index] = hop.copy(relayId = value)
                 "hpke_public_key" -> {
-                    hopsByIndex[index] = hop.copy(hpkePublicKey = requireBase64(value, key))
+                    hopsByIndex[index] = hop.copy(
+                        hpkePublicKey = requireHpkePublicKeyBase64(value, key),
+                    )
                 }
                 "weight" -> {
                     val parsed = parseNonNegativeInt(value, "relay hop weight")
@@ -269,9 +329,15 @@ object KaigiInstructionUtils {
     fun validateRelayManifest(manifest: RelayManifest): RelayManifest {
         manifest.expiryMs
             ?: throw IllegalArgumentException("relay manifest expiry_ms is required")
-        require(manifest.hops.size >= 3) { "relay manifest must contain at least 3 hops" }
+        val hops = manifest.hops.map { hop ->
+            RelayManifestHop(hop.relayId, hop.hpkePublicKey, hop.weight)
+        }
+        require(hops.size >= 3) { "relay manifest must contain at least 3 hops" }
+        require(hops.size <= KAIGI_RELAY_MANIFEST_MAX_HOPS_V1) {
+            "relay manifest must not contain more than $KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 hops"
+        }
         val relayIds = mutableSetOf<String>()
-        for ((index, hop) in manifest.hops.withIndex()) {
+        for ((index, hop) in hops.withIndex()) {
             val relayId = hop.relayId
             if (relayId.isNullOrBlank()) {
                 throw IllegalArgumentException("relay_manifest.hop.$index.relay_id is required")
@@ -279,12 +345,18 @@ object KaigiInstructionUtils {
             if (!relayIds.add(relayId)) {
                 throw IllegalArgumentException("relay manifest relay IDs must be unique")
             }
-            requireBase64(hop.hpkePublicKey, "relay_manifest.hop.$index.hpke_public_key")
+            requireHpkePublicKeyBase64(
+                hop.hpkePublicKey,
+                "relay_manifest.hop.$index.hpke_public_key",
+            )
             val weight = hop.weight
                 ?: throw IllegalArgumentException("relay_manifest.hop.$index.weight is required")
             require(weight in 1..0xFF) { "relay hop weight must be between 1 and 255" }
         }
-        return manifest
+        return RelayManifest(
+            manifest.expiryMs,
+            java.util.Collections.unmodifiableList(hops),
+        )
     }
 
     fun prefixKey(prefix: String?, key: String): String {
@@ -352,10 +424,36 @@ object KaigiInstructionUtils {
     }
 
     /** Immutable relay manifest snapshot. */
-    data class RelayManifest(
+    class RelayManifest(
         @JvmField val expiryMs: Long?,
-        @JvmField val hops: List<RelayManifestHop>,
-    )
+        hops: List<RelayManifestHop>,
+    ) {
+        @JvmField val hops: List<RelayManifestHop> =
+            java.util.Collections.unmodifiableList(
+                hops.map { hop ->
+                    RelayManifestHop(hop.relayId, hop.hpkePublicKey, hop.weight)
+                },
+            )
+
+        operator fun component1(): Long? = expiryMs
+
+        operator fun component2(): List<RelayManifestHop> = hops
+
+        fun copy(
+            expiryMs: Long? = this.expiryMs,
+            hops: List<RelayManifestHop> = this.hops,
+        ): RelayManifest = RelayManifest(expiryMs, hops)
+
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is RelayManifest) return false
+            return expiryMs == other.expiryMs && hops == other.hops
+        }
+
+        override fun hashCode(): Int = 31 * (expiryMs?.hashCode() ?: 0) + hops.hashCode()
+
+        override fun toString(): String = "RelayManifest(expiryMs=$expiryMs, hops=$hops)"
+    }
 
     /** Single relay hop entry. */
     data class RelayManifestHop(

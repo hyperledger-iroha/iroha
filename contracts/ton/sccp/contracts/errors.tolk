@@ -1,0 +1,27 @@
+enum SccpErrors {
+    BalanceError = 47
+    NotEnoughGas = 48
+    InvalidMessage = 49
+    InvalidPayload = 50
+    InvalidAmount = 51
+    InvalidNonce = 52
+    NonceExhausted = 53
+    Replay = 54
+    UnknownPendingOperation = 55
+    WrongPendingOperation = 56
+    ProofBackendUnavailable = 57
+    ProofRejected = 58
+    WrongNetwork = 59
+    HashRoleAlias = 60
+    InvalidOp = 72
+    NotOwner = 73
+    NotValidWallet = 74
+    NotBridge = 75
+    NotMaster = 76
+    InvalidCallback = 77
+    InvalidConfiguration = 78
+    InvalidProofShape = 79
+    InvalidVerificationKey = 80
+    InvalidPublicSignals = 81
+    WrongWorkchain = 333
+}

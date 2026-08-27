@@ -1183,6 +1183,7 @@ fn local_producer_recovery_requires_the_exact_current_queue_owner() {
 fn exercise_nonproducer_retired_attempt_startup(
     queue_cut: NonproducerReplicaQueueCut,
     claim_prefix: NonproducerRetirementClaimPrefix,
+    exercise_complete_claim_presweep: bool,
 ) {
     let kura_dir = TempDir::new().expect("nonproducer retirement Kura directory");
     let queue_dir = TempDir::new().expect("nonproducer retirement Queue directory");
@@ -1468,6 +1469,60 @@ fn exercise_nonproducer_retired_attempt_startup(
             .expect("repeated nonproducer cursor remains signed"),
         &recovered_cursor,
     );
+    if exercise_complete_claim_presweep {
+        assert!(
+            payload.entrypoint_hashes.len() > 1,
+            "replica Complete crash cut requires a partial claim suffix",
+        );
+        restarted
+            .downgrade_autonomous_lane_replica_complete_claim_suffix_for_test(&payload, 1)
+            .expect("recreate Complete-outcome/partial-raw-claim crash cut");
+        assert_eq!(
+            restarted
+                .autonomous_lane_replica_claim_seal_counts_for_test(&payload)
+                .expect("count partial replica claim seal"),
+            (1, payload.entrypoint_hashes.len() - 1),
+        );
+        assert_eq!(
+            std::fs::read(&terminal_path).expect("preserve Complete replica outcome at crash cut"),
+            terminal_bytes,
+        );
+        drop(repeated_receipt);
+        drop(generation_two);
+        drop(restarted_state);
+        drop(restarted);
+
+        let (sealed_restart, sealed_state) =
+            open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
+        assert_eq!(
+            sealed_restart
+                .autonomous_lane_replica_claim_seal_counts_for_test(&payload)
+                .expect("strict startup seals partial replica claim suffix"),
+            (0, payload.entrypoint_hashes.len()),
+        );
+        assert_eq!(
+            std::fs::read(&terminal_path).expect("read presweep Complete replica outcome"),
+            terminal_bytes,
+            "claim pre-sweep must preserve the byte-exact Complete outcome",
+        );
+        drop(sealed_state);
+        drop(sealed_restart);
+
+        let (idempotent_restart, idempotent_state) =
+            open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
+        assert_eq!(
+            idempotent_restart
+                .autonomous_lane_replica_claim_seal_counts_for_test(&payload)
+                .expect("repeat strict startup stutters on sealed replica claims"),
+            (0, payload.entrypoint_hashes.len()),
+        );
+        assert_eq!(
+            std::fs::read(&terminal_path).expect("reread idempotent Complete replica outcome"),
+            terminal_bytes,
+        );
+        drop(idempotent_state);
+        drop(idempotent_restart);
+    }
 }
 
 #[test]
@@ -1479,6 +1534,7 @@ fn nonproducer_release_pending_attempt_startup_completes_replica_for_fifo_and_ab
         exercise_nonproducer_retired_attempt_startup(
             queue_cut,
             NonproducerRetirementClaimPrefix::ReleasePending,
+            false,
         );
     }
 }
@@ -1492,6 +1548,21 @@ fn nonproducer_released_attempt_startup_completes_replica_for_fifo_and_absent_qu
         exercise_nonproducer_retired_attempt_startup(
             queue_cut,
             NonproducerRetirementClaimPrefix::ReplicaReleased,
+            false,
+        );
+    }
+}
+
+#[test]
+fn strict_kura_startup_seals_complete_replica_outcome_claim_suffix_idempotently() {
+    for queue_cut in [
+        NonproducerReplicaQueueCut::ExactOrdinaryFifo,
+        NonproducerReplicaQueueCut::StrictQueueAbsent,
+    ] {
+        exercise_nonproducer_retired_attempt_startup(
+            queue_cut,
+            NonproducerRetirementClaimPrefix::ReplicaReleased,
+            true,
         );
     }
 }

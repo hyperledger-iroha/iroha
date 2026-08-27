@@ -13,7 +13,7 @@
             .configure_roster([validator.clone()])
             .expect("validator and anonymous protected owners fit");
         ingress.open().expect("open configured roster");
-        let message = v2_certified_body_response(7, 0, 64);
+        let message = v2_certified_body_response(7, validator.clone(), 64);
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 message.clone(),

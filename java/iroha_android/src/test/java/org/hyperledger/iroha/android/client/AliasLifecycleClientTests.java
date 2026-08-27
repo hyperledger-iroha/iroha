@@ -43,6 +43,7 @@ import org.hyperledger.iroha.android.alias.RenewAliasLease;
 import org.hyperledger.iroha.android.alias.ResolvedAccountAliasV1;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.testing.TestNetworkIds;
@@ -274,6 +275,7 @@ public final class AliasLifecycleClientTests {
                     intent,
                     receipt,
                     binding,
+                    FeePaymentIntent.authority(Collections.emptyList()),
                     ONBOARDING_TOKEN,
                     authority,
                     TestNetworkIds.canonical())

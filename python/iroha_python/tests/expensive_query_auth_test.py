@@ -16,12 +16,13 @@ from iroha_python.client import (
     ToriiClient,
     canonical_network_request_signature_message,
 )
-from iroha_python.crypto import NetworkId
+from iroha_python.crypto import Ed25519KeyPair, NetworkId
 
 NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
 FOREIGN_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
+ACCOUNT_PUBLIC_KEY = Ed25519KeyPair.from_private_key(bytes([0x31]) * 32).public_key
 ACCOUNT_ID = AccountAddress.from_account(
-    public_key=bytes([0x31]) * 32,
+    public_key=ACCOUNT_PUBLIC_KEY,
 ).to_i105(0x02F1)
 ACCOUNT_HEADER = AccountAddress.parse_encoded(
     ACCOUNT_ID, expected_discriminant=0x02F1
@@ -47,6 +48,25 @@ class _Session(requests.Session):
         self.calls.append({"method": method, "path": urlsplit(url).path, **kwargs})
         if not self.responses:
             raise AssertionError(f"unexpected request {method} {url}")
+        response = self.responses.pop(0)
+        response.url = url
+        return response
+
+    def send(
+        self, request: requests.PreparedRequest, **kwargs: Any
+    ) -> requests.Response:
+        url = request.url or ""
+        self.calls.append(
+            {
+                "method": request.method,
+                "path": urlsplit(url).path,
+                "headers": dict(request.headers),
+                "data": request.body,
+                **kwargs,
+            }
+        )
+        if not self.responses:
+            raise AssertionError(f"unexpected prepared request {request.method} {url}")
         response = self.responses.pop(0)
         response.url = url
         return response

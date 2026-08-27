@@ -11,6 +11,7 @@ import iroha_python.client as client_module
 import iroha_python.crypto as crypto_module
 from iroha_python import (
     AccountAddress,
+    Ed25519KeyPair,
     NetworkId,
     SorafsAliasPolicy,
     ToriiCanonicalRequestAuth,
@@ -25,18 +26,14 @@ SIGNED_OTHER_WIRE = b"canonical-signed-other-protocol-wire"
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
 NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 FOREIGN_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
+CANONICAL_AUTH_PUBLIC_KEY = Ed25519KeyPair.from_private_key(bytes([0x11]) * 32).public_key
 CANONICAL_AUTH = ToriiCanonicalRequestAuth(
     network_id=NETWORK_ID.literal,
-    account_id=AccountAddress.from_account(public_key=bytes([0x11]) * 32).to_i105(0x02F1),
+    account_id=AccountAddress.from_account(public_key=CANONICAL_AUTH_PUBLIC_KEY).to_i105(0x02F1),
     signer=lambda _message: bytes([0x44]) * 64,
     timestamp_ms=4_102_444_801_000,
     nonce="privacy-capability-test",
 )
-CANONICAL_AUTH_HEADER = AccountAddress.parse_encoded(
-    CANONICAL_AUTH.account_id, expected_discriminant=0x02F1
-).canonical_hex()
-
-
 class _FakeCrypto:
     PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1 = 256 * 1024
     NetworkId = NetworkId
@@ -156,8 +153,10 @@ def test_privacy_capabilities_fetches_and_preserves_exact_norito_manifest(
 
     assert isinstance(manifest, _FakeManifest)
     assert requests[0][:2] == ("GET", "/v1/privacy/capabilities")
-    assert requests[0][2]["Accept"] == "application/x-norito"
-    assert requests[0][2]["X-Iroha-Account"] == CANONICAL_AUTH_HEADER
+    header_plan = requests[0][2]
+    assert header_plan["Accept"] == "application/x-norito"
+    assert header_plan.canonical_auth is CANONICAL_AUTH
+    assert "X-Iroha-Account" not in header_plan
     assert requests[0][3:] == (False, False)
     assert events == ["decode-capabilities"]
 

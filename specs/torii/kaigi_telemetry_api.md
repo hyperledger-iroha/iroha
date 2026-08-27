@@ -111,6 +111,8 @@ objects with the following structure (one per SSE event):
 Query parameters allow optional filtering by `domain`, `relay`, and `kind`
 (`registration` or `health`). Unsupported events are dropped with an SSE
 comment (`"ignored"`), and filter mismatches yield `"filtered"` comments.
+For health events, the top-level `domain` is the relay registration's owning
+domain; `call.domain` remains the domain of the call that submitted the report.
 
 ### Diagnostic authentication and bounds
 
@@ -120,15 +122,23 @@ comment (`"ignored"`), and filter mismatches yield `"filtered"` comments.
   headers, and caller-precomputed operator headers are not substitutes.
 - SDK callers dispatch each signed request once with redirects and automatic
   retries disabled. A retry must be a newly signed logical request.
+- Operator middleware marks every authenticated snapshot response, including
+  errors, `Cache-Control: private, no-store` so shared caches cannot reuse a
+  response outside the exact signed request. Outer route-timeout and panic
+  recovery errors also install that policy before returning a generated
+  response.
 - List and health are catalogued as `ExpensiveCompute`; detail is `ReadOnly`.
   Authentication runs before any relay-world scan or response materialization.
 - List and health fail closed with `422` after
   `KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS` relay records. They use a single bounded
   pass rather than collecting the full registry or every Prometheus label
   series. Detail derives the metadata key and performs direct per-domain lookup.
-- Call-signal history uses the core bounded committed-transaction visitor,
-  validates `offset + limit` against the canonical fetch budget, retains only
-  the requested heap window, and caps retained page JSON at
+- Call-signal history uses the core committed-transaction visitor with both
+  per-carrier and cumulative physical-work budgets. Every touched carrier costs
+  at least one unit, so old or sparse chains cannot force an unbounded scan;
+  budget exhaustion fails closed before resolving the next carrier. The route
+  also validates `offset + limit` against the canonical fetch budget, retains
+  only the requested heap window, and caps retained page JSON at
   `KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES`.
 - The SSE route retains its separate streaming protocol and is not converted to
   snapshot-style operator request signing by this contract. It consumes the

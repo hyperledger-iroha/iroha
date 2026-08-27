@@ -46,7 +46,6 @@ public final class NoritoTests {
     testMapAdapter();
     testMapAdapterSortsKeys();
     testPackedMapLayout();
-    testStructuralSchemaHash();
     testCompression();
     testCompressionProfiles();
     testDecodeFromByteBuffer();
@@ -596,10 +595,20 @@ public final class NoritoTests {
             (String) map.get("name"),
             coerceLongList(map.get("values"))));
 
-    Demo demo = new Demo(-7L, "alice", List.of(1L, 2L, 3L));
-    byte[] encoded = NoritoCodec.encode(demo, "iroha.test.Struct", structAdapter);
+    Map<String, Object> fieldsValue =
+        Map.of("id", -7L, "name", "alice", "values", List.of(1L, 2L, 3L));
+    byte[] encoded = NoritoCodec.encode(fieldsValue, "iroha.test.Struct", structAdapter);
     Demo decoded = (Demo) NoritoCodec.decode(encoded, structAdapter, "iroha.test.Struct");
-    assert decoded.equals(demo);
+    assert decoded.equals(new Demo(-7L, "alice", List.of(1L, 2L, 3L)));
+
+    expectIllegal(
+        () -> NoritoCodec.encode(new Demo(1L, "alice", List.of()), "iroha.test.Struct", structAdapter),
+        "reflective struct access");
+    expectIllegal(
+        () ->
+            NoritoCodec.encode(
+                Map.of("id", 1L, "name", "alice"), "iroha.test.Struct", structAdapter),
+        "missing struct field");
   }
 
   private static void testMapAdapter() {
@@ -696,70 +705,35 @@ public final class NoritoTests {
     return result;
   }
 
-  private static void testStructuralSchemaHash() {
-    Map<String, Object> schema = Map.of(
-        "Sample",
-            Map.of(
-                "Struct",
-                    List.of(
-                        Map.of("name", "id", "type", "u64"),
-                        Map.of("name", "name", "type", "String"),
-                        Map.of("name", "flag", "type", "bool"))),
-        "String", "String",
-        "bool", "bool",
-        "u64", Map.of("Int", "FixedWidth"));
-    byte[] expected = new byte[] {
-        0x3A, (byte) 0xE1, 0x59, 0x17, 0x41, (byte) 0xF6, 0x66, 0x46,
-        0x2F, (byte) 0xB7, 0x66, 0x57, 0x20, (byte) 0xDD, (byte) 0xDE, 0x6C
-    };
-    byte[] actual = SchemaHash.hash16FromStructural(schema);
-    assert Arrays.equals(expected, actual) : "Structural schema hash mismatch";
-  }
-
   private static void testCompression() {
     TypeAdapter<List<Long>> adapter = NoritoAdapters.sequence(NoritoAdapters.uint(32));
     List<Long> values = List.of(1L, 2L, 3L, 4L, 5L);
-    if (NoritoCompression.hasZstd()) {
-      NoritoCodec.AdaptiveEncoding adaptive = NoritoCodec.encodeAdaptive(values, adapter);
-      int rawLen = adaptive.payload().length;
-      byte[] encoded =
-          NoritoCodec.encode(
-              values,
-              "iroha.test.Compression",
-              adapter,
-              NoritoCodec.DEFAULT_FLAGS,
-              NoritoCodec.CompressionConfig.zstd(3));
-      List<Long> decoded =
-          NoritoCodec.decode(encoded, adapter, "iroha.test.Compression");
-      assert decoded.equals(values);
-
-      NoritoCodec.CompressionConfig profileConfig =
-          NoritoCodec.CompressionConfig.zstdProfile(
-              NoritoCodec.CompressionConfig.CompressionProfile.BALANCED, rawLen);
-      byte[] encodedProfile =
-          NoritoCodec.encode(
-              values,
-              "iroha.test.Compression",
-              adapter,
-              NoritoCodec.DEFAULT_FLAGS,
-              profileConfig);
-      List<Long> decodedProfile =
-          NoritoCodec.decode(encodedProfile, adapter, "iroha.test.Compression");
-      assert decodedProfile.equals(values);
-    } else {
-      boolean failed = false;
-      try {
+    NoritoCodec.AdaptiveEncoding adaptive = NoritoCodec.encodeAdaptive(values, adapter);
+    int rawLen = adaptive.payload().length;
+    byte[] encoded =
         NoritoCodec.encode(
             values,
             "iroha.test.Compression",
             adapter,
             NoritoCodec.DEFAULT_FLAGS,
             NoritoCodec.CompressionConfig.zstd(3));
-      } catch (UnsupportedOperationException ex) {
-        failed = true;
-      }
-      assert failed : "Expected compression request to fail without backend";
-    }
+    List<Long> decoded =
+        NoritoCodec.decode(encoded, adapter, "iroha.test.Compression");
+    assert decoded.equals(values);
+
+    NoritoCodec.CompressionConfig profileConfig =
+        NoritoCodec.CompressionConfig.zstdProfile(
+            NoritoCodec.CompressionConfig.CompressionProfile.BALANCED, rawLen);
+    byte[] encodedProfile =
+        NoritoCodec.encode(
+            values,
+            "iroha.test.Compression",
+            adapter,
+            NoritoCodec.DEFAULT_FLAGS,
+            profileConfig);
+    List<Long> decodedProfile =
+        NoritoCodec.decode(encodedProfile, adapter, "iroha.test.Compression");
+    assert decodedProfile.equals(values);
   }
 
   private static void testColumnarHelpers() {

@@ -4084,7 +4084,7 @@ impl SoraDeploymentBundleV1 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "sora deployment bundle",
                         field: "service.rollout.canary_percent",
-                        reason: "first-release Inrou host-local lease disks require one active revision; use 0 or 100 until authenticated state migration and per-revision billing are implemented"
+                        reason: "first-release Inrou host-local lease disks require exactly one active revision; atomic exact-revision upgrades require canary_percent 0 or 100"
                             .to_string(),
                     });
                 }

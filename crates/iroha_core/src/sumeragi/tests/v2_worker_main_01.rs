@@ -717,11 +717,12 @@ fn response_outputs_without_exact_routes_fail_stop() {
     let (service, _) = fixture();
     let peer = service.context.roster[1].validator.clone();
     let global_v2 = BlockMessage::V2(wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::VrfCommit(wire::VrfCommit {
-            epoch: 1,
-            commitment: [0xA5; 32],
-            signer: 0,
-            bls_sig: vec![0x5A],
+        wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+            manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"global-v2-manifest")),
+            index: 0,
+            bytes: vec![0xA5],
+            sender: 0,
+            signature: vec![0x5A],
         }),
     ));
     assert!(
@@ -1559,6 +1560,90 @@ fn locked_candidate_completion_uses_latest_consumer_without_reloading() {
     detach_locked_candidate_io(&mut service);
 }
 #[test]
+fn locked_candidate_delivery_rearms_exact_same_view_consumer_after_capacity_deferral() {
+    let (mut service, _) = fixture();
+    let command_rx = attach_locked_candidate_io(&mut service, 4);
+    let tag = locked_candidate_tag(3);
+    let round = locked_candidate_round(&service, 1);
+    let subject = locked_candidate_subject(b"capacity-deferred locked candidate");
+    let canonical_wire = b"exact durable capacity-deferred body".to_vec();
+    service
+        .request_locked_candidate(tag, round, subject)
+        .expect("queue the exact acquisition");
+    let acquisition_id = match command_rx.try_recv() {
+        Ok(V2IoCommand::LoadCandidate {
+            acquisition_id,
+            subject: queued,
+        }) if queued == subject => acquisition_id,
+        _ => panic!("expected the exact-subject candidate load"),
+    };
+    service
+        .complete_locked_candidate_load(LockedCandidateLoad {
+            acquisition_id,
+            subject,
+            canonical_wire: canonical_wire.clone(),
+        })
+        .expect("complete the exact acquisition");
+
+    assert!(
+        service
+            .rearm_loaded_candidate_delivery(tag, round, subject)
+            .expect_err("an undelivered result cannot be rearmed")
+            .contains("was not delivered")
+    );
+    let first = service
+        .take_loaded_candidate()
+        .expect("deliver the ready body before capacity changes");
+    assert_eq!(first.tag(), tag);
+    assert_eq!(first.round(), round);
+    assert_eq!(first.subject(), subject);
+    assert_eq!(first.into_canonical_wire(), canonical_wire);
+    assert!(service.take_loaded_candidate().is_none());
+
+    let wrong_subject = locked_candidate_subject(b"wrong capacity-deferred candidate");
+    assert!(
+        service
+            .rearm_loaded_candidate_delivery(tag, round, wrong_subject)
+            .expect_err("a different subject cannot rearm the delivery")
+            .contains("does not match its exact acquisition")
+    );
+    assert!(
+        service
+            .rearm_loaded_candidate_delivery(locked_candidate_tag(4), round, subject)
+            .expect_err("a different consumer cannot rearm the delivery")
+            .contains("does not match its exact acquisition")
+    );
+    let wrong_round = locked_candidate_round(&service, 2);
+    assert!(
+        service
+            .rearm_loaded_candidate_delivery(tag, wrong_round, subject)
+            .expect_err("a different locked round cannot rearm the delivery")
+            .contains("does not match its exact acquisition")
+    );
+    service
+        .rearm_loaded_candidate_delivery(tag, round, subject)
+        .expect("transient capacity deferral rearms the exact delivery");
+    assert!(
+        service
+            .rearm_loaded_candidate_delivery(tag, round, subject)
+            .expect_err("the same delivery cannot be rearmed twice")
+            .contains("was not delivered")
+    );
+    let retried = service
+        .take_loaded_candidate()
+        .expect("redeliver the exact body in the same view");
+    assert_eq!(retried.tag(), tag);
+    assert_eq!(retried.round(), round);
+    assert_eq!(retried.subject(), subject);
+    assert_eq!(retried.into_canonical_wire(), canonical_wire);
+    assert!(service.take_loaded_candidate().is_none());
+    assert!(matches!(
+        command_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    detach_locked_candidate_io(&mut service);
+}
+#[test]
 fn locked_candidate_consumer_rebind_rejects_stale_or_regressive_tags() {
     let (mut service, _) = fixture();
     let command_rx = attach_locked_candidate_io(&mut service, 4);
@@ -1861,14 +1946,14 @@ fn unavailable_locked_candidate_waits_for_matching_durable_store() {
         Err(mpsc::TryRecvError::Empty)
     ));
     service
-        .retry_locked_candidate_after_store(locked_candidate_subject(b"unrelated body"))
+        .retry_locked_candidate_after_durable_body(locked_candidate_subject(b"unrelated body"))
         .expect("unrelated store cannot steal retry ownership");
     assert!(matches!(
         command_rx.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
     service
-        .retry_locked_candidate_after_store(subject)
+        .retry_locked_candidate_after_durable_body(subject)
         .expect("matching durable store requeues exactly once");
     assert!(matches!(
         command_rx.try_recv(),
@@ -1923,7 +2008,7 @@ fn unavailable_locked_candidate_rebinds_latest_consumer_before_retry() {
         Err(mpsc::TryRecvError::Empty)
     ));
     service
-        .retry_locked_candidate_after_store(subject)
+        .retry_locked_candidate_after_durable_body(subject)
         .expect("matching durable store starts one replacement read");
     let retry_id = match command_rx.try_recv() {
         Ok(V2IoCommand::LoadCandidate {
@@ -2636,6 +2721,95 @@ fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
     assert!(!service.output_guard.restart_required());
 }
 #[test]
+fn periodic_proposal_retry_does_not_duplicate_a_pending_atomic_batch() {
+    let (mut service, keys) = fixture_with_block_payload();
+    service
+        .set_exact_output_shared_unit_capacity_for_test(64)
+        .expect("install enough shared capacity to expose duplicate batch admission");
+    service.set_exact_output_admission_hook(|post, ticket| {
+        let is_payload_chunk = matches!(
+            &post.data,
+            NetworkMessage::SumeragiBlock(envelope)
+                if matches!(
+                    envelope.as_message(),
+                    BlockMessage::V2(message)
+                        if matches!(
+                            &message.payload,
+                            wire::ConsensusMessageV2Payload::PayloadChunk(_)
+                        )
+                )
+        );
+        if is_payload_chunk {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        } else {
+            Ok(())
+        }
+    });
+    let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+    set_local_validator(&mut service, &keys, proposal.proposer);
+    service
+        .register_outbound_payload(service.active_tag, payload)
+        .expect("retain proposal chunks before broadcast");
+    let message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal));
+    assert_eq!(
+        service
+            .broadcast_consensus(message.clone())
+            .expect("the initial atomic Proposal batch enters exact output"),
+        ConsensusBroadcastDisposition::ExactServiceAccepted
+    );
+    let before = {
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect the actor-backpressured Proposal batch");
+        assert_eq!(
+            pending.fanouts.len(),
+            1,
+            "Proposal control drains while its fast-path chunks remain pending"
+        );
+        assert!(matches!(
+            &pending.fanouts[0].rollover_claim,
+            ExactOutputRolloverClaim::PayloadChunks { .. }
+        ));
+        (
+            pending.source_fifo_owners.clone(),
+            pending.reservation_owner_counts.clone(),
+            pending.ownership_units,
+            pending.shared_ownership_units,
+            pending.next_fanout_fifo_id,
+        )
+    };
+    assert_eq!(
+        service
+            .broadcast_consensus(message)
+            .expect("periodic Proposal retry remains a typed source owner"),
+        ConsensusBroadcastDisposition::SourceRetained
+    );
+    let after = {
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect the unchanged atomic Proposal batch");
+        assert_eq!(
+            pending.fanouts.len(),
+            1,
+            "periodic retry cannot duplicate chunks or recreate Proposal control"
+        );
+        (
+            pending.source_fifo_owners.clone(),
+            pending.reservation_owner_counts.clone(),
+            pending.ownership_units,
+            pending.shared_ownership_units,
+            pending.next_fanout_fifo_id,
+        )
+    };
+    assert_eq!(after, before);
+    assert!(!service.output_guard.restart_required());
+}
+#[test]
 fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
     let (mut service, keys) = fixture_with_block_payload();
     let old_round = wire::ConsensusRound {
@@ -2805,6 +2979,714 @@ fn certified_fetch_fans_out_to_every_frozen_roster_archive() {
             .collect::<Vec<_>>(),
         "every remote fixture archive is intentionally outside the one-signer QC"
     );
+}
+#[test]
+fn certified_fetch_keeps_actor_ticket_across_later_view_retention() {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let tag = EventTag::new(
+        service.context.height,
+        proposal.round.view,
+        Generation::new(service.context.height),
+    );
+    let request = certified_fetch_task(&service, 63, tag, None, proposal.round, proposal.subject)
+        .certified_request()
+        .expect("fixture certified request")
+        .clone();
+    let sources = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    let task = BodyFetchTask::certified_for_test(63, tag, None, sources, request);
+    let ticket_fixtures = Arc::new(Mutex::new(Vec::new()));
+    let ticket_fixtures_for_hook = Arc::clone(&ticket_fixtures);
+    let ticketed_retries = Arc::new(AtomicUsize::new(0));
+    let ticketed_retries_for_hook = Arc::clone(&ticketed_retries);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        if let Some(ticket) = ticket {
+            assert_eq!(ticket.rank(), Some(1));
+            ticketed_retries_for_hook.fetch_add(1, Ordering::Relaxed);
+            return Ok(());
+        }
+        let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+        ticket_fixtures_for_hook
+            .lock()
+            .expect("retain actor-ticket fixtures")
+            .push(fixture);
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket: Some(ticket),
+            rank: 1,
+        })
+    });
+    service
+        .enqueue_body_fetch(task)
+        .expect("retain one actor-backpressured certified request");
+    let target_count = {
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect retained certified request");
+        assert_eq!(pending.fanouts.len(), 1);
+        let fanout = &pending.fanouts[0];
+        assert!(matches!(
+            fanout.messages.as_slice(),
+            [NetworkMessage::SumeragiBlock(envelope)]
+                if matches!(
+                    envelope.as_message(),
+                    BlockMessage::V2(message)
+                        if matches!(
+                            &message.payload,
+                            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+                        )
+                )
+        ));
+        assert!(fanout.targets.iter().all(|target| {
+            target
+                .ticket
+                .as_ref()
+                .and_then(NetworkActorAdmissionTicket::rank)
+                == Some(1)
+        }));
+        fanout.targets.len()
+    };
+    assert!(target_count > 0);
+    let later_round = wire::ConsensusRound {
+        view: proposal
+            .round
+            .view
+            .checked_add(1)
+            .expect("fixture view has a successor"),
+        ..proposal.round
+    };
+    assert_eq!(
+        service
+            .retain_certified_global_view_output(later_round)
+            .expect("later view keeps the live body acquisition"),
+        0
+    );
+    assert_eq!(
+        ticket_fixtures
+            .lock()
+            .expect("inspect retained ticket fixtures")
+            .iter()
+            .map(NetworkActorAdmissionTicketTestFixture::waiter_count)
+            .sum::<usize>(),
+        target_count
+    );
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("the same ranked requests enter after actor recovery")
+    );
+    assert_eq!(
+        ticketed_retries.load(Ordering::Relaxed),
+        target_count,
+        "later-view cleanup must not replace ranked requests with fresh tail occurrences"
+    );
+}
+#[test]
+fn certified_body_response_keeps_reply_owner_across_later_view_retention() {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let request = authenticated_serve_request(
+        &service.context,
+        &keys[1],
+        proposal.round,
+        proposal.subject,
+        wire::GlobalPhase::Prepare,
+    );
+    let requester = request.request().requester.clone();
+    let inbound = certified_serve_inbound(request.request(), requester.clone());
+    let roster = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect();
+    let mut admitted = fair_v2_ingress_admit_with_roster_for_test(inbound, roster);
+    let ingress_ownership = admitted
+        .take_ingress_ownership()
+        .expect("fair ingress owns the exact certified request");
+    let (_, sender, reply_routes) = admitted.into_message_sender_and_reply_routes();
+    assert_eq!(sender, requester);
+    let reply_routes = reply_routes.expect("certified request retains its reply route");
+    let response = certified_serve_response(&request, payload.manifest().clone(), body, &keys[0]);
+    service.set_exact_output_admission_hook(|post, ticket| {
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket,
+            rank: 1,
+        })
+    });
+    service
+        .post_to_peer_on_reply_routes(
+            requester,
+            reply_routes,
+            ingress_ownership,
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
+                response,
+            )),
+        )
+        .expect("retain the actor-backpressured current-height reply");
+    assert!(
+        service
+            .has_pending_exact_output()
+            .expect("inspect the retained response")
+    );
+    let later_round = wire::ConsensusRound {
+        view: proposal
+            .round
+            .view
+            .checked_add(1)
+            .expect("fixture view has a successor"),
+        ..proposal.round
+    };
+    assert_eq!(
+        service
+            .retain_certified_global_view_output(later_round)
+            .expect("later view keeps the request-bound response"),
+        0
+    );
+    assert!(
+        service
+            .has_pending_exact_output()
+            .expect("the response remains owned for actor retry")
+    );
+}
+#[test]
+fn certified_fetch_cancellation_retires_backpressured_request() {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let tag = EventTag::new(
+        service.context.height,
+        proposal.round.view,
+        Generation::new(service.context.height),
+    );
+    let request = certified_fetch_task(&service, 64, tag, None, proposal.round, proposal.subject)
+        .certified_request()
+        .expect("fixture certified request")
+        .clone();
+    let sources = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    let task = BodyFetchTask::certified_for_test(64, tag, None, sources, request);
+    service.set_exact_output_admission_hook(|post, ticket| {
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket,
+            rank: 1,
+        })
+    });
+    service
+        .enqueue_body_fetch(task.clone())
+        .expect("retain one actor-backpressured certified request");
+    assert!(
+        service
+            .has_pending_exact_output()
+            .expect("inspect the retained request")
+    );
+    service
+        .cancel_body_fetch(&task)
+        .expect("the exact fetch owner cancels its retained request");
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect("inspect request cancellation")
+    );
+}
+#[test]
+fn certified_fetch_success_commit_retires_backpressured_request() {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let tag = EventTag::new(
+        service.context.height,
+        proposal.round.view,
+        Generation::new(service.context.height),
+    );
+    let request = certified_fetch_task(&service, 65, tag, None, proposal.round, proposal.subject)
+        .certified_request()
+        .expect("fixture certified request")
+        .clone();
+    let sources = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    let task = BodyFetchTask::certified_for_test(65, tag, None, sources, request);
+    service.set_exact_output_admission_hook(|post, ticket| {
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket,
+            rank: 1,
+        })
+    });
+    service
+        .enqueue_body_fetch(task.clone())
+        .expect("retain one actor-backpressured certified request");
+    assert!(
+        service
+            .has_pending_exact_output()
+            .expect("inspect the retained request")
+    );
+    let output_guard = service.lifecycle_output_guard();
+    let prepared = service
+        .prepare_certified_body_fetch_owner_removal(&task)
+        .expect("preflight the successful response transaction");
+    let operation = output_guard
+        .begin_fail_stop_operation()
+        .expect("open the successful response commit boundary");
+    prepared.commit(operation.permit());
+    operation.complete();
+    assert!(service.fetches.is_empty());
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect("successful response cancels its retained request")
+    );
+}
+#[test]
+fn decided_height_retires_backpressured_block_sync_request() {
+    let (mut service, keys) = fixture();
+    let mut discovery = super::super::v2_block_sync::V2BlockSyncDiscovery::new(
+        service.context.clone(),
+        service.local_peer.clone(),
+        1,
+    )
+    .expect("open current-height CommitQC discovery");
+    let request = discovery
+        .begin(&keys[0])
+        .expect("sign one exact CommitQC discovery request");
+    let wire::ConsensusMessageV2Payload::CommitCertificateRequest(request_payload) =
+        &request.payload
+    else {
+        panic!("block sync must emit a CommitCertificateRequest")
+    };
+    let request_hash = HashOf::new(request_payload);
+    service.set_exact_output_admission_hook(|post, ticket| {
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket,
+            rank: 1,
+        })
+    });
+    let output_guard = service.lifecycle_output_guard();
+    let operation = output_guard
+        .begin_fail_stop_operation()
+        .expect("open the block-sync broadcast boundary");
+    service
+        .broadcast_block_sync_while_guarded(request, operation.permit())
+        .expect("retain the actor-backpressured discovery fanout");
+    operation.complete();
+    assert!(
+        service
+            .has_pending_exact_output()
+            .expect("inspect retained CommitQC request")
+    );
+
+    let mut active_request = Some(request_hash);
+    assert!(matches!(
+        super::super::v2_runner::retire_block_sync_request_after_decision(
+            &mut active_request,
+            &mut discovery,
+            &service,
+        ),
+        Ok(true)
+    ));
+    assert!(active_request.is_none());
+    assert!(discovery.retransmit(request_hash).is_none());
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect("Decision retires the obsolete CommitQC request fanout")
+    );
+}
+#[test]
+fn admitted_block_sync_response_retires_backpressured_request() {
+    let (mut service, keys) = fixture();
+    let mut discovery = super::super::v2_block_sync::V2BlockSyncDiscovery::new(
+        service.context.clone(),
+        service.local_peer.clone(),
+        1,
+    )
+    .expect("open current-height CommitQC discovery");
+    let request = discovery
+        .begin(&keys[0])
+        .expect("sign one exact CommitQC discovery request");
+    let wire::ConsensusMessageV2Payload::CommitCertificateRequest(request_payload) =
+        &request.payload
+    else {
+        panic!("block sync must emit a CommitCertificateRequest")
+    };
+    let request_hash = HashOf::new(request_payload);
+    service.set_exact_output_admission_hook(|post, ticket| {
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket,
+            rank: 1,
+        })
+    });
+    let output_guard = service.lifecycle_output_guard();
+    let operation = output_guard
+        .begin_fail_stop_operation()
+        .expect("open the block-sync broadcast boundary");
+    service
+        .broadcast_block_sync_while_guarded(request, operation.permit())
+        .expect("retain the actor-backpressured discovery fanout");
+    operation.complete();
+    assert!(
+        service
+            .has_pending_exact_output()
+            .expect("inspect retained CommitQC request")
+    );
+
+    let mut active_request = Some(request_hash);
+    let foreign_request_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"foreign CommitQC discovery request"));
+    assert!(matches!(
+        super::super::v2_runner::retire_admitted_block_sync_request(
+            &mut active_request,
+            foreign_request_hash,
+            &service,
+        ),
+        Err(super::super::v2_runner::V2RunnerError::RuntimeAdmissionInvariant(_))
+    ));
+    assert_eq!(active_request, Some(request_hash));
+    assert!(
+        service
+            .has_pending_exact_output()
+            .expect("foreign admission cannot retire the live request")
+    );
+    super::super::v2_runner::retire_admitted_block_sync_request(
+        &mut active_request,
+        request_hash,
+        &service,
+    )
+    .expect("admitted response retires its exact request output");
+    assert!(active_request.is_none());
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect("admission retires the completed CommitQC request fanout")
+    );
+}
+#[test]
+fn commit_certificate_rotation_releases_unranked_peer_but_preserves_ranked_ticket() {
+    let (service, keys) = fixture();
+    let mut discovery = super::super::v2_block_sync::V2BlockSyncDiscovery::new(
+        service.context.clone(),
+        service.local_peer.clone(),
+        1,
+    )
+    .expect("open current-height CommitQC discovery");
+    let request = discovery
+        .begin(&keys[0])
+        .expect("sign one exact CommitQC discovery request");
+    let wire::ConsensusMessageV2Payload::CommitCertificateRequest(request_payload) =
+        &request.payload
+    else {
+        panic!("block sync must emit a CommitCertificateRequest")
+    };
+    let request_hash = HashOf::new(request_payload);
+    let message = ProductionV2Services::preencode_v2_network_message(request)
+        .expect("encode CommitQC request");
+    let first_peer = PeerId::new(
+        KeyPair::try_from_seed(vec![0xD3; 32], Algorithm::Ed25519)
+            .expect("deterministic first archive peer")
+            .public_key()
+            .clone(),
+    );
+    let rotated_peer = PeerId::new(
+        KeyPair::try_from_seed(vec![0xD4; 32], Algorithm::Ed25519)
+            .expect("deterministic rotated archive peer")
+            .public_key()
+            .clone(),
+    );
+    let claim = ExactOutputRolloverClaim::GlobalV2(service.exact_output_scope());
+    let fanout = |peer: PeerId| {
+        PendingExactFanout::claimed(vec![message.clone()], vec![peer], claim.clone())
+            .expect("validate CommitQC acquisition fanout")
+            .expect("CommitQC acquisition fanout has one target")
+    };
+    let mut pending = service
+        .lock_pending_exact_output()
+        .expect("open exact-output corridor");
+
+    assert_eq!(
+        pending.enqueue(fanout(first_peer.clone())),
+        Ok(ExactFanoutOwnership::Owned)
+    );
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, route| {
+                assert_eq!(post.peer_id, first_peer);
+                assert!(ticket.is_none());
+                assert!(matches!(route, ExactTargetRoute::Topology));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: None,
+                    rank: 1,
+                })
+            })
+            .expect("release a topology attempt which acquired no actor rank"),
+        ExactOutputDriveOutcome::Drained
+    );
+    assert!(pending.fanouts.is_empty());
+    assert!(pending.source_fifo_owners.is_empty());
+    assert!(pending.reservation_owner_counts.is_empty());
+    assert_eq!(pending.ownership_units, 0);
+    assert_eq!(pending.shared_ownership_units, 0);
+
+    assert_eq!(
+        pending.enqueue(fanout(rotated_peer.clone())),
+        Ok(ExactFanoutOwnership::Owned),
+        "the outstanding discovery source can install its rotated archive batch"
+    );
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert_eq!(post.peer_id, rotated_peer);
+                assert!(ticket.is_none());
+                Ok(())
+            })
+            .expect("the rotated archive request crosses actor admission"),
+        ExactOutputDriveOutcome::Drained
+    );
+
+    assert_eq!(
+        pending.enqueue(fanout(first_peer)),
+        Ok(ExactFanoutOwnership::Owned)
+    );
+    let mut ticket_fixture = None;
+    assert!(matches!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert!(ticket.is_none());
+                let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                ticket_fixture = Some(fixture);
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: Some(ticket),
+                    rank: 1,
+                })
+            })
+            .expect("retain the ranked CommitQC archive attempt"),
+        ExactOutputDriveOutcome::BudgetExhausted { .. }
+            | ExactOutputDriveOutcome::Backpressured { .. }
+    ));
+    let later_round = wire::ConsensusRound {
+        context_id: service.context.id(),
+        height: service.context.height,
+        view: 1,
+    };
+    assert_eq!(
+        pending.retain_certified_global_view_output(later_round),
+        Ok(0),
+        "view cleanup must retain the viewless discovery request and its actor rank"
+    );
+    assert_eq!(
+        pending.enqueue(fanout(rotated_peer)),
+        Ok(ExactFanoutOwnership::SourceRetained),
+        "a rotated batch cannot displace the incumbent actor rank"
+    );
+    assert_eq!(
+        ticket_fixture
+            .as_ref()
+            .expect("ranked attempt minted a ticket fixture")
+            .waiter_count(),
+        1
+    );
+    assert_eq!(
+        pending.cancel_commit_certificate_request(request_hash),
+        Ok(1)
+    );
+    assert_eq!(
+        ticket_fixture
+            .as_ref()
+            .expect("ranked attempt minted a ticket fixture")
+            .waiter_count(),
+        0,
+        "authoritative cancellation drops the retained actor ticket"
+    );
+    assert!(pending.fanouts.is_empty());
+    assert!(pending.source_fifo_owners.is_empty());
+    assert!(pending.reservation_owner_counts.is_empty());
+    assert_eq!(pending.ownership_units, 0);
+    assert_eq!(pending.shared_ownership_units, 0);
+}
+#[test]
+fn rotated_certified_fetch_waits_for_ranked_incumbent_then_reaches_later_peer() {
+    let (service, keys) = fixture();
+    service
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("install a one-target shared output corridor");
+    let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let tag = EventTag::new(
+        service.context.height,
+        proposal.round.view,
+        Generation::new(service.context.height),
+    );
+    let request = certified_fetch_task(&service, 66, tag, None, proposal.round, proposal.subject)
+        .certified_request()
+        .expect("fixture certified request")
+        .clone();
+    let request_hash = HashOf::new(&request);
+    let message =
+        ProductionV2Services::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+        ))
+        .expect("encode certified body request");
+    let old_peer = PeerId::new(
+        KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519)
+            .expect("deterministic old archive peer")
+            .public_key()
+            .clone(),
+    );
+    let new_peer = PeerId::new(
+        KeyPair::try_from_seed(vec![0xD2; 32], Algorithm::Ed25519)
+            .expect("deterministic rotated archive peer")
+            .public_key()
+            .clone(),
+    );
+    let claim = ExactOutputRolloverClaim::GlobalV2(service.exact_output_scope());
+    let old =
+        PendingExactFanout::claimed(vec![message.clone()], vec![old_peer.clone()], claim.clone())
+            .expect("validate incumbent acquisition fanout")
+            .expect("incumbent acquisition fanout has one target");
+    let rotated_while_blocked =
+        PendingExactFanout::claimed(vec![message.clone()], vec![new_peer.clone()], claim.clone())
+            .expect("validate rotated acquisition fanout")
+            .expect("rotated acquisition fanout has one target");
+    let rotated_after_drain =
+        PendingExactFanout::claimed(vec![message.clone()], vec![new_peer.clone()], claim.clone())
+            .expect("validate retried rotated acquisition fanout")
+            .expect("retried rotated acquisition fanout has one target");
+    let mut pending = service
+        .lock_pending_exact_output()
+        .expect("open exact-output corridor");
+    assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
+    let mut ticket_fixture = None;
+    assert!(matches!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert!(ticket.is_none());
+                let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                ticket_fixture = Some(fixture);
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: Some(ticket),
+                    rank: 1,
+                })
+            })
+            .expect("retain the first target behind actor backpressure"),
+        ExactOutputDriveOutcome::BudgetExhausted { .. }
+            | ExactOutputDriveOutcome::Backpressured { .. }
+    ));
+    assert_eq!(pending.fanouts.len(), 1);
+    let incumbent_fifo = pending.fanouts[0]
+        .fifo_id
+        .expect("first shard owns its stable FIFO identity");
+    assert_eq!(pending.fanouts[0].peers, vec![old_peer.clone()]);
+    assert_eq!(
+        pending.fanouts[0].targets[0]
+            .ticket
+            .as_ref()
+            .and_then(NetworkActorAdmissionTicket::rank),
+        Some(1)
+    );
+
+    assert_eq!(
+        pending.enqueue(rotated_while_blocked),
+        Ok(ExactFanoutOwnership::SourceRetained),
+        "the rotating discovery source keeps the next batch while actor rank is owned"
+    );
+    assert_eq!(pending.fanouts.len(), 1);
+    assert_eq!(pending.fanouts[0].fifo_id, Some(incumbent_fifo));
+    assert_eq!(pending.fanouts[0].peers, vec![old_peer.clone()]);
+    assert_eq!(pending.ownership_units, 1);
+    assert_eq!(pending.shared_ownership_units, 1);
+    assert_eq!(
+        pending.fanouts[0].targets[0]
+            .ticket
+            .as_ref()
+            .and_then(NetworkActorAdmissionTicket::rank),
+        Some(1),
+        "rotating the archive batch must not replace the incumbent actor ticket"
+    );
+    assert_eq!(
+        ticket_fixture
+            .as_ref()
+            .expect("first attempt minted a ticket fixture")
+            .waiter_count(),
+        1
+    );
+
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert_eq!(post.peer_id, old_peer);
+                assert_eq!(
+                    ticket.as_ref().and_then(NetworkActorAdmissionTicket::rank),
+                    Some(1),
+                    "actor recovery must retry the incumbent ticket in place"
+                );
+                Ok(())
+            })
+            .expect("fair actor admission drains the incumbent target"),
+        ExactOutputDriveOutcome::Drained
+    );
+    assert!(pending.fanouts.is_empty());
+    assert_eq!(
+        ticket_fixture
+            .as_ref()
+            .expect("first attempt minted a ticket fixture")
+            .waiter_count(),
+        0
+    );
+
+    assert_eq!(
+        pending.enqueue(rotated_after_drain),
+        Ok(ExactFanoutOwnership::Owned),
+        "the retained source may install the later archive after capacity returns"
+    );
+    assert_eq!(pending.fanouts.len(), 1);
+    assert_eq!(pending.fanouts[0].peers, vec![new_peer.clone()]);
+    assert_eq!(pending.ownership_units, 1);
+    assert_eq!(pending.shared_ownership_units, 1);
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert_eq!(post.peer_id, new_peer);
+                assert!(ticket.is_none());
+                Ok(())
+            })
+            .expect("the responsive archive crosses the released corridor"),
+        ExactOutputDriveOutcome::Drained
+    );
+    assert!(pending.fanouts.is_empty());
+    assert!(pending.source_fifo_owners.is_empty());
+    assert!(pending.reservation_owner_counts.is_empty());
+    assert_eq!(pending.ownership_units, 0);
+    assert_eq!(pending.shared_ownership_units, 0);
+
+    let cancellable = PendingExactFanout::claimed(vec![message], vec![old_peer], claim)
+        .expect("validate cancellable acquisition fanout")
+        .expect("cancellable acquisition fanout has one target");
+    assert_eq!(
+        pending.enqueue(cancellable),
+        Ok(ExactFanoutOwnership::Owned)
+    );
+    assert_eq!(pending.cancel_certified_body_request(request_hash), Ok(1));
+    assert!(pending.fanouts.is_empty());
 }
 #[test]
 fn replayed_proposal_signature_restores_exact_durable_payload() {

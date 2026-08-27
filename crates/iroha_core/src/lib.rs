@@ -587,8 +587,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                             | ConsensusMessageV2Payload::TimeoutVote(_)
                             | ConsensusMessageV2Payload::TimeoutCertificate(_)
                             | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-                            | ConsensusMessageV2Payload::VrfCommit(_)
-                            | ConsensusMessageV2Payload::VrfReveal(_)
                             | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                                 T::ConsensusSafety
                             }
@@ -1058,12 +1056,15 @@ mod tests {
     fn raw_sumeragi_topic_for_synthetic_tag(tag: u32) -> Result<NetworkTopic, ncore::Error> {
         use iroha_data_model::block::consensus_v2 as wire;
         let (mut payload, flags) = norito::codec::encode_with_header_flags(&BlockMessage::V2(
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::VrfCommit(
-                wire::VrfCommit {
-                    epoch: 1,
-                    commitment: [0xA5; 32],
-                    signer: 0,
-                    bls_sig: vec![0x5A],
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+                wire::PayloadChunk {
+                    manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                        b"synthetic-topic-manifest",
+                    )),
+                    index: 0,
+                    bytes: vec![0xA5],
+                    sender: 0,
+                    signature: vec![0x5A],
                 },
             )),
         ));
@@ -2042,12 +2043,7 @@ mod tests {
             Err(ncore::Error::ArchiveLengthExceeded { .. })
         ));
         let worst_request_wire =
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                None,
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+            iroha_p2p::network::broadcast_data_frame_wire_len_from_payload_len::<NetworkMessage>(
                 TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1
                     + TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1,
             );
@@ -2089,12 +2085,7 @@ mod tests {
             Err(ncore::Error::ArchiveLengthExceeded { .. })
         ));
         let worst_response_wire =
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                None,
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+            iroha_p2p::network::broadcast_data_frame_wire_len_from_payload_len::<NetworkMessage>(
                 TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1
                     + TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1,
             );
@@ -2218,22 +2209,6 @@ mod tests {
             "the nested raw classifier must receive the full BlockMessage frame"
         );
         assert_eq!(raw_network_topic(&message), NetworkTopic::ConsensusSafety);
-        let v2_vrf = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::VrfCommit(wire::VrfCommit {
-                    epoch: 3,
-                    commitment: [0xA5; 32],
-                    signer: 0,
-                    bls_sig: vec![0x5A],
-                }),
-            )),
-        )));
-        assert_eq!(v2_vrf.topic(), NetworkTopic::ConsensusSafety);
-        assert_eq!(raw_network_topic(&v2_vrf), NetworkTopic::ConsensusSafety);
-        assert!(
-            v2_vrf.is_outbound_allowed(),
-            "versioned VRF frames must use the authenticated v2 safety corridor"
-        );
     }
     fn signed_kura_replica_advert_message() -> NetworkMessage {
         let key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)

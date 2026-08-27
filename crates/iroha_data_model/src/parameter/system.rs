@@ -313,10 +313,6 @@ mod model {
     pub struct SumeragiNposParameters {
         /// Deterministic epoch seed used for PRF-based leader and validator selection.
         pub epoch_seed: [u8; 32],
-        /// VRF commit window length in blocks.
-        pub vrf_commit_window_blocks: u64,
-        /// VRF reveal window length in blocks.
-        pub vrf_reveal_window_blocks: u64,
         /// Exact bounded `3f + 1` ceiling for the next epoch committee.
         pub max_validators: u32,
         /// Minimum self-bond required for validator eligibility.
@@ -364,16 +360,6 @@ mod model {
             let value = norito::json::from_str::<Self>(custom.payload().get()).ok()?;
             value.validate().ok()?;
             Some(value)
-        }
-        /// VRF commit window measured in blocks.
-        #[must_use]
-        pub fn vrf_commit_window_blocks(&self) -> u64 {
-            self.vrf_commit_window_blocks
-        }
-        /// VRF reveal window measured in blocks.
-        #[must_use]
-        pub fn vrf_reveal_window_blocks(&self) -> u64 {
-            self.vrf_reveal_window_blocks
         }
         /// Exact bounded `3f + 1` ceiling for the next epoch committee.
         #[must_use]
@@ -444,27 +430,17 @@ mod model {
         /// Validate all signed `NPoS` election and reconfiguration invariants.
         ///
         /// # Errors
-        /// Returns a stable diagnostic when a seed, window, bond, percentage,
+        /// Returns a stable diagnostic when a seed, bond, percentage,
         /// or reconfiguration bound is invalid.
         pub fn validate(&self) -> Result<(), &'static str> {
             if self.epoch_seed == [0; 32] {
                 return Err("epoch_seed must not be all zero");
-            }
-            if self.vrf_commit_window_blocks == 0 || self.vrf_reveal_window_blocks == 0 {
-                return Err("VRF commit and reveal windows must be greater than zero");
             }
             if usize::try_from(self.max_validators)
                 .ok()
                 .is_none_or(|count| !crate::block::consensus_v2::is_valid_committee_size(count))
             {
                 return Err("max_validators must be a bounded 3f + 1 committee size (4..=31)");
-            }
-            if self
-                .vrf_commit_window_blocks
-                .checked_add(self.vrf_reveal_window_blocks)
-                .is_none_or(|total| total >= self.epoch_length_blocks.get())
-            {
-                return Err("VRF reveal window must close before the epoch boundary");
             }
             if self.min_self_bond.is_zero() || self.min_nomination_bond.is_zero() {
                 return Err("NPoS minimum bond values must be greater than zero");
@@ -490,8 +466,6 @@ mod model {
             use defaults::sumeragi::npos::*;
             Self {
                 epoch_seed: [0xA5; 32],
-                vrf_commit_window_blocks: vrf_commit_window_blocks(),
-                vrf_reveal_window_blocks: vrf_reveal_window_blocks(),
                 max_validators: max_validators(),
                 min_self_bond: min_self_bond(),
                 min_nomination_bond: min_nomination_bond(),
@@ -728,8 +702,6 @@ impl core::fmt::Display for Parameter {
 #[norito(deny_unknown_fields)]
 struct SumeragiNposParametersJson {
     epoch_seed: [u8; 32],
-    vrf_commit_window_blocks: u64,
-    vrf_reveal_window_blocks: u64,
     max_validators: u32,
     min_self_bond: Quantity,
     min_nomination_bond: Quantity,
@@ -747,8 +719,6 @@ impl From<SumeragiNposParameters> for SumeragiNposParametersJson {
     fn from(value: SumeragiNposParameters) -> Self {
         Self {
             epoch_seed: value.epoch_seed,
-            vrf_commit_window_blocks: value.vrf_commit_window_blocks,
-            vrf_reveal_window_blocks: value.vrf_reveal_window_blocks,
             max_validators: value.max_validators,
             min_self_bond: value.min_self_bond,
             min_nomination_bond: value.min_nomination_bond,
@@ -768,8 +738,6 @@ impl From<SumeragiNposParametersJson> for SumeragiNposParameters {
     fn from(value: SumeragiNposParametersJson) -> Self {
         Self {
             epoch_seed: value.epoch_seed,
-            vrf_commit_window_blocks: value.vrf_commit_window_blocks,
-            vrf_reveal_window_blocks: value.vrf_reveal_window_blocks,
             max_validators: value.max_validators,
             min_self_bond: value.min_self_bond,
             min_nomination_bond: value.min_nomination_bond,
@@ -797,18 +765,6 @@ impl JsonSerialize for SumeragiNposParameters {
         out.push('{')?;
         let mut first = true;
         json_support::write_field_to(out, &mut first, "epoch_seed", &self.epoch_seed)?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "vrf_commit_window_blocks",
-            &self.vrf_commit_window_blocks,
-        )?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "vrf_reveal_window_blocks",
-            &self.vrf_reveal_window_blocks,
-        )?;
         json_support::write_field_to(out, &mut first, "max_validators", &self.max_validators)?;
         json_support::write_field_to(out, &mut first, "min_self_bond", &self.min_self_bond)?;
         json_support::write_field_to(
@@ -1291,12 +1247,6 @@ mod defaults {
         pub mod npos {
             use core::num::NonZeroU64;
             use iroha_primitives::numeric::Quantity;
-            pub const fn vrf_commit_window_blocks() -> u64 {
-                100
-            }
-            pub const fn vrf_reveal_window_blocks() -> u64 {
-                40
-            }
             pub const fn max_validators() -> u32 {
                 31
             }
@@ -2498,8 +2448,6 @@ mod tests {
             .as_object_mut()
             .expect("npos payload should serialize as object");
         for field in [
-            "vrf_commit_window_blocks",
-            "vrf_reveal_window_blocks",
             "max_validators",
             "max_nominator_concentration_pct",
             "seat_band_pct",
@@ -2590,7 +2538,7 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_valid_payload() {
-        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":259200,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40}"#;
+        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":259200}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload
@@ -2710,27 +2658,10 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
-        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
+        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
         assert!(
             Json::from_raw_json(payload.to_owned()).is_err(),
             "invalid JSON must be rejected before it can enter a custom parameter"
         );
-    }
-    #[test]
-    fn sumeragi_npos_reveal_window_must_close_before_boundary() {
-        let mut parameters = SumeragiNposParameters {
-            epoch_length_blocks: NonZeroU64::new(4).expect("non-zero epoch"),
-            vrf_commit_window_blocks: 2,
-            vrf_reveal_window_blocks: 2,
-            ..SumeragiNposParameters::default()
-        };
-        assert_eq!(
-            parameters.validate(),
-            Err("VRF reveal window must close before the epoch boundary")
-        );
-        parameters.epoch_length_blocks = NonZeroU64::new(5).expect("non-zero epoch");
-        parameters
-            .validate()
-            .expect("one finalized pre-boundary block is sufficient");
     }
 }

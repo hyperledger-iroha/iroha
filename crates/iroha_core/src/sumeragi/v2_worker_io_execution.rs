@@ -243,13 +243,13 @@ fn build_certified_body_response(
     authenticated: &AuthenticatedCertifiedBodyRequest,
 ) -> Result<(DurableBodyReceipt, wire::CertifiedBodyResponse), String> {
     let request = authenticated.request();
-    let Some(responder) = local_validator else {
+    let Some(responder_index) = local_validator else {
         return Err("local observer crossed certified-body Serve admission".to_owned());
     };
     if request
         .certificate
         .signers
-        .binary_search(&responder)
+        .binary_search(&responder_index)
         .is_err()
     {
         return Err(
@@ -272,7 +272,7 @@ fn build_certified_body_response(
         request_hash: authenticated.request_hash(),
         manifest,
         body,
-        responder,
+        responder: PeerId::new(key_pair.public_key().clone()),
         signature: Vec::new(),
     };
     response.signature = Signature::try_new(key_pair.private_key(), &response.signature_preimage())
@@ -384,15 +384,28 @@ pub(in crate::sumeragi) struct PreparedCertifiedBodyFetchOwnerRemoval<'a> {
     services: &'a mut ProductionV2Services,
     task: BodyFetchTask,
     owner: BodyFetchServiceOwner,
+    request_cancellation: Option<PendingExactOutputRemovalPlan>,
 }
 impl PreparedCertifiedBodyFetchOwnerRemoval<'_> {
     pub(in crate::sumeragi) fn commit(self, permit: &ConsensusOutputPermit<'_>) {
+        let Self {
+            services,
+            task,
+            owner,
+            request_cancellation,
+        } = self;
         assert!(
-            permit.authorizes(self.services.output_guard.as_ref()),
+            permit.authorizes(services.output_guard.as_ref()),
             "certified body-fetch removal requires this service's live output permit"
         );
-        self.services
-            .commit_exact_body_fetch_owner_removal(&self.task, self.owner);
+        if let Some(request_cancellation) = request_cancellation {
+            services
+                .pending_exact_output
+                .get_mut()
+                .expect("preflighted certified body-request output lock remains healthy")
+                .commit_fanout_removal(request_cancellation);
+        }
+        services.commit_exact_body_fetch_owner_removal(&task, owner);
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -691,6 +704,30 @@ impl LockedCandidateAcquisition {
             subject: self.subject,
             canonical_wire: canonical_wire.clone(),
         })
+    }
+    fn rearm_ready_delivery(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Result<(), String> {
+        if tag != self.consumer || round != self.round || subject != self.subject {
+            return Err(
+                "Sumeragi v2 locked-body delivery rearm does not match its exact acquisition"
+                    .to_owned(),
+            );
+        }
+        let LockedCandidateAcquisitionState::Ready { delivered_to, .. } = &mut self.state else {
+            return Err("Sumeragi v2 locked-body delivery rearm is not ready".to_owned());
+        };
+        if *delivered_to != Some((round, tag)) {
+            return Err(
+                "Sumeragi v2 locked-body delivery rearm was not delivered to its exact consumer"
+                    .to_owned(),
+            );
+        }
+        *delivered_to = None;
+        Ok(())
     }
 }
 /// Exact body/reference tuple retained when validation or decided application

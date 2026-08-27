@@ -8,8 +8,8 @@ use super::rs16::{
     build_chunk_commitments, validate_erasure_work_budget,
 };
 use super::{
-    DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, persistence,
-    storage_class_label, taikai, taikai::taikai_ingest,
+    DaIngestAdmissionSnapshot, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch,
+    DaSpoolBatchReport, persistence, storage_class_label, taikai, taikai::taikai_ingest,
 };
 use crate::{
     NoritoQuery, SharedAppState,
@@ -48,6 +48,7 @@ use iroha_data_model::{
         capacity::ProviderId,
         pin_registry::{ManifestDigest, StorageClass},
     },
+    taikai::TaikaiSegmentWindow,
 };
 use iroha_logger::{error, warn};
 use iroha_torii_shared::da::sampling::compute_sample_window;
@@ -85,6 +86,50 @@ struct FreshReplayReservation {
     cache: Arc<ReplayCache>,
     reservation: Option<ReplayReservation>,
     committed: bool,
+}
+struct PendingTaikaiLineageCommit {
+    guard: taikai_ingest::TrmLineageGuard,
+    segment_window: TaikaiSegmentWindow,
+    manifest_digest_hex: String,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: StorageTicketId,
+    fingerprint: ReplayFingerprint,
+}
+impl PendingTaikaiLineageCommit {
+    fn stage(&mut self) -> Result<(), String> {
+        self.guard
+            .persist_lineage_hint(
+                self.lane_id,
+                self.epoch,
+                self.sequence,
+                &self.storage_ticket,
+                &self.fingerprint,
+            )
+            .map_err(|(_, message)| message)?;
+        self.guard
+            .stage_ingest(
+                self.segment_window.clone(),
+                &self.manifest_digest_hex,
+                self.lane_id,
+                self.epoch,
+                self.sequence,
+                &self.storage_ticket,
+                &self.fingerprint,
+            )
+            .map_err(|(_, message)| message)
+    }
+
+    fn recover(&mut self, receipt_log: &persistence::DaReceiptLog) -> Result<(), String> {
+        self.guard
+            .recover_pending(receipt_log)
+            .map_err(|(_, message)| message)
+    }
+
+    fn discard(&mut self) -> Result<(), String> {
+        self.guard.discard_pending().map_err(|(_, message)| message)
+    }
 }
 impl FreshReplayReservation {
     fn new(cache: Arc<ReplayCache>, reservation: ReplayReservation) -> Self {
@@ -248,11 +293,15 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, (StatusCode, String)> + Send + 'static,
 {
-    let permit = limiter.acquire_owned().await.map_err(|_| {
-        (
+    let permit = limiter.try_acquire_owned().map_err(|err| match err {
+        tokio::sync::TryAcquireError::Closed => (
             StatusCode::SERVICE_UNAVAILABLE,
             "DA ingest compute limiter is closed".to_owned(),
-        )
+        ),
+        tokio::sync::TryAcquireError::NoPermits => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DA ingest compute capacity is saturated".to_owned(),
+        ),
     })?;
     tokio::task::spawn_blocking(move || {
         let result = job();
@@ -281,6 +330,48 @@ struct DaManifestComputeArtifacts {
     taikai_trm_payload: Option<Vec<u8>>,
     queued_at_secs: u64,
 }
+
+fn admission_snapshot_for_request(
+    app: &crate::AppState,
+    owner: &AccountId,
+    lane_id: LaneId,
+    epoch: u64,
+) -> Result<DaIngestAdmissionSnapshot, (StatusCode, String)> {
+    let snapshot = super::committed_da_ingest_admission_snapshot(&app.state).map_err(|error| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("committed DA ingest admission policy is invalid: {error}"),
+        )
+    })?;
+    if !snapshot.is_configured() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DA ingest is disabled until governance installs an admission policy".to_owned(),
+        ));
+    }
+    if !snapshot.authorizes(owner, lane_id, epoch) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "authenticated account is not an authorised producer for this active DA lane/epoch"
+                .to_owned(),
+        ));
+    }
+    Ok(snapshot)
+}
+
+fn reconcile_da_replay_state(
+    snapshot: &DaIngestAdmissionSnapshot,
+    receipt_log: &super::DaReceiptLog,
+    replay_cache: &ReplayCache,
+) -> Result<(), String> {
+    let retired = receipt_log
+        .retain_lane_epochs(|lane_epoch| snapshot.retains(lane_epoch.lane_id, lane_epoch.epoch))
+        .map_err(|error| format!("failed to retire superseded DA replay windows: {error}"))?;
+    for lane_epoch in retired {
+        replay_cache.clear_lane_epoch(lane_epoch);
+    }
+    Ok(())
+}
 #[allow(clippy::too_many_arguments)]
 fn compute_da_manifest_artifacts(
     request: &DaIngestRequest,
@@ -308,6 +399,16 @@ fn compute_da_manifest_artifacts(
         governance_metadata_key_label,
     )?;
     let taikai_ssm_payload = taikai_ingest::take_ssm_entry(&mut metadata)?;
+    if matches!(request.blob_class, BlobClass::TaikaiSegment)
+        && taikai_ssm_payload.is_some()
+        && request.norito_manifest.is_none()
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Taikai ingest requests carrying `taikai.ssm` require a caller-supplied `norito_manifest`"
+                .to_owned(),
+        ));
+    }
     let taikai_trm_payload = taikai_ingest::take_trm_entry(&mut metadata)?;
     let taikai_availability = if matches!(request.blob_class, BlobClass::TaikaiSegment) {
         taikai::taikai_availability_from_metadata(&request.metadata, taikai_trm_payload.as_deref())?
@@ -330,6 +431,7 @@ fn compute_da_manifest_artifacts(
             request.total_size,
         )?;
     }
+    // TODO: Persist a durable partial-retry journal for this server-owned queue time.
     let queued_at_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
@@ -381,6 +483,15 @@ pub async fn handler_post_da_ingest(
     validate_request_shape(&request).map_err(|(status, message)| {
         ResponseError::from(build_error_response(status, message, format))
     })?;
+    admission_snapshot_for_request(
+        app.as_ref(),
+        &authenticated_owner,
+        request.lane_id,
+        request.epoch,
+    )
+    .map_err(|(status, message)| {
+        ResponseError::from(build_error_response(status, &message, format))
+    })?;
     let nexus = app.state.nexus_snapshot();
     let committed_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let compute_request = request;
@@ -429,9 +540,35 @@ pub async fn handler_post_da_ingest(
             "overriding DA retention policy to match configured network baseline"
         );
     }
+    let pin_intent = build_da_pin_intent(&request, &manifest).map_err(|(status, message)| {
+        ResponseError::from(build_error_response(status, &message, format))
+    })?;
+    debug_assert_eq!(request.owner, authenticated_owner);
     let fingerprint = manifest.fingerprint;
     let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
     let replay_key = ReplayKey::new(lane_epoch, request.sequence, fingerprint);
+    let replay_lifecycle_guard = app.da_replay_lifecycle_lock.lock();
+    let admission_snapshot = admission_snapshot_for_request(
+        app.as_ref(),
+        &authenticated_owner,
+        request.lane_id,
+        request.epoch,
+    )
+    .map_err(|(status, message)| {
+        ResponseError::from(build_error_response(status, &message, format))
+    })?;
+    reconcile_da_replay_state(
+        &admission_snapshot,
+        app.da_receipt_log.as_ref(),
+        app.da_replay_cache.as_ref(),
+    )
+    .map_err(|message| {
+        ResponseError::from(build_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &message,
+            format,
+        ))
+    })?;
     if let Some(artifacts) = load_duplicate_da_artifacts_if_receipt_present(
         app.da_receipt_log.as_ref(),
         &app.da_ingest.manifest_store_dir,
@@ -439,13 +576,14 @@ pub async fn handler_post_da_ingest(
         request.sequence,
         &manifest.storage_ticket,
         fingerprint,
+        &pin_intent,
     )
     .map_err(|err| {
-        ResponseError::from(build_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("failed to recover durable duplicate DA ingest artifacts: {err}"),
+        duplicate_da_artifacts_response_error(
+            err,
+            "failed to recover durable duplicate DA ingest artifacts",
             format,
-        ))
+        )
     })? {
         ensure_taikai_anchor_ready(&app.da_ingest.manifest_store_dir, &request, &manifest)
             .map_err(|err| {
@@ -464,6 +602,7 @@ pub async fn handler_post_da_ingest(
         );
     }
     let (outcome, fresh_reservation) = app.da_replay_cache.reserve(replay_key, Instant::now());
+    drop(replay_lifecycle_guard);
     match outcome {
         ReplayInsertOutcome::Fresh { .. } | ReplayInsertOutcome::Duplicate { .. } => {
             let duplicate = matches!(&outcome, ReplayInsertOutcome::Duplicate { .. });
@@ -482,6 +621,7 @@ pub async fn handler_post_da_ingest(
                     &request,
                     &manifest,
                     lane_epoch,
+                    &pin_intent,
                     format,
                 );
             }
@@ -664,20 +804,6 @@ pub async fn handler_post_da_ingest(
                     .map_err(|err| err.to_string())
                 }));
             }
-            let pin_alias =
-                registry_alias_from_metadata(&request.metadata).map_err(|(status, message)| {
-                    ResponseError::from(build_error_response(status, &message, format))
-                })?;
-            let mut pin_intent = DaPinIntent::new(
-                request.lane_id,
-                request.epoch,
-                request.sequence,
-                manifest.storage_ticket,
-                ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
-                request.authorization(),
-            );
-            pin_intent.alias = pin_alias;
-            debug_assert_eq!(request.owner, authenticated_owner);
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
                 let pin_intent = pin_intent.clone();
@@ -700,6 +826,7 @@ pub async fn handler_post_da_ingest(
                 }));
             }
             let mut taikai_alias_rotation_event = None;
+            let mut taikai_lineage_commit = None;
             if let Some(taikai) = taikai_artifacts {
                 {
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
@@ -765,6 +892,10 @@ pub async fn handler_post_da_ingest(
                 .map_err(|(status, message)| {
                     ResponseError::from(build_error_response(status, &message, format))
                 })?;
+                taikai::validate_taikai_publisher_owner(&ssm_outcome, &authenticated_owner)
+                    .map_err(|(status, message)| {
+                        ResponseError::from(build_error_response(status, &message, format))
+                    })?;
                 {
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
                     let ssm_bytes_for_spool = ssm_bytes.clone();
@@ -810,22 +941,54 @@ pub async fn handler_post_da_ingest(
                         ResponseError::from(build_error_response(status, &message, format))
                     })?;
                     if let Some(guard) = lineage_guard.as_mut() {
+                        guard.recover_pending(app.da_receipt_log.as_ref()).map_err(
+                            |(status, message): (StatusCode, String)| {
+                                ResponseError::from(build_error_response(status, &message, format))
+                            },
+                        )?;
+                    }
+                    let lineage_validation = if let Some(guard) = lineage_guard.as_ref() {
                         guard
-                            .validate(&routing_manifest, &manifest_digest_hex)
+                            .validate_ingest_retry(
+                                &routing_manifest,
+                                &manifest_digest_hex,
+                                request.lane_id,
+                                request.epoch,
+                                request.sequence,
+                                &manifest.storage_ticket,
+                                &fingerprint,
+                                &trm_bytes,
+                            )
                             .map_err(|(status, message): (StatusCode, String)| {
                                 ResponseError::from(build_error_response(status, &message, format))
-                            })?;
-                    }
+                            })?
+                    } else {
+                        taikai_ingest::TrmLineageValidation::Fresh
+                    };
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
                     let storage_ticket = manifest.storage_ticket.clone();
                     let lane_id = request.lane_id;
                     let epoch = request.epoch;
                     let sequence = request.sequence;
-                    let segment_window = routing_manifest.segment_window.clone();
-                    let manifest_digest_for_spool = manifest_digest_hex.clone();
                     let trm_bytes_for_spool = trm_bytes.clone();
                     spool_batch.push(DaSpoolAction::new("taikai_trm", move || {
-                        let persisted = taikai_ingest::persist_trm(
+                        if matches!(
+                            lineage_validation,
+                            taikai_ingest::TrmLineageValidation::ExactArtifactRetry
+                        ) {
+                            taikai_ingest::validate_existing_trm_retry_artifact(
+                                &spool_dir,
+                                lane_id,
+                                epoch,
+                                sequence,
+                                &storage_ticket,
+                                &fingerprint,
+                                &trm_bytes_for_spool,
+                            )
+                            .map_err(|err| err.to_string())?;
+                            return Ok(DaSpoolActionOutput::None);
+                        }
+                        taikai_ingest::persist_trm(
                             &spool_dir,
                             lane_id,
                             epoch,
@@ -835,34 +998,38 @@ pub async fn handler_post_da_ingest(
                             &trm_bytes_for_spool,
                         )
                         .map_err(|err| err.to_string())?;
-                        if persisted.is_some()
-                            && let Some(guard) = lineage_guard.as_mut()
-                        {
-                            guard
-                                .persist_lineage_hint(
-                                    lane_id,
-                                    epoch,
-                                    sequence,
-                                    &storage_ticket,
-                                    &fingerprint,
-                                )
-                                .map_err(|(_, message)| message)?;
-                            guard
-                                .commit(segment_window, &manifest_digest_for_spool)
-                                .map_err(|(_, message)| message)?;
-                        }
                         Ok(DaSpoolActionOutput::None)
                     }));
-                    taikai_alias_rotation_event =
-                        Some((routing_manifest.clone(), manifest_digest_hex));
+                    if lineage_validation.records_alias_rotation() {
+                        taikai_lineage_commit =
+                            lineage_guard.map(|guard| PendingTaikaiLineageCommit {
+                                guard,
+                                segment_window: routing_manifest.segment_window.clone(),
+                                manifest_digest_hex: manifest_digest_hex.clone(),
+                                lane_id: request.lane_id,
+                                epoch: request.epoch,
+                                sequence: request.sequence,
+                                storage_ticket: manifest.storage_ticket.clone(),
+                                fingerprint,
+                            });
+                        taikai_alias_rotation_event =
+                            Some((routing_manifest.clone(), manifest_digest_hex));
+                    }
                 }
                 taikai::record_taikai_ingest_metrics(&telemetry, cluster_label, &taikai.telemetry);
             }
             {
                 let receipt_log = Arc::clone(&app.da_receipt_log);
+                let replay_cache = Arc::clone(&app.da_replay_cache);
+                let replay_lifecycle_lock = Arc::clone(&app.da_replay_lifecycle_lock);
+                let state = Arc::clone(&app.state);
                 let receipt = receipt.clone();
                 let sequence = request.sequence;
+                let owner = authenticated_owner.clone();
+                let lane_id = request.lane_id;
+                let epoch = request.epoch;
                 let mut replay_reservation = replay_reservation;
+                let mut taikai_lineage_commit = taikai_lineage_commit;
                 let taikai_ready =
                     matches!(request.blob_class, BlobClass::TaikaiSegment).then(|| {
                         (
@@ -878,9 +1045,104 @@ pub async fn handler_post_da_ingest(
                 // reservation into the queued action keeps it live if the HTTP future is
                 // cancelled after the spool worker accepts the batch.
                 spool_batch.push_commit(DaSpoolAction::new("receipt_log", move || {
-                    let outcome = receipt_log
-                        .append(lane_epoch, sequence, receipt, fingerprint)
-                        .map_err(|err| err.to_string())?;
+                    let _lifecycle_guard = replay_lifecycle_lock.lock();
+                    let admission_snapshot = super::committed_da_ingest_admission_snapshot(&state)
+                        .map_err(|error| {
+                            format!("committed DA ingest admission policy is invalid: {error}")
+                        })?;
+                    if !admission_snapshot.is_configured() {
+                        return Err(
+                            "DA ingest admission policy was removed before durable commit"
+                                .to_owned(),
+                        );
+                    }
+                    if !admission_snapshot.authorizes(&owner, lane_id, epoch) {
+                        return Err(
+                            "DA ingest authorization was retired before durable commit".to_owned()
+                        );
+                    }
+                    reconcile_da_replay_state(
+                        &admission_snapshot,
+                        receipt_log.as_ref(),
+                        replay_cache.as_ref(),
+                    )?;
+                    if let Some(lineage) = taikai_lineage_commit.as_mut() {
+                        lineage.stage()?;
+                    }
+                    let outcome = match receipt_log.append(
+                        lane_epoch,
+                        sequence,
+                        receipt,
+                        fingerprint,
+                    ) {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            let append_error = error.to_string();
+                            if let Some(lineage) = taikai_lineage_commit.as_mut() {
+                                let recovery_snapshot =
+                                    super::committed_da_ingest_admission_snapshot(&state).map_err(
+                                        |snapshot_error| {
+                                            format!(
+                                                "{append_error}; could not reconcile staged Taikai lineage because the committed DA admission policy is invalid: {snapshot_error}"
+                                            )
+                                        },
+                                    )?;
+                                if !recovery_snapshot.authorizes(&owner, lane_id, epoch) {
+                                    reconcile_da_replay_state(
+                                        &recovery_snapshot,
+                                        receipt_log.as_ref(),
+                                        replay_cache.as_ref(),
+                                    )
+                                    .map_err(|reconcile_error| {
+                                        format!(
+                                            "{append_error}; could not retire a possibly written receipt before Taikai lineage recovery: {reconcile_error}"
+                                        )
+                                    })?;
+                                }
+                                lineage.recover(receipt_log.as_ref()).map_err(
+                                    |recovery_error| {
+                                        format!(
+                                            "{append_error}; failed to reconcile staged Taikai lineage against the receipt log: {recovery_error}"
+                                        )
+                                    },
+                                )?;
+                            }
+                            return Err(append_error);
+                        }
+                    };
+                    let post_commit_snapshot = super::committed_da_ingest_admission_snapshot(
+                        &state,
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "failed to recheck DA admission policy after receipt commit: {error}"
+                        )
+                    })?;
+                    if !post_commit_snapshot.authorizes(&owner, lane_id, epoch) {
+                        reconcile_da_replay_state(
+                            &post_commit_snapshot,
+                            receipt_log.as_ref(),
+                            replay_cache.as_ref(),
+                        )?;
+                        if let Some(lineage) = taikai_lineage_commit.as_mut() {
+                            lineage.discard()?;
+                        }
+                        return Err(
+                            "DA ingest authorization changed during durable commit; retired receipt"
+                                .to_owned(),
+                        );
+                    }
+                    if matches!(
+                        &outcome,
+                        ReceiptInsertOutcome::Stored { .. }
+                            | ReceiptInsertOutcome::Duplicate { .. }
+                    ) {
+                        if let Some(lineage) = taikai_lineage_commit.as_mut() {
+                            lineage.recover(receipt_log.as_ref())?;
+                        }
+                    } else if let Some(lineage) = taikai_lineage_commit.as_mut() {
+                        lineage.discard()?;
+                    }
                     if matches!(
                         &outcome,
                         ReceiptInsertOutcome::Stored { .. }
@@ -983,11 +1245,42 @@ pub async fn handler_post_da_ingest(
         }
     }
 }
+#[derive(Debug)]
 struct DuplicateDaArtifacts {
     receipt_path: PathBuf,
     receipt: DaIngestReceipt,
     pdp_commitment_bytes: Vec<u8>,
 }
+#[derive(Debug)]
+enum DuplicateDaArtifactsError {
+    Conflict(String),
+    Internal(eyre::Report),
+}
+impl std::fmt::Display for DuplicateDaArtifactsError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Conflict(message) => formatter.write_str(message),
+            Self::Internal(error) => std::fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+impl std::error::Error for DuplicateDaArtifactsError {}
+
+fn duplicate_da_artifacts_response_error(
+    error: DuplicateDaArtifactsError,
+    internal_context: &str,
+    format: ResponseFormat,
+) -> ResponseError {
+    let (status, message) = match error {
+        DuplicateDaArtifactsError::Conflict(message) => (StatusCode::CONFLICT, message),
+        DuplicateDaArtifactsError::Internal(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{internal_context}: {error}"),
+        ),
+    };
+    ResponseError::from(build_error_response(status, &message, format))
+}
+
 fn load_duplicate_da_artifacts(
     receipt_log: &persistence::DaReceiptLog,
     spool_dir: &Path,
@@ -995,34 +1288,63 @@ fn load_duplicate_da_artifacts(
     sequence: u64,
     storage_ticket: &StorageTicketId,
     fingerprint: ReplayFingerprint,
-) -> eyre::Result<DuplicateDaArtifacts> {
+    expected_pin_intent: &DaPinIntent,
+) -> Result<DuplicateDaArtifacts, DuplicateDaArtifactsError> {
+    let durable_pin_intent = persistence::load_da_pin_intent(
+        spool_dir,
+        lane_epoch.lane_id,
+        lane_epoch.epoch,
+        sequence,
+        storage_ticket,
+        &fingerprint,
+    )
+    .wrap_err("failed to load duplicate DA pin-intent artifact")
+    .map_err(DuplicateDaArtifactsError::Internal)?;
     let manifest_artifact =
         persistence::load_manifest_artifact_from_spool(spool_dir, storage_ticket)
-            .wrap_err("failed to load duplicate DA manifest artifact")?;
+            .wrap_err("failed to load duplicate DA manifest artifact")
+            .map_err(DuplicateDaArtifactsError::Internal)?;
     let manifest_hash = BlobDigest::from_hash(blake3_hash(&manifest_artifact.bytes));
+    if durable_pin_intent.manifest_hash.as_bytes() != manifest_hash.as_bytes() {
+        return Err(DuplicateDaArtifactsError::Internal(eyre!(
+            "duplicate DA pin-intent manifest digest does not match durable manifest"
+        )));
+    }
     let pdp_commitment_bytes = persistence::load_pdp_commitment_for_manifest_artifact(
         spool_dir,
         &manifest_artifact,
         &manifest_hash,
     )
-    .wrap_err("failed to load duplicate DA PDP commitment artifact")?;
+    .wrap_err("failed to load duplicate DA PDP commitment artifact")
+    .map_err(DuplicateDaArtifactsError::Internal)?;
     let (receipt_path, receipt) = receipt_log
         .receipt_for_duplicate(lane_epoch, sequence, fingerprint)
-        .wrap_err("failed to load duplicate DA receipt")?
-        .ok_or_else(|| eyre!("duplicate DA receipt was not found"))?;
+        .wrap_err("failed to load duplicate DA receipt")
+        .map_err(DuplicateDaArtifactsError::Internal)?
+        .ok_or_else(|| {
+            DuplicateDaArtifactsError::Internal(eyre!("duplicate DA receipt was not found"))
+        })?;
     if receipt.storage_ticket != *storage_ticket {
-        return Err(eyre!(
+        return Err(DuplicateDaArtifactsError::Internal(eyre!(
             "duplicate DA receipt storage ticket does not match replay fingerprint"
-        ));
+        )));
     }
     if receipt.manifest_hash != manifest_hash {
-        return Err(eyre!(
+        return Err(DuplicateDaArtifactsError::Internal(eyre!(
             "duplicate DA receipt manifest hash does not match durable manifest"
-        ));
+        )));
     }
     if receipt.pdp_commitment.as_deref() != Some(pdp_commitment_bytes.as_slice()) {
-        return Err(eyre!(
+        return Err(DuplicateDaArtifactsError::Internal(eyre!(
             "duplicate DA receipt PDP commitment does not match durable PDP artifact"
+        )));
+    }
+    if durable_pin_intent.alias != expected_pin_intent.alias
+        || durable_pin_intent.authorization.signing_digest()
+            != expected_pin_intent.authorization.signing_digest()
+    {
+        return Err(DuplicateDaArtifactsError::Conflict(
+            "completed DA ingest identity conflicts with the submitted request".to_owned(),
         ));
     }
     Ok(DuplicateDaArtifacts {
@@ -1038,10 +1360,12 @@ fn load_duplicate_da_artifacts_if_receipt_present(
     sequence: u64,
     storage_ticket: &StorageTicketId,
     fingerprint: ReplayFingerprint,
-) -> eyre::Result<Option<DuplicateDaArtifacts>> {
+    expected_pin_intent: &DaPinIntent,
+) -> Result<Option<DuplicateDaArtifacts>, DuplicateDaArtifactsError> {
     if receipt_log
         .receipt_for_duplicate(lane_epoch, sequence, fingerprint)
-        .wrap_err("failed to check durable DA receipt log for duplicate")?
+        .wrap_err("failed to check durable DA receipt log for duplicate")
+        .map_err(DuplicateDaArtifactsError::Internal)?
         .is_none()
     {
         return Ok(None);
@@ -1053,6 +1377,7 @@ fn load_duplicate_da_artifacts_if_receipt_present(
         sequence,
         storage_ticket,
         fingerprint,
+        expected_pin_intent,
     )
     .map(Some)
 }
@@ -1062,6 +1387,7 @@ fn handle_duplicate_da_ingest(
     request: &DaIngestRequest,
     manifest: &ManifestArtifacts,
     lane_epoch: LaneEpoch,
+    expected_pin_intent: &DaPinIntent,
     format: ResponseFormat,
 ) -> Result<Response, ResponseError> {
     let artifacts = load_duplicate_da_artifacts_and_publish_taikai_ready(
@@ -1070,13 +1396,14 @@ fn handle_duplicate_da_ingest(
         request,
         manifest,
         lane_epoch,
+        expected_pin_intent,
     )
     .map_err(|err| {
-        ResponseError::from(build_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("failed to recover duplicate DA ingest artifacts: {err}"),
+        duplicate_da_artifacts_response_error(
+            err,
+            "failed to recover duplicate DA ingest artifacts",
             format,
-        ))
+        )
     })?;
     duplicate_da_ingest_response_from_artifacts(
         telemetry,
@@ -1092,7 +1419,8 @@ fn load_duplicate_da_artifacts_and_publish_taikai_ready(
     request: &DaIngestRequest,
     manifest: &ManifestArtifacts,
     lane_epoch: LaneEpoch,
-) -> eyre::Result<DuplicateDaArtifacts> {
+    expected_pin_intent: &DaPinIntent,
+) -> Result<DuplicateDaArtifacts, DuplicateDaArtifactsError> {
     let artifacts = load_duplicate_da_artifacts(
         receipt_log,
         spool_dir,
@@ -1100,10 +1428,12 @@ fn load_duplicate_da_artifacts_and_publish_taikai_ready(
         request.sequence,
         &manifest.storage_ticket,
         manifest.fingerprint,
+        expected_pin_intent,
     )?;
     // Publish readiness only after every durable duplicate artifact, including
     // its receipt, has been reloaded and cross-checked successfully.
-    ensure_taikai_anchor_ready(spool_dir, request, manifest)?;
+    ensure_taikai_anchor_ready(spool_dir, request, manifest)
+        .map_err(DuplicateDaArtifactsError::Internal)?;
     Ok(artifacts)
 }
 fn ensure_taikai_anchor_ready(
@@ -1539,6 +1869,12 @@ fn authenticate_da_ingest_request(
     Ok(principal.account.clone())
 }
 fn validate_request_shape(request: &DaIngestRequest) -> Result<(), (StatusCode, &'static str)> {
+    if request.sequence == u64::MAX {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "sequence must leave room for a monotonic successor",
+        ));
+    }
     if request.total_size == 0 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -1896,13 +2232,6 @@ fn role_tag(role: ChunkRole) -> u8 {
         ChunkRole::StripeParity => 3,
     }
 }
-fn effective_chunk_role(commitment: &ChunkCommitment) -> ChunkRole {
-    if commitment.parity && matches!(commitment.role, ChunkRole::Data) {
-        ChunkRole::GlobalParity
-    } else {
-        commitment.role
-    }
-}
 #[cfg(feature = "ipa-commitment")]
 fn ipa_scalar_from_chunk(commitment: &ChunkCommitment) -> IpaScalar {
     let mut hasher = Blake3Hasher::new();
@@ -2047,7 +2376,9 @@ fn resolve_manifest_with_observer(
             format!("failed to compute DA rent quote: {err}"),
         )
     })?;
-    let manifest_template = if let Some(bytes) = &request.norito_manifest {
+    let (manifest_template, supplied_taikai_issued_at_unix) = if let Some(bytes) =
+        &request.norito_manifest
+    {
         let manifest = decode_from_bytes::<DaManifestV1>(bytes).map_err(|err| {
             warn!(?err, "failed to decode DA manifest");
             (
@@ -2055,6 +2386,15 @@ fn resolve_manifest_with_observer(
                 format!("failed to decode DA manifest: {err}"),
             )
         })?;
+        let supplied_taikai_issued_at_unix = matches!(request.blob_class, BlobClass::TaikaiSegment)
+            .then_some(manifest.issued_at_unix);
+        if supplied_taikai_issued_at_unix == Some(0) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "caller-supplied Taikai manifest issued_at_unix must be greater than zero"
+                    .to_owned(),
+            ));
+        }
         let expected_ipa = ipa_commitment_from_chunks(&chunk_commitments)?;
         let ipa_commitment = if manifest.ipa_commitment.is_zero() {
             expected_ipa
@@ -2076,47 +2416,53 @@ fn resolve_manifest_with_observer(
             chunk_root,
             &rent_quote,
         )?;
-        DaManifestV1 {
-            version: manifest.version,
-            storage_ticket: StorageTicketId::default(),
-            total_stripes: total_stripes_full,
-            shards_per_stripe,
-            metadata: metadata.clone(),
-            rent_quote,
-            ipa_commitment,
-            issued_at_unix: 0,
-            ..manifest
-        }
+        (
+            DaManifestV1 {
+                version: manifest.version,
+                storage_ticket: StorageTicketId::default(),
+                total_stripes: total_stripes_full,
+                shards_per_stripe,
+                metadata: metadata.clone(),
+                rent_quote,
+                ipa_commitment,
+                issued_at_unix: 0,
+                ..manifest
+            },
+            supplied_taikai_issued_at_unix,
+        )
     } else {
         let ipa_commitment = ipa_commitment_from_chunks(&chunk_commitments)?;
-        DaManifestV1 {
-            version: DaManifestV1::VERSION,
-            client_blob_id: request.client_blob_id.clone(),
-            lane_id: request.lane_id,
-            epoch: request.epoch,
-            blob_class: request.blob_class,
-            codec: request.codec.clone(),
-            blob_hash,
-            chunk_root,
-            storage_ticket: StorageTicketId::default(),
-            total_size: request.total_size,
-            chunk_size: request.chunk_size,
-            total_stripes: total_stripes_full,
-            shards_per_stripe,
-            erasure_profile: request.erasure_profile,
-            retention_policy: enforced_retention.clone(),
-            rent_quote,
-            chunks: chunk_commitments.clone(),
-            ipa_commitment,
-            metadata: metadata.clone(),
-            issued_at_unix: 0,
-        }
+        (
+            DaManifestV1 {
+                version: DaManifestV1::VERSION,
+                client_blob_id: request.client_blob_id.clone(),
+                lane_id: request.lane_id,
+                epoch: request.epoch,
+                blob_class: request.blob_class,
+                codec: request.codec.clone(),
+                blob_hash,
+                chunk_root,
+                storage_ticket: StorageTicketId::default(),
+                total_size: request.total_size,
+                chunk_size: request.chunk_size,
+                total_stripes: total_stripes_full,
+                shards_per_stripe,
+                erasure_profile: request.erasure_profile,
+                retention_policy: enforced_retention.clone(),
+                rent_quote,
+                chunks: chunk_commitments.clone(),
+                ipa_commitment,
+                metadata: metadata.clone(),
+                issued_at_unix: 0,
+            },
+            None,
+        )
     };
     let fingerprint = manifest_fingerprint(&manifest_template)?;
     let storage_ticket = StorageTicketId::new(*fingerprint.as_bytes());
     let manifest = DaManifestV1 {
         storage_ticket,
-        issued_at_unix: queued_at_unix,
+        issued_at_unix: supplied_taikai_issued_at_unix.unwrap_or(queued_at_unix),
         ..manifest_template
     };
     let encoded =
@@ -2367,6 +2713,21 @@ fn registry_alias_from_metadata(
     }
     Ok(Some(value.to_owned()))
 }
+fn build_da_pin_intent(
+    request: &DaIngestRequest,
+    manifest: &ManifestArtifacts,
+) -> Result<DaPinIntent, (StatusCode, String)> {
+    let mut intent = DaPinIntent::new(
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        manifest.storage_ticket,
+        ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
+        request.authorization(),
+    );
+    intent.alias = registry_alias_from_metadata(&request.metadata)?;
+    Ok(intent)
+}
 #[allow(clippy::too_many_arguments)]
 fn verify_manifest_against_request(
     request: &DaIngestRequest,
@@ -2478,13 +2839,13 @@ fn verify_manifest_against_request(
                 format!("manifest parity flag mismatch at index {}", expected.index),
             ));
         }
-        if effective_chunk_role(expected) != effective_chunk_role(actual) {
+        if expected.role != actual.role {
             return Err((
                 StatusCode::BAD_REQUEST,
                 format!("manifest role mismatch at index {}", expected.index),
             ));
         }
-        if actual.group_id != 0 && expected.group_id != actual.group_id {
+        if expected.group_id != actual.group_id {
             return Err((
                 StatusCode::BAD_REQUEST,
                 format!("manifest group_id mismatch at index {}", expected.index),

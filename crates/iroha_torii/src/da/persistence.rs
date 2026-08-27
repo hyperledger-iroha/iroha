@@ -14,7 +14,7 @@ use norito::{
 use parking_lot::{Mutex as NonPoisoningMutex, MutexGuard as NonPoisoningMutexGuard};
 use sorafs_manifest::pdp::{PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PdpCommitmentV1};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     fs::{self, File},
     io::{ErrorKind, Read, Seek, SeekFrom, Write},
@@ -36,12 +36,15 @@ const CURSOR_JOURNAL_DOMAIN: &[u8] = b"iroha.da.replay.cursor.journal.v1";
 const CURSOR_SNAPSHOT_MAX_ENTRY_BYTES: usize = 256;
 const CURSOR_SNAPSHOT_FIXED_OVERHEAD_BYTES: usize = 128;
 const RECEIPT_FILE_PREFIX: &str = "da-receipt";
+const RETIRED_RECEIPT_DIR_NAME: &str = "retired-da-receipts-v1";
 /// First-release ceiling for one durable DA receipt, including its PDP commitment and signature.
 const DA_RECEIPT_ARTIFACT_MAX_BYTES_V1: usize = 64 * 1024;
 /// First-release ceiling covering Ed25519, secp256k1, and ML-DSA-65 receipt signatures.
 const DA_RECEIPT_SIGNATURE_MAX_BYTES_V1: usize = 4 * 1024;
 /// First-release ceiling for one canonical DA manifest spool body.
 const DA_MANIFEST_ARTIFACT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
+/// First-release ceiling for one authorised DA pin-intent spool body.
+const DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 const TICKET_ARTIFACTS_DIR: &str = "artifacts";
 const MANIFEST_ARTIFACT_FILE_NAME: &str = "manifest.norito";
 const PDP_COMMITMENT_ARTIFACT_FILE_NAME: &str = "pdp-commitment.norito";
@@ -263,6 +266,25 @@ impl ReplayCursorStore {
             .iter()
             .map(|(lane_epoch, highest)| (*lane_epoch, *highest))
             .collect()
+    }
+    /// Retire every cursor outside an authoritative lane/epoch allow-set.
+    ///
+    /// The filtered snapshot is published and the applied journal is truncated
+    /// before this method returns, so a later receipt scan cannot resurrect a
+    /// retired window when it applies the same allow-set.
+    pub(crate) fn retain_lane_epochs(
+        &self,
+        mut retain: impl FnMut(LaneEpoch) -> bool,
+    ) -> eyre::Result<usize> {
+        let mut guard = self.lock_state();
+        let before = guard.highest.len();
+        guard.highest.retain(|lane_epoch, _| retain(*lane_epoch));
+        let removed = before.saturating_sub(guard.highest.len());
+        if removed == 0 {
+            return Ok(0);
+        }
+        self.checkpoint_locked(&mut guard)?;
+        Ok(removed)
     }
     fn highest_sequence(&self, lane_epoch: LaneEpoch) -> Option<u64> {
         self.lock_state().highest.get(&lane_epoch).copied()
@@ -968,6 +990,109 @@ struct DaReceiptSigningPayload {
     sequence: u64,
     receipt: DaIngestReceipt,
 }
+fn archive_receipts_outside_allow_set(
+    dir: &Path,
+    retain: &impl Fn(LaneEpoch) -> bool,
+) -> eyre::Result<BTreeSet<LaneEpoch>> {
+    if dir.as_os_str().is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let archive_dir = dir.join(RETIRED_RECEIPT_DIR_NAME);
+    create_spool_dir_no_follow(&archive_dir).wrap_err_with(|| {
+        format!(
+            "failed to create retired DA receipt archive {}",
+            archive_dir.display()
+        )
+    })?;
+    let mut linked = Vec::new();
+    let mut retired = BTreeSet::new();
+    let Some(entries) = open_spool_dir_no_follow(dir)? else {
+        return Ok(retired);
+    };
+    for entry in entries {
+        let entry = entry?;
+        let source = entry.path();
+        if !artifact_path_matches(&source, RECEIPT_FILE_PREFIX)? {
+            continue;
+        }
+        if !fs::symlink_metadata(&source)?.file_type().is_file() {
+            return Err(eyre!(
+                "durable DA receipt {} is not a regular file",
+                source.display()
+            ));
+        }
+        let key = parse_receipt_file_key(&source).wrap_err_with(|| {
+            format!(
+                "failed to parse durable DA receipt filename {} before retirement",
+                source.display()
+            )
+        })?;
+        let lane_epoch = LaneEpoch::new(key.lane_id, key.epoch);
+        if retain(lane_epoch) {
+            continue;
+        }
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| eyre!("retired DA receipt path has no file name"))?;
+        let destination = archive_dir.join(file_name);
+        match fs::hard_link(&source, &destination) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                let source_bytes = read_regular_spool_artifact(
+                    &source,
+                    "retired DA receipt source",
+                    DA_RECEIPT_ARTIFACT_MAX_BYTES_V1,
+                )?;
+                let archived_bytes = read_regular_spool_artifact(
+                    &destination,
+                    "retired DA receipt archive",
+                    DA_RECEIPT_ARTIFACT_MAX_BYTES_V1,
+                )?;
+                if source_bytes != archived_bytes {
+                    return Err(eyre!(
+                        "retired DA receipt archive collision at {}",
+                        destination.display()
+                    ));
+                }
+            }
+            Err(error) => {
+                return Err(eyre!(error)).wrap_err_with(|| {
+                    format!(
+                        "failed to durably link retired DA receipt {} into {}",
+                        source.display(),
+                        destination.display()
+                    )
+                });
+            }
+        }
+        linked.push(source);
+        retired.insert(lane_epoch);
+    }
+    if linked.is_empty() {
+        return Ok(retired);
+    }
+    sync_dir(&archive_dir).wrap_err_with(|| {
+        format!(
+            "failed to sync retired DA receipt archive {}",
+            archive_dir.display()
+        )
+    })?;
+    for source in linked {
+        fs::remove_file(&source).wrap_err_with(|| {
+            format!(
+                "failed to remove active-prefix retired DA receipt {}",
+                source.display()
+            )
+        })?;
+    }
+    sync_dir(dir).wrap_err_with(|| {
+        format!(
+            "failed to sync DA receipt directory {} after retirement",
+            dir.display()
+        )
+    })?;
+    Ok(retired)
+}
 /// Outcome returned after attempting to insert a receipt into the log.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReceiptInsertOutcome {
@@ -1202,12 +1327,32 @@ impl DaReceiptLog {
         cursor_store: Arc<ReplayCursorStore>,
         signer_public_key: PublicKey,
     ) -> eyre::Result<Self> {
+        Self::open_with_lane_epoch_filter(dir, cursor_store, signer_public_key, |_| true)
+    }
+    /// Open a receipt log while retiring excluded lane/epoch windows.
+    ///
+    /// Excluded receipt files are durably moved out of the active filename
+    /// namespace before the cursor checkpoint is pruned. This ordering makes a
+    /// crash retryable and prevents a later restart from resurrecting capacity.
+    pub(crate) fn open_with_lane_epoch_filter(
+        dir: PathBuf,
+        cursor_store: Arc<ReplayCursorStore>,
+        signer_public_key: PublicKey,
+        retain: impl Fn(LaneEpoch) -> bool,
+    ) -> eyre::Result<Self> {
         if dir.as_os_str().is_empty() {
             return Err(eyre!("receipt log directory must not be empty"));
         }
         create_spool_dir_no_follow(&dir)
             .wrap_err_with(|| format!("failed to create DA receipt directory {}", dir.display()))?;
-        let index = Self::load_existing(&dir, &signer_public_key, cursor_store.max_lane_epochs())?;
+        archive_receipts_outside_allow_set(&dir, &retain)?;
+        cursor_store.retain_lane_epochs(|lane_epoch| retain(lane_epoch))?;
+        let index = Self::load_existing(
+            &dir,
+            &signer_public_key,
+            cursor_store.max_lane_epochs(),
+            &retain,
+        )?;
         let mut known_lane_epochs = BTreeMap::new();
         for (lane_epoch, _) in cursor_store.highest_sequences() {
             known_lane_epochs.insert(lane_epoch, ());
@@ -1236,6 +1381,41 @@ impl DaReceiptLog {
             signer_public_key,
             index: Arc::new(NonPoisoningMutex::new(index)),
         })
+    }
+
+    /// Reconcile active receipts and cursors with one authoritative allow-set.
+    ///
+    /// Active-prefix receipt files are archived and directory-synced first,
+    /// then the durable cursor checkpoint is pruned, and finally the in-memory
+    /// receipt head is removed. Callers may clear returned replay-cache scopes
+    /// after this method succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if archival, directory synchronization, or cursor
+    /// checkpointing fails. Partial archival is safe to retry.
+    pub(crate) fn retain_lane_epochs(
+        &self,
+        retain: impl Fn(LaneEpoch) -> bool,
+    ) -> eyre::Result<Vec<LaneEpoch>> {
+        let mut guard = self.lock_index();
+        let mut known = BTreeSet::new();
+        known.extend(guard.keys().copied());
+        known.extend(
+            self.cursor_store
+                .highest_sequences()
+                .into_iter()
+                .map(|(lane_epoch, _)| lane_epoch),
+        );
+        known.extend(archive_receipts_outside_allow_set(&self.dir, &retain)?);
+        let retired = known
+            .into_iter()
+            .filter(|lane_epoch| !retain(*lane_epoch))
+            .collect::<Vec<_>>();
+        self.cursor_store
+            .retain_lane_epochs(|lane_epoch| retain(lane_epoch))?;
+        guard.retain(|lane_epoch, _| retain(*lane_epoch));
+        Ok(retired)
     }
     /// Construct a non-durable in-memory receipt log.
     ///
@@ -1416,6 +1596,7 @@ impl DaReceiptLog {
         dir: &Path,
         signer_public_key: &PublicKey,
         max_lane_epochs: NonZeroUsize,
+        retain: &impl Fn(LaneEpoch) -> bool,
     ) -> eyre::Result<ReceiptIndex> {
         let mut summaries: BTreeMap<LaneEpoch, ReceiptScanSummary> = BTreeMap::new();
         let Some(dir_entries) = open_spool_dir_no_follow(dir)? else {
@@ -1432,6 +1613,16 @@ impl DaReceiptLog {
                     "durable DA receipt {} is not a regular file",
                     path.display()
                 ));
+            }
+            let filename_key = parse_receipt_file_key(&path).wrap_err_with(|| {
+                format!(
+                    "failed to parse durable DA receipt filename {}",
+                    path.display()
+                )
+            })?;
+            let filename_lane_epoch = LaneEpoch::new(filename_key.lane_id, filename_key.epoch);
+            if !retain(filename_lane_epoch) {
+                continue;
             }
             let (receipt_key, stored) =
                 Self::decode_receipt_with_key(&path).wrap_err_with(|| {
@@ -2217,6 +2408,114 @@ mod temp_artifact_tests {
         );
     }
     #[test]
+    fn governed_cursor_retirement_survives_restart() {
+        let dir = tempdir().expect("tempdir");
+        let cursor_dir = dir.path().join("cursors");
+        let retained = LaneEpoch::new(LaneId::new(1), 8);
+        let retired = LaneEpoch::new(LaneId::new(1), 7);
+        let store = ReplayCursorStore::empty(cursor_dir.clone()).expect("cursor store");
+        store.record(retired, 4).expect("record retired cursor");
+        store.record(retained, 2).expect("record retained cursor");
+        assert_eq!(
+            store
+                .retain_lane_epochs(|lane_epoch| lane_epoch == retained)
+                .expect("retire old cursor"),
+            1
+        );
+        drop(store);
+
+        let reopened = ReplayCursorStore::open(cursor_dir).expect("reopen filtered cursor store");
+        assert_eq!(reopened.highest_sequences(), vec![(retained, 2)]);
+    }
+    #[test]
+    fn retired_receipt_window_cannot_repopulate_cursor_on_restart() {
+        let dir = tempdir().expect("tempdir");
+        let cursor_dir = dir.path().join("cursors");
+        let receipt_dir = dir.path().join("receipts");
+        let lane_epoch = LaneEpoch::new(LaneId::new(2), 99);
+        let signer = checked_ed25519_keypair("retired DA receipt fixture");
+        let cursor_store =
+            Arc::new(ReplayCursorStore::empty(cursor_dir.clone()).expect("initial cursor store"));
+        let log = DaReceiptLog::open(
+            receipt_dir.clone(),
+            Arc::clone(&cursor_store),
+            signer.public_key().clone(),
+        )
+        .expect("initial receipt log");
+        let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xCC);
+        assert!(matches!(
+            log.append(lane_epoch, 1, receipt, test_fingerprint(0xCC))
+                .expect("append retired receipt"),
+            ReceiptInsertOutcome::Stored { .. }
+        ));
+        let active_receipt = receipt_file_path(&receipt_dir, lane_epoch, 1, test_fingerprint(0xCC));
+        assert!(active_receipt.exists());
+        drop(log);
+        drop(cursor_store);
+
+        let cursor_store =
+            Arc::new(ReplayCursorStore::open(cursor_dir).expect("reopen populated cursor store"));
+        let log = DaReceiptLog::open_with_lane_epoch_filter(
+            receipt_dir.clone(),
+            Arc::clone(&cursor_store),
+            signer.public_key().clone(),
+            |_| false,
+        )
+        .expect("open receipt log with governed retirement filter");
+        assert!(log.index.lock().is_empty());
+        assert!(cursor_store.highest_sequences().is_empty());
+        assert!(!active_receipt.exists());
+        assert!(
+            receipt_dir
+                .join(RETIRED_RECEIPT_DIR_NAME)
+                .join(active_receipt.file_name().expect("receipt file name"))
+                .exists(),
+            "retired receipt must remain in the audit archive"
+        );
+    }
+    #[test]
+    fn runtime_receipt_retirement_archives_before_pruning_cursor() {
+        let dir = tempdir().expect("tempdir");
+        let receipt_dir = dir.path().join("receipts");
+        let cursor_store =
+            Arc::new(ReplayCursorStore::empty(dir.path().join("cursors")).expect("cursor store"));
+        let signer = checked_ed25519_keypair("runtime DA retirement fixture");
+        let log = DaReceiptLog::open(
+            receipt_dir.clone(),
+            Arc::clone(&cursor_store),
+            signer.public_key().clone(),
+        )
+        .expect("receipt log");
+        let retained = LaneEpoch::new(LaneId::new(3), 8);
+        let retired = LaneEpoch::new(LaneId::new(3), 7);
+        for (lane_epoch, marker) in [(retired, 0xC1), (retained, 0xC2)] {
+            let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, marker);
+            assert!(matches!(
+                log.append(lane_epoch, 1, receipt, test_fingerprint(marker))
+                    .expect("append receipt"),
+                ReceiptInsertOutcome::Stored { .. }
+            ));
+        }
+        let retired_path = receipt_file_path(&receipt_dir, retired, 1, test_fingerprint(0xC1));
+        assert_eq!(
+            log.retain_lane_epochs(|lane_epoch| lane_epoch == retained)
+                .expect("runtime retirement"),
+            vec![retired]
+        );
+        assert_eq!(cursor_store.highest_sequences(), vec![(retained, 1)]);
+        assert_eq!(
+            log.index.lock().keys().copied().collect::<Vec<_>>(),
+            vec![retained]
+        );
+        assert!(!retired_path.exists());
+        assert!(
+            receipt_dir
+                .join(RETIRED_RECEIPT_DIR_NAME)
+                .join(retired_path.file_name().expect("receipt file name"))
+                .exists()
+        );
+    }
+    #[test]
     fn da_receipt_log_remains_usable_after_caught_action_panic() {
         let dir = tempdir().expect("tempdir");
         let cursor_store =
@@ -2671,6 +2970,66 @@ pub(super) fn load_pdp_commitment_for_manifest_artifact(
     validate_pdp_commitment_spool_body_for_manifest(&bytes, manifest_hash)?;
     Ok(bytes)
 }
+pub(super) fn load_da_pin_intent(
+    spool_dir: &Path,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: &ReplayFingerprint,
+) -> std::io::Result<DaPinIntent> {
+    if spool_dir.as_os_str().is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::NotFound,
+            "DA pin-intent spool directory is not configured",
+        ));
+    }
+    validate_ticket_fingerprint(storage_ticket, fingerprint).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid DA pin-intent lookup tuple: {err}"),
+        )
+    })?;
+    if open_spool_dir_no_follow(spool_dir)?.is_none() {
+        return Err(std::io::Error::new(
+            ErrorKind::NotFound,
+            "DA pin-intent spool directory does not exist",
+        ));
+    }
+    let path = da_pin_intent_file_path(
+        spool_dir,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        fingerprint,
+    );
+    let bytes = read_regular_spool_artifact(
+        &path,
+        "DA pin-intent artifact",
+        DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1,
+    )?;
+    let intent = decode_from_bytes::<DaPinIntent>(&bytes).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "failed to decode DA pin-intent artifact {}: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    validate_pin_intent_artifact_inputs(&intent, lane_id, epoch, sequence, storage_ticket)
+        .map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "DA pin-intent artifact {} does not match its filename: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+    Ok(intent)
+}
 fn load_ticket_artifact_path(
     spool_dir: &Path,
     ticket: &StorageTicketId,
@@ -2918,6 +3277,19 @@ fn validate_pin_intent_artifact_inputs(
     {
         return Err(invalid_artifact_input(
             "DA pin-intent artifact filename tuple does not match intent body",
+        ));
+    }
+    if intent.authorization.lane_id != intent.lane_id
+        || intent.authorization.epoch != intent.epoch
+        || intent.authorization.sequence != intent.sequence
+    {
+        return Err(invalid_artifact_input(
+            "DA pin-intent authorization tuple does not match intent body",
+        ));
+    }
+    if !intent.authorization.has_valid_canonical_signatures() {
+        return Err(invalid_artifact_input(
+            "DA pin-intent authorization signatures are invalid",
         ));
     }
     Ok(())
@@ -3199,16 +3571,31 @@ pub(super) fn persist_da_pin_intent(
         return Ok(None);
     }
     validate_pin_intent_artifact_inputs(intent, lane_id, epoch, sequence, storage_ticket)?;
+    validate_ticket_fingerprint(storage_ticket, fingerprint)?;
     create_spool_dir_no_follow(spool_dir)?;
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
     let fingerprint_hex = hex::encode(fingerprint.as_bytes());
-    let file_name = format!(
-        "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito"
+    let target_path = da_pin_intent_file_path(
+        spool_dir,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        fingerprint,
     );
-    let target_path = spool_dir.join(file_name);
     let encoded =
         to_bytes(intent).map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+    if encoded.len() > DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "DA pin intent is {} bytes, exceeding the first-release {}-byte limit",
+                encoded.len(),
+                DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1
+            ),
+        ));
+    }
     if let Some(path) =
         existing_artifact_path_if_matching(&target_path, &encoded, "DA pin intent artifact")?
     {
@@ -3238,4 +3625,20 @@ pub(super) fn persist_da_pin_intent(
         "queued DA pin intent for registry ingestion"
     );
     Ok(Some(target_path))
+}
+
+fn da_pin_intent_file_path(
+    spool_dir: &Path,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: &ReplayFingerprint,
+) -> PathBuf {
+    let lane = lane_id.as_u32();
+    let ticket_hex = hex::encode(storage_ticket.as_ref());
+    let fingerprint_hex = hex::encode(fingerprint.as_bytes());
+    spool_dir.join(format!(
+        "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito"
+    ))
 }

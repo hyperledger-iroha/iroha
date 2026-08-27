@@ -9,12 +9,7 @@ fn bench_register_index(step: u32) -> usize {
 }
 fn bench_registers_merkle(c: &mut Criterion) {
     let mut group = c.benchmark_group("registers_merkle");
-    // Banner indicating mode
-    if cfg!(feature = "merkle_incremental") {
-        println!("Registers Merkle mode: incremental (per-update O(log n))");
-    } else {
-        println!("Registers Merkle mode: full rebuild (lazy on read)");
-    }
+    println!("Registers Merkle mode: full rebuild (lazy on read)");
     let sizes = [10u32, 100, 1_000, 10_000];
     for &n in &sizes {
         group.bench_function(BenchmarkId::new("set_many_then_root", n), |b| {

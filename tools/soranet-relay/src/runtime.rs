@@ -44,9 +44,9 @@ iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
 use crate::metrics::normalize_downgrade_reason;
 use crate::{
     capability::{
-        self, CapabilityError, CapabilityWarning, GreaseEntry, NegotiatedCapabilities,
-        ServerCapabilities, SignatureId, encode_relay_advertisement, negotiate_capabilities,
-        parse_client_advertisement,
+        self, CapabilityError, CapabilityWarning, ConstantRateMode, GreaseEntry,
+        NegotiatedCapabilities, ServerCapabilities, SignatureId, encode_relay_advertisement,
+        negotiate_capabilities, parse_client_advertisement,
     },
     circuit::{
         CircuitAdmissionError, CircuitRegistry, PaddingBudget, abort_padding_task,
@@ -4910,12 +4910,12 @@ impl RelayRuntime {
                 b"vpn bridge policy failure".as_slice()
             }
         };
-        connection.close(0u32.into(), close_reason);
         match timeout(Duration::from_secs(1), protected_send.shutdown()).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => debug!(%error, "failed to finish protected vpn tunnel stream"),
             Err(error) => debug!(%error, "timed out finishing protected vpn tunnel stream"),
         }
+        connection.close(0u32.into(), close_reason);
     }
     #[expect(
         clippy::too_many_arguments,
@@ -6970,11 +6970,26 @@ fn preflight_client_hello(
         .map_err(HandshakeError::Capability)?;
     let negotiated =
         negotiate_capabilities(&client_caps, server_caps).map_err(HandshakeError::Capability)?;
+    // Configuration rejects strict advertisements, but keep the live boundary fail-closed for
+    // programmatic capabilities and future callers. A strict claim must never reach the relay
+    // response while payload bypasses the DATAGRAM scheduler.
+    ensure_constant_rate_runtime_available(&negotiated)?;
     validate_client_selection(&negotiated, metadata.kem_id(), metadata.sig_id())?;
     Ok(RelayClientHelloPreflight {
         metadata,
         negotiated,
     })
+}
+fn ensure_constant_rate_runtime_available(
+    negotiated: &NegotiatedCapabilities,
+) -> Result<(), HandshakeError> {
+    if negotiated
+        .constant_rate
+        .is_some_and(|capability| matches!(capability.mode, ConstantRateMode::Strict))
+    {
+        return Err(HandshakeError::StrictConstantRateUnavailable);
+    }
+    Ok(())
 }
 fn validate_client_selection(
     negotiated: &NegotiatedCapabilities,

@@ -1,7 +1,6 @@
 //! Error types and permission flags for the VM.
 //!
-//! Error variants cover common failure modes including privacy tag violations
-//! and hardware transactional memory aborts.
+//! Error variants cover common failure modes including privacy tag violations.
 use crate::numeric::{NumericFaultV1, PointerAbiFaultV1};
 use std::{error::Error as StdError, fmt};
 /// Memory region permissions.
@@ -54,7 +53,6 @@ pub enum VmTrapKind {
     PermissionDenied,
     PrivacyViolation,
     RegisterOutOfBounds,
-    HTMAbort,
     NoritoInvalid,
     AbiTypeNotAllowed,
     HostOutputBudgetExceeded,
@@ -128,12 +126,8 @@ pub enum VMError {
     MisalignedAccess {
         addr: u32,
     },
-    /// Access outside the bounds of a memory segment in `segmented_memory`.
+    /// Access outside the configured VM memory bounds.
     MemoryOutOfBounds,
-    /// Unaligned load/store in `segmented_memory`.
-    UnalignedAccess,
-    /// Attempt to write to a read-only segment.
-    MemoryPermissionDenied,
     /// Instruction decoding failed due to invalid data or out-of-bounds fetch.
     DecodeError,
     InvalidOpcode(u16),
@@ -226,7 +220,6 @@ pub enum VMError {
     PermissionDenied,
     PrivacyViolation,
     RegisterOutOfBounds,
-    HTMAbort,
     /// Malformed Norito TLV envelope or checksum mismatch.
     NoritoInvalid,
     /// Pointer‑ABI type not allowed under the current ABI policy.
@@ -329,8 +322,6 @@ impl fmt::Display for VMError {
                 write!(f, "misaligned memory access at 0x{addr:08x}")
             }
             VMError::MemoryOutOfBounds => write!(f, "memory access out of bounds"),
-            VMError::UnalignedAccess => write!(f, "unaligned memory access"),
-            VMError::MemoryPermissionDenied => write!(f, "memory permission denied"),
             VMError::DecodeError => write!(f, "instruction decode error"),
             VMError::InvalidOpcode(op) => write!(f, "invalid or unknown opcode 0x{op:02x}"),
             VMError::UnknownSyscall(num) => write!(f, "unknown syscall number {num}"),
@@ -403,7 +394,6 @@ impl fmt::Display for VMError {
             VMError::PermissionDenied => write!(f, "permission denied"),
             VMError::PrivacyViolation => write!(f, "privacy tag violation"),
             VMError::RegisterOutOfBounds => write!(f, "register index out of bounds"),
-            VMError::HTMAbort => write!(f, "hardware transaction aborted"),
             VMError::NoritoInvalid => write!(f, "invalid Norito TLV envelope"),
             VMError::AbiTypeNotAllowed { abi, type_id } => write!(
                 f,

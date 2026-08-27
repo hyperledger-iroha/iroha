@@ -77,8 +77,8 @@ use iroha_data_model::{
         types::{BlobDigest, ExtraMetadata},
     },
     nexus::{
-        AssetPermissionManifest, FeeSponsorProgramId, LaneLifecycleParameterV1, LaneLifecyclePlan,
-        LaneLifecycleStatusV1, UniversalAccountId,
+        AssetPermissionManifest, FeeSponsorProgram, FeeSponsorProgramId, LaneLifecycleParameterV1,
+        LaneLifecyclePlan, LaneLifecycleStatusV1, UniversalAccountId,
     },
     privacy::PrivacyExact12CapabilityManifestV1,
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
@@ -110,9 +110,11 @@ pub use iroha_torii_shared::parliament_api::{
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
+    VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1, VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1,
     ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
+    ValidationFeeHijiriQuoteRequestV1, ValidationFeeHijiriQuoteResponseV1,
     ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
     ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
     ValidationFeeProposalListV1, ValidationFeeProposalRecordV1,
@@ -182,6 +184,7 @@ const ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES: usize =
     iroha_torii_shared::ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES;
 const TRANSACTION_ENTRYPOINT_HASH_HEADER: &str = "x-iroha-entrypoint-hash";
 const SIGNED_TRANSACTION_HASH_HEADER: &str = "x-iroha-signed-transaction-hash";
+const FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const FEE_QUOTE_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
@@ -1526,6 +1529,8 @@ pub struct AccountOnboardingPrepareRequestV1 {
     pub binding: TairaPublicResetMutationBindingV1,
     /// Receipt returned by the planner.
     pub receipt: AccountOnboardingPlanReceiptV1,
+    /// Exact payer, sponsor revision, and gas bound Torii may quote.
+    pub fee_payment: FeePaymentIntent,
 }
 impl AccountOnboardingPrepareRequestV1 {
     /// Current immutable request schema.
@@ -1644,12 +1649,10 @@ pub enum AccountOnboardingPrepareResponseV1 {
 pub struct AccountFaucetClaimV1 {
     /// Canonical domainless target account.
     pub account_id: String,
-    /// Committed block height anchoring proof-of-work.
-    #[norito(default)]
-    pub pow_anchor_height: Option<u64>,
-    /// Canonical lowercase hexadecimal proof nonce.
-    #[norito(default)]
-    pub pow_nonce_hex: Option<String>,
+    /// Positive committed block height anchoring proof-of-work.
+    pub pow_anchor_height: u64,
+    /// Nonempty canonical lowercase hexadecimal proof nonce.
+    pub pow_nonce_hex: String,
 }
 /// Prepare request consuming one solved faucet claim.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
@@ -1661,6 +1664,8 @@ pub struct AccountFaucetPrepareRequestV1 {
     pub binding: TairaPublicResetMutationBindingV1,
     /// Solved faucet claim.
     pub claim: AccountFaucetClaimV1,
+    /// Exact payer, sponsor revision, and gas bound Torii may quote.
+    pub fee_payment: FeePaymentIntent,
 }
 impl AccountFaucetPrepareRequestV1 {
     /// Current immutable request schema.
@@ -1704,6 +1709,61 @@ impl AccountFaucetPreparedTransactionV1 {
     pub const SCHEMA: &'static str = "iroha.taira.prepared-transaction.v1";
     /// Exact operation label.
     pub const OPERATION: &'static str = "faucet";
+}
+/// Independently trusted first-release faucet identity and issuance policy.
+///
+/// This value is local trust input. It is never learned from a prepared response: callers must
+/// obtain the exact faucet authority, asset definition, and issuance amount from their trusted
+/// deployment configuration before preparing, verifying, or submitting a faucet transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountFaucetPolicyV1 {
+    faucet_authority: AccountId,
+    asset_definition_id: AssetDefinitionId,
+    amount: Quantity,
+}
+impl AccountFaucetPolicyV1 {
+    /// Construct one exact first-release faucet policy.
+    ///
+    /// # Errors
+    /// Returns an error when the authority is not a single-signatory account or the configured
+    /// issuance amount is zero.
+    pub fn try_new(
+        faucet_authority: AccountId,
+        asset_definition_id: AssetDefinitionId,
+        amount: Quantity,
+    ) -> Result<Self> {
+        if faucet_authority.try_signatory().is_none() {
+            return Err(eyre!(
+                "faucet policy authority must be a single-signatory account"
+            ));
+        }
+        if amount.is_zero() {
+            return Err(eyre!("faucet policy amount must be positive"));
+        }
+        Ok(Self {
+            faucet_authority,
+            asset_definition_id,
+            amount,
+        })
+    }
+
+    /// Return the independently trusted faucet authority.
+    #[must_use]
+    pub fn faucet_authority(&self) -> &AccountId {
+        &self.faucet_authority
+    }
+
+    /// Return the exact asset definition the faucet may issue.
+    #[must_use]
+    pub fn asset_definition_id(&self) -> &AssetDefinitionId {
+        &self.asset_definition_id
+    }
+
+    /// Return the exact quantity issued by one accepted faucet claim.
+    #[must_use]
+    pub fn amount(&self) -> &Quantity {
+        &self.amount
+    }
 }
 /// Canonical terminal or nonterminal state for an exact submitted hash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2308,7 +2368,7 @@ impl PreparedSignatureTranscriptV1 for AccountFaucetPreparedSignaturePayloadV1 {
                     binding: prepared_binding_ref(&self.binding),
                     claim_account_id: &self.claim.account_id,
                     claim_pow_anchor_height: self.claim.pow_anchor_height,
-                    claim_pow_nonce_hex: self.claim.pow_nonce_hex.as_deref(),
+                    claim_pow_nonce_hex: &self.claim.pow_nonce_hex,
                     semantic_hash_hex: &self.semantic_hash_hex,
                     account_id: &self.account_id,
                     asset_definition_id: &self.asset_definition_id,
@@ -2429,12 +2489,30 @@ pub struct SccpResourceLimits {
     /// Maximum BLS key-validation and signer-contribution work committed in one block.
     #[norito(rename = "max_bls_signer_contributions_per_block")]
     pub bls_signer_contributions_per_block: u32,
+    /// Maximum Ed25519 signature checks in one transaction.
+    #[norito(rename = "max_ed25519_signature_checks_per_transaction")]
+    pub ed25519_signature_checks_per_transaction: u32,
+    /// Maximum Ed25519 signature checks committed in one block.
+    #[norito(rename = "max_ed25519_signature_checks_per_block")]
+    pub ed25519_signature_checks_per_block: u32,
+    /// Maximum TON Ed25519 validator-key checks in one transaction.
+    #[norito(rename = "max_ed25519_validator_key_checks_per_transaction")]
+    pub ed25519_validator_key_checks_per_transaction: u32,
+    /// Maximum TON Ed25519 validator-key checks committed in one block.
+    #[norito(rename = "max_ed25519_validator_key_checks_per_block")]
+    pub ed25519_validator_key_checks_per_block: u32,
     /// Maximum BN254 pairing-product checks in one transaction.
     #[norito(rename = "max_bn254_pairing_checks_per_transaction")]
     pub bn254_pairing_checks_per_transaction: u32,
     /// Maximum BN254 pairing-product checks committed in one block.
     #[norito(rename = "max_bn254_pairing_checks_per_block")]
     pub bn254_pairing_checks_per_block: u32,
+    /// Maximum BLS12-381 pairing-product checks in one transaction.
+    #[norito(rename = "max_bls12_381_pairing_checks_per_transaction")]
+    pub bls12_381_pairing_checks_per_transaction: u32,
+    /// Maximum BLS12-381 pairing-product checks committed in one block.
+    #[norito(rename = "max_bls12_381_pairing_checks_per_block")]
+    pub bls12_381_pairing_checks_per_block: u32,
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
@@ -2524,8 +2602,14 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         bls_aggregate_checks_per_block,
         bls_signer_contributions_per_transaction,
         bls_signer_contributions_per_block,
+        ed25519_signature_checks_per_transaction,
+        ed25519_signature_checks_per_block,
+        ed25519_validator_key_checks_per_transaction,
+        ed25519_validator_key_checks_per_block,
         bn254_pairing_checks_per_transaction,
         bn254_pairing_checks_per_block,
+        bls12_381_pairing_checks_per_transaction,
+        bls12_381_pairing_checks_per_block,
     );
     macro_rules! require_json_safe {
         ($($field:ident),+ $(,)?) => {
@@ -2609,9 +2693,24 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         "BLS signer contributions"
     );
     require_transaction_within_block!(
+        ed25519_signature_checks_per_transaction,
+        ed25519_signature_checks_per_block,
+        "Ed25519 signature checks"
+    );
+    require_transaction_within_block!(
+        ed25519_validator_key_checks_per_transaction,
+        ed25519_validator_key_checks_per_block,
+        "Ed25519 validator-key checks"
+    );
+    require_transaction_within_block!(
         bn254_pairing_checks_per_transaction,
         bn254_pairing_checks_per_block,
         "BN254 pairing checks"
+    );
+    require_transaction_within_block!(
+        bls12_381_pairing_checks_per_transaction,
+        bls12_381_pairing_checks_per_block,
+        "BLS12-381 pairing checks"
     );
     Ok(())
 }
@@ -2793,6 +2892,22 @@ fn sccp_recent_projection_value_is_canonical(
         iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes } => {
             (iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32, bytes)
         }
+        iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { workchain, account } => {
+            let Some(bytes) = iroha_sccp::canonical_sccp_ton_account36_bytes_v1(
+                iroha_data_model::bridge::SccpTonAddressV1 {
+                    workchain: *workchain,
+                    account: *account,
+                },
+            ) else {
+                return false;
+            };
+            return iroha_sccp::decode_sccp_normalized_codec_value(
+                iroha_sccp::SCCP_CODEC_TON_ACCOUNT36,
+                &bytes,
+            )
+            .as_ref()
+                == Some(value);
+        }
     };
     iroha_sccp::decode_sccp_normalized_codec_value(codec, bytes).as_ref() == Some(value)
 }
@@ -2819,6 +2934,10 @@ fn validate_sccp_recent_projection(
         ) | (
             iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
             iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { .. },
+        ) | (
+            iroha_data_model::bridge::SccpNetworkV1::TonMainnet
+                | iroha_data_model::bridge::SccpNetworkV1::TonTestnet,
+            iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { .. },
         )
     );
     if transfer.version != 1
@@ -3388,12 +3507,9 @@ mod parliament_draft_response_validation_tests {
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             GovernanceAttemptId, ProposalKind,
         },
-        isi::{
-            Instruction,
-            governance::{
-                CreateParliamentGovernanceAttemptV1, ParliamentLifecycleTransitionV1,
-                SubmitParliamentLifecycleTransitionV1,
-            },
+        isi::governance::{
+            CreateParliamentGovernanceAttemptV1, ParliamentLifecycleTransitionV1,
+            SubmitParliamentLifecycleTransitionV1,
         },
         smart_contract::ContractAddress,
     };
@@ -3401,12 +3517,10 @@ mod parliament_draft_response_validation_tests {
     fn framed_draft(
         instruction: iroha_data_model::isi::InstructionBox,
     ) -> ParliamentInstructionDraftV1 {
-        let wire_id = Instruction::id(&*instruction).to_owned();
-        let payload = Instruction::dyn_encode(&*instruction);
-        let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+        let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&instruction)
             .expect("frame Parliament client fixture instruction");
         ParliamentInstructionDraftV1 {
-            wire_id,
+            wire_id: wire_id.to_owned(),
             payload_hex: hex::encode(framed),
         }
     }
@@ -4627,8 +4741,23 @@ pub struct MultisigProposeRequest {
     /// Optional user-facing transfer memo forwarded to transaction metadata.
     #[norito(default)]
     pub memo: Option<String>,
+    /// Optional validation-fee policy version forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_policy_version: Option<String>,
+    /// Optional validation-fee policy hash forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_policy_hash: Option<String>,
+    /// Optional composite Hijiri fee-quote hash forwarded to metadata and the signed marker.
+    #[norito(default)]
+    pub validation_fee_hijiri_fee_quote_hash: Option<String>,
     /// Instruction batch to wrap inside the multisig proposal.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    /// Optional validation-fee instruction index forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_instruction_index: Option<String>,
+    /// Optional validation-fee transfer entry index forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_transfer_entry_index: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 /// Response payload returned by multisig participation endpoints.
@@ -5039,15 +5168,21 @@ fn validate_account_faucet_claim(claim: &AccountFaucetClaimV1) -> Result<Account
             "faucet claim account_id must use its canonical domainless representation"
         ));
     }
-    if let Some(nonce) = claim.pow_nonce_hex.as_deref()
-        && (nonce.is_empty()
-            || nonce.len() % 2 != 0
-            || !nonce
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    if claim.pow_anchor_height == 0 {
+        return Err(eyre!(
+            "faucet proof anchor height must be a positive committed height"
+        ));
+    }
+    let nonce = claim.pow_nonce_hex.as_str();
+    if nonce.is_empty()
+        || nonce.len() > 64
+        || nonce.len() % 2 != 0
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(eyre!(
-            "faucet proof nonce must use nonempty canonical lowercase hexadecimal"
+            "faucet proof nonce must use 1..32 bytes of canonical lowercase hexadecimal"
         ));
     }
     Ok(account_id)
@@ -5056,25 +5191,40 @@ fn validate_account_faucet_claim(claim: &AccountFaucetClaimV1) -> Result<Account
 fn validate_faucet_transaction_identity(
     prepared: &AccountFaucetPreparedTransactionV1,
     transaction: &SignedTransaction,
+    policy: &AccountFaucetPolicyV1,
 ) -> Result<()> {
     let account_id = validate_account_faucet_claim(&prepared.claim)?;
     let asset_definition_id: AssetDefinitionId = prepared
         .asset_definition_id
         .parse()
         .wrap_err("parse prepared faucet asset definition")?;
-    if asset_definition_id.to_string() != prepared.asset_definition_id {
-        return Err(eyre!("prepared faucet asset definition is not canonical"));
+    if asset_definition_id.to_string() != prepared.asset_definition_id
+        || &asset_definition_id != policy.asset_definition_id()
+        || &prepared.amount != policy.amount()
+    {
+        return Err(eyre!(
+            "prepared faucet asset definition or amount differs from the trusted policy"
+        ));
     }
-    let destination_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    if transaction.authority() != policy.faucet_authority() {
+        return Err(eyre!(
+            "prepared faucet transaction authority differs from the trusted policy"
+        ));
+    }
+    let destination_asset_id =
+        AssetId::new(policy.asset_definition_id().clone(), account_id.clone());
     if destination_asset_id.to_string() != prepared.asset_id {
         return Err(eyre!(
             "prepared faucet destination asset differs from the exact claim"
         ));
     }
-    let source_asset_id = AssetId::new(asset_definition_id, transaction.authority().clone());
+    let source_asset_id = AssetId::new(
+        policy.asset_definition_id().clone(),
+        policy.faucet_authority().clone(),
+    );
     let transfer: InstructionBox = iroha_data_model::isi::Transfer::asset_quantity(
         source_asset_id,
-        prepared.amount.clone(),
+        policy.amount().clone(),
         account_id.clone(),
     )
     .into();
@@ -5111,7 +5261,15 @@ pub fn verify_account_onboarding_prepared_transaction_v1(
     prepared: &AccountOnboardingPreparedTransactionV1,
     receipt: &AccountOnboardingPlanReceiptV1,
     binding: &TairaPublicResetMutationBindingV1,
+    expected_fee_payment: &FeePaymentIntent,
 ) -> Result<SignedTransaction> {
+    expected_fee_payment
+        .validate()
+        .map_err(|error| eyre!("invalid requested onboarding fee payment: {error}"))?;
+    prepared
+        .fee_payment
+        .validate()
+        .map_err(|error| eyre!("invalid prepared onboarding fee payment: {error}"))?;
     validate_prepared_mutation_binding(
         &prepared.binding,
         AccountOnboardingPreparedTransactionV1::OPERATION,
@@ -5161,6 +5319,7 @@ pub fn verify_account_onboarding_prepared_transaction_v1(
     if transaction.network_id() != Some(&expected_network_id)
         || transaction.authority() != &receipt.body.authority
         || transaction.payload().fee_payment != prepared.fee_payment
+        || !expected_fee_payment.has_same_payer_and_gas_bound(&prepared.fee_payment)
         || transaction.metadata() != &expected_metadata
         || instructions.is_empty()
         || !instructions_are_ordered_subset(instructions.as_ref(), &planned_instructions)
@@ -5175,14 +5334,23 @@ pub fn verify_account_onboarding_prepared_transaction_v1(
 /// Authenticate an exact prepared faucet transaction without constructing a client.
 ///
 /// # Errors
-/// Returns an error for any substituted claim, binding, wire, signature, network, fee intent,
-/// metadata, destination, amount, or instruction sequence.
+/// Returns an error for any substituted claim, binding, wire, signature, network, authority,
+/// fee intent, metadata, asset definition, destination, amount, or instruction sequence.
 pub fn verify_account_faucet_prepared_transaction_v1(
     expected_network_id: NetworkId,
     prepared: &AccountFaucetPreparedTransactionV1,
     claim: &AccountFaucetClaimV1,
     binding: &TairaPublicResetMutationBindingV1,
+    expected_fee_payment: &FeePaymentIntent,
+    policy: &AccountFaucetPolicyV1,
 ) -> Result<SignedTransaction> {
+    expected_fee_payment
+        .validate()
+        .map_err(|error| eyre!("invalid requested faucet fee payment: {error}"))?;
+    prepared
+        .fee_payment
+        .validate()
+        .map_err(|error| eyre!("invalid prepared faucet fee payment: {error}"))?;
     validate_prepared_mutation_binding(
         &prepared.binding,
         AccountFaucetPreparedTransactionV1::OPERATION,
@@ -5195,11 +5363,18 @@ pub fn verify_account_faucet_prepared_transaction_v1(
         || &prepared.claim != claim
         || prepared.semantic_hash_hex != hex::encode(faucet_claim_hash(claim).as_ref())
         || prepared.account_id != claim.account_id
+        || prepared.asset_definition_id != policy.asset_definition_id().to_string()
+        || &prepared.amount != policy.amount()
     {
         return Err(eyre!(
-            "prepared faucet envelope differs from its exact claim or binding"
+            "prepared faucet envelope differs from its exact claim, binding, or trusted policy"
         ));
     }
+    verify_prepared_payload_signature(
+        &AccountFaucetPreparedSignaturePayloadV1::from(prepared),
+        &prepared.server_signature,
+        policy.faucet_authority(),
+    )?;
     let transaction = decode_canonical_prepared_transaction(
         &prepared.transaction_hash_hex,
         &prepared.signed_transaction_wire_hex,
@@ -5211,19 +5386,16 @@ pub fn verify_account_faucet_prepared_transaction_v1(
         &prepared.semantic_hash_hex,
     )?;
     if transaction.network_id() != Some(&expected_network_id)
+        || transaction.authority() != policy.faucet_authority()
         || transaction.payload().fee_payment != prepared.fee_payment
+        || !expected_fee_payment.has_same_payer_and_gas_bound(&prepared.fee_payment)
         || transaction.metadata() != &expected_metadata
     {
         return Err(eyre!(
-            "prepared faucet transaction network or fee intent was substituted"
+            "prepared faucet transaction network, authority, or fee intent was substituted"
         ));
     }
-    verify_prepared_payload_signature(
-        &AccountFaucetPreparedSignaturePayloadV1::from(prepared),
-        &prepared.server_signature,
-        transaction.authority(),
-    )?;
-    validate_faucet_transaction_identity(prepared, &transaction)?;
+    validate_faucet_transaction_identity(prepared, &transaction, policy)?;
     Ok(transaction)
 }
 
@@ -8096,10 +8268,10 @@ fn secure_transaction_submission_uses_direct_loopback(url: &Url) -> Result<bool>
     }
 }
 
-fn exact_single_response_header<'a>(
+fn exact_single_response_header_value<'a>(
     response: &'a Response<Vec<u8>>,
     name: &'static str,
-) -> Result<&'a str> {
+) -> Result<&'a ::http::HeaderValue> {
     let mut values = response.headers().get_all(name).iter();
     let value = values
         .next()
@@ -8107,9 +8279,39 @@ fn exact_single_response_header<'a>(
     if values.next().is_some() {
         return Err(eyre!("response duplicated `{name}`"));
     }
-    value
+    Ok(value)
+}
+
+fn exact_single_response_header<'a>(
+    response: &'a Response<Vec<u8>>,
+    name: &'static str,
+) -> Result<&'a str> {
+    exact_single_response_header_value(response, name)?
         .to_str()
         .wrap_err_with(|| format!("response `{name}` is not canonical ASCII"))
+}
+
+fn exact_single_response_header_bytes<'a>(
+    response: &'a Response<Vec<u8>>,
+    name: &'static str,
+) -> Result<&'a [u8]> {
+    Ok(exact_single_response_header_value(response, name)?.as_bytes())
+}
+
+fn reject_explicit_null_fee_sponsor_program_optionals(body: &[u8]) -> Result<()> {
+    let value: JsonValue = norito::json::from_slice(body)
+        .wrap_err("failed to inspect fee sponsor program response shape")?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| eyre!("fee sponsor program response must be a JSON object"))?;
+    for field in ["active_revision", "staged_revision", "scheduled_activation"] {
+        if matches!(object.get(field), Some(JsonValue::Null)) {
+            return Err(eyre!(
+                "fee sponsor program response `{field}` must be omitted rather than null"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Strict response verifier for high-assurance transaction submission.
@@ -8365,11 +8567,106 @@ impl Client {
         Self::is_exact_json_content_type(content_type)
     }
     fn is_exact_json_content_type(content_type: &str) -> bool {
-        content_type
-            .split(';')
-            .next()
-            .map(str::trim)
-            .is_some_and(|media_type| media_type.eq_ignore_ascii_case(APPLICATION_JSON))
+        Self::is_exact_json_content_type_bytes(content_type.as_bytes())
+    }
+    fn is_exact_json_content_type_bytes(bytes: &[u8]) -> bool {
+        fn skip_ows(bytes: &[u8], index: &mut usize) {
+            while bytes
+                .get(*index)
+                .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+            {
+                *index += 1;
+            }
+        }
+        fn is_token(byte: u8) -> bool {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        }
+        fn is_quoted_text(byte: u8) -> bool {
+            byte == b'\t' || matches!(byte, 0x20..=0x21 | 0x23..=0x5b | 0x5d..=0x7e | 0x80..=0xff)
+        }
+        fn is_quoted_pair(byte: u8) -> bool {
+            byte == b'\t' || matches!(byte, 0x20..=0x7e | 0x80..=0xff)
+        }
+
+        if bytes.contains(&b',') {
+            return false;
+        }
+        let mut index = 0;
+        skip_ows(bytes, &mut index);
+        let expected = APPLICATION_JSON.as_bytes();
+        let Some(media_type) = bytes.get(index..index.saturating_add(expected.len())) else {
+            return false;
+        };
+        if !media_type.eq_ignore_ascii_case(expected) {
+            return false;
+        }
+        index += expected.len();
+        skip_ows(bytes, &mut index);
+        while index < bytes.len() {
+            if bytes[index] != b';' {
+                return false;
+            }
+            index += 1;
+            skip_ows(bytes, &mut index);
+            let name_start = index;
+            while bytes.get(index).is_some_and(|byte| is_token(*byte)) {
+                index += 1;
+            }
+            if index == name_start || bytes.get(index) != Some(&b'=') {
+                return false;
+            }
+            index += 1;
+            match bytes.get(index) {
+                Some(b'"') => {
+                    index += 1;
+                    let mut closed = false;
+                    while let Some(&byte) = bytes.get(index) {
+                        if byte == b'"' {
+                            index += 1;
+                            closed = true;
+                            break;
+                        }
+                        if byte == b'\\' {
+                            index += 1;
+                            if !bytes.get(index).is_some_and(|byte| is_quoted_pair(*byte)) {
+                                return false;
+                            }
+                        } else if !is_quoted_text(byte) {
+                            return false;
+                        }
+                        index += 1;
+                    }
+                    if !closed {
+                        return false;
+                    }
+                }
+                Some(&byte) if is_token(byte) => {
+                    while bytes.get(index).is_some_and(|byte| is_token(*byte)) {
+                        index += 1;
+                    }
+                }
+                _ => return false,
+            }
+            skip_ows(bytes, &mut index);
+        }
+        true
     }
     fn is_norito_content_type(content_type: &str) -> bool {
         content_type
@@ -8569,9 +8866,17 @@ impl Client {
             OfflineOperationStatus::Pending {
                 operation_id,
                 transaction_hash,
+                submitted_at_ms,
                 ..
+            } => {
+                if *submitted_at_ms == 0 {
+                    return Err(eyre!(
+                        "offline pending result submitted_at_ms must be at least 1"
+                    ));
+                }
+                (operation_id, transaction_hash, None)
             }
-            | OfflineOperationStatus::Rejected {
+            OfflineOperationStatus::Rejected {
                 operation_id,
                 transaction_hash,
                 ..
@@ -8729,6 +9034,9 @@ impl Client {
     {
         if operation_id == [0; 32] {
             return Err(eyre!("offline operation_id must not be zero"));
+        }
+        if submitted_at_ms == 0 {
+            return Err(eyre!("offline submitted_at_ms must be at least 1"));
         }
         let operation_id = bytes_to_hex(&operation_id);
         let body = to_bytes(request).wrap_err("failed to encode offline request as Norito")?;
@@ -9306,6 +9614,16 @@ mod offline_client_tests {
             .expect_err("zero operation id must fail before transport");
         assert!(zero_error.to_string().contains("must not be zero"));
         let operation_bytes = [0x11; 32];
+        let zero_time_error = client
+            .submit_offline_operation(
+                torii_uri::OFFLINE_TOP_UP,
+                &fixture,
+                operation_bytes,
+                0,
+                OfflineOperationKind::TopUp,
+            )
+            .expect_err("zero submission time must fail before transport");
+        assert!(zero_time_error.to_string().contains("submitted_at_ms"));
         let operation_id = bytes_to_hex(&operation_bytes);
         let mut forged = operation_reference(&operation_id, OfflineOperationKind::Redeem);
         forged.submitted_at_ms = 43;
@@ -9354,6 +9672,19 @@ mod offline_client_tests {
             .get_offline_operation_status("../redeem")
             .expect_err("path injection must fail locally");
         assert!(malformed.to_string().contains("64 lowercase hexadecimal"));
+    }
+    #[test]
+    fn pending_operation_status_rejects_zero_submission_time() {
+        let operation_id = "11".repeat(32);
+        let status = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: "22".repeat(32),
+            submitted_at_ms: 0,
+        };
+        let error = Client::validate_offline_operation_status(&status, &operation_id)
+            .expect_err("zero pending submission time must fail closed");
+        assert!(error.to_string().contains("submitted_at_ms"));
     }
     #[test]
     fn applied_operation_status_rejects_zero_finality_fields() {
@@ -10172,7 +10503,12 @@ mod evidence_http_tests {
             creation_time_ms: Some(123),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             memo: Some("invoice 42".to_owned()),
+            validation_fee_policy_version: Some("7".to_owned()),
+            validation_fee_policy_hash: Some("ab".repeat(32)),
+            validation_fee_hijiri_fee_quote_hash: Some("cd".repeat(32)),
             instructions: vec![instruction.clone()],
+            validation_fee_instruction_index: Some("1".to_owned()),
+            validation_fee_transfer_entry_index: Some("2".to_owned()),
         };
         let response_payload =
             prepared_multisig_response(&client, multisig_account_id.clone(), &request, proposal_id);
@@ -10200,7 +10536,23 @@ mod evidence_http_tests {
             "http://mock.local/v1/multisig/propose"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected_policy_hash = "ab".repeat(32);
+        let expected_hijiri_fee_quote_hash = "cd".repeat(32);
         assert_eq!(body["memo"].as_str(), Some("invoice 42"));
+        assert_eq!(body["validation_fee_policy_version"].as_str(), Some("7"));
+        assert_eq!(
+            body["validation_fee_policy_hash"].as_str(),
+            Some(expected_policy_hash.as_str())
+        );
+        assert_eq!(
+            body["validation_fee_hijiri_fee_quote_hash"].as_str(),
+            Some(expected_hijiri_fee_quote_hash.as_str())
+        );
+        assert_eq!(body["validation_fee_instruction_index"].as_str(), Some("1"));
+        assert_eq!(
+            body["validation_fee_transfer_entry_index"].as_str(),
+            Some("2")
+        );
         let encoded_instruction = body["instructions"][0]
             .as_str()
             .expect("native instruction base64");
@@ -10241,7 +10593,12 @@ mod evidence_http_tests {
             creation_time_ms: Some(123),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             memo: None,
+            validation_fee_policy_version: None,
+            validation_fee_policy_hash: None,
+            validation_fee_hijiri_fee_quote_hash: None,
             instructions: vec![dm::Log::new(dm::Level::INFO, message.to_owned()).into()],
+            validation_fee_instruction_index: None,
+            validation_fee_transfer_entry_index: None,
         };
         (multisig_account_id, request)
     }
@@ -15220,6 +15577,7 @@ impl Client {
         request: &AccountOnboardingPlanRequestV1,
         receipt: &AccountOnboardingPlanReceiptV1,
         binding: &TairaPublicResetMutationBindingV1,
+        fee_payment: &FeePaymentIntent,
         onboarding_token: &str,
     ) -> Result<Response<Vec<u8>>> {
         self.verify_account_onboarding_plan_for_request(request, receipt)?;
@@ -15228,12 +15586,16 @@ impl Client {
             AccountOnboardingPreparedTransactionV1::OPERATION,
             true,
         )?;
+        fee_payment
+            .validate()
+            .map_err(|error| eyre!("invalid requested onboarding fee payment: {error}"))?;
         let token = validate_account_onboarding_token(onboarding_token)?;
         let url = join_torii_url(&self.torii_url, "v1/accounts/onboard/prepare");
         let body = norito::json::to_vec(&AccountOnboardingPrepareRequestV1 {
             schema: AccountOnboardingPrepareRequestV1::SCHEMA.to_owned(),
             binding: binding.clone(),
             receipt: receipt.clone(),
+            fee_payment: fee_payment.clone(),
         })?;
         self.send_builder(
             self.default_request(HttpMethod::POST, url)
@@ -15254,10 +15616,16 @@ impl Client {
         request: &AccountOnboardingPlanRequestV1,
         receipt: &AccountOnboardingPlanReceiptV1,
         binding: &TairaPublicResetMutationBindingV1,
+        fee_payment: &FeePaymentIntent,
         onboarding_token: &str,
     ) -> Result<AccountOnboardingPrepareResponseV1> {
-        let response =
-            self.post_account_onboarding_prepare(request, receipt, binding, onboarding_token)?;
+        let response = self.post_account_onboarding_prepare(
+            request,
+            receipt,
+            binding,
+            fee_payment,
+            onboarding_token,
+        )?;
         if response.status() != StatusCode::OK {
             return Err(eyre!(
                 "account onboarding preparation failed with HTTP status {}",
@@ -15272,7 +15640,11 @@ impl Client {
                     norito::json::from_slice(response.body())
                         .wrap_err("decode prepared onboarding transaction")?;
                 self.verify_account_onboarding_prepared_transaction(
-                    request, &prepared, receipt, binding,
+                    request,
+                    &prepared,
+                    receipt,
+                    binding,
+                    fee_payment,
                 )?;
                 Ok(AccountOnboardingPrepareResponseV1::Prepared(prepared))
             }
@@ -15307,6 +15679,7 @@ impl Client {
         prepared: &AccountOnboardingPreparedTransactionV1,
         receipt: &AccountOnboardingPlanReceiptV1,
         binding: &TairaPublicResetMutationBindingV1,
+        expected_fee_payment: &FeePaymentIntent,
     ) -> Result<SignedTransaction> {
         verify_account_onboarding_prepared_transaction_v1(
             self.network_id,
@@ -15314,6 +15687,7 @@ impl Client {
             prepared,
             receipt,
             binding,
+            expected_fee_payment,
         )
     }
 
@@ -15421,6 +15795,7 @@ impl Client {
         &self,
         request: &AccountOnboardingPlanRequestV1,
         prepared: &AccountOnboardingPreparedTransactionV1,
+        expected_fee_payment: &FeePaymentIntent,
         onboarding_token: &str,
     ) -> Result<Response<Vec<u8>>> {
         self.verify_account_onboarding_prepared_transaction(
@@ -15428,6 +15803,7 @@ impl Client {
             prepared,
             &prepared.receipt,
             &prepared.binding,
+            expected_fee_payment,
         )?;
         let token = validate_account_onboarding_token(onboarding_token)?;
         let url = join_torii_url(&self.torii_url, "v1/accounts/onboard");
@@ -15454,10 +15830,15 @@ impl Client {
         &self,
         request: &AccountOnboardingPlanRequestV1,
         prepared: &AccountOnboardingPreparedTransactionV1,
+        expected_fee_payment: &FeePaymentIntent,
         onboarding_token: &str,
     ) -> Result<PreparedTransactionSubmitResponseV1> {
-        let response =
-            self.post_prepared_account_onboarding(request, prepared, onboarding_token)?;
+        let response = self.post_prepared_account_onboarding(
+            request,
+            prepared,
+            expected_fee_payment,
+            onboarding_token,
+        )?;
         parse_prepared_submit_response(
             &response,
             &prepared.binding,
@@ -15466,7 +15847,7 @@ impl Client {
         )
     }
 
-    /// Non-mutating faucet preparation for one solved claim.
+    /// Non-mutating faucet preparation for one solved claim and independently trusted policy.
     ///
     /// # Errors
     /// Returns an error for a noncanonical binding or claim, JSON failure, or HTTP failure.
@@ -15474,6 +15855,8 @@ impl Client {
         &self,
         claim: &AccountFaucetClaimV1,
         binding: &TairaPublicResetMutationBindingV1,
+        fee_payment: &FeePaymentIntent,
+        _policy: &AccountFaucetPolicyV1,
     ) -> Result<Response<Vec<u8>>> {
         validate_prepared_mutation_binding(
             binding,
@@ -15481,11 +15864,15 @@ impl Client {
             true,
         )?;
         validate_account_faucet_claim(claim)?;
+        fee_payment
+            .validate()
+            .map_err(|error| eyre!("invalid requested faucet fee payment: {error}"))?;
         let url = join_torii_url(&self.torii_url, "v1/accounts/faucet/prepare");
         let body = norito::json::to_vec(&AccountFaucetPrepareRequestV1 {
             schema: AccountFaucetPrepareRequestV1::SCHEMA.to_owned(),
             binding: binding.clone(),
             claim: claim.clone(),
+            fee_payment: fee_payment.clone(),
         })?;
         self.send_builder(
             self.default_request(HttpMethod::POST, url)
@@ -15495,7 +15882,7 @@ impl Client {
         )
     }
 
-    /// Prepare and locally authenticate one exact faucet transaction.
+    /// Prepare and locally authenticate one exact faucet transaction against trusted policy.
     ///
     /// # Errors
     /// Returns an error for HTTP failure, malformed JSON, or any substituted signed field.
@@ -15503,8 +15890,10 @@ impl Client {
         &self,
         claim: &AccountFaucetClaimV1,
         binding: &TairaPublicResetMutationBindingV1,
+        fee_payment: &FeePaymentIntent,
+        policy: &AccountFaucetPolicyV1,
     ) -> Result<AccountFaucetPreparedTransactionV1> {
-        let response = self.post_account_faucet_prepare(claim, binding)?;
+        let response = self.post_account_faucet_prepare(claim, binding, fee_payment, policy)?;
         if response.status() != StatusCode::OK {
             return Err(eyre!(
                 "account faucet preparation failed with HTTP status {}",
@@ -15514,11 +15903,17 @@ impl Client {
         let prepared: AccountFaucetPreparedTransactionV1 =
             norito::json::from_slice(response.body())
                 .wrap_err("decode prepared faucet transaction")?;
-        self.verify_account_faucet_prepared_transaction(&prepared, claim, binding)?;
+        self.verify_account_faucet_prepared_transaction(
+            &prepared,
+            claim,
+            binding,
+            fee_payment,
+            policy,
+        )?;
         Ok(prepared)
     }
 
-    /// Verify one authenticated faucet transaction against its exact claim and binding.
+    /// Verify one authenticated faucet transaction against its claim, binding, and trusted policy.
     ///
     /// # Errors
     /// Returns an error for noncanonical wire, invalid signatures, wrong network, or substitution.
@@ -15527,22 +15922,35 @@ impl Client {
         prepared: &AccountFaucetPreparedTransactionV1,
         claim: &AccountFaucetClaimV1,
         binding: &TairaPublicResetMutationBindingV1,
+        expected_fee_payment: &FeePaymentIntent,
+        policy: &AccountFaucetPolicyV1,
     ) -> Result<SignedTransaction> {
-        verify_account_faucet_prepared_transaction_v1(self.network_id, prepared, claim, binding)
+        verify_account_faucet_prepared_transaction_v1(
+            self.network_id,
+            prepared,
+            claim,
+            binding,
+            expected_fee_payment,
+            policy,
+        )
     }
 
-    /// Submit only one already authenticated exact faucet envelope.
+    /// Submit only one exact faucet envelope authenticated against independent trusted policy.
     ///
     /// # Errors
     /// Returns an error if local verification, JSON encoding, or HTTP fails.
     pub fn post_prepared_account_faucet(
         &self,
         prepared: &AccountFaucetPreparedTransactionV1,
+        expected_fee_payment: &FeePaymentIntent,
+        policy: &AccountFaucetPolicyV1,
     ) -> Result<Response<Vec<u8>>> {
         self.verify_account_faucet_prepared_transaction(
             prepared,
             &prepared.claim,
             &prepared.binding,
+            expected_fee_payment,
+            policy,
         )?;
         let url = join_torii_url(&self.torii_url, "v1/accounts/faucet");
         let body = norito::json::to_vec(prepared)?;
@@ -15559,15 +15967,17 @@ impl Client {
         )
     }
 
-    /// Submit and reconcile one exact prepared faucet hash.
+    /// Submit and reconcile one exact prepared faucet hash under independent trusted policy.
     ///
     /// # Errors
     /// Returns an error for HTTP failure or a response not bound to the exact envelope.
     pub fn submit_prepared_account_faucet_transaction(
         &self,
         prepared: &AccountFaucetPreparedTransactionV1,
+        expected_fee_payment: &FeePaymentIntent,
+        policy: &AccountFaucetPolicyV1,
     ) -> Result<PreparedTransactionSubmitResponseV1> {
-        let response = self.post_prepared_account_faucet(prepared)?;
+        let response = self.post_prepared_account_faucet(prepared, expected_fee_payment, policy)?;
         parse_prepared_submit_response(
             &response,
             &prepared.binding,
@@ -15800,7 +16210,7 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if request signing, JSON serialization, construction, or the HTTP call
-    /// fails.
+    /// fails, or if the response exceeds the first-release size bound.
     pub fn post_fee_sponsor_program_by_id(
         &self,
         program_id: &FeeSponsorProgramId,
@@ -15810,11 +16220,73 @@ impl Client {
             torii_uri::FEE_SPONSOR_PROGRAM_BY_ID.trim_start_matches('/'),
         );
         let body = norito::json::to_vec(&FeeSponsorProgramByIdRequest::new(program_id))?;
-        self.send_builder(
+        let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES),
+        )?;
+        if response.body().len() > FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "fee sponsor program response exceeds the {} byte limit",
+                FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES
+            ));
+        }
+        Ok(response)
+    }
+    /// Fetch one exact on-chain sponsor-program lifecycle record.
+    ///
+    /// A `404` is returned as `Ok(None)`. A successful response must use the
+    /// JSON media type, decode as the closed first-release record, and contain
+    /// the exact requested controller identity and program name.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, transport, response bounds, media
+    /// type, decoding, or response-selector validation fails.
+    pub fn find_fee_sponsor_program_by_id(
+        &self,
+        program_id: &FeeSponsorProgramId,
+    ) -> Result<Option<FeeSponsorProgram>> {
+        let response = self.post_fee_sponsor_program_by_id(program_id)?;
+        match response.status() {
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::OK => {
+                let content_type = exact_single_response_header_bytes(&response, "content-type")
+                    .wrap_err("fee sponsor program response has ambiguous content-type")?;
+                if !Self::is_exact_json_content_type_bytes(content_type) {
+                    return Err(eyre!(
+                        "fee sponsor program response has invalid content-type (expected {APPLICATION_JSON})"
+                    ));
+                }
+                reject_explicit_null_fee_sponsor_program_optionals(response.body())?;
+                let program: FeeSponsorProgram = norito::json::from_slice(response.body())
+                    .wrap_err("failed to decode typed fee sponsor program response")?;
+                if &program.id != program_id {
+                    return Err(eyre!(
+                        "fee sponsor program response id differs from the requested program"
+                    ));
+                }
+                if program.active_revision == Some(0)
+                    || program.staged_revision == Some(0)
+                    || program
+                        .scheduled_activation
+                        .as_ref()
+                        .is_some_and(|activation| {
+                            activation.revision == 0 || activation.activate_at_height == 0
+                        })
+                {
+                    return Err(eyre!(
+                        "fee sponsor program response contains a zero revision or activation height"
+                    ));
+                }
+                Ok(Some(program))
+            }
+            _ => Err(
+                ResponseReport::with_msg("failed to fetch fee sponsor program", &response)
+                    .unwrap_or_else(core::convert::identity)
+                    .into(),
+            ),
+        }
     }
     /// Account-signed `POST /v1/fees/quote` retaining the exact response.
     ///
@@ -15855,7 +16327,7 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if Torii rejects the payload or the typed response
-    /// cannot be decoded.
+    /// cannot be decoded or validated against the exact request payload.
     pub fn quote_fees(&self, payload: &TransactionPayload) -> Result<FeeQuoteResponse> {
         let response = self.post_fee_quote_response(payload)?;
         if response.status() != StatusCode::OK {
@@ -15865,8 +16337,20 @@ impl Client {
                     .into(),
             );
         }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode typed fee quote response")
+        let content_type = exact_single_response_header_bytes(&response, "content-type")
+            .wrap_err("fee quote response has ambiguous content-type")?;
+        if !Self::is_exact_json_content_type_bytes(content_type) {
+            return Err(eyre!(
+                "fee quote response has invalid content-type (expected {APPLICATION_JSON})"
+            ));
+        }
+        let quote: FeeQuoteResponse = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode typed fee quote response")?;
+        quote
+            .validate_for_draft(payload)
+            .map_err(|error| eyre!(error))
+            .wrap_err("fee quote response does not match the requested transaction payload")?;
+        Ok(quote)
     }
     /// Quote fees for an exact multisig-authority payload using its detached app-auth witness.
     ///
@@ -15876,7 +16360,7 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if the payload, witness, multisig policy, request binding, signatures,
-    /// Torii response, or typed response decoding fails validation.
+    /// Torii response, typed response decoding, or exact-payload validation fails.
     pub fn quote_fees_with_multisig_witness(
         &self,
         payload: &TransactionPayload,
@@ -15887,12 +16371,12 @@ impl Client {
                 "fee-quote payload network differs from the client network"
             ));
         }
-        if witness.subject_account != payload.authority {
+        if &witness.subject_account != payload.authority() {
             return Err(eyre!(
                 "fee-quote witness subject differs from the payload authority"
             ));
         }
-        let AccountController::Multisig(policy) = payload.authority.controller() else {
+        let AccountController::Multisig(policy) = payload.authority().controller() else {
             return Err(eyre!(
                 "multisig-witness fee quoting requires a multisig payload authority"
             ));
@@ -15976,8 +16460,20 @@ impl Client {
                     .into(),
             );
         }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode typed fee quote response")
+        let content_type = exact_single_response_header_bytes(&response, "content-type")
+            .wrap_err("fee quote response has ambiguous content-type")?;
+        if !Self::is_exact_json_content_type_bytes(content_type) {
+            return Err(eyre!(
+                "fee quote response has invalid content-type (expected {APPLICATION_JSON})"
+            ));
+        }
+        let quote: FeeQuoteResponse = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode typed fee quote response")?;
+        quote
+            .validate_for_draft(payload)
+            .map_err(|error| eyre!(error))
+            .wrap_err("fee quote response does not match the requested transaction payload")?;
+        Ok(quote)
     }
     /// Convenience: POST `/v1/assets/aliases/resolve` with an asset alias literal.
     ///
@@ -18505,6 +19001,62 @@ impl Client {
             )
             .map_err(|error| eyre!("validation-fee policy proof verification failed: {error}"))?;
         Ok(proof)
+    }
+    /// Request one bounded current-state Hijiri validation-fee quote.
+    ///
+    /// The request and response use canonical Norito. The response is accepted only when its
+    /// account, transfer count, arithmetic, policy/Hijiri bindings, and live next-height semantics
+    /// are coherent with the exact request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid request, transport or HTTP failure, non-Norito response,
+    /// malformed quote, or a quote that is not coherent with the request.
+    pub fn post_validation_fee_hijiri_quote(
+        &self,
+        request: &ValidationFeeHijiriQuoteRequestV1,
+    ) -> Result<ValidationFeeHijiriQuoteResponseV1> {
+        request
+            .validate()
+            .map_err(|error| eyre!("invalid Hijiri validation-fee quote request: {error}"))?;
+        if request.account_id != self.account {
+            return Err(eyre!(
+                "Hijiri validation-fee quote account must match the authenticated client account"
+            ));
+        }
+        let body = to_bytes(request)
+            .wrap_err("failed to encode Hijiri validation-fee quote request as Norito")?;
+        let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_HIJIRI_QUOTE);
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to fetch Hijiri validation-fee quote",
+            " ",
+        )?;
+        if response.headers().contains_key("x-iroha-reject-code") {
+            return Err(eyre!(
+                "successful Hijiri validation-fee quote carried a rejection code"
+            ));
+        }
+        let content_type = exact_single_response_header(&response, "content-type")
+            .wrap_err("Hijiri validation-fee quote response content type is invalid")?;
+        if !Self::is_norito_content_type(content_type) {
+            return Err(eyre!(
+                "Hijiri validation-fee quote response has invalid content type {content_type}"
+            ));
+        }
+        let quote: ValidationFeeHijiriQuoteResponseV1 = decode_from_bytes(response.body())
+            .wrap_err("failed to decode Hijiri validation-fee quote response")?;
+        quote.validate_for_request(request).map_err(|error| {
+            eyre!("Hijiri validation-fee quote response validation failed: {error}")
+        })?;
+        Ok(quote)
     }
     /// Repeatedly verify bounded validation-fee proof pages until Torii's observed tip.
     ///
@@ -22610,6 +23162,216 @@ mod tests {
             "proposal height ordering must be numeric rather than lexicographic",
         );
     }
+    fn validation_fee_hijiri_quote_fixture(
+        request: &ValidationFeeHijiriQuoteRequestV1,
+    ) -> ValidationFeeHijiriQuoteResponseV1 {
+        use iroha_data_model::{
+            hijiri::{FeeMultiplierBand, HijiriFeePolicy, HijiriParametersV1, Q16},
+            validation_fee::VALIDATION_FEE_DS_SCALE,
+        };
+        use iroha_torii_shared::validation_fee_api::{
+            VALIDATION_FEE_BASE_MINOR_UNITS_V1, ValidationFeeHijiriQuoteBaseV1,
+            evaluate_hijiri_quote_v1,
+        };
+
+        let fee_policy = HijiriFeePolicy::new(
+            vec![
+                FeeMultiplierBand::new(Q16::ONE, Q16::ONE)
+                    .expect("valid one-band Hijiri test policy"),
+            ],
+            Q16::ONE,
+        )
+        .expect("valid Hijiri test policy");
+        let parameters = HijiriParametersV1::try_new(1, None, fee_policy, Q16::ZERO)
+            .expect("valid Hijiri test parameters");
+        let fee_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("valid validation-fee test asset");
+        let base = ValidationFeeHijiriQuoteBaseV1::try_new(
+            42,
+            43,
+            1,
+            [0x03; 32],
+            fee_asset_definition_id.to_string(),
+            request.account_id.to_string(),
+            VALIDATION_FEE_DS_SCALE,
+            VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+        )
+        .expect("valid Hijiri quote base");
+        evaluate_hijiri_quote_v1(
+            base,
+            &request.account_id,
+            &parameters,
+            None,
+            request.qualifying_transfer_count,
+        )
+        .expect("valid Hijiri quote fixture")
+    }
+    #[test]
+    fn validation_fee_hijiri_quote_posts_signed_norito_and_roundtrips() {
+        let client = client_with_base_url(base_url());
+        let request = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: client.account.clone(),
+            qualifying_transfer_count: 2,
+        };
+        let expected = validation_fee_hijiri_quote_fixture(&request);
+        let response = mk_response(
+            StatusCode::OK,
+            to_bytes(&expected).expect("encode Hijiri quote fixture"),
+            Some(APPLICATION_NORITO),
+        );
+        let (actual, snapshot) = capture_request(response, || {
+            client.post_validation_fee_hijiri_quote(&request)
+        });
+        assert_eq!(actual.expect("valid Hijiri quote response"), expected);
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), torii_uri::VALIDATION_FEE_HIJIRI_QUOTE);
+        assert_eq!(snapshot.url.query(), None);
+        assert_eq!(
+            snapshot.max_response_bytes,
+            VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
+        );
+        assert_single_accept_header(&snapshot, APPLICATION_NORITO);
+        assert_eq!(
+            snapshot
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+            vec![APPLICATION_NORITO]
+        );
+        let decoded_request: ValidationFeeHijiriQuoteRequestV1 =
+            decode_from_bytes(&snapshot.body).expect("decode exact Hijiri quote request");
+        assert_eq!(decoded_request, request);
+        assert_canonical_account_signed_request(&client, &snapshot);
+    }
+    #[test]
+    fn validation_fee_hijiri_quote_rejects_invalid_request_before_http() {
+        let client = client_with_base_url(base_url());
+        let zero_count = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: client.account.clone(),
+            qualifying_transfer_count: 0,
+        };
+        let error = with_mock_http(
+            |_| panic!("invalid Hijiri quote request reached HTTP transport"),
+            || client.post_validation_fee_hijiri_quote(&zero_count),
+        )
+        .expect_err("zero-count Hijiri quote request must fail locally");
+        assert!(
+            error.to_string().contains("qualifying_transfer_count"),
+            "unexpected invalid-request error: {error:#}"
+        );
+
+        let (other_account, _) = gen_account_in("other");
+        let other_account_request = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: other_account,
+            qualifying_transfer_count: 1,
+        };
+        let error = with_mock_http(
+            |_| panic!("cross-account Hijiri quote request reached HTTP transport"),
+            || client.post_validation_fee_hijiri_quote(&other_account_request),
+        )
+        .expect_err("cross-account Hijiri quote request must fail locally");
+        assert!(
+            error.to_string().contains("authenticated client account"),
+            "unexpected cross-account error: {error:#}"
+        );
+    }
+    #[test]
+    fn validation_fee_hijiri_quote_rejects_malformed_or_unbound_responses() {
+        let client = client_with_base_url(base_url());
+        let request = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: client.account.clone(),
+            qualifying_transfer_count: 2,
+        };
+        let valid = validation_fee_hijiri_quote_fixture(&request);
+        let valid_body = to_bytes(&valid).expect("encode Hijiri quote fixture");
+        let mut other_request = request.clone();
+        other_request.qualifying_transfer_count = 1;
+        let unbound_body = to_bytes(&validation_fee_hijiri_quote_fixture(&other_request))
+            .expect("encode unbound Hijiri quote fixture");
+        let mut duplicate_content_type =
+            mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_NORITO));
+        duplicate_content_type
+            .headers_mut()
+            .append("content-type", HeaderValue::from_static(APPLICATION_JSON));
+        let mut success_with_reject_code =
+            mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_NORITO));
+        success_with_reject_code.headers_mut().insert(
+            "x-iroha-reject-code",
+            HeaderValue::from_static("validation_fee_state_inconsistent"),
+        );
+        let cases = [
+            (
+                "status",
+                mk_response(
+                    StatusCode::CONFLICT,
+                    valid_body.clone(),
+                    Some(APPLICATION_NORITO),
+                ),
+                "Failed to fetch Hijiri validation-fee quote",
+            ),
+            (
+                "content type",
+                mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_JSON)),
+                "invalid content type",
+            ),
+            (
+                "content type prefix confusion",
+                mk_response(
+                    StatusCode::OK,
+                    valid_body.clone(),
+                    Some("application/x-norito-evil"),
+                ),
+                "invalid content type",
+            ),
+            (
+                "duplicate content type",
+                duplicate_content_type,
+                "duplicated `content-type`",
+            ),
+            (
+                "success rejection code",
+                success_with_reject_code,
+                "carried a rejection code",
+            ),
+            (
+                "Norito",
+                mk_response(
+                    StatusCode::OK,
+                    b"not-norito".to_vec(),
+                    Some(APPLICATION_NORITO),
+                ),
+                "failed to decode",
+            ),
+            (
+                "request binding",
+                mk_response(StatusCode::OK, unbound_body, Some(APPLICATION_NORITO)),
+                "does not echo",
+            ),
+        ];
+        for (case, response, expected_error) in cases {
+            let (result, snapshot) = capture_request(response, || {
+                client.post_validation_fee_hijiri_quote(&request)
+            });
+            let error = result.expect_err("hostile Hijiri quote response must fail");
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected {case} error: {error:#}"
+            );
+            assert_eq!(
+                snapshot.max_response_bytes,
+                VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
+            );
+        }
+    }
     #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
     #[norito(deny_unknown_fields)]
     struct SharedAccountOnboardingReceiptVector {
@@ -22864,6 +23626,21 @@ mod tests {
             idempotency_key: "22".repeat(32),
             execution_expires_at_unix_ms: u64::MAX,
         }
+    }
+    fn prepared_fee_payment_fixture() -> FeePaymentIntent {
+        FeePaymentIntent::authority(Vec::new(), None)
+    }
+    fn faucet_policy_fixture() -> AccountFaucetPolicyV1 {
+        let signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
+            .expect("derive trusted faucet fixture signer");
+        AccountFaucetPolicyV1::try_new(
+            AccountId::new(signer.public_key().clone()),
+            "4rPeAP6jAjiLVZThZYwwPRBuQagt"
+                .parse()
+                .expect("canonical faucet asset definition"),
+            5_u64.into(),
+        )
+        .expect("valid trusted faucet policy")
     }
     fn onboarding_current_state_fixture(
         client: &Client,
@@ -23992,12 +24769,13 @@ mod tests {
         let client = client_with_base_url(base_url());
         let (request, receipt) = account_onboarding_plan_fixture(&client);
         let binding = prepared_binding_fixture("onboarding");
+        let fee_payment = prepared_fee_payment_fixture();
         let token = "A".repeat(32);
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
         with_mock_http(respond_with(&store, response), || {
             client
-                .post_account_onboarding_prepare(&request, &receipt, &binding, &token)
+                .post_account_onboarding_prepare(&request, &receipt, &binding, &fee_payment, &token)
                 .expect("prepare sponsored onboarding receipt")
         });
         let snapshots = store.lock().expect("snapshot store");
@@ -24012,6 +24790,36 @@ mod tests {
         assert_eq!(decoded.schema, AccountOnboardingPrepareRequestV1::SCHEMA);
         assert_eq!(decoded.binding, binding);
         assert_eq!(decoded.receipt, receipt);
+        assert_eq!(decoded.fee_payment, fee_payment);
+    }
+    #[test]
+    fn faucet_prepare_forwards_the_independently_selected_fee_intent() {
+        let mut client = client_with_base_url(base_url());
+        let prepared = faucet_prepared_signature_fixture(&mut client);
+        let fee_payment = prepared_fee_payment_fixture();
+        let policy = faucet_policy_fixture();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_account_faucet_prepare(
+                    &prepared.claim,
+                    &prepared.binding,
+                    &fee_payment,
+                    &policy,
+                )
+                .expect("prepare exact faucet claim")
+        });
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/accounts/faucet/prepare");
+        let decoded: AccountFaucetPrepareRequestV1 =
+            norito::json::from_slice(&snapshot.body).expect("typed faucet prepare request");
+        assert_eq!(decoded.schema, AccountFaucetPrepareRequestV1::SCHEMA);
+        assert_eq!(decoded.binding, prepared.binding);
+        assert_eq!(decoded.claim, prepared.claim);
+        assert_eq!(decoded.fee_payment, fee_payment);
     }
     #[test]
     fn sponsored_onboarding_requires_the_callers_exact_original_request_before_dispatch() {
@@ -24027,6 +24835,7 @@ mod tests {
                     &substituted_request,
                     &receipt,
                     &prepared_binding_fixture("onboarding"),
+                    &prepared_fee_payment_fixture(),
                     &"R".repeat(32),
                 )
                 .expect_err("a substituted original request must fail before prepare dispatch")
@@ -24054,6 +24863,7 @@ mod tests {
                 &prepared,
                 &receipt,
                 &prepared.binding,
+                &prepared.fee_payment,
             )
             .expect("verify the exact prepared fixture");
 
@@ -24078,6 +24888,7 @@ mod tests {
                     &prepared,
                     &receipt,
                     &prepared.binding,
+                    &prepared.fee_payment,
                 )
                 .expect_err("prepared verification must reject a substituted request")
                 .to_string()
@@ -24100,7 +24911,12 @@ mod tests {
         let response = json_response(StatusCode::ACCEPTED, "{}");
         with_mock_http(respond_with(&store, response), || {
             let _ = client
-                .post_prepared_account_onboarding(&substituted_request, &prepared, &"S".repeat(32))
+                .post_prepared_account_onboarding(
+                    &substituted_request,
+                    &prepared,
+                    &prepared.fee_payment,
+                    &"S".repeat(32),
+                )
                 .expect_err("submit must reject a substituted original request");
         });
         assert!(
@@ -24108,6 +24924,234 @@ mod tests {
             "request substitution must not dispatch submit HTTP"
         );
     }
+    #[test]
+    fn prepared_transaction_verifiers_reject_an_independent_fee_substitution() {
+        let mut client = client_with_base_url(base_url());
+        let onboarding = onboarding_prepared_signature_fixture(&mut client);
+        let request = onboarding.receipt.body.request.clone();
+        let substituted = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1));
+        let onboarding_error = client
+            .verify_account_onboarding_prepared_transaction(
+                &request,
+                &onboarding,
+                &onboarding.receipt,
+                &onboarding.binding,
+                &substituted,
+            )
+            .expect_err("onboarding must reject a substituted requested gas bound");
+        assert!(onboarding_error.to_string().contains("fee intent"));
+
+        let faucet = faucet_prepared_signature_fixture(&mut client);
+        let faucet_policy = faucet_policy_fixture();
+        let faucet_error = client
+            .verify_account_faucet_prepared_transaction(
+                &faucet,
+                &faucet.claim,
+                &faucet.binding,
+                &substituted,
+                &faucet_policy,
+            )
+            .expect_err("faucet must reject a substituted requested gas bound");
+        assert!(faucet_error.to_string().contains("fee intent"));
+    }
+
+    #[test]
+    fn account_faucet_policy_requires_a_single_signatory_and_positive_amount() {
+        let policy = faucet_policy_fixture();
+        let expected_asset = "4rPeAP6jAjiLVZThZYwwPRBuQagt"
+            .parse::<AssetDefinitionId>()
+            .expect("canonical faucet asset definition");
+        let expected_amount: Quantity = 5_u64.into();
+        assert_eq!(policy.asset_definition_id(), &expected_asset);
+        assert_eq!(policy.amount(), &expected_amount);
+
+        assert!(
+            AccountFaucetPolicyV1::try_new(
+                policy.faucet_authority().clone(),
+                expected_asset.clone(),
+                Quantity::zero(),
+            )
+            .is_err(),
+            "a zero issuance amount must not form a trusted faucet policy"
+        );
+
+        let member = iroha_data_model::account::MultisigMember::new(
+            policy.faucet_authority().expect_single_signatory().clone(),
+            1,
+        )
+        .expect("valid multisig member");
+        let multisig = iroha_data_model::account::MultisigPolicy::new(1, vec![member])
+            .expect("valid multisig policy");
+        assert!(
+            AccountFaucetPolicyV1::try_new(
+                AccountId::new_multisig(multisig),
+                expected_asset,
+                expected_amount,
+            )
+            .is_err(),
+            "a multisig account cannot authenticate the exact V1 server transcript"
+        );
+    }
+    #[test]
+    fn account_faucet_claim_requires_direct_canonical_pow_values() {
+        let mut client = client_with_base_url(base_url());
+        let claim = faucet_prepared_signature_fixture(&mut client).claim;
+        validate_account_faucet_claim(&claim).expect("canonical solved faucet claim");
+
+        let claim_json = norito::json::to_value(&claim).expect("encode faucet claim");
+        for field in ["pow_anchor_height", "pow_nonce_hex"] {
+            let mut missing = claim_json.clone();
+            missing
+                .as_object_mut()
+                .expect("faucet claim object")
+                .remove(field)
+                .expect("faucet proof field");
+            assert!(
+                norito::json::from_value::<AccountFaucetClaimV1>(missing).is_err(),
+                "an omitted V1 faucet proof field must fail: {field}"
+            );
+
+            let mut null = claim_json.clone();
+            null.as_object_mut()
+                .expect("faucet claim object")
+                .insert(field.to_owned(), norito::json::Value::Null);
+            assert!(
+                norito::json::from_value::<AccountFaucetClaimV1>(null).is_err(),
+                "a null V1 faucet proof field must fail: {field}"
+            );
+        }
+
+        let mut zero_anchor = claim.clone();
+        zero_anchor.pow_anchor_height = 0;
+        assert!(validate_account_faucet_claim(&zero_anchor).is_err());
+        let mut empty_nonce = claim.clone();
+        empty_nonce.pow_nonce_hex.clear();
+        assert!(validate_account_faucet_claim(&empty_nonce).is_err());
+        let mut uppercase_nonce = claim;
+        uppercase_nonce.pow_nonce_hex = "AA".to_owned();
+        assert!(validate_account_faucet_claim(&uppercase_nonce).is_err());
+        uppercase_nonce.pow_nonce_hex = "00".repeat(33);
+        assert!(validate_account_faucet_claim(&uppercase_nonce).is_err());
+    }
+    #[test]
+    fn faucet_prepared_verifier_rejects_substituted_authority_asset_and_amount_policy() {
+        let mut client = client_with_base_url(base_url());
+        let faucet = faucet_prepared_signature_fixture(&mut client);
+        let fee_payment = prepared_fee_payment_fixture();
+        let trusted = faucet_policy_fixture();
+        client
+            .verify_account_faucet_prepared_transaction(
+                &faucet,
+                &faucet.claim,
+                &faucet.binding,
+                &fee_payment,
+                &trusted,
+            )
+            .expect("fixture must match the independent trusted faucet policy");
+
+        let substituted_authority = AccountId::new(checked_random_keypair().public_key().clone());
+        let authority_policy = AccountFaucetPolicyV1::try_new(
+            substituted_authority,
+            trusted.asset_definition_id().clone(),
+            trusted.amount().clone(),
+        )
+        .expect("valid substituted authority policy");
+        let substituted_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("assets", "paynet").expect("asset domain"),
+            "other".parse().expect("asset name"),
+        );
+        let asset_policy = AccountFaucetPolicyV1::try_new(
+            trusted.faucet_authority().clone(),
+            substituted_asset,
+            trusted.amount().clone(),
+        )
+        .expect("valid substituted asset policy");
+        let amount_policy = AccountFaucetPolicyV1::try_new(
+            trusted.faucet_authority().clone(),
+            trusted.asset_definition_id().clone(),
+            6_u64.into(),
+        )
+        .expect("valid substituted amount policy");
+
+        for (label, policy) in [
+            ("authority", authority_policy),
+            ("asset definition", asset_policy),
+            ("amount", amount_policy),
+        ] {
+            let error = client
+                .verify_account_faucet_prepared_transaction(
+                    &faucet,
+                    &faucet.claim,
+                    &faucet.binding,
+                    &fee_payment,
+                    &policy,
+                )
+                .expect_err("a substituted trusted faucet policy must fail");
+            assert!(
+                error.to_string().contains("policy")
+                    || error.to_string().contains("signature")
+                    || error.to_string().contains("authority"),
+                "unexpected substituted {label} error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_transaction_verifiers_reject_malformed_actual_fee_intents() {
+        let mut client = client_with_base_url(base_url());
+        let mut faucet = faucet_prepared_signature_fixture(&mut client);
+        let faucet_policy = faucet_policy_fixture();
+        let fee_asset = faucet
+            .asset_definition_id
+            .parse::<AssetDefinitionId>()
+            .expect("canonical prepared faucet asset definition");
+        let malformed = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                fee_asset,
+                Quantity::zero(),
+            )],
+            None,
+        );
+        let expected = prepared_fee_payment_fixture();
+
+        let mut onboarding = onboarding_prepared_signature_fixture(&mut client);
+        onboarding.fee_payment = malformed.clone();
+        let request = onboarding.receipt.body.request.clone();
+        let onboarding_error = client
+            .verify_account_onboarding_prepared_transaction(
+                &request,
+                &onboarding,
+                &onboarding.receipt,
+                &onboarding.binding,
+                &expected,
+            )
+            .expect_err("onboarding must reject a malformed prepared fee intent");
+        assert!(
+            onboarding_error
+                .to_string()
+                .contains("invalid prepared onboarding fee payment"),
+            "unexpected onboarding error: {onboarding_error:#}"
+        );
+
+        faucet.fee_payment = malformed;
+        let faucet_error = client
+            .verify_account_faucet_prepared_transaction(
+                &faucet,
+                &faucet.claim,
+                &faucet.binding,
+                &expected,
+                &faucet_policy,
+            )
+            .expect_err("faucet must reject a malformed prepared fee intent");
+        assert!(
+            faucet_error
+                .to_string()
+                .contains("invalid prepared faucet fee payment"),
+            "unexpected faucet error: {faucet_error:#}"
+        );
+    }
+
     #[test]
     fn atomic_onboarding_state_uses_one_exact_post_and_returns_its_anchor() {
         let client = client_with_base_url(base_url());
@@ -24336,6 +25380,7 @@ mod tests {
                 &onboarding,
                 &onboarding.receipt,
                 &expired_onboarding_binding,
+                &onboarding.fee_payment,
             )
             .expect("durable onboarding verification remains expiry tolerant");
 
@@ -24343,7 +25388,12 @@ mod tests {
         let response = json_response(StatusCode::ACCEPTED, "{}");
         let error = with_mock_http(respond_with(&onboarding_store, response), || {
             client
-                .post_prepared_account_onboarding(&request, &onboarding, &"E".repeat(32))
+                .post_prepared_account_onboarding(
+                    &request,
+                    &onboarding,
+                    &onboarding.fee_payment,
+                    &"E".repeat(32),
+                )
                 .expect_err("expired onboarding submit must fail")
         });
         assert!(error.to_string().contains("expired"));
@@ -24356,6 +25406,7 @@ mod tests {
         );
 
         let mut faucet = faucet_prepared_signature_fixture(&mut client);
+        let faucet_policy = faucet_policy_fixture();
         let mut expired_faucet_binding = faucet.binding.clone();
         expired_faucet_binding.execution_expires_at_unix_ms = 1;
         replace_faucet_prepared_binding(&mut faucet, expired_faucet_binding.clone());
@@ -24364,6 +25415,8 @@ mod tests {
                 &faucet,
                 &faucet.claim,
                 &expired_faucet_binding,
+                &faucet.fee_payment,
+                &faucet_policy,
             )
             .expect("durable faucet verification remains expiry tolerant");
 
@@ -24371,7 +25424,7 @@ mod tests {
         let response = json_response(StatusCode::ACCEPTED, "{}");
         let error = with_mock_http(respond_with(&faucet_store, response), || {
             client
-                .post_prepared_account_faucet(&faucet)
+                .post_prepared_account_faucet(&faucet, &faucet.fee_payment, &faucet_policy)
                 .expect_err("expired faucet submit must fail")
         });
         assert!(error.to_string().contains("expired"));
@@ -24470,6 +25523,7 @@ mod tests {
                     &request,
                     &receipt,
                     &prepared_binding_fixture("onboarding"),
+                    &prepared_fee_payment_fixture(),
                     &"T".repeat(32),
                 )
                 .expect_err("tampered receipt rejected")
@@ -24639,6 +25693,10 @@ mod tests {
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(snapshot.url.path(), "/v1/fee-sponsor-programs/by-id");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES
+        );
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode program selector body");
         assert_eq!(
@@ -24648,6 +25706,250 @@ mod tests {
             })
         );
         assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+    #[test]
+    fn fee_sponsor_program_lookup_returns_only_the_exact_typed_record() {
+        let client = client_with_base_url(base_url());
+        let program_id = FeeSponsorProgramId::new(
+            client.account.clone(),
+            "retail".parse().expect("canonical program name"),
+        );
+        let program = FeeSponsorProgram::new(program_id.clone(), client.account.clone());
+        let body = norito::json::to_json(&program).expect("encode fee sponsor program");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let decoded = with_mock_http(
+            respond_with(&store, json_response(StatusCode::OK, &body)),
+            || client.find_fee_sponsor_program_by_id(&program_id),
+        )
+        .expect("decode exact fee sponsor program");
+        assert_eq!(decoded, Some(program));
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES
+        );
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+    #[test]
+    fn fee_sponsor_program_lookup_rejects_a_substituted_record_id() {
+        let client = client_with_base_url(base_url());
+        let requested_id = FeeSponsorProgramId::new(
+            client.account.clone(),
+            "retail".parse().expect("canonical requested program name"),
+        );
+        let other_sponsor = AccountId::new(
+            KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+                .expect("valid alternate sponsor seed")
+                .public_key()
+                .clone(),
+        );
+        let substituted_ids = [
+            (
+                "controller",
+                FeeSponsorProgramId::new(
+                    other_sponsor,
+                    "retail".parse().expect("canonical program name"),
+                ),
+            ),
+            (
+                "name",
+                FeeSponsorProgramId::new(
+                    client.account.clone(),
+                    "wholesale"
+                        .parse()
+                        .expect("canonical substituted program name"),
+                ),
+            ),
+        ];
+        for (case, substituted_id) in substituted_ids {
+            let substituted = FeeSponsorProgram::new(substituted_id, client.account.clone());
+            let body = norito::json::to_json(&substituted).expect("encode substituted program");
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let error = with_mock_http(
+                respond_with(&store, json_response(StatusCode::OK, &body)),
+                || client.find_fee_sponsor_program_by_id(&requested_id),
+            )
+            .expect_err("substituted fee sponsor program id must be rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("differs from the requested program"),
+                "unexpected substituted-{case} error: {error:#}"
+            );
+        }
+    }
+    #[test]
+    fn fee_sponsor_program_lookup_rejects_zero_revision_and_activation_values() {
+        let client = client_with_base_url(base_url());
+        let program_id = FeeSponsorProgramId::new(
+            client.account.clone(),
+            "retail".parse().expect("canonical program name"),
+        );
+        let base = FeeSponsorProgram::new(program_id.clone(), client.account.clone());
+        let mut zero_active = base.clone();
+        zero_active.active_revision = Some(0);
+        let mut zero_staged = base.clone();
+        zero_staged.staged_revision = Some(0);
+        let mut zero_activation_revision = base.clone();
+        zero_activation_revision.scheduled_activation =
+            Some(iroha_data_model::nexus::FeeSponsorProgramActivation {
+                revision: 0,
+                activate_at_height: 1,
+            });
+        let mut zero_activation_height = base;
+        zero_activation_height.scheduled_activation =
+            Some(iroha_data_model::nexus::FeeSponsorProgramActivation {
+                revision: 1,
+                activate_at_height: 0,
+            });
+
+        for (case, program) in [
+            ("active revision", zero_active),
+            ("staged revision", zero_staged),
+            ("activation revision", zero_activation_revision),
+            ("activation height", zero_activation_height),
+        ] {
+            let body = norito::json::to_vec(&program).expect("encode invalid sponsor program");
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let error = with_mock_http(
+                respond_with(
+                    &store,
+                    mk_response(StatusCode::OK, body, Some(APPLICATION_JSON)),
+                ),
+                || client.find_fee_sponsor_program_by_id(&program_id),
+            )
+            .expect_err("zero sponsor-program lifecycle values must be rejected");
+            assert!(
+                error.to_string().contains("contains a zero revision"),
+                "unexpected zero-{case} error: {error:#}"
+            );
+        }
+    }
+    #[test]
+    fn fee_sponsor_program_lookup_rejects_explicit_null_optional_fields() {
+        let client = client_with_base_url(base_url());
+        let program_id = FeeSponsorProgramId::new(
+            client.account.clone(),
+            "retail".parse().expect("canonical program name"),
+        );
+        let program = FeeSponsorProgram::new(program_id.clone(), client.account.clone());
+
+        for field in ["active_revision", "staged_revision", "scheduled_activation"] {
+            let mut value = norito::json::to_value(&program).expect("encode sponsor program");
+            value
+                .as_object_mut()
+                .expect("sponsor program object")
+                .insert(field.to_owned(), JsonValue::Null);
+            let body = norito::json::to_vec(&value).expect("encode explicit-null response");
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let error = with_mock_http(
+                respond_with(
+                    &store,
+                    mk_response(StatusCode::OK, body, Some(APPLICATION_JSON)),
+                ),
+                || client.find_fee_sponsor_program_by_id(&program_id),
+            )
+            .expect_err("explicit-null optional sponsor fields must be rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("must be omitted rather than null"),
+                "unexpected explicit-null `{field}` error: {error:#}"
+            );
+        }
+    }
+    #[test]
+    fn fee_sponsor_program_lookup_handles_not_found_and_rejects_non_json_success() {
+        let client = client_with_base_url(base_url());
+        let program_id = FeeSponsorProgramId::new(
+            client.account.clone(),
+            "retail".parse().expect("canonical program name"),
+        );
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let missing = with_mock_http(
+            respond_with(&store, empty_response(StatusCode::NOT_FOUND)),
+            || client.find_fee_sponsor_program_by_id(&program_id),
+        )
+        .expect("404 must map to an absent program");
+        assert!(missing.is_none());
+
+        let program = FeeSponsorProgram::new(program_id.clone(), client.account.clone());
+        let body = norito::json::to_vec(&program).expect("encode fee sponsor program");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let error = with_mock_http(
+            respond_with(
+                &store,
+                mk_response(StatusCode::OK, body, Some("text/plain")),
+            ),
+            || client.find_fee_sponsor_program_by_id(&program_id),
+        )
+        .expect_err("non-JSON success response must be rejected");
+        assert!(
+            error.to_string().contains("invalid content-type"),
+            "unexpected media-type error: {error:#}"
+        );
+
+        let body = norito::json::to_vec(&program).expect("encode fee sponsor program");
+        let mut duplicate_media = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
+        duplicate_media.headers_mut().append(
+            "content-type",
+            "text/plain".parse().expect("conflicting media type"),
+        );
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let error = with_mock_http(respond_with(&store, duplicate_media), || {
+            client.find_fee_sponsor_program_by_id(&program_id)
+        })
+        .expect_err("duplicate sponsor-program response media type must be rejected");
+        assert!(
+            error.to_string().contains("duplicated `content-type`"),
+            "unexpected duplicate-media error: {error:#}"
+        );
+    }
+    #[test]
+    fn fee_sponsor_program_response_cap_is_inclusive_and_status_independent() {
+        let client = client_with_base_url(base_url());
+        let program_id = FeeSponsorProgramId::new(
+            client.account.clone(),
+            "retail".parse().expect("canonical program name"),
+        );
+
+        for status in [StatusCode::OK, StatusCode::NOT_FOUND] {
+            let exact_body = vec![b'x'; FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES];
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let response = with_mock_http(
+                respond_with(
+                    &store,
+                    mk_response(status, exact_body.clone(), Some(APPLICATION_JSON)),
+                ),
+                || client.post_fee_sponsor_program_by_id(&program_id),
+            )
+            .expect("an exact-limit sponsor-program response must be retained");
+            assert_eq!(response.status(), status);
+            assert_eq!(response.body(), &exact_body);
+
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let error = with_mock_http(
+                respond_with(
+                    &store,
+                    mk_response(
+                        status,
+                        vec![b'x'; FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES + 1],
+                        Some(APPLICATION_JSON),
+                    ),
+                ),
+                || client.post_fee_sponsor_program_by_id(&program_id),
+            )
+            .expect_err("an oversized sponsor-program response must be rejected for every status");
+            assert!(
+                error.to_string().contains(&format!(
+                    "{} byte limit",
+                    FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES
+                )),
+                "unexpected oversized-response error for {status}: {error:#}"
+            );
+        }
     }
     #[test]
     fn fee_quote_preserves_the_exact_unsigned_payload_and_is_canonically_signed() {
@@ -24679,6 +25981,260 @@ mod tests {
             norito::json::from_slice(&snapshot.body).expect("decode fee quote body");
         assert_eq!(decoded.payload, payload);
         assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+    fn authority_fee_quote_for_draft(payload: &TransactionPayload) -> FeeQuoteResponse {
+        FeeQuoteResponse {
+            intent: payload.fee_payment_intent().clone(),
+            observation: iroha_torii_shared::FeeQuoteObservation {
+                ledger_time_ms: 1,
+                next_block_height: 1,
+                route_dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+            components: Vec::new(),
+            capacities: Vec::new(),
+            decision: iroha_torii_shared::FeeQuoteDecision::Accepted {
+                debit_source: iroha_data_model::nexus::FeeDebitSource::Account(
+                    payload.authority().clone(),
+                ),
+                program_revision: None,
+            },
+        }
+    }
+    #[test]
+    fn quote_fees_accepts_response_bound_to_exact_draft() {
+        let client = client_with_base_url(base_url());
+        let payload = client
+            .try_build_transaction_payload(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build exact unsigned fee quote payload");
+        let quote = authority_fee_quote_for_draft(&payload);
+        let body = norito::json::to_json(&quote).expect("encode bound fee quote response");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let decoded = with_mock_http(
+            respond_with(&store, json_response(StatusCode::OK, &body)),
+            || client.quote_fees(&payload),
+        )
+        .expect("accept fee quote response bound to the exact draft");
+        assert_eq!(decoded, quote);
+    }
+    #[test]
+    fn quote_fees_accepts_obs_text_in_a_quoted_media_parameter() {
+        let client = client_with_base_url(base_url());
+        let payload = client
+            .try_build_transaction_payload(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build exact unsigned fee quote payload");
+        let quote = authority_fee_quote_for_draft(&payload);
+        let body = norito::json::to_vec(&quote).expect("encode bound fee quote response");
+        let mut response = mk_response(StatusCode::OK, body, None);
+        response.headers_mut().insert(
+            "content-type",
+            ::http::HeaderValue::from_bytes(b"application/json; note=\"\xe9\"")
+                .expect("valid HTTP obs-text media parameter"),
+        );
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client.quote_fees(&payload)
+        })
+        .expect("accept an RFC 9110 obs-text quoted media parameter");
+        assert_eq!(decoded, quote);
+    }
+    #[test]
+    fn quote_fees_rejects_non_json_success_media_type() {
+        let client = client_with_base_url(base_url());
+        let payload = client
+            .try_build_transaction_payload(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build exact unsigned fee quote payload");
+        let quote = authority_fee_quote_for_draft(&payload);
+        let body = norito::json::to_json(&quote).expect("encode bound fee quote response");
+        let response = mk_response(StatusCode::OK, body.into_bytes(), Some("text/plain"));
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let error = with_mock_http(respond_with(&store, response), || {
+            client.quote_fees(&payload)
+        })
+        .expect_err("non-JSON fee quote response media type must be rejected");
+        assert!(
+            error.to_string().contains("invalid content-type"),
+            "unexpected media-type error: {error:#}"
+        );
+    }
+    #[test]
+    fn quote_fees_rejects_duplicate_success_content_type() {
+        let client = client_with_base_url(base_url());
+        let payload = client
+            .try_build_transaction_payload(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build exact unsigned fee quote payload");
+        let quote = authority_fee_quote_for_draft(&payload);
+        let body = norito::json::to_vec(&quote).expect("encode bound fee quote response");
+        let mut response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
+        response.headers_mut().append(
+            "content-type",
+            "text/plain".parse().expect("conflicting media type"),
+        );
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let error = with_mock_http(respond_with(&store, response), || {
+            client.quote_fees(&payload)
+        })
+        .expect_err("duplicate fee quote response media type must be rejected");
+        assert!(
+            error.to_string().contains("duplicated `content-type`"),
+            "unexpected duplicate-media error: {error:#}"
+        );
+    }
+    #[test]
+    fn quote_fees_rejects_comma_folded_success_content_type() {
+        let client = client_with_base_url(base_url());
+        let payload = client
+            .try_build_transaction_payload(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build exact unsigned fee quote payload");
+        let quote = authority_fee_quote_for_draft(&payload);
+        let body = norito::json::to_vec(&quote).expect("encode bound fee quote response");
+        let response = mk_response(
+            StatusCode::OK,
+            body,
+            Some("application/json; charset=utf-8, text/plain"),
+        );
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let error = with_mock_http(respond_with(&store, response), || {
+            client.quote_fees(&payload)
+        })
+        .expect_err("comma-folded fee quote response media type must be rejected");
+        assert!(
+            error.to_string().contains("invalid content-type"),
+            "unexpected folded-media error: {error:#}"
+        );
+    }
+    #[test]
+    fn quote_fees_rejects_duplicate_response_keys_before_semantic_validation() {
+        let client = client_with_base_url(base_url());
+        let payload = client
+            .try_build_transaction_payload(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build exact unsigned fee quote payload");
+        let quote = authority_fee_quote_for_draft(&payload);
+        let canonical = norito::json::to_json(&quote).expect("encode bound fee quote response");
+        let duplicate = canonical.replacen(
+            r#""next_block_height":1"#,
+            r#""next_block_height":1,"\u006eext_block_height":1"#,
+            1,
+        );
+        assert_ne!(duplicate, canonical, "duplicate response fixture");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let error = with_mock_http(
+            respond_with(&store, json_response(StatusCode::OK, &duplicate)),
+            || client.quote_fees(&payload),
+        )
+        .expect_err("duplicate response key must be rejected before semantic validation");
+        assert!(
+            format!("{error:#}").contains("duplicate field `next_block_height`"),
+            "unexpected duplicate-key error: {error:#}"
+        );
+    }
+    #[test]
+    fn fee_quote_response_cap_is_exact_and_status_independent() {
+        let client = client_with_base_url(base_url());
+        let payload = client
+            .try_build_transaction_payload(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build exact unsigned fee quote payload");
+
+        for status in [StatusCode::OK, StatusCode::BAD_REQUEST] {
+            let exact_body = vec![b'x'; FEE_QUOTE_RESPONSE_MAX_BYTES];
+            let exact_response = mk_response(status, exact_body.clone(), Some(APPLICATION_JSON));
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let response = with_mock_http(respond_with(&store, exact_response), || {
+                client.post_fee_quote_response(&payload)
+            })
+            .expect("an exact-limit fee quote response must be retained");
+            assert_eq!(response.status(), status);
+            assert_eq!(response.body(), &exact_body);
+
+            let oversized_response = mk_response(
+                status,
+                vec![b'x'; FEE_QUOTE_RESPONSE_MAX_BYTES + 1],
+                Some(APPLICATION_JSON),
+            );
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let error = with_mock_http(respond_with(&store, oversized_response), || {
+                client.post_fee_quote_response(&payload)
+            })
+            .expect_err("an oversized fee quote response must be rejected for every status");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("{} byte limit", FEE_QUOTE_RESPONSE_MAX_BYTES)),
+                "unexpected oversized-response error for {status}: {error:#}"
+            );
+        }
+    }
+    #[test]
+    fn quote_fees_rejects_semantically_tampered_typed_responses() {
+        let client = client_with_base_url(base_url());
+        let payload = client
+            .try_build_transaction_payload(
+                Vec::<InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build exact unsigned fee quote payload");
+        let quote = authority_fee_quote_for_draft(&payload);
+
+        let mut gas_tampered = quote.clone();
+        gas_tampered.intent = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1));
+        let mut decision_tampered = quote.clone();
+        decision_tampered.decision = iroha_torii_shared::FeeQuoteDecision::Accepted {
+            debit_source: iroha_data_model::nexus::FeeDebitSource::Account(AccountId::new(
+                checked_random_keypair().public_key().clone(),
+            )),
+            program_revision: None,
+        };
+        let mut height_tampered = quote;
+        height_tampered.observation.next_block_height = 0;
+
+        for (label, tampered) in [
+            ("gas bound", gas_tampered),
+            ("debit decision", decision_tampered),
+            ("next block height", height_tampered),
+        ] {
+            let body =
+                norito::json::to_json(&tampered).expect("encode tampered fee quote response");
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let error = with_mock_http(
+                respond_with(&store, json_response(StatusCode::OK, &body)),
+                || client.quote_fees(&payload),
+            )
+            .expect_err(label);
+            assert!(
+                error.to_string().contains(
+                    "fee quote response does not match the requested transaction payload"
+                ),
+                "unexpected {label} error: {error:#}"
+            );
+        }
     }
     #[test]
     fn quote_to_sign_rejects_authority_substitution() {
@@ -28589,8 +30145,6 @@ mod tests {
         status.npos = Some(
             iroha_data_model::block::consensus::SumeragiNposDiagnostics {
                 epoch_length_blocks: NonZeroU64::new(100).unwrap(),
-                vrf_commit_deadline_offset: NonZeroU64::new(20).unwrap(),
-                vrf_reveal_deadline_offset: NonZeroU64::new(40).unwrap(),
                 epoch_seed: [0; 32],
                 prf_height: 12,
                 prf_view: 5,
@@ -29975,7 +31529,10 @@ mod tests {
         store
             .ingest_bytes(payload)
             .expect("sample payload must be accepted by the chunk store");
-        let profile = ErasureProfile::default();
+        let profile = ErasureProfile {
+            parity_shards: 0,
+            ..ErasureProfile::default()
+        };
         let data_shards = usize::from(profile.data_shards);
         let chunk_commitments = store
             .chunks()
@@ -30191,8 +31748,14 @@ mod tests {
                 bls_aggregate_checks_per_block: 4_016,
                 bls_signer_contributions_per_transaction: 131_713,
                 bls_signer_contributions_per_block: 526_852,
+                ed25519_signature_checks_per_transaction: 65_536,
+                ed25519_signature_checks_per_block: 262_144,
+                ed25519_validator_key_checks_per_transaction: 198_656,
+                ed25519_validator_key_checks_per_block: 794_624,
                 bn254_pairing_checks_per_transaction: 1,
                 bn254_pairing_checks_per_block: 4,
+                bls12_381_pairing_checks_per_transaction: 1,
+                bls12_381_pairing_checks_per_block: 4,
             },
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             native_message_submit_path: Some("/v1/bridge/messages".to_owned()),
@@ -30287,7 +31850,6 @@ mod tests {
     fn sccp_governance_draft_response(
         request: &SccpRouteGovernanceProposalDraftRequestV1,
     ) -> SccpRouteGovernanceProposalDraftResponseV1 {
-        use iroha_data_model::isi::Instruction;
         let instruction = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
             anchor: iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
                 network_id: test_network_id(),
@@ -30295,16 +31857,14 @@ mod tests {
             },
         };
         let boxed: iroha_data_model::isi::InstructionBox = instruction.into();
-        let wire_id = Instruction::id(&*boxed).to_string();
-        let payload = Instruction::dyn_encode(&*boxed);
-        let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+        let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
             .expect("frame SCCP governance instruction");
         SccpRouteGovernanceProposalDraftResponseV1 {
             proposal_id: iroha_data_model::governance::types::ProposalContentId::new(
                 sccp_route_governance_proposal_id(test_network_id(), &request.action),
             ),
             tx_instructions: [GovernanceProposalInstructionDraftV1 {
-                wire_id,
+                wire_id: wire_id.to_owned(),
                 payload_hex: hex::encode(framed),
             }],
         }
@@ -30337,9 +31897,8 @@ mod tests {
     fn deploy_contract_proposal_draft_response(
         request: &DeployContractProposalDraftRequestV1,
     ) -> DeployContractProposalDraftResponseV1 {
-        use iroha_data_model::{
-            governance::types::{DeployContractProposal, ProposalContentId, ProposalKind},
-            isi::Instruction,
+        use iroha_data_model::governance::types::{
+            DeployContractProposal, ProposalContentId, ProposalKind,
         };
         let contract_address = request
             .contract_address
@@ -30353,9 +31912,7 @@ mod tests {
             manifest_provenance: request.manifest_provenance.clone(),
         };
         let boxed: iroha_data_model::isi::InstructionBox = instruction.into();
-        let wire_id = Instruction::id(&*boxed).to_owned();
-        let payload = Instruction::dyn_encode(&*boxed);
-        let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+        let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
             .expect("frame deploy proposal instruction");
         let proposal = ProposalKind::DeployContract(DeployContractProposal {
             contract_address,
@@ -30367,7 +31924,7 @@ mod tests {
         DeployContractProposalDraftResponseV1 {
             proposal_id: ProposalContentId::new(proposal.fingerprint()),
             tx_instructions: [GovernanceProposalInstructionDraftV1 {
-                wire_id,
+                wire_id: wire_id.to_owned(),
                 payload_hex: hex::encode(framed),
             }],
         }
@@ -30578,8 +32135,14 @@ mod tests {
             "max_bls_aggregate_checks_per_block",
             "max_bls_signer_contributions_per_transaction",
             "max_bls_signer_contributions_per_block",
+            "max_ed25519_signature_checks_per_transaction",
+            "max_ed25519_signature_checks_per_block",
+            "max_ed25519_validator_key_checks_per_transaction",
+            "max_ed25519_validator_key_checks_per_block",
             "max_bn254_pairing_checks_per_transaction",
             "max_bn254_pairing_checks_per_block",
+            "max_bls12_381_pairing_checks_per_transaction",
+            "max_bls12_381_pairing_checks_per_block",
         ];
         assert_eq!(resource_limits.len(), expected_resource_fields.len());
         for field in expected_resource_fields {
@@ -30592,11 +32155,26 @@ mod tests {
         assert!(Client::is_sccp_json_content_type(
             "Application/JSON; charset=utf-8"
         ));
+        assert!(Client::is_sccp_json_content_type(
+            "Application/JSON; charset=\"utf-8\"; profile=exact"
+        ));
+        assert!(Client::is_exact_json_content_type_bytes(
+            b"application/json; note=\"\xe9\""
+        ));
         for hostile in [
             "",
             "text/json",
             "application/problem+json",
             "application/x-norito",
+            "application/json, text/plain",
+            "application/json; charset=utf-8, text/plain",
+            "application/json;",
+            "application/json; charset",
+            "application/json; profile=\"unterminated",
+            "application/json; profile=\"a,b\"",
+            "application/jſon",
+            "applıcation/json",
+            "application\u{000f}json",
         ] {
             assert!(
                 !Client::is_sccp_json_content_type(hostile),
@@ -30718,8 +32296,14 @@ mod tests {
             bls_aggregate_checks_per_block,
             bls_signer_contributions_per_transaction,
             bls_signer_contributions_per_block,
+            ed25519_signature_checks_per_transaction,
+            ed25519_signature_checks_per_block,
+            ed25519_validator_key_checks_per_transaction,
+            ed25519_validator_key_checks_per_block,
             bn254_pairing_checks_per_transaction,
             bn254_pairing_checks_per_block,
+            bls12_381_pairing_checks_per_transaction,
+            bls12_381_pairing_checks_per_block,
         );
         macro_rules! assert_unsafe_json_resource_limit_rejects {
             ($($field:ident),+ $(,)?) => {
@@ -30802,8 +32386,20 @@ mod tests {
                 bls_signer_contributions_per_block
             ),
             (
+                ed25519_signature_checks_per_transaction,
+                ed25519_signature_checks_per_block
+            ),
+            (
+                ed25519_validator_key_checks_per_transaction,
+                ed25519_validator_key_checks_per_block
+            ),
+            (
                 bn254_pairing_checks_per_transaction,
                 bn254_pairing_checks_per_block
+            ),
+            (
+                bls12_381_pairing_checks_per_transaction,
+                bls12_381_pairing_checks_per_block
             ),
         );
     }
@@ -31003,15 +32599,13 @@ mod tests {
             manifest_provenance: request.manifest_provenance.clone(),
         };
         let boxed: iroha_data_model::isi::InstructionBox = instruction.into();
-        let wire_id = iroha_data_model::isi::Instruction::id(&*boxed).to_owned();
-        let payload = iroha_data_model::isi::Instruction::dyn_encode(&*boxed);
-        let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+        let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
             .expect("frame hostile deploy proposal instruction");
         let draft = hostile
             .tx_instructions
             .first_mut()
             .expect("one deploy proposal instruction");
-        draft.wire_id = wire_id;
+        draft.wire_id = wire_id.to_owned();
         draft.payload_hex = hex::encode(framed);
         let response = json_response(
             StatusCode::OK,
@@ -31168,11 +32762,9 @@ mod tests {
             },
         };
         let boxed: iroha_data_model::isi::InstructionBox = instruction.into();
-        let wire_id = iroha_data_model::isi::Instruction::id(&*boxed).to_owned();
-        let payload = iroha_data_model::isi::Instruction::dyn_encode(&*boxed);
-        let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+        let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
             .expect("frame hostile SCCP governance instruction");
-        draft.wire_id = wire_id;
+        draft.wire_id = wire_id.to_owned();
         draft.payload_hex = hex::encode(framed);
         let response = json_response(
             StatusCode::OK,
@@ -31326,6 +32918,33 @@ mod tests {
             value: iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.to_owned(),
         };
         validate_sccp_recent_messages(&solana).expect("valid Solana recent response");
+
+        let mut ton = valid.clone();
+        ton.items[0].target_profile = iroha_data_model::bridge::SccpNetworkV1::TonMainnet
+            .profile_key()
+            .to_owned();
+        ton.items[0].target_domain = iroha_sccp::SCCP_DOMAIN_TON;
+        ton.items[0].route_id = Some(iroha_sccp::SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned());
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut ton.items[0].payload_projection;
+        transfer.dest_domain = iroha_sccp::SCCP_DOMAIN_TON;
+        transfer.recipient = iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 {
+            workchain: 0,
+            account: [0x94; 32],
+        };
+        transfer.route_id = iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+            value: iroha_sccp::SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned(),
+        };
+        validate_sccp_recent_messages(&ton).expect("valid TON recent response");
+        let mut wrong_ton_workchain = ton.clone();
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut wrong_ton_workchain.items[0].payload_projection;
+        transfer.recipient = iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 {
+            workchain: -1,
+            account: [0x94; 32],
+        };
+        assert!(validate_sccp_recent_messages(&wrong_ton_workchain).is_err());
+
         let mut zero_solana_recipient = solana.clone();
         let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
             &mut zero_solana_recipient.items[0].payload_projection;

@@ -2379,8 +2379,6 @@ pub(super) fn exact_signed_broadcast_successor_candidate(
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-        | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_)
         | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
     };
     let context = replay_context(round);
@@ -2745,8 +2743,6 @@ fn exact_signed_broadcast_authority(effect: &AdapterEffect) -> Option<LifecycleR
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-        | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_)
         | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
     };
     canonical_replay_authority(

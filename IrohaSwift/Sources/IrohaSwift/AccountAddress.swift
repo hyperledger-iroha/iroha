@@ -130,6 +130,9 @@ public struct AccountAddress {
     }
 
     public static func fromCanonicalBytes(_ bytes: Data) throws -> AccountAddress {
+        // Public callers may pass a `Data` slice whose indices do not start at zero.
+        // Rebase once before the decoder uses wire-format offsets.
+        let bytes = Data(bytes)
         guard !bytes.isEmpty else { throw AccountAddressError.invalidLength }
         let header = try AddressHeader.decode(bytes[0])
         let (controller, cursor) = try ControllerPayload.decode(bytes: bytes, cursor: 1)
@@ -148,6 +151,7 @@ public struct AccountAddress {
         guard header.classId.rawValue == canonicalHeader.classId.rawValue else {
             throw AccountAddressError.unsupportedAddressFormat
         }
+        try controller.validatePublicKeys()
         return AccountAddress(
             header: header,
             controller: controller,
@@ -445,7 +449,32 @@ private enum ControllerPayload {
         if let expected = curve.expectedPublicKeyLength, publicKey.count != expected {
             throw AccountAddressError.invalidPublicKey
         }
+        try validatePublicKey(curve: curve, publicKey: publicKey)
         return publicKey
+    }
+
+    static func validatePublicKey(curve: CurveId, publicKey: Data) throws {
+        if curve == .ed25519,
+           !Ed25519PublicKeyAdmission.isValidPublicKey(publicKey) {
+            throw AccountAddressError.invalidPublicKey
+        }
+        #if IROHASWIFT_ENABLE_MLDSA
+        if curve == .mldsa,
+           (publicKey.count != 1_952 || !publicKey.contains(where: { $0 != 0 })) {
+            throw AccountAddressError.invalidPublicKey
+        }
+        #endif
+    }
+
+    func validatePublicKeys() throws {
+        switch self {
+        case let .singleKey(curve, publicKey):
+            try Self.validatePublicKey(curve: curve, publicKey: publicKey)
+        case let .multiSig(_, _, members):
+            for member in members {
+                try Self.validatePublicKey(curve: member.curve, publicKey: member.publicKey)
+            }
+        }
     }
 
     func encode(into buffer: inout Data) throws {
@@ -778,17 +807,16 @@ private enum CurveId: UInt8 {
     }
 
     static func from(algorithm: String) throws -> CurveId {
-        let trimmed = algorithm.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed == algorithm else {
-            throw AccountAddressError.unsupportedAlgorithm(algorithm)
-        }
-        let normalized = algorithm.lowercased()
-        guard normalized.allSatisfy({ scalar in
-            guard let ascii = scalar.asciiValue else { return false }
-            return ascii >= 0x20 && ascii <= 0x7E
+        guard !algorithm.isEmpty, algorithm.utf8.allSatisfy({ byte in
+            (byte >= 0x30 && byte <= 0x39)
+                || (byte >= 0x41 && byte <= 0x5A)
+                || (byte >= 0x61 && byte <= 0x7A)
+                || byte == 0x2D
+                || byte == 0x5F
         }) else {
             throw AccountAddressError.unsupportedAlgorithm(algorithm)
         }
+        let normalized = algorithm.lowercased()
         switch normalized {
         case "ed25519", "ed":
             return .ed25519
@@ -797,7 +825,8 @@ private enum CurveId: UInt8 {
             return .secp256k1
         #endif
         #if IROHASWIFT_ENABLE_MLDSA
-        case "ml-dsa", "mldsa", "ml_dsa":
+        case "ml-dsa", "mldsa", "ml_dsa",
+             "mldsa65", "ml-dsa-65", "ml_dsa_65", "ml_dsa-65":
             return .mldsa
         #endif
         #if IROHASWIFT_ENABLE_BLS
@@ -834,6 +863,10 @@ private enum CurveId: UInt8 {
         #if IROHASWIFT_ENABLE_SECP256K1
         case .secp256k1:
             return 33
+        #endif
+        #if IROHASWIFT_ENABLE_MLDSA
+        case .mldsa:
+            return 1_952
         #endif
         #if IROHASWIFT_ENABLE_BLS
         case .blsNormal:
@@ -1748,6 +1781,10 @@ public final class MultisigPolicyBuilder {
 
         let payloadMembers = try members.map { descriptor -> ControllerPayload.MultisigMember in
             let curve = try curveId(for: descriptor.algorithm)
+            try ControllerPayload.validatePublicKey(
+                curve: curve,
+                publicKey: descriptor.publicKey
+            )
             return ControllerPayload.MultisigMember(curve: curve,
                                                     weight: descriptor.weight,
                                                     publicKey: descriptor.publicKey)

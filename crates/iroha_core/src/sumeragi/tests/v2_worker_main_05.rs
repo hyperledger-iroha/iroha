@@ -1031,7 +1031,7 @@ fn productive_chunk_at_view(
     let proposer = service.context.leader(view);
     let proposer_index = usize::try_from(proposer).expect("small proposer index");
     let sender = service.context.roster[proposer_index].validator.clone();
-    let proposal = wire::Proposal {
+    let mut proposal = wire::Proposal {
         round: manifest.round,
         proposer,
         subject: manifest.subject,
@@ -1041,6 +1041,12 @@ fn productive_chunk_at_view(
         }),
         signature: Vec::new(),
     };
+    proposal.signature = Signature::new(
+        keys[proposer_index].private_key(),
+        &proposal.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
     let mut chunk = wire::PayloadChunk {
         manifest_hash: HashOf::new(&manifest),
         index: 0,
@@ -1105,6 +1111,35 @@ fn chunk_effect_executor_with_exact_ownership(
     )
     .expect("construct productive-chunk effect executor")
 }
+fn chunk_effect_executor_with_remote_proposal(
+    service: &ProductionV2Services,
+    recovered: BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        (wire::PayloadManifest, DurableBodyReceipt),
+    >,
+    proposal: wire::Proposal,
+) -> V2EffectExecutor<SaturatedCompletionRuntime> {
+    let effect = AdapterEffect::FetchBody {
+        tag: service.active_tag,
+        round: proposal.round,
+        subject: proposal.subject,
+        manifest: Some(proposal.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let mut ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            service.active_tag,
+            1,
+        )],
+    )
+    .expect("bind authenticated productive-chunk Fetch owner")
+    .pop()
+    .expect("one productive-chunk Fetch has one exact owner");
+    assert!(ownership.bind_authenticated_remote_proposal_replay_for_test(proposal, &effect));
+    chunk_effect_executor_with_exact_ownership(service, recovered, Some((effect, ownership)))
+}
 #[test]
 fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -1113,15 +1148,9 @@ fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
     let _chunk_root = install_temporary_chunk_root(&mut service);
     let gate_directory = TempDir::new().expect("temporary productive-chunk ingress gate");
     let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
-    let (_, manifest, mut proposal, chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
-    let proposer_index = usize::try_from(proposal.proposer).expect("fixture proposer index");
-    proposal.signature = Signature::new(
-        keys[proposer_index].private_key(),
-        &proposal.signature_preimage(),
-    )
-    .payload()
-    .to_vec();
-    admit_and_terminalize_productive_proposal(&ingress, proposal.clone(), sender.clone());
+    let (_, manifest, proposal, chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
+    let proposal_replay = proposal.clone();
+    admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
 
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::from_authenticated_peer(
@@ -1147,7 +1176,8 @@ fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
     };
     let physical_cut = ingress.next_physical_admission_ordinal();
 
-    let executor = chunk_effect_executor(&service, BTreeMap::new());
+    let mut executor =
+        chunk_effect_executor_with_remote_proposal(&service, BTreeMap::new(), proposal_replay);
     assert!(
         ingress
             .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
@@ -1197,32 +1227,18 @@ fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
     );
     drop(durable_cut);
 
-    let tag = service.active_tag;
-    let fetch_effect = AdapterEffect::FetchBody {
-        tag,
-        round: manifest.round,
-        subject: manifest.subject,
-        manifest: Some(manifest),
-        certified_sources: Vec::new(),
-        certificate: None,
-    };
-    let mut fetch_ownership = bind_adapter_effect_batch_ownership(
-        std::slice::from_ref(&fetch_effect),
-        vec![RuntimeEffectOwnership::fresh_for_test(tag, 9_101)],
-    )
-    .expect("bind the exact Proposal Fetch owner")
-    .pop()
-    .expect("one Proposal Fetch has one exact owner");
-    assert!(
-        fetch_ownership.bind_authenticated_remote_proposal_replay_for_test(proposal, &fetch_effect)
-    );
-    let mut executor = chunk_effect_executor_with_exact_ownership(
-        &service,
-        BTreeMap::new(),
-        Some((fetch_effect.clone(), fetch_ownership)),
-    );
     executor
-        .consume_effects(vec![fetch_effect], &mut service)
+        .consume_effects(
+            vec![AdapterEffect::FetchBody {
+                tag: service.active_tag,
+                round: manifest.round,
+                subject: manifest.subject,
+                manifest: Some(manifest),
+                certified_sources: Vec::new(),
+                certificate: None,
+            }],
+            &mut service,
+        )
         .expect("open the exact manifest-bearing chunk fetch");
     let fetch_cut = ingress
         .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {

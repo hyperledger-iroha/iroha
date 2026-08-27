@@ -390,7 +390,7 @@ pub struct IzanamiScenarioProfile {
     /// Short note for operators.
     pub note: &'static str,
 }
-/// Izanami profiles for the five paper cases.
+/// Executable Izanami profiles for paper cases supported by first-release fault injectors.
 pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
     IzanamiScenarioProfile {
         attack: CommunicationAttack::TargetedLoad,
@@ -409,7 +409,6 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
             "1",
             "--max-inflight",
             "512",
-            "--fault-enable-network-packet-loss=false",
         ],
         note: "one submitter is pinned to one preferred Torii endpoint, matching a targeted valid-load shape",
     },
@@ -439,43 +438,10 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
             "--fault-enable-spam-invalid-transactions=false",
             "--fault-enable-network-latency=false",
             "--fault-enable-network-partition=false",
-            "--fault-enable-network-packet-loss=false",
             "--fault-enable-cpu-stress=false",
             "--fault-enable-disk-saturation=false",
         ],
         note: "crash/restart faults exercise transient peer failure inside the paper's 133s-266s attack window",
-    },
-    IzanamiScenarioProfile {
-        attack: CommunicationAttack::PacketLoss,
-        coverage: IzanamiCoverage::Native,
-        paper_like_args: &[
-            "--allow-net",
-            "--peers",
-            "19",
-            "--faulty",
-            "5",
-            "--duration",
-            "800s",
-            "--fault-window-start",
-            "133s",
-            "--fault-window-end",
-            "266s",
-            "--tps",
-            "200",
-            "--submitters",
-            "19",
-            "--max-inflight",
-            "512",
-            "--fault-enable-crash-restart=false",
-            "--fault-enable-wipe-storage=false",
-            "--fault-enable-spam-invalid-transactions=false",
-            "--fault-enable-network-latency=false",
-            "--fault-enable-network-partition=false",
-            "--fault-enable-network-packet-loss=true",
-            "--fault-enable-cpu-stress=false",
-            "--fault-enable-disk-saturation=false",
-        ],
-        note: "Izanami injects 75% in-process P2P application-frame loss during the paper's timed attack window",
     },
     IzanamiScenarioProfile {
         attack: CommunicationAttack::Stopping,
@@ -503,7 +469,6 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
             "--fault-enable-spam-invalid-transactions=false",
             "--fault-enable-network-latency=false",
             "--fault-enable-network-partition=false",
-            "--fault-enable-network-packet-loss=false",
             "--fault-enable-cpu-stress=false",
             "--fault-enable-disk-saturation=false",
         ],
@@ -511,7 +476,7 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
     },
     IzanamiScenarioProfile {
         attack: CommunicationAttack::LeaderIsolation,
-        coverage: IzanamiCoverage::Native,
+        coverage: IzanamiCoverage::Approximation,
         paper_like_args: &[
             "--allow-net",
             "--peers",
@@ -534,12 +499,11 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
             "--fault-enable-wipe-storage=false",
             "--fault-enable-spam-invalid-transactions=false",
             "--fault-enable-network-latency=false",
-            "--fault-enable-network-partition=false",
-            "--fault-enable-network-packet-loss=true",
+            "--fault-enable-network-partition=true",
             "--fault-enable-cpu-stress=false",
             "--fault-enable-disk-saturation=false",
         ],
-        note: "Izanami samples Sumeragi leader telemetry and applies 75% in-process P2P packet loss to the current leader during the timed attack window",
+        note: "Izanami samples Sumeragi leader telemetry and temporarily partitions the current leader during the timed attack window",
     },
 ];
 /// Return the baseline for a reference blockchain.
@@ -668,26 +632,24 @@ mod tests {
         );
     }
     #[test]
-    fn izanami_profiles_cover_each_attack_and_mark_native_faults() {
+    fn izanami_profiles_cover_supported_attacks() {
         let profiled: BTreeSet<_> = IZANAMI_SCENARIO_PROFILES
             .iter()
             .map(|profile| profile.attack)
             .collect();
-        assert_eq!(profiled.len(), CommunicationAttack::ALL.len());
-        for attack in CommunicationAttack::ALL {
+        assert_eq!(profiled.len(), CommunicationAttack::ALL.len() - 1);
+        for attack in CommunicationAttack::ALL
+            .into_iter()
+            .filter(|attack| *attack != CommunicationAttack::PacketLoss)
+        {
             assert!(profiled.contains(&attack), "missing {}", attack.slug());
         }
-        assert_eq!(
-            izanami_profile_for(CommunicationAttack::PacketLoss)
-                .expect("packet-loss profile")
-                .coverage,
-            IzanamiCoverage::Native
-        );
+        assert!(izanami_profile_for(CommunicationAttack::PacketLoss).is_none());
         assert_eq!(
             izanami_profile_for(CommunicationAttack::LeaderIsolation)
                 .expect("leader-isolation profile")
                 .coverage,
-            IzanamiCoverage::Native
+            IzanamiCoverage::Approximation
         );
     }
     #[test]

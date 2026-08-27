@@ -475,6 +475,30 @@ fn record_diagnostic(
         *omitted_diagnostics = omitted_diagnostics.saturating_add(1);
     }
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DelimiterKind {
+    Brace,
+    Bracket,
+    Parenthesis,
+}
+impl DelimiterKind {
+    fn opening(kind: SyntaxKind) -> Option<Self> {
+        match kind {
+            SyntaxKind::LBrace => Some(Self::Brace),
+            SyntaxKind::LBracket => Some(Self::Bracket),
+            SyntaxKind::LParen => Some(Self::Parenthesis),
+            _ => None,
+        }
+    }
+    fn closing(kind: SyntaxKind) -> Option<Self> {
+        match kind {
+            SyntaxKind::RBrace => Some(Self::Brace),
+            SyntaxKind::RBracket => Some(Self::Bracket),
+            SyntaxKind::RParen => Some(Self::Parenthesis),
+            _ => None,
+        }
+    }
+}
 /// Lex one source file without discarding trivia or malformed text.
 #[must_use]
 pub fn lex(source: &SourceFile, budget: FrontendBudget) -> Lexed {
@@ -503,7 +527,7 @@ pub fn lex(source: &SourceFile, budget: FrontendBudget) -> Lexed {
     let mut diagnostics = Vec::new();
     let mut omitted_diagnostics = 0_usize;
     let mut significant_tokens = 0_usize;
-    let mut delimiter_depth = 0_usize;
+    let mut delimiter_stack = Vec::new();
     let mut nesting_reported = false;
     loop {
         let (token, lexical_error) = scanner.next_token();
@@ -533,31 +557,29 @@ pub fn lex(source: &SourceFile, budget: FrontendBudget) -> Lexed {
             }
             significant_tokens = significant_tokens.saturating_add(1);
         }
-        match token.kind {
-            SyntaxKind::LParen | SyntaxKind::LBrace | SyntaxKind::LBracket => {
-                delimiter_depth = delimiter_depth.saturating_add(1);
-                if delimiter_depth > budget.max_nesting() && !nesting_reported {
-                    nesting_reported = true;
-                    record_diagnostic(
-                        &mut diagnostics,
-                        &mut omitted_diagnostics,
-                        budget,
-                        diagnostic(
-                            source,
-                            "K0003",
-                            format!(
-                                "source exceeds the {}-level nesting limit",
-                                budget.max_nesting()
-                            ),
-                            token.range,
+        if let Some(delimiter) = DelimiterKind::opening(token.kind) {
+            delimiter_stack.push(delimiter);
+            if delimiter_stack.len() > budget.max_nesting() && !nesting_reported {
+                nesting_reported = true;
+                record_diagnostic(
+                    &mut diagnostics,
+                    &mut omitted_diagnostics,
+                    budget,
+                    diagnostic(
+                        source,
+                        "K0003",
+                        format!(
+                            "source exceeds the {}-level nesting limit",
+                            budget.max_nesting()
                         ),
-                    );
-                }
+                        token.range,
+                    ),
+                );
             }
-            SyntaxKind::RParen | SyntaxKind::RBrace | SyntaxKind::RBracket => {
-                delimiter_depth = delimiter_depth.saturating_sub(1);
-            }
-            _ => {}
+        } else if let Some(delimiter) = DelimiterKind::closing(token.kind)
+            && delimiter_stack.last() == Some(&delimiter)
+        {
+            delimiter_stack.pop();
         }
         if let Some(error) = lexical_error {
             let mut emitted = diagnostic(source, error.code, error.message, token.range);

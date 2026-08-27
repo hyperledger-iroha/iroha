@@ -6,7 +6,6 @@ import ipaddress
 import re
 from typing import Any, Mapping, Union
 
-
 _ED25519_FIELD_MODULUS = (1 << 255) - 19
 _ED25519_SUBGROUP_ORDER = (1 << 252) + 27742317777372353535851937790883648493
 _ED25519_D = (
@@ -210,12 +209,12 @@ def require_vpn_relay_endpoint(
             raise RuntimeError(f"{context} must contain a canonical IPv4 address")
     elif protocol == "ip6":
         try:
-            address = ipaddress.IPv6Address(host)
+            ipv6_address = ipaddress.IPv6Address(host)
         except ipaddress.AddressValueError as exc:
             raise RuntimeError(
                 f"{context} must contain a canonical lowercase IPv6 address"
             ) from exc
-        if address.compressed != host:
+        if ipv6_address.compressed != host:
             raise RuntimeError(
                 f"{context} must contain a canonical lowercase IPv6 address"
             )

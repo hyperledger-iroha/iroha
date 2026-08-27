@@ -88,7 +88,7 @@ use iroha_data_model::{
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
-        Unregister, UnregisterBox,
+        Unregister, UnregisterBox, UnregisterKaigiRelay,
         asset_transfer_control::SetAssetTransferAvailability,
         escrow::CancelAssetLock,
         governance::{
@@ -174,9 +174,9 @@ use std::{
 // Production receives the evidence through decoded instructions instead;
 // direct construction remains deliberately confined to tests.
 #[cfg(test)]
-use iroha_data_model::proof::VerifyingKeyBox;
+use iroha_data_model::isi::settlement::FxCorridorOracleEvidence;
 #[cfg(test)]
-use iroha_data_model::{da::types::DaRentQuote, isi::settlement::FxCorridorOracleEvidence};
+use iroha_data_model::proof::VerifyingKeyBox;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -1158,20 +1158,31 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
         distid: None,
     })
 }
-fn algorithm_alias_key(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
+fn algorithm_alias_key(value: &str) -> Option<String> {
+    (!value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+    .then(|| {
+        value
+            .bytes()
+            .filter(|byte| !matches!(*byte, b'-' | b'_'))
+            .map(|byte| char::from(byte.to_ascii_lowercase()))
+            .collect()
+    })
 }
 fn parse_crypto_algorithm(value: Option<&str>) -> napi::Result<Algorithm> {
-    let value = value.unwrap_or("ed25519").trim();
-    let key = algorithm_alias_key(value);
+    let value = value.unwrap_or("ed25519");
+    let key = algorithm_alias_key(value).ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("unsupported crypto algorithm: {value}"),
+        )
+    })?;
     let algorithm = match key.as_str() {
         "ed25519" | "ed" | "eddsa" => Algorithm::Ed25519,
         "secp256k1" | "secp" | "secpk1" => Algorithm::Secp256k1,
-        "mldsa" | "mldsa65" | "mldsa44" | "mldsa87" => Algorithm::MlDsa,
+        "mldsa" | "mldsa65" => Algorithm::MlDsa,
         "blsnormal" | "bls12381g1" => Algorithm::BlsNormal,
         "blssmall" | "bls12381g2" => Algorithm::BlsSmall,
         "gost256a" | "gost34102012256paramseta" => Algorithm::Gost3410_2012_256ParamSetA,
@@ -1735,11 +1746,11 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         lane_id,
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
-        tx_count: 1,
-        total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
+        tx_count: 0,
+        total_local_amount: "0".parse().expect("valid settlement quantity"),
+        total_xor_due: "0".parse().expect("valid settlement quantity"),
+        total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+        total_xor_variance: "0".parse().expect("valid settlement quantity"),
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
@@ -8827,6 +8838,19 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     let registration = RegisterKaigiRelay { relay };
                     return Ok(Box::new(registration).into_instruction_box());
                 }
+                if let Some(json::Value::Object(mut unregister_fields)) =
+                    kaigi_map.remove("UnregisterKaigiRelay")
+                {
+                    let relay_id_value = unregister_fields.remove("relay_id").ok_or_else(|| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            "UnregisterKaigiRelay.relay_id field missing",
+                        )
+                    })?;
+                    let relay_id =
+                        parse_account_id_value(relay_id_value, "UnregisterKaigiRelay.relay_id")?;
+                    return Ok(Box::new(UnregisterKaigiRelay { relay_id }).into_instruction_box());
+                }
                 if let Some(json::Value::Object(mut health_fields)) =
                     kaigi_map.remove("ReportKaigiRelayHealth")
                 {
@@ -10662,6 +10686,20 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::Value::Object(payload),
         ));
     }
+    if let Some(unregistration) = instruction_ref
+        .as_any()
+        .downcast_ref::<UnregisterKaigiRelay>()
+    {
+        let mut payload = json::Map::new();
+        payload.insert(
+            "relay_id".to_owned(),
+            json::to_value(unregistration.relay_id()).map_err(norito_to_napi)?,
+        );
+        return Ok(kaigi_json_value(
+            "UnregisterKaigiRelay",
+            json::Value::Object(payload),
+        ));
+    }
     Err(napi::Error::new(
         napi::Status::GenericFailure,
         "unsupported instruction variant; JSON conversion is not yet implemented for this instruction",
@@ -12237,6 +12275,69 @@ mod tests {
         Uint8Array::from(test_network_id(label).as_bytes().to_vec())
     }
     #[test]
+    fn crypto_algorithm_parser_accepts_supported_aliases() {
+        assert_eq!(
+            parse_crypto_algorithm(None).expect("default crypto algorithm"),
+            Algorithm::Ed25519
+        );
+        for (label, expected) in [
+            ("ed25519", Algorithm::Ed25519),
+            ("ed-25519", Algorithm::Ed25519),
+            ("SECP_256K1", Algorithm::Secp256k1),
+            ("mldsa", Algorithm::MlDsa),
+            ("ML-DSA-65", Algorithm::MlDsa),
+            ("ML_DSA_65", Algorithm::MlDsa),
+            ("ML_DSA-65", Algorithm::MlDsa),
+            ("BLS-NORMAL", Algorithm::BlsNormal),
+            ("BLS_SMALL", Algorithm::BlsSmall),
+            (
+                "GOST-3410-2012-256-PARAMSETA",
+                Algorithm::Gost3410_2012_256ParamSetA,
+            ),
+            (
+                "GOST_3410_2012_512_PARAMSETB",
+                Algorithm::Gost3410_2012_512ParamSetB,
+            ),
+            ("sm2", Algorithm::Sm2),
+        ] {
+            assert_eq!(
+                parse_crypto_algorithm(Some(label)).expect("supported crypto algorithm alias"),
+                expected,
+                "{label}"
+            );
+        }
+    }
+    #[test]
+    fn crypto_algorithm_parser_rejects_invalid_alias_characters_and_suites() {
+        for label in [
+            "",
+            " mldsa",
+            "mldsa ",
+            "ML DSA 65",
+            "\tML-DSA-65",
+            "ML-DSA-65\n",
+            "ML.DSA.65",
+            "ML/DSA/65",
+            "ML@DSA@65",
+            "ML#DSA#65",
+            "MLKDSA65",
+            "ed－25519",
+            "MLDSA44",
+            "MLDSA87",
+            "ML-DSA-44",
+            "ML_DSA_87",
+            "ML-DSA-4-4",
+            "ML-DSA-４４",
+            "ML-DSA-８７",
+            "ML－DSA-65",
+        ] {
+            assert!(
+                parse_crypto_algorithm(Some(label)).is_err(),
+                "invalid crypto algorithm alias {label:?} must fail"
+            );
+        }
+    }
+    #[test]
     fn transaction_network_id_requires_exact_marked_32_bytes() {
         let expected = test_network_id(b"js-network-id-boundary");
         assert_eq!(
@@ -12838,19 +12939,14 @@ mod tests {
         HasMetadata,
         account::AccountId,
         asset::id::{AssetDefinitionId, AssetId},
-        da::{
-            manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
-            types::{
-                BlobClass, BlobCodec, BlobDigest, ErasureProfile, ExtraMetadata, MetadataEntry,
-                MetadataVisibility, RetentionPolicy, StorageTicketId,
-            },
-        },
+        da::manifest::DaManifestV1,
         domain::DomainId,
         events::EventFilterBox,
         isi::{
             Burn, BurnBox, CreateKaigi, CustomInstruction, InstructionBox, JoinKaigi, LeaveKaigi,
             Mint, MintBox, RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
+            UnregisterKaigiRelay,
             governance::{
                 CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
                 ProposeValidationFeePolicy, RegisterCitizen,
@@ -13515,6 +13611,10 @@ seiyaku Privacy {
             lane_relay_envelope_sample().expect("checked validator generation for relay sample");
         assert!(!sample.valid.is_empty());
         assert!(!sample.tampered.is_empty());
+        let mut valid = sample.valid.as_ref();
+        let envelope =
+            LaneRelayEnvelope::decode_all(&mut valid).expect("decode canonical relay sample");
+        envelope.verify().expect("verify canonical relay sample");
     }
     #[test]
     fn crypto_keypair_exports_checked_public_key_payload() {
@@ -15098,108 +15198,32 @@ seiyaku Privacy {
         chunk_root: [u8; 32],
         leaf_count: usize,
     }
-    #[allow(clippy::too_many_lines)]
     fn build_da_manifest_fixture() -> DaManifestFixture {
-        let payload: Vec<u8> = (0..16 * 1024)
-            .map(|idx| u8::try_from(idx % 197).expect("payload byte fits in u8"))
-            .collect();
-        let plan =
-            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+        let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture_root = crate_root
+            .ancestors()
+            .nth(2)
+            .expect("workspace root")
+            .join("fixtures/da/reconstruct/rs_parity_v1");
+        let manifest_hex = fs::read_to_string(fixture_root.join("manifest.norito.hex"))
+            .expect("read shared DA manifest fixture");
+        let manifest_bytes = hex::decode(manifest_hex).expect("decode shared DA manifest fixture");
+        let manifest: DaManifestV1 =
+            decode_from_bytes(&manifest_bytes).expect("decode shared DA manifest");
+        let payload =
+            fs::read(fixture_root.join("payload.bin")).expect("read shared DA payload fixture");
+        let plan = sorafs_car::build_plan_from_da_manifest(&manifest)
+            .expect("build shared DA manifest plan");
         let mut store = ChunkStore::with_profile(plan.chunk_profile);
         let mut source = InMemoryPayload::new(&payload);
         store
             .ingest_plan_source(&plan, &mut source)
             .expect("ingest payload");
-        let chunk_root = *store.por_tree().root();
-        let blob_hash = *store.payload_digest().as_bytes();
-        let shard_span = usize::from(
-            ErasureProfile::default()
-                .data_shards
-                .saturating_add(ErasureProfile::default().parity_shards),
-        );
-        let chunk_commitments = plan
-            .chunks
-            .iter()
-            .enumerate()
-            .map(|(index, chunk)| {
-                let chunk_index =
-                    u32::try_from(index).expect("chunk index must fit within u32 range");
-                let stripe_id =
-                    u32::try_from(index / shard_span).expect("stripe index fits in u32");
-                ChunkCommitment::new_with_role(
-                    chunk_index,
-                    chunk.offset,
-                    chunk.length,
-                    BlobDigest::new(chunk.digest),
-                    ChunkRole::Data,
-                    stripe_id,
-                )
-            })
-            .collect();
-        let manifest = DaManifestV1 {
-            version: DaManifestV1::VERSION,
-            client_blob_id: BlobDigest::from_hash(blake3::hash(b"client")),
-            lane_id: LaneId::new(0),
-            epoch: 0,
-            blob_class: BlobClass::TaikaiSegment,
-            codec: BlobCodec("application/octet-stream".into()),
-            blob_hash: BlobDigest::new(blob_hash),
-            chunk_root: BlobDigest::new(chunk_root),
-            storage_ticket: StorageTicketId::from_hash(blake3::hash(b"ticket")),
-            total_size: payload.len() as u64,
-            chunk_size: plan
-                .chunks
-                .first()
-                .map(|chunk| chunk.length)
-                .expect("chunks present"),
-            total_stripes: u32::try_from(
-                plan.chunks
-                    .len()
-                    .div_ceil(usize::from(ErasureProfile::default().data_shards)),
-            )
-            .expect("stripe count fits in u32"),
-            shards_per_stripe: u32::from(
-                ErasureProfile::default()
-                    .data_shards
-                    .saturating_add(ErasureProfile::default().parity_shards),
-            ),
-            erasure_profile: ErasureProfile::default(),
-            retention_policy: RetentionPolicy::default(),
-            rent_quote: DaRentQuote::default(),
-            chunks: chunk_commitments,
-            ipa_commitment: BlobDigest::new(chunk_root),
-            metadata: ExtraMetadata {
-                items: vec![
-                    MetadataEntry::new(
-                        "taikai.event_id",
-                        b"demo-event".to_vec(),
-                        MetadataVisibility::Public,
-                    ),
-                    MetadataEntry::new(
-                        "taikai.stream_id",
-                        b"demo-stream".to_vec(),
-                        MetadataVisibility::Public,
-                    ),
-                    MetadataEntry::new(
-                        "taikai.rendition_id",
-                        b"demo-rendition".to_vec(),
-                        MetadataVisibility::Public,
-                    ),
-                    MetadataEntry::new(
-                        "taikai.segment.sequence",
-                        b"1".to_vec(),
-                        MetadataVisibility::Public,
-                    ),
-                ],
-            },
-            issued_at_unix: 0,
-        };
-        let manifest_bytes = norito::to_bytes(&manifest).expect("encode manifest");
         DaManifestFixture {
             manifest_bytes,
             payload,
-            blob_hash,
-            chunk_root,
+            blob_hash: *manifest.blob_hash.as_ref(),
+            chunk_root: *manifest.chunk_root.as_ref(),
             leaf_count: store.por_tree().leaf_count(),
         }
     }
@@ -15987,6 +16011,21 @@ seiyaku Privacy {
         assert!(outer.contains_key("Kaigi"));
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize Kaigi relay instruction");
+        assert_eq!(reconstructed, instruction);
+    }
+    #[test]
+    fn unregister_kaigi_relay_instruction_json_roundtrip() {
+        let relay_id = sample_account("wonderland");
+        let instruction: InstructionBox =
+            Box::new(UnregisterKaigiRelay { relay_id }).into_instruction_box();
+        let json_value = instruction_to_json_value(&instruction)
+            .expect("serialize Kaigi relay unregistration instruction");
+        let outer = json_value
+            .as_object()
+            .expect("instruction JSON should be an object");
+        assert!(outer.contains_key("Kaigi"));
+        let reconstructed = value_to_instruction(json_value)
+            .expect("deserialize Kaigi relay unregistration instruction");
         assert_eq!(reconstructed, instruction);
     }
     #[test]

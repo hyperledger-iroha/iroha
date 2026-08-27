@@ -12,6 +12,10 @@
 //!   resumes its directory cursor across cycles, and canonically orders each
 //!   window instead of collecting and sorting the complete tenant population;
 //!   unscheduled locations remain in a retry queue with the same hard cap.
+//!   Versioned content-ID processing receipts are retained separately from
+//!   reports and referenced by each live tenant copy, so report eviction does
+//!   not cause completed attachments to be verified again. Retryable policy or
+//!   registry failures use bounded exponential backoff.
 //!   Registry-backed verifying-key files use the data model's 8 MiB V1 payload
 //!   ceiling and a stable direct-file read, so a corrupt key file cannot race
 //!   metadata admission and make the worker allocate an unbounded buffer;
@@ -24,9 +28,11 @@
 use crate::{
     routing::MaybeTelemetry,
     zk_attachments::{
-        ATTACHMENT_META_FILE_MAX_BYTES, open_attachment_regular_file,
-        read_bounded_attachment_regular_file, validate_attachment_body_contract,
-        validate_attachment_metadata_contract,
+        ATTACHMENT_META_FILE_MAX_BYTES, ProverProcessingDecision, ProverProcessingReceipt,
+        ZK_PROVER_PROCESSING_STATE_VERSION, ensure_prover_processing_reference,
+        open_attachment_regular_file, persist_prover_processing_receipt_if_referenced,
+        prover_processing_decision, read_bounded_attachment_regular_file,
+        validate_attachment_body_contract, validate_attachment_metadata_contract,
     },
     zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
 };
@@ -35,7 +41,7 @@ use iroha_core::{
     zk::{
         hash_proof, hash_vk, is_developer_only_backend_label, is_production_claim_backend_label,
         is_trusted_setup_backend_label, is_verifier_backend_registry_label_v1,
-        verify_backend_with_timing_checked,
+        production_verify_backend_tag, verify_backend_with_timing_checked,
     },
 };
 #[cfg(test)]
@@ -44,6 +50,7 @@ use iroha_data_model::proof::{
     ProofAttachment, ProofAttachmentList, VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1, VerifyingKeyBox,
     VerifyingKeyId,
 };
+use iroha_data_model::zk::BackendTag;
 use mv::storage::StorageReadOnly;
 use norito::json;
 use parking_lot::{Mutex, RwLock};
@@ -71,6 +78,29 @@ use tokio::{
     sync::Semaphore,
     task::{self, JoinSet},
 };
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    PartialEq,
+    Eq,
+)]
+/// Durable processing disposition embedded in a prover report.
+pub struct ProverReportProcessing {
+    /// Whether the attachment outcome must not be retried automatically.
+    pub terminal: bool,
+    /// Earliest retry time for a transient failure, in Unix milliseconds.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub retry_not_before_ms: Option<u64>,
+    /// Number of transient attempts already made for this attachment.
+    #[norito(default)]
+    pub retry_count: u32,
+}
 #[derive(
     Debug,
     Clone,
@@ -156,6 +186,10 @@ pub struct ProverReport {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub proofs: Vec<ProofReportEntry>,
+    /// Processing disposition used to recover a receipt after a partial commit.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub processing: Option<ProverReportProcessing>,
 }
 #[derive(
     Debug,
@@ -369,7 +403,27 @@ const ATTACHMENT_DISCOVERY_MAX_WORK_ITEMS: u64 =
 static REPORT_SUMMARY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static ATTACHMENT_DISCOVERY_STATE: OnceLock<Mutex<Option<AttachmentDiscoveryState>>> =
     OnceLock::new();
+static ATTACHMENT_PROCESSING_CLAIMS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 include!("zk_prover/attachment_discovery_and_report_storage.rs");
+struct AttachmentProcessingClaim {
+    id: String,
+}
+impl AttachmentProcessingClaim {
+    fn acquire(id: &str) -> Option<Self> {
+        let claims = ATTACHMENT_PROCESSING_CLAIMS.get_or_init(|| Mutex::new(HashSet::new()));
+        let mut claims = claims.lock();
+        claims
+            .insert(id.to_owned())
+            .then(|| Self { id: id.to_owned() })
+    }
+}
+impl Drop for AttachmentProcessingClaim {
+    fn drop(&mut self) {
+        if let Some(claims) = ATTACHMENT_PROCESSING_CLAIMS.get() {
+            claims.lock().remove(&self.id);
+        }
+    }
+}
 #[cfg(test)]
 fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io::Result<()> {
     ensure_dirs();
@@ -525,6 +579,75 @@ fn canonicalize_attachment_locations(locations: &mut Vec<AttachmentLocation>) {
     let mut seen_ids = HashSet::with_capacity(locations.len());
     locations.retain(|location| seen_ids.insert(location.id.clone()));
 }
+fn processing_retry_delay_ms(retry_count: u32) -> u64 {
+    const MAX_RETRY_DELAY_MS: u64 = 24 * 60 * 60 * 1_000;
+    let base = u64::try_from(cfg_scan_period().as_millis())
+        .unwrap_or(u64::MAX)
+        .max(1_000);
+    let exponent = retry_count.saturating_sub(1).min(16);
+    base.saturating_mul(1_u64 << exponent)
+        .min(MAX_RETRY_DELAY_MS)
+}
+fn processing_receipt_from_report(report: &ProverReport) -> Option<ProverProcessingReceipt> {
+    let processing = if report.ok {
+        ProverReportProcessing {
+            terminal: true,
+            retry_not_before_ms: None,
+            retry_count: 0,
+        }
+    } else {
+        report.processing?
+    };
+    if (processing.terminal
+        && (processing.retry_not_before_ms.is_some() || processing.retry_count != 0))
+        || (!processing.terminal
+            && (processing.retry_not_before_ms.is_none() || processing.retry_count == 0))
+    {
+        return None;
+    }
+    Some(ProverProcessingReceipt {
+        version: ZK_PROVER_PROCESSING_STATE_VERSION,
+        id: report.id.clone(),
+        processed_ms: report.processed_ms,
+        terminal: processing.terminal,
+        retry_not_before_ms: processing.retry_not_before_ms,
+        retry_count: processing.retry_count,
+    })
+}
+fn committed_report_processing_decision(id: &str, now_ms: u64) -> Option<ProverProcessingDecision> {
+    let report = load_report(id)?;
+    let receipt = processing_receipt_from_report(&report)?;
+    if let Err(error) = persist_prover_processing_receipt_if_referenced(&receipt) {
+        iroha_logger::warn!(
+            attachment_id = %id,
+            %error,
+            "Failed to reconcile a committed ZK prover report receipt"
+        );
+    }
+    if receipt.terminal
+        || receipt
+            .retry_not_before_ms
+            .is_some_and(|retry_at| now_ms < retry_at)
+    {
+        Some(ProverProcessingDecision::Suppress)
+    } else {
+        Some(ProverProcessingDecision::Due {
+            retry_count: receipt.retry_count,
+        })
+    }
+}
+fn attachment_needs_processing(location: &AttachmentLocation) -> bool {
+    if let Err(error) = ensure_prover_processing_reference(&location.tenant_key, &location.id) {
+        iroha_logger::warn!(
+            attachment_id = %location.id,
+            tenant = %location.tenant_key,
+            %error,
+            "Failed to persist ZK prover live-attachment reference"
+        );
+        return false;
+    }
+    processing_retry_count(&location.id).is_some()
+}
 fn discover_attachment_window(
     stream: &mut AttachmentDirectoryStream,
     geometry: AttachmentDiscoveryGeometry,
@@ -613,7 +736,7 @@ fn discover_pending_attachment_locations(
             }
             let location = retry_locations.next().expect("peeked above");
             discovery.work_items = discovery.work_items.saturating_add(1);
-            if !report_path_from_sanitized(&location.id).exists() {
+            if attachment_needs_processing(&location) {
                 discovery.locations.push(location);
             }
             if scan_deadline_reached(start, max_millis) {
@@ -646,7 +769,7 @@ fn discover_pending_attachment_locations(
         remaining_geometry,
         start,
         max_millis,
-        |location| !report_path_from_sanitized(&location.id).exists(),
+        attachment_needs_processing,
     );
     discovery.locations.extend(streamed.locations);
     discovery.work_items = discovery.work_items.saturating_add(streamed.work_items);
@@ -1204,35 +1327,129 @@ fn decode_proof_attachments(
         )),
     }
 }
-fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -> ProofReportEntry {
+struct ProofProcessingResult {
+    report: ProofReportEntry,
+    retryable: bool,
+}
+fn process_proof_attachment_with_disposition(
+    ctx: &ProverContext,
+    attachment: &ProofAttachment,
+) -> ProofProcessingResult {
     let backend = attachment.backend.clone();
     let backend_str = backend.as_str();
     let proof_hash = Some(hex::encode(hash_proof(&attachment.proof)));
     let mut errors = Vec::new();
     let resolved_vk_ref = attachment.vk_ref.clone();
     let mut circuit_id: Option<String> = None;
+    let mut retryable = false;
+    let mut terminal_error = false;
+    let result =
+        |errors: Vec<String>, circuit_id: Option<String>, retryable: bool, terminal_error: bool| {
+            let ok = errors.is_empty();
+            ProofProcessingResult {
+                report: ProofReportEntry {
+                    backend: backend.clone(),
+                    ok,
+                    error: (!ok).then(|| errors.join("; ")),
+                    proof_hash: proof_hash.clone(),
+                    vk_ref: Some(resolved_vk_ref.clone()),
+                    circuit_id,
+                },
+                retryable: !ok && retryable && !terminal_error,
+            }
+        };
     if attachment.proof.backend.as_str() != backend_str {
         errors.push("proof backend does not match attachment backend".into());
+        terminal_error = true;
     }
     if attachment.proof.bytes.is_empty() {
         errors.push("proof bytes are empty".into());
+        terminal_error = true;
     }
     if is_trusted_setup_backend_label(backend_str) {
         errors.push(format!(
             "trusted-setup backend `{backend_str}` is not supported"
         ));
+        terminal_error = true;
     } else if is_developer_only_backend_label(backend_str) {
         errors.push(format!(
             "developer-only backend `{backend_str}` is not supported"
         ));
+        terminal_error = true;
     } else if !backend_allowed(backend_str, &ctx.allowed_backends) {
         errors.push(format!("backend `{backend_str}` not allowed"));
+        retryable = is_verifier_backend_registry_label_v1(backend_str);
+        terminal_error |= !retryable;
     }
-    if crate::is_stark_fri_v1_backend(backend_str) {
-        if let Some(state) = ctx.state.as_ref() {
-            if !state.zk_snapshot().stark.enabled {
-                errors.push("stark verification is disabled in node configuration".into());
+    if let Some(state) = ctx.state.as_ref() {
+        let zk = state.zk_snapshot();
+        match production_verify_backend_tag(backend_str) {
+            Some(BackendTag::Halo2IpaPasta) if !zk.halo2.enabled => {
+                errors.push("halo2 verification is disabled in node configuration".into());
+                retryable = true;
             }
+            Some(BackendTag::Halo2IpaPasta)
+                if attachment.proof.bytes.len() > zk.halo2.max_envelope_bytes =>
+            {
+                errors.push(format!(
+                    "halo2 proof exceeds node-configured max_envelope_bytes {}",
+                    zk.halo2.max_envelope_bytes
+                ));
+                retryable = true;
+            }
+            Some(BackendTag::Halo2IpaPasta) => {
+                if let Ok(envelope) = norito::decode_canonical::<
+                    iroha_data_model::zk::OpenVerifyEnvelope,
+                >(&attachment.proof.bytes)
+                    && envelope.backend == BackendTag::Halo2IpaPasta
+                    && envelope.proof_bytes.len() > zk.halo2.max_proof_bytes
+                {
+                    errors.push(format!(
+                        "halo2 proof exceeds node-configured max_proof_bytes {}",
+                        zk.halo2.max_proof_bytes
+                    ));
+                    retryable = true;
+                }
+            }
+            Some(BackendTag::Stark) if !zk.stark.enabled => {
+                errors.push("stark verification is disabled in node configuration".into());
+                retryable = true;
+            }
+            Some(BackendTag::Stark)
+                if attachment.proof.bytes.len() > zk.stark.max_envelope_bytes =>
+            {
+                errors.push(format!(
+                    "stark proof exceeds node-configured max_envelope_bytes {}",
+                    zk.stark.max_envelope_bytes
+                ));
+                retryable = true;
+            }
+            Some(BackendTag::Stark) => {
+                if let Ok(envelope) = norito::decode_canonical::<
+                    iroha_data_model::zk::OpenVerifyEnvelope,
+                >(&attachment.proof.bytes)
+                    && envelope.backend == BackendTag::Stark
+                {
+                    if envelope.proof_bytes.len() > zk.stark.max_envelope_bytes {
+                        errors.push(format!(
+                            "stark proof wrapper exceeds node-configured max_envelope_bytes {}",
+                            zk.stark.max_envelope_bytes
+                        ));
+                        retryable = true;
+                    } else if let Ok(open) = norito::decode_canonical::<
+                        iroha_data_model::zk::StarkFriOpenProofV1,
+                    >(&envelope.proof_bytes)
+                        && open.envelope_bytes.len() > zk.stark.max_proof_bytes
+                    {
+                        errors.push(format!(
+                            "stark proof exceeds node-configured max_proof_bytes {}",
+                            zk.stark.max_proof_bytes
+                        ));
+                        retryable = true;
+                    }
+                }
+            }
+            None => {}
         }
     }
     let vk_id = &attachment.vk_ref;
@@ -1241,29 +1458,16 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             "vk_ref backend `{}` does not match proof backend `{backend_str}`",
             vk_id.backend
         ));
+        terminal_error = true;
     }
     if !errors.is_empty() {
-        return ProofReportEntry {
-            backend,
-            ok: false,
-            error: Some(errors.join("; ")),
-            proof_hash,
-            vk_ref: Some(resolved_vk_ref),
-            circuit_id,
-        };
+        return result(errors, circuit_id, retryable, terminal_error);
     }
     let state = match ctx.state.as_ref() {
         Some(state) => state,
         None => {
             errors.push("verifying key lookup requires core state".into());
-            return ProofReportEntry {
-                backend,
-                ok: false,
-                error: Some(errors.join("; ")),
-                proof_hash,
-                vk_ref: Some(resolved_vk_ref),
-                circuit_id,
-            };
+            return result(errors, circuit_id, true, false);
         }
     };
     let view = state.query_view();
@@ -1272,18 +1476,12 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
         Some(record) => record,
         None => {
             errors.push("verifying key not found in registry".into());
-            return ProofReportEntry {
-                backend,
-                ok: false,
-                error: Some(errors.join("; ")),
-                proof_hash,
-                vk_ref: Some(resolved_vk_ref),
-                circuit_id,
-            };
+            return result(errors, circuit_id, true, false);
         }
     };
     if !record.is_active_at(verification_height) {
         errors.push("verifying key is not active".into());
+        retryable = true;
     }
     if record.max_proof_bytes > 0 && attachment.proof.bytes.len() > record.max_proof_bytes as usize
     {
@@ -1291,16 +1489,19 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             "proof exceeds max_proof_bytes {}",
             record.max_proof_bytes
         ));
+        retryable = true;
     }
     if let Some(commitment) = attachment.vk_commitment
         && commitment != record.commitment
     {
         errors.push("vk_commitment does not match registry commitment".into());
+        retryable = true;
     }
     circuit_id = Some(record.circuit_id.clone());
     let vk_box = match record.key.as_ref() {
         Some(key) if key.backend.as_str() != backend_str => {
             errors.push("verifying key backend does not match proof backend".into());
+            retryable = true;
             None
         }
         Some(key) => Some(std::borrow::Cow::Borrowed(key)),
@@ -1312,6 +1513,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
                         bytes.len(),
                         record.vk_len
                     ));
+                    retryable = true;
                 }
                 Some(std::borrow::Cow::Owned(VerifyingKeyBox::new(
                     backend.clone(),
@@ -1320,6 +1522,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             }
             Err(err) => {
                 errors.push(err);
+                retryable = true;
                 None
             }
         },
@@ -1327,10 +1530,12 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     if let Some(vk_box) = vk_box.as_deref() {
         if vk_box.bytes.is_empty() {
             errors.push("verifying key bytes are empty".into());
+            retryable = true;
         } else {
             let vk_hash = hash_vk(vk_box);
             if vk_hash != record.commitment {
                 errors.push("verifying key bytes do not match registry commitment".into());
+                retryable = true;
             }
         }
     }
@@ -1339,6 +1544,9 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             Some(circuit) if circuit_allowed(circuit, &ctx.allowed_circuits) => {}
             Some(circuit) => errors.push(format!("circuit `{circuit}` not allowed")),
             None => errors.push("circuit_id unavailable for allowlist".into()),
+        }
+        if !errors.is_empty() {
+            retryable = true;
         }
     }
     if errors.is_empty() {
@@ -1358,15 +1566,11 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             None => errors.push("verifying key bytes missing".into()),
         }
     }
-    let ok = errors.is_empty();
-    ProofReportEntry {
-        backend,
-        ok,
-        error: if ok { None } else { Some(errors.join("; ")) },
-        proof_hash,
-        vk_ref: Some(resolved_vk_ref),
-        circuit_id,
-    }
+    result(errors, circuit_id, retryable, false)
+}
+#[cfg(test)]
+fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -> ProofReportEntry {
+    process_proof_attachment_with_disposition(ctx, attachment).report
 }
 /// Process a single attachment id, emitting a report if not present yet.
 pub fn process_attachment_once(id: &str) -> Option<ProverReport> {
@@ -1374,8 +1578,36 @@ pub fn process_attachment_once(id: &str) -> Option<ProverReport> {
     let loc = find_attachment_location(&clean)?;
     process_attachment_once_at(&loc)
 }
+fn processing_retry_count(id: &str) -> Option<u32> {
+    let now_ms = now_ms();
+    let report_decision = || committed_report_processing_decision(id, now_ms);
+    match prover_processing_decision(id, now_ms) {
+        ProverProcessingDecision::Suppress => None,
+        ProverProcessingDecision::Due { retry_count } => match report_decision() {
+            Some(ProverProcessingDecision::Suppress) => None,
+            Some(ProverProcessingDecision::Due {
+                retry_count: report_retry_count,
+            }) => Some(retry_count.max(report_retry_count)),
+            Some(ProverProcessingDecision::Missing) | None => Some(retry_count),
+        },
+        ProverProcessingDecision::Missing => match report_decision() {
+            Some(ProverProcessingDecision::Suppress) => None,
+            Some(ProverProcessingDecision::Due { retry_count }) => Some(retry_count),
+            Some(ProverProcessingDecision::Missing) | None => Some(0),
+        },
+    }
+}
 fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> {
-    if report_path_from_sanitized(&loc.id).exists() {
+    if let Err(error) = ensure_prover_processing_reference(&loc.tenant_key, &loc.id) {
+        iroha_logger::warn!(
+            attachment_id = %loc.id,
+            tenant = %loc.tenant_key,
+            %error,
+            "Failed to persist ZK prover live-attachment reference"
+        );
+        return load_report(&loc.id);
+    }
+    if processing_retry_count(&loc.id).is_none() {
         return load_report(&loc.id);
     }
     match load_attachment_snapshot(loc, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1)? {
@@ -1408,10 +1640,35 @@ fn process_attachment_snapshot_at(
     loc: &AttachmentLocation,
     snapshot: AttachmentSnapshot,
 ) -> Option<ProverReport> {
-    // A direct request and the background scan may race. The immutable
-    // snapshot is discarded if either side already committed the report.
-    if report_path_from_sanitized(&loc.id).exists() {
+    // A direct request and the background scan may race. Only one claimant may
+    // verify a content id; later claimants observe its durable receipt/report.
+    let _claim = AttachmentProcessingClaim::acquire(&loc.id)?;
+    let Some(previous_retry_count) = processing_retry_count(&loc.id) else {
         return load_report(&loc.id);
+    };
+    let retry_count = previous_retry_count.saturating_add(1);
+    let attempt_started_ms = now_ms();
+    let provisional_receipt = ProverProcessingReceipt {
+        version: ZK_PROVER_PROCESSING_STATE_VERSION,
+        id: loc.id.clone(),
+        processed_ms: attempt_started_ms,
+        terminal: false,
+        retry_not_before_ms: Some(
+            attempt_started_ms.saturating_add(processing_retry_delay_ms(retry_count)),
+        ),
+        retry_count,
+    };
+    match persist_prover_processing_receipt_if_referenced(&provisional_receipt) {
+        Ok(true) => {}
+        Ok(false) => return None,
+        Err(error) => {
+            iroha_logger::warn!(
+                attachment_id = %loc.id,
+                %error,
+                "Skipping ZK proof processing because its provisional receipt could not persist"
+            );
+            return None;
+        }
     }
     let AttachmentSnapshot { meta, body_load } = snapshot;
     let validated_body = validate_attachment_snapshot(loc, &meta, &body_load);
@@ -1429,57 +1686,67 @@ fn process_attachment_snapshot_at(
         state: cfg_state(),
     };
     let mut proofs: Vec<ProofReportEntry> = Vec::new();
-    let (ok, err, backend, vk_ref, proof_hash, circuit_id) =
-        match validated_body.and_then(|body| decode_proof_attachments(&meta.content_type, body)) {
-            Ok(attachments) => {
-                if attachments.is_empty() {
+    let (ok, err, backend, vk_ref, proof_hash, circuit_id, retryable) = match validated_body
+        .and_then(|body| decode_proof_attachments(&meta.content_type, body))
+    {
+        Ok(attachments) => {
+            if attachments.is_empty() {
+                (
+                    false,
+                    Some("empty proof attachment list".into()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    false,
+                )
+            } else {
+                let mut saw_retryable_failure = false;
+                let mut saw_terminal_failure = false;
+                for attachment in attachments {
+                    let processed = process_proof_attachment_with_disposition(&ctx, &attachment);
+                    if !processed.report.ok {
+                        saw_retryable_failure |= processed.retryable;
+                        saw_terminal_failure |= !processed.retryable;
+                    }
+                    proofs.push(processed.report);
+                }
+                let failures: Vec<_> = proofs.iter().filter(|p| !p.ok).collect();
+                let ok = failures.is_empty();
+                let err = if ok {
+                    None
+                } else {
+                    let first = failures
+                        .first()
+                        .and_then(|p| p.error.clone())
+                        .unwrap_or_else(|| "verification failed".into());
+                    Some(format!(
+                        "{} of {} proofs failed: {}",
+                        failures.len(),
+                        proofs.len(),
+                        first
+                    ))
+                };
+                let (backend, vk_ref, proof_hash, circuit_id) = if proofs.len() == 1 {
+                    let entry = &proofs[0];
                     (
-                        false,
-                        Some("empty proof attachment list".into()),
-                        None,
-                        None,
-                        None,
-                        None,
+                        Some(entry.backend.clone()),
+                        entry.vk_ref.clone(),
+                        entry.proof_hash.clone(),
+                        entry.circuit_id.clone(),
                     )
                 } else {
-                    for attachment in attachments {
-                        proofs.push(process_proof_attachment(&ctx, &attachment));
-                    }
-                    let failures: Vec<_> = proofs.iter().filter(|p| !p.ok).collect();
-                    let ok = failures.is_empty();
-                    let err = if ok {
-                        None
-                    } else {
-                        let first = failures
-                            .first()
-                            .and_then(|p| p.error.clone())
-                            .unwrap_or_else(|| "verification failed".into());
-                        Some(format!(
-                            "{} of {} proofs failed: {}",
-                            failures.len(),
-                            proofs.len(),
-                            first
-                        ))
-                    };
-                    let (backend, vk_ref, proof_hash, circuit_id) = if proofs.len() == 1 {
-                        let entry = &proofs[0];
-                        (
-                            Some(entry.backend.clone()),
-                            entry.vk_ref.clone(),
-                            entry.proof_hash.clone(),
-                            entry.circuit_id.clone(),
-                        )
-                    } else {
-                        (None, None, None, None)
-                    };
-                    if proofs.len() == 1 {
-                        proofs.clear();
-                    }
-                    (ok, err, backend, vk_ref, proof_hash, circuit_id)
+                    (None, None, None, None)
+                };
+                if proofs.len() == 1 {
+                    proofs.clear();
                 }
+                let retryable = saw_retryable_failure && !saw_terminal_failure;
+                (ok, err, backend, vk_ref, proof_hash, circuit_id, retryable)
             }
-            Err(err) => (false, Some(err), None, None, None, None),
-        };
+        }
+        Err(err) => (false, Some(err), None, None, None, None, false),
+    };
     #[cfg(test)]
     {
         use std::time::Duration;
@@ -1490,6 +1757,12 @@ fn process_attachment_snapshot_at(
     }
     let processed_ms = now_ms();
     let latency_ms = processed_ms.saturating_sub(meta.created_ms);
+    let processing = ProverReportProcessing {
+        terminal: !retryable,
+        retry_not_before_ms: retryable
+            .then(|| processed_ms.saturating_add(processing_retry_delay_ms(retry_count))),
+        retry_count: retryable.then_some(retry_count).unwrap_or(0),
+    };
     let rep = ProverReport {
         id: loc.id.clone(),
         ok,
@@ -1505,8 +1778,35 @@ fn process_attachment_snapshot_at(
         proof_hash,
         circuit_id,
         proofs,
+        processing: Some(processing),
     };
-    let _ = save_report(&rep);
+    let receipt = processing_receipt_from_report(&rep)
+        .expect("new prover reports always carry a valid processing disposition");
+    match save_report(&rep) {
+        Ok(()) => match persist_prover_processing_receipt_if_referenced(&receipt) {
+            Ok(true) => {}
+            Ok(false) => {
+                iroha_logger::debug!(
+                    attachment_id = %rep.id,
+                    "Skipping durable ZK prover receipt because no live attachment reference remains"
+                );
+            }
+            Err(error) => {
+                iroha_logger::warn!(
+                    attachment_id = %rep.id,
+                    %error,
+                    "Failed to finalize ZK prover processing receipt"
+                );
+            }
+        },
+        Err(error) => {
+            iroha_logger::warn!(
+                attachment_id = %rep.id,
+                %error,
+                "Failed to persist ZK prover report; provisional retry receipt remains active"
+            );
+        }
+    }
     record_prover_metrics(&rep);
     Some(rep)
 }
@@ -2162,9 +2462,10 @@ mod tests {
             "unexpected oversized-body rejection: {error}"
         );
     }
-    fn fixture_state_with_vk_window(
+    fn fixture_state_with_vk_window_and_zk(
         activation_height: Option<u64>,
         withdraw_height: Option<u64>,
+        configure_zk: impl FnOnce(&mut iroha_config::parameters::actual::Zk),
     ) -> Arc<CoreState> {
         let fixture = fixture_envelope();
         let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
@@ -2200,11 +2501,19 @@ mod tests {
             iroha_core::query::store::LiveQueryStore::start_test(),
         );
         let mut zk = state.zk_snapshot();
-        zk.halo2.enabled = true;
+        configure_zk(&mut zk);
         state
             .set_zk(zk)
             .expect("empty SCCP outbox accepts prover test configuration");
         Arc::new(state)
+    }
+    fn fixture_state_with_vk_window(
+        activation_height: Option<u64>,
+        withdraw_height: Option<u64>,
+    ) -> Arc<CoreState> {
+        fixture_state_with_vk_window_and_zk(activation_height, withdraw_height, |zk| {
+            zk.halo2.enabled = true;
+        })
     }
     fn fixture_state() -> Arc<CoreState> {
         fixture_state_with_vk_window(None, None)
@@ -2328,6 +2637,94 @@ mod tests {
         assert!(report.circuit_id.is_none());
     }
     #[test]
+    fn terminal_proof_error_overrides_retryable_policy_error() {
+        let ctx = ProverContext {
+            keys_dir: PathBuf::new(),
+            allowed_backends: vec!["stark/fri".to_owned()],
+            allowed_circuits: Vec::new(),
+            state: Some(fixture_state()),
+        };
+        let attachment = ProofAttachment::new_ref(
+            "halo2/ipa".to_owned(),
+            ProofBox::new("stark/fri".to_owned(), vec![0x42]),
+            VerifyingKeyId::new("halo2/ipa", "tiny-add"),
+        );
+        let processed = process_proof_attachment_with_disposition(&ctx, &attachment);
+        assert!(!processed.report.ok);
+        assert!(
+            processed
+                .report
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("proof backend does not match"))
+        );
+        assert!(
+            !processed.retryable,
+            "a terminally malformed proof must not inherit policy retries"
+        );
+    }
+    #[test]
+    fn prover_worker_retries_after_halo2_is_reenabled() {
+        let attachment = fixture_attachment();
+        let disabled_ctx = ProverContext {
+            keys_dir: PathBuf::new(),
+            allowed_backends: Vec::new(),
+            allowed_circuits: Vec::new(),
+            state: Some(fixture_state_with_vk_window_and_zk(None, None, |zk| {
+                zk.halo2.enabled = false;
+            })),
+        };
+        let disabled = process_proof_attachment_with_disposition(&disabled_ctx, &attachment);
+        assert!(!disabled.report.ok);
+        assert!(
+            disabled
+                .report
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("halo2 verification is disabled"))
+        );
+        assert!(
+            disabled.retryable,
+            "a node-configuration gate may be lifted without changing the attachment"
+        );
+
+        let undersized_ctx = ProverContext {
+            keys_dir: PathBuf::new(),
+            allowed_backends: Vec::new(),
+            allowed_circuits: Vec::new(),
+            state: Some(fixture_state_with_vk_window_and_zk(None, None, |zk| {
+                zk.halo2.enabled = true;
+                zk.halo2.max_proof_bytes = 0;
+            })),
+        };
+        let undersized = process_proof_attachment_with_disposition(&undersized_ctx, &attachment);
+        assert!(!undersized.report.ok);
+        assert!(
+            undersized
+                .report
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("max_proof_bytes"))
+        );
+        assert!(
+            undersized.retryable,
+            "a mutable node size guardrail must not create a terminal receipt"
+        );
+
+        let enabled_ctx = ProverContext {
+            keys_dir: PathBuf::new(),
+            allowed_backends: Vec::new(),
+            allowed_circuits: Vec::new(),
+            state: Some(fixture_state()),
+        };
+        let enabled = process_proof_attachment_with_disposition(&enabled_ctx, &attachment);
+        assert!(
+            enabled.report.ok,
+            "the same proof must verify once Halo2 is enabled"
+        );
+        assert!(!enabled.retryable);
+    }
+    #[test]
     fn prover_worker_still_reports_missing_registry_for_supported_backend() {
         let ctx = ProverContext {
             keys_dir: PathBuf::new(),
@@ -2378,6 +2775,11 @@ mod tests {
             proof_hash: None,
             circuit_id: None,
             proofs: Vec::new(),
+            processing: Some(ProverReportProcessing {
+                terminal: true,
+                retry_not_before_ms: None,
+                retry_count: 0,
+            }),
         }
     }
     #[test]
@@ -2400,6 +2802,11 @@ mod tests {
             proof_hash: None,
             circuit_id: None,
             proofs: Vec::new(),
+            processing: Some(ProverReportProcessing {
+                terminal: true,
+                retry_not_before_ms: None,
+                retry_count: 0,
+            }),
         };
         save_report(&report).expect("save report");
         let summaries = load_report_summaries();

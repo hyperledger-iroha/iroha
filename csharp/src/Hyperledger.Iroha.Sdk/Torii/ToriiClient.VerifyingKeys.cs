@@ -646,6 +646,14 @@ public sealed partial class ToriiClient
         var expectedWireName = operation switch
         {
             VerifyingKeyDraftOperation.Register =>
+                "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey",
+            VerifyingKeyDraftOperation.Update =>
+                "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey",
+            _ => throw new JsonException("Verifying-key draft operation is unknown."),
+        };
+        var expectedSchemaName = operation switch
+        {
+            VerifyingKeyDraftOperation.Register =>
                 "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
             VerifyingKeyDraftOperation.Update =>
                 "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
@@ -661,7 +669,7 @@ public sealed partial class ToriiClient
 
         RequireCanonicalVerifyingKeyInstructionArchive(
             archive,
-            expectedWireName,
+            expectedSchemaName,
             expectedBackend,
             expectedName,
             expectedRecord,

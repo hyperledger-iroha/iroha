@@ -6790,7 +6790,6 @@ fn analyze_statement_inner(
                 None,
                 loop_depth + 1,
             )?;
-            *vars = loop_env;
             Ok(vec![TypedStatement::For {
                 line: *line,
                 init: init_t,
@@ -9842,8 +9841,30 @@ fn analyze_expr_expected_inner(
                     message: "conditional expects a bool condition".into(),
                 });
             }
-            let t1 = analyze_expr_expected(context, then_expr, vars, expected)?;
-            let t2 = analyze_expr_expected(context, else_expr, vars, Some(&t1.ty))?;
+            let mut t1 = analyze_expr_expected(context, then_expr, vars, expected)?;
+            let branch_type = if let Some(expected) = expected {
+                let mut contextual = t1.clone();
+                match ensure_assignable_and_coerce(expected, &mut contextual) {
+                    Ok(()) => {
+                        t1 = contextual;
+                        expected.clone()
+                    }
+                    Err(error) if error.code == "E_TYPE_ANNOTATION_MISMATCH" => t1.ty.clone(),
+                    Err(error) => return Err(error),
+                }
+            } else {
+                t1.ty.clone()
+            };
+            let mut t2 = analyze_expr_expected(context, else_expr, vars, Some(&branch_type))?;
+            if let Err(error) = ensure_assignable_and_coerce(&branch_type, &mut t2) {
+                if error.code != "E_TYPE_ANNOTATION_MISMATCH" {
+                    return Err(error);
+                }
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "conditional branches must have the same type".into(),
+                });
+            }
             if t1.ty != t2.ty {
                 return Err(SemanticError {
                     code: "K2003",
@@ -12857,22 +12878,75 @@ fn merge_alternative_continuations(
         }
     }
 }
-fn evaluate_definite_init_expr(
+#[derive(Debug, Default)]
+struct DefiniteInitExprFlow {
+    continuing: Option<DefiniteStateSet>,
+    returns: Option<DefiniteStateSet>,
+    breaks: Option<DefiniteStateSet>,
+    continues: Option<DefiniteStateSet>,
+}
+fn continue_definite_init_expr(
+    mut flow: DefiniteInitExprFlow,
     expr: &TypedExpr,
-    mut initialized: DefiniteStateSet,
+    required: &DefiniteStateSet,
     summaries: &HashMap<String, DefiniteStateSet>,
-) -> DefiniteStateSet {
+) -> DefiniteInitExprFlow {
+    let Some(incoming) = flow.continuing.take() else {
+        return flow;
+    };
+    let next = analyze_definite_init_expr(expr, incoming, required, summaries);
+    flow.continuing = next.continuing;
+    merge_exit(&mut flow.returns, next.returns);
+    merge_exit(&mut flow.breaks, next.breaks);
+    merge_exit(&mut flow.continues, next.continues);
+    flow
+}
+fn merge_alternative_expr_flows(
+    mut left: DefiniteInitExprFlow,
+    right: DefiniteInitExprFlow,
+) -> DefiniteInitExprFlow {
+    left.continuing = merge_alternative_continuations(left.continuing, right.continuing);
+    merge_exit(&mut left.returns, right.returns);
+    merge_exit(&mut left.breaks, right.breaks);
+    merge_exit(&mut left.continues, right.continues);
+    left
+}
+fn block_expr_flow(flow: DefiniteInitFlow) -> DefiniteInitExprFlow {
+    DefiniteInitExprFlow {
+        continuing: flow.continuing,
+        returns: flow.returns,
+        breaks: flow.breaks,
+        continues: flow.continues,
+    }
+}
+fn analyze_definite_init_expr(
+    expr: &TypedExpr,
+    initialized: DefiniteStateSet,
+    required: &DefiniteStateSet,
+    summaries: &HashMap<String, DefiniteStateSet>,
+) -> DefiniteInitExprFlow {
+    let continuing = |state| DefiniteInitExprFlow {
+        continuing: Some(state),
+        ..DefiniteInitExprFlow::default()
+    };
     match expr.kind() {
         ExprKind::Binary { op, left, right } => {
-            initialized = evaluate_definite_init_expr(left, initialized, summaries);
+            let mut flow = analyze_definite_init_expr(left, initialized, required, summaries);
             if matches!(op, BinaryOp::And | BinaryOp::Or) {
                 // The RHS of `&&` and `||` is conditional. A write is definite
                 // only if it is already present after the always-evaluated LHS.
-                let rhs = evaluate_definite_init_expr(right, initialized.clone(), summaries);
-                intersect_states(&mut initialized, &rhs);
-                initialized
+                let Some(after_left) = flow.continuing.take() else {
+                    return flow;
+                };
+                let rhs =
+                    analyze_definite_init_expr(right, after_left.clone(), required, summaries);
+                flow.continuing = merge_alternative_continuations(Some(after_left), rhs.continuing);
+                merge_exit(&mut flow.returns, rhs.returns);
+                merge_exit(&mut flow.breaks, rhs.breaks);
+                merge_exit(&mut flow.continues, rhs.continues);
+                flow
             } else {
-                evaluate_definite_init_expr(right, initialized, summaries)
+                continue_definite_init_expr(flow, right, required, summaries)
             }
         }
         ExprKind::Conditional {
@@ -12880,33 +12954,48 @@ fn evaluate_definite_init_expr(
             then_expr,
             else_expr,
         } => {
-            let after_cond = evaluate_definite_init_expr(cond, initialized, summaries);
-            let mut then_state =
-                evaluate_definite_init_expr(then_expr, after_cond.clone(), summaries);
-            let else_state = evaluate_definite_init_expr(else_expr, after_cond, summaries);
-            intersect_states(&mut then_state, &else_state);
-            then_state
+            let mut flow = analyze_definite_init_expr(cond, initialized, required, summaries);
+            let Some(after_cond) = flow.continuing.take() else {
+                return flow;
+            };
+            let branches = merge_alternative_expr_flows(
+                analyze_definite_init_expr(then_expr, after_cond.clone(), required, summaries),
+                analyze_definite_init_expr(else_expr, after_cond, required, summaries),
+            );
+            flow.continuing = branches.continuing;
+            merge_exit(&mut flow.returns, branches.returns);
+            merge_exit(&mut flow.breaks, branches.breaks);
+            merge_exit(&mut flow.continues, branches.continues);
+            flow
         }
         ExprKind::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            let after_condition = evaluate_definite_init_expr(condition, initialized, summaries);
-            let then_flow = analyze_definite_init_block(
-                then_branch,
-                after_condition.clone(),
-                &HashSet::new(),
-                summaries,
+            let mut flow = analyze_definite_init_expr(condition, initialized, required, summaries);
+            let Some(after_condition) = flow.continuing.take() else {
+                return flow;
+            };
+            let branches = merge_alternative_expr_flows(
+                block_expr_flow(analyze_definite_init_block(
+                    then_branch,
+                    after_condition.clone(),
+                    required,
+                    summaries,
+                )),
+                block_expr_flow(analyze_definite_init_block(
+                    else_branch,
+                    after_condition,
+                    required,
+                    summaries,
+                )),
             );
-            let else_flow = analyze_definite_init_block(
-                else_branch,
-                after_condition,
-                &HashSet::new(),
-                summaries,
-            );
-            merge_alternative_continuations(then_flow.continuing, else_flow.continuing)
-                .unwrap_or_default()
+            flow.continuing = branches.continuing;
+            merge_exit(&mut flow.returns, branches.returns);
+            merge_exit(&mut flow.breaks, branches.breaks);
+            merge_exit(&mut flow.continues, branches.continues);
+            flow
         }
         ExprKind::IfLet {
             value,
@@ -12914,102 +13003,173 @@ fn evaluate_definite_init_expr(
             else_branch,
             ..
         } => {
-            let after_value = evaluate_definite_init_expr(value, initialized, summaries);
-            let then_flow = analyze_definite_init_block(
-                then_branch,
-                after_value.clone(),
-                &HashSet::new(),
-                summaries,
+            let mut flow = analyze_definite_init_expr(value, initialized, required, summaries);
+            let Some(after_value) = flow.continuing.take() else {
+                return flow;
+            };
+            let branches = merge_alternative_expr_flows(
+                block_expr_flow(analyze_definite_init_block(
+                    then_branch,
+                    after_value.clone(),
+                    required,
+                    summaries,
+                )),
+                block_expr_flow(analyze_definite_init_block(
+                    else_branch,
+                    after_value,
+                    required,
+                    summaries,
+                )),
             );
-            let else_flow =
-                analyze_definite_init_block(else_branch, after_value, &HashSet::new(), summaries);
-            merge_alternative_continuations(then_flow.continuing, else_flow.continuing)
-                .unwrap_or_default()
+            flow.continuing = branches.continuing;
+            merge_exit(&mut flow.returns, branches.returns);
+            merge_exit(&mut flow.breaks, branches.breaks);
+            merge_exit(&mut flow.continues, branches.continues);
+            flow
         }
         ExprKind::Match { value, arms } => {
-            let after_value = evaluate_definite_init_expr(value, initialized, summaries);
-            let mut continuation = None;
+            let mut flow = analyze_definite_init_expr(value, initialized, required, summaries);
+            let Some(after_value) = flow.continuing.take() else {
+                return flow;
+            };
+            let mut branches = None;
             for arm in arms {
-                let flow = analyze_definite_init_block(
+                let arm_flow = block_expr_flow(analyze_definite_init_block(
                     &arm.body,
                     after_value.clone(),
-                    &HashSet::new(),
+                    required,
                     summaries,
-                );
-                continuation = merge_alternative_continuations(continuation, flow.continuing);
+                ));
+                branches = Some(match branches {
+                    Some(previous) => merge_alternative_expr_flows(previous, arm_flow),
+                    None => arm_flow,
+                });
             }
-            continuation.unwrap_or_default()
+            let branches = branches.unwrap_or_default();
+            flow.continuing = branches.continuing;
+            merge_exit(&mut flow.returns, branches.returns);
+            merge_exit(&mut flow.breaks, branches.breaks);
+            merge_exit(&mut flow.continues, branches.continues);
+            flow
         }
         ExprKind::Call { name, args } => {
             // Arguments are evaluated eagerly in source order. The call itself
             // contributes exactly the callee's must-write summary; unknown or
             // external bodies contribute nothing and therefore fail closed.
+            let mut flow = continuing(initialized);
             for arg in args {
-                initialized = evaluate_definite_init_expr(arg, initialized, summaries);
+                flow = continue_definite_init_expr(flow, arg, required, summaries);
             }
-            if let Some(callee_writes) = summaries.get(name) {
+            if let (Some(initialized), Some(callee_writes)) =
+                (flow.continuing.as_mut(), summaries.get(name))
+            {
                 initialized.extend(callee_writes.iter().cloned());
             }
-            initialized
+            flow
         }
         ExprKind::NamedCall {
             name,
             args,
             evaluation_order,
         } => {
+            let mut flow = continuing(initialized);
             for index in evaluation_order {
-                initialized = evaluate_definite_init_expr(&args[*index], initialized, summaries);
+                flow = continue_definite_init_expr(flow, &args[*index], required, summaries);
             }
-            if let Some(callee_writes) = summaries.get(name) {
+            if let (Some(initialized), Some(callee_writes)) =
+                (flow.continuing.as_mut(), summaries.get(name))
+            {
                 initialized.extend(callee_writes.iter().cloned());
             }
-            initialized
+            flow
         }
         ExprKind::Tuple(items) | ExprKind::List(items) => {
+            let mut flow = continuing(initialized);
             for item in items {
-                initialized = evaluate_definite_init_expr(item, initialized, summaries);
+                flow = continue_definite_init_expr(flow, item, required, summaries);
             }
-            initialized
+            flow
         }
-        ExprKind::ListComprehension { source, .. } => {
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
             // The source is always evaluated. A bounded source may be empty,
             // so neither the filter nor result expression contributes a
-            // definite write.
-            evaluate_definite_init_expr(source, initialized, summaries)
+            // definite write. Their early-return paths still leave the
+            // enclosing function and must participate in the must-analysis.
+            let mut flow = analyze_definite_init_expr(source, initialized, required, summaries);
+            if let Some(after_source) = flow.continuing.clone() {
+                let mut iteration = continuing(after_source);
+                if let Some(condition) = condition {
+                    iteration =
+                        continue_definite_init_expr(iteration, condition, required, summaries);
+                }
+                iteration = continue_definite_init_expr(iteration, expression, required, summaries);
+                merge_exit(&mut flow.returns, iteration.returns);
+                merge_exit(&mut flow.breaks, iteration.breaks);
+                merge_exit(&mut flow.continues, iteration.continues);
+            }
+            flow
         }
         ExprKind::StructLiteral { fields, .. } => {
+            let mut flow = continuing(initialized);
             for (_, value) in fields {
-                initialized = evaluate_definite_init_expr(value, initialized, summaries);
+                flow = continue_definite_init_expr(flow, value, required, summaries);
             }
-            initialized
+            flow
         }
         ExprKind::JsonObject(entries) => {
+            let mut flow = continuing(initialized);
             for (_, value) in entries {
-                initialized = evaluate_definite_init_expr(value, initialized, summaries);
+                flow = continue_definite_init_expr(flow, value, required, summaries);
             }
-            initialized
+            flow
         }
         ExprKind::JsonArray(items) => {
+            let mut flow = continuing(initialized);
             for item in items {
-                initialized = evaluate_definite_init_expr(item, initialized, summaries);
+                flow = continue_definite_init_expr(flow, item, required, summaries);
             }
-            initialized
+            flow
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
         | ExprKind::NumericTryCast { expr }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
-        | ExprKind::ResultErr { error: expr }
-        | ExprKind::Propagate { value: expr } => {
-            evaluate_definite_init_expr(expr, initialized, summaries)
+        | ExprKind::ResultErr { error: expr } => {
+            analyze_definite_init_expr(expr, initialized, required, summaries)
+        }
+        ExprKind::Propagate { value } => {
+            let mut flow = analyze_definite_init_expr(value, initialized, required, summaries);
+            match value.kind() {
+                // These constructors make the outcome of `?` statically
+                // known, so avoid inventing an unreachable exit or
+                // continuation in the must-analysis.
+                ExprKind::OptionSome { .. } | ExprKind::ResultOk { .. } => {}
+                ExprKind::OptionNone | ExprKind::ResultErr { .. } => {
+                    let returned = flow.continuing.take();
+                    merge_exit(&mut flow.returns, returned);
+                }
+                _ => {
+                    // An inactive Option or error Result returns from the
+                    // enclosing function before any following initialization.
+                    // The active path continues with the same state.
+                    let returned = flow.continuing.clone();
+                    merge_exit(&mut flow.returns, returned);
+                }
+            }
+            flow
         }
         ExprKind::Member { object, .. } => {
-            evaluate_definite_init_expr(object, initialized, summaries)
+            analyze_definite_init_expr(object, initialized, required, summaries)
         }
         ExprKind::Index { target, index } => {
-            initialized = evaluate_definite_init_expr(target, initialized, summaries);
-            evaluate_definite_init_expr(index, initialized, summaries)
+            let flow = analyze_definite_init_expr(target, initialized, required, summaries);
+            continue_definite_init_expr(flow, index, required, summaries)
         }
         ExprKind::IntLiteral(_)
         | ExprKind::DecimalLiteral { .. }
@@ -13017,7 +13177,7 @@ fn evaluate_definite_init_expr(
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
-        | ExprKind::Ident(_) => initialized,
+        | ExprKind::Ident(_) => continuing(initialized),
     }
 }
 fn analyze_definite_init_block(
@@ -13046,7 +13206,11 @@ fn analyze_definite_init_block(
     if let Some(tail) = &block.tail
         && let Some(continuing) = flow.continuing.take()
     {
-        flow.continuing = Some(evaluate_definite_init_expr(tail, continuing, summaries));
+        let tail_flow = analyze_definite_init_expr(tail, continuing, required, summaries);
+        flow.continuing = tail_flow.continuing;
+        merge_exit(&mut flow.returns, tail_flow.returns);
+        merge_exit(&mut flow.breaks, tail_flow.breaks);
+        merge_exit(&mut flow.continues, tail_flow.continues);
     }
     flow
 }
@@ -13058,27 +13222,47 @@ fn analyze_definite_init_statement(
 ) -> DefiniteInitFlow {
     match statement.kind() {
         TypedStatement::Let { name, value } => {
-            let mut continuing = evaluate_definite_init_expr(value, incoming, summaries);
+            let mut expression_flow =
+                analyze_definite_init_expr(value, incoming, required, summaries);
             let state_name = name.split('#').next().unwrap_or(name);
-            if required.contains(state_name) {
+            if required.contains(state_name)
+                && let Some(continuing) = expression_flow.continuing.as_mut()
+            {
                 continuing.insert(state_name.to_owned());
             }
             DefiniteInitFlow {
-                continuing: Some(continuing),
-                ..DefiniteInitFlow::default()
+                continuing: expression_flow.continuing,
+                returns: expression_flow.returns,
+                breaks: expression_flow.breaks,
+                continues: expression_flow.continues,
             }
         }
-        TypedStatement::Expr(expr) => DefiniteInitFlow {
-            continuing: Some(evaluate_definite_init_expr(expr, incoming, summaries)),
-            ..DefiniteInitFlow::default()
-        },
-        TypedStatement::Return(expr) => {
-            let returned = expr.as_ref().map_or(incoming.clone(), |expr| {
-                evaluate_definite_init_expr(expr, incoming, summaries)
-            });
+        TypedStatement::Expr(expr) => {
+            let expression_flow = analyze_definite_init_expr(expr, incoming, required, summaries);
             DefiniteInitFlow {
-                returns: Some(returned),
-                ..DefiniteInitFlow::default()
+                continuing: expression_flow.continuing,
+                returns: expression_flow.returns,
+                breaks: expression_flow.breaks,
+                continues: expression_flow.continues,
+            }
+        }
+        TypedStatement::Return(expr) => {
+            if let Some(expr) = expr {
+                let mut expression_flow =
+                    analyze_definite_init_expr(expr, incoming, required, summaries);
+                let returned = expression_flow.continuing.take();
+                merge_exit(&mut expression_flow.returns, returned);
+                DefiniteInitFlow {
+                    returns: expression_flow.returns,
+                    breaks: expression_flow.breaks,
+                    continues: expression_flow.continues,
+                    continuing: None,
+                }
+            } else {
+                DefiniteInitFlow {
+                    returns: Some(incoming),
+                    ..DefiniteInitFlow::default()
+                }
             }
         }
         TypedStatement::Break => DefiniteInitFlow {
@@ -13094,7 +13278,15 @@ fn analyze_definite_init_statement(
             then_branch,
             else_branch,
         } => {
-            let after_cond = evaluate_definite_init_expr(cond, incoming, summaries);
+            let condition_flow = analyze_definite_init_expr(cond, incoming, required, summaries);
+            let Some(after_cond) = condition_flow.continuing else {
+                return DefiniteInitFlow {
+                    returns: condition_flow.returns,
+                    breaks: condition_flow.breaks,
+                    continues: condition_flow.continues,
+                    continuing: None,
+                };
+            };
             let then_flow =
                 analyze_definite_init_block(then_branch, after_cond.clone(), required, summaries);
             let else_flow = if let Some(branch) = else_branch {
@@ -13110,7 +13302,9 @@ fn analyze_definite_init_statement(
                     then_flow.continuing,
                     else_flow.continuing,
                 ),
-                ..DefiniteInitFlow::default()
+                returns: condition_flow.returns,
+                breaks: condition_flow.breaks,
+                continues: condition_flow.continues,
             };
             merge_exit(&mut flow.returns, then_flow.returns);
             merge_exit(&mut flow.returns, else_flow.returns);
@@ -13126,7 +13320,15 @@ fn analyze_definite_init_statement(
             else_branch,
             ..
         } => {
-            let after_value = evaluate_definite_init_expr(value, incoming, summaries);
+            let value_flow = analyze_definite_init_expr(value, incoming, required, summaries);
+            let Some(after_value) = value_flow.continuing else {
+                return DefiniteInitFlow {
+                    returns: value_flow.returns,
+                    breaks: value_flow.breaks,
+                    continues: value_flow.continues,
+                    continuing: None,
+                };
+            };
             let then_flow =
                 analyze_definite_init_block(then_branch, after_value.clone(), required, summaries);
             let else_flow = if let Some(branch) = else_branch {
@@ -13142,7 +13344,9 @@ fn analyze_definite_init_statement(
                     then_flow.continuing,
                     else_flow.continuing,
                 ),
-                ..DefiniteInitFlow::default()
+                returns: value_flow.returns,
+                breaks: value_flow.breaks,
+                continues: value_flow.continues,
             };
             merge_exit(&mut flow.returns, then_flow.returns);
             merge_exit(&mut flow.returns, else_flow.returns);
@@ -13153,8 +13357,20 @@ fn analyze_definite_init_statement(
             flow
         }
         TypedStatement::While { cond, body } => {
-            let after_cond = evaluate_definite_init_expr(cond, incoming, summaries);
-            analyze_may_execute_loop(body, after_cond, None, required, summaries)
+            let condition_flow = analyze_definite_init_expr(cond, incoming, required, summaries);
+            let Some(after_cond) = condition_flow.continuing else {
+                return DefiniteInitFlow {
+                    continuing: condition_flow.breaks,
+                    returns: condition_flow.returns,
+                    ..DefiniteInitFlow::default()
+                };
+            };
+            let mut loop_flow =
+                analyze_may_execute_loop(body, after_cond, None, required, summaries);
+            loop_flow.continuing =
+                merge_alternative_continuations(loop_flow.continuing, condition_flow.breaks);
+            merge_exit(&mut loop_flow.returns, condition_flow.returns);
+            loop_flow
         }
         TypedStatement::For {
             init,
@@ -13171,34 +13387,64 @@ fn analyze_definite_init_statement(
                     ..DefiniteInitFlow::default()
                 }
             };
+            let mut loop_exits = prefix.breaks.take();
             let Some(mut after_prefix) = prefix.continuing.take() else {
-                return prefix;
+                return DefiniteInitFlow {
+                    continuing: loop_exits,
+                    returns: prefix.returns,
+                    ..DefiniteInitFlow::default()
+                };
             };
             if let Some(cond) = cond {
                 // A C-style loop evaluates its condition once even when its
                 // body executes zero times.
-                after_prefix = evaluate_definite_init_expr(cond, after_prefix, summaries);
+                let condition_flow =
+                    analyze_definite_init_expr(cond, after_prefix, required, summaries);
+                merge_exit(&mut prefix.returns, condition_flow.returns);
+                loop_exits = merge_alternative_continuations(loop_exits, condition_flow.breaks);
+                let Some(continuing) = condition_flow.continuing else {
+                    return DefiniteInitFlow {
+                        continuing: loop_exits,
+                        returns: prefix.returns,
+                        ..DefiniteInitFlow::default()
+                    };
+                };
+                after_prefix = continuing;
             }
             let mut loop_flow =
                 analyze_may_execute_loop(body, after_prefix, step.as_deref(), required, summaries);
+            loop_flow.continuing =
+                merge_alternative_continuations(loop_flow.continuing, loop_exits);
             merge_exit(&mut loop_flow.returns, prefix.returns);
-            merge_exit(&mut loop_flow.breaks, prefix.breaks);
-            merge_exit(&mut loop_flow.continues, prefix.continues);
             loop_flow
         }
         TypedStatement::ForEachMap { map, body, .. } => {
-            let after_map = evaluate_definite_init_expr(map, incoming, summaries);
-            analyze_may_execute_loop(body, after_map, None, required, summaries)
+            let map_flow = analyze_definite_init_expr(map, incoming, required, summaries);
+            let Some(after_map) = map_flow.continuing else {
+                return DefiniteInitFlow {
+                    continuing: map_flow.breaks,
+                    returns: map_flow.returns,
+                    ..DefiniteInitFlow::default()
+                };
+            };
+            let mut loop_flow =
+                analyze_may_execute_loop(body, after_map, None, required, summaries);
+            loop_flow.continuing =
+                merge_alternative_continuations(loop_flow.continuing, map_flow.breaks);
+            merge_exit(&mut loop_flow.returns, map_flow.returns);
+            loop_flow
         }
         TypedStatement::MapSet { map, key, value } => {
             // StateMap roots are deliberately excluded from `required`, but
             // calls nested in their receiver/key/value still execute eagerly.
-            let continuing = evaluate_definite_init_expr(map, incoming, summaries);
-            let continuing = evaluate_definite_init_expr(key, continuing, summaries);
-            let continuing = evaluate_definite_init_expr(value, continuing, summaries);
+            let flow = analyze_definite_init_expr(map, incoming, required, summaries);
+            let flow = continue_definite_init_expr(flow, key, required, summaries);
+            let flow = continue_definite_init_expr(flow, value, required, summaries);
             DefiniteInitFlow {
-                continuing: Some(continuing),
-                ..DefiniteInitFlow::default()
+                continuing: flow.continuing,
+                returns: flow.returns,
+                breaks: flow.breaks,
+                continues: flow.continues,
             }
         }
     }
@@ -14205,6 +14451,47 @@ mod tests {
         let ratio = returned_expr("fn ratio(quantity balance) -> decimal { return balance / 2; }");
         assert_eq!(ratio.ty, Type::Decimal);
     }
+    #[test]
+    fn ternary_literals_inherit_the_enclosing_numeric_context() {
+        let program = parse(
+            "fn decimal_choice(bool flag, decimal value) -> decimal { \
+                 return flag ? value : 1; \
+             } \
+             fn quantity_choice(bool flag, quantity value) -> quantity { \
+                 return flag ? 1 : value; \
+             } \
+             fn literal_choice(bool flag) -> decimal { \
+                 return flag ? 1 : 2; \
+             }",
+        )
+        .expect("parse contextual ternary literals");
+        let typed = analyze(&program).expect("ternary literals must inherit their return context");
+        for item in typed.items {
+            let TypedItem::Function(function) = item;
+            let return_type = function.ret_ty.clone().expect("return type");
+            let TypedStatement::Return(Some(value)) = &function.body.statements[0] else {
+                panic!("expected a returned ternary")
+            };
+            let ExprKind::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } = value.kind()
+            else {
+                panic!("expected a typed ternary")
+            };
+            assert_eq!(then_expr.ty, return_type);
+            assert_eq!(else_expr.ty, return_type);
+        }
+    }
+    #[test]
+    fn raw_semantic_analysis_does_not_leak_range_iterators() {
+        let program = parse("fn invalid() -> int { for index in range(1) {} return index; }")
+            .expect("parse range iterator scope");
+        let error = analyze(&program).expect_err("the iterator must end with the loop scope");
+        assert_eq!(error.code, "K2002");
+        assert!(error.message.contains("undefined variable index"));
+    }
     include!("semantic/tests/numeric_rounding_modes.rs");
     #[test]
     fn unknown_rounding_spellings_are_rejected() {
@@ -14952,6 +15239,43 @@ mod tests {
         )
         .expect("parse initialized early return");
         analyze(&accepted).expect("every normal exit initializes scalar state");
+    }
+    #[test]
+    fn scalar_state_initialization_checks_early_returns_inside_expressions() {
+        for source in [
+            "state int value; \
+             hajimari() { \
+                 let int ignored = if true { return; } else { 0 }; \
+                 value = 1; \
+             }",
+            "state int value; \
+             hajimari() { \
+                 let int ignored = match Option::some(1) { \
+                     Option::some(item) => { return; }, \
+                     Option::none => { 0 } \
+                 }; \
+                 value = 1; \
+             }",
+        ] {
+            let error = analyze_error(source);
+            assert_eq!(error.code, "E_STATE_HAJIMARI_INCOMPLETE");
+            assert!(error.message.contains("missing: value"));
+        }
+
+        let initialized = parse(
+            "state int value; \
+             hajimari() { \
+                 let int ignored = if true { \
+                     value = 1; \
+                     return; \
+                 } else { \
+                     value = 1; \
+                     0 \
+                 }; \
+             }",
+        )
+        .expect("parse expression branches that initialize state");
+        analyze(&initialized).expect("state writes before expression exits must remain definite");
     }
     #[rustfmt::skip]
     analyze_error_code_cases! {

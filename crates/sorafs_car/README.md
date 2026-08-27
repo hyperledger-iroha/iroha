@@ -67,6 +67,9 @@ Right now it exposes:
   plans or allocation failures remain errors rather than masquerading as an
   empty fetch plan. Raw spec arrays are only emitted as typed fields inside a
   recognized versioned report; they are never accepted as standalone plans.
+- DA manifest conversion accepts only the first-release V1 layout, validates
+  the complete producer-ordered data/global-parity/stripe-parity inventory,
+  and projects only data commitments into the payload fetch and PoR plan.
 
 The companion CLI `sorafs_manifest_chunk_store` ingests payloads with the deterministic
 chunker, emits a CAR plan report, and supports `--list-profiles` along with

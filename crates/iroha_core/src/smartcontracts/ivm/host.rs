@@ -3991,9 +3991,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             DecodeError => "decode_error",
             OutOfGas => "out_of_gas",
             OutOfMemory => "out_of_memory",
-            MemoryAccessViolation { .. } | MemoryOutOfBounds | MemoryPermissionDenied => {
-                "memory_violation"
-            }
+            MemoryAccessViolation { .. } | MemoryOutOfBounds => "memory_violation",
             NotImplemented { .. } => "not_implemented",
             UnknownSyscall(_) => "unknown_syscall",
             PrivacyViolation => "privacy_violation",
@@ -20913,8 +20911,21 @@ seiyaku Callee {
         // eight-byte payload begins at an aligned address. A private STORE64
         // taints the payload while leaving the pointer register public; the
         // return boundary must reject the memory taint before decoding it.
+        let mut private_store_program = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            max_cycles: 32,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        private_store_program.extend_from_slice(
+            &ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 1, 2, 0)
+                .to_le_bytes(),
+        );
+        private_store_program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut pointer_vm = IVM::new(10_000);
-        pointer_vm.set_zk_mode(true);
+        pointer_vm
+            .load_program(&private_store_program)
+            .expect("load private stack-spill fixture");
         let pointer = ivm::Memory::STACK_START + 1;
         let payload = 7_u64.to_le_bytes();
         let envelope = make_tlv(PointerType::Blob as u16, &payload);
@@ -20924,13 +20935,7 @@ seiyaku Callee {
         pointer_vm.set_register(1, pointer + 7);
         pointer_vm.set_register(2, 11);
         pointer_vm.registers.set_tag(2, true);
-        pointer_vm
-            .execute_instruction(ivm::Instruction::Store {
-                rs: 2,
-                addr_reg: 1,
-                offset: 0,
-            })
-            .expect("private stack spill");
+        pointer_vm.run().expect("private stack spill");
         pointer_vm.set_register(10, pointer);
         pointer_vm.registers.set_tag(10, false);
         let blob_schema = exact_return_type(
@@ -26335,48 +26340,8 @@ seiyaku DurableOwner {
         );
     }
     #[test]
-    fn vrf_epoch_seed_syscall_ignores_retired_commit_reveal_snapshot() {
-        let mut world = World::new();
-        world.vrf_epochs.insert(
-            7,
-            iroha_data_model::consensus::VrfEpochRecord {
-                epoch: 7,
-                seed: [0x11; 32],
-                epoch_length: 5,
-                commit_deadline_offset: 1,
-                reveal_deadline_offset: 2,
-                roster_len: 0,
-                finalized: true,
-                updated_at_height: 100,
-                participants: Vec::new(),
-                late_reveals: Vec::new(),
-                committed_no_reveal: Vec::new(),
-                no_participation: Vec::new(),
-                penalties_applied: false,
-                penalties_applied_at_height: None,
-                validator_election: None,
-            },
-        );
-        world.vrf_epochs.insert(
-            9,
-            iroha_data_model::consensus::VrfEpochRecord {
-                epoch: 9,
-                seed: [0x22; 32],
-                epoch_length: 5,
-                commit_deadline_offset: 1,
-                reveal_deadline_offset: 2,
-                roster_len: 0,
-                finalized: true,
-                updated_at_height: 110,
-                participants: Vec::new(),
-                late_reveals: Vec::new(),
-                committed_no_reveal: Vec::new(),
-                no_participation: Vec::new(),
-                penalties_applied: false,
-                penalties_applied_at_height: None,
-                validator_election: None,
-            },
-        );
+    fn vrf_epoch_seed_syscall_reports_missing_with_fallback() {
+        let world = World::new();
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);

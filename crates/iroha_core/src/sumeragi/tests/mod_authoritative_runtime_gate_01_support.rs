@@ -177,7 +177,7 @@ fn single_stripe_rs16_layout(body_len: usize) -> wire::DataAvailabilityLayout {
 }
 fn v2_certified_body_response(
     request_ordinal: u64,
-    responder: wire::ValidatorIndex,
+    responder: PeerId,
     body_len: usize,
 ) -> BlockMessage {
     let body = vec![u8::try_from(request_ordinal).unwrap_or(0xA5); body_len];
@@ -212,7 +212,10 @@ fn v2_certified_body_response(
         }),
     ))
 }
-fn v2_maximum_certified_body_response(layout: wire::DataAvailabilityLayout) -> BlockMessage {
+fn v2_maximum_certified_body_response(
+    layout: wire::DataAvailabilityLayout,
+    responder: PeerId,
+) -> BlockMessage {
     let body_len =
         usize::try_from(layout.max_payload_size_bytes).expect("test payload bound fits usize");
     let chunk_count = usize::try_from(layout.max_chunk_count).expect("test chunk count fits usize");
@@ -262,7 +265,7 @@ fn v2_maximum_certified_body_response(layout: wire::DataAvailabilityLayout) -> B
             )),
             manifest,
             body,
-            responder: u32::MAX,
+            responder,
             signature: vec![0x5A; wire::MAX_CONSENSUS_SIGNATURE_BYTES],
         }),
     ))

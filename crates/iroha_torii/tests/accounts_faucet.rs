@@ -17,7 +17,6 @@ use iroha_data_model::{
     Registrable,
     account::AccountId,
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
-    consensus::VrfEpochRecord,
     domain::DomainId,
     level::Level,
     peer::PeerId,
@@ -55,6 +54,22 @@ fn checked_faucet_account_key_fixture() -> KeyPair {
 fn checked_faucet_block_leader_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("generate checked faucet block leader fixture keypair")
+}
+fn signed_faucet_beacon_fixture(
+    network_id: iroha_data_model::NetworkId,
+) -> (
+    iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+) {
+    static FIXTURE: std::sync::OnceLock<(
+        iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+    )> = std::sync::OnceLock::new();
+    let fixture = FIXTURE.get_or_init(|| {
+        iroha_core::beacon::signed_persisted_pulse_fixture_for_world(network_id, 5)
+    });
+    assert_eq!(fixture.1.network_id, network_id);
+    (fixture.0.clone(), fixture.1)
 }
 #[test]
 fn faucet_account_fixture_uses_checked_ed25519_key_generation() {
@@ -119,30 +134,16 @@ fn build_faucet_test_context_with_registration(
     if register_user {
         accounts.push(Account::new(user_id.clone()).build(&authority_id));
     }
+    let chain_id = iroha_data_model::ChainId::from("test-chain");
+    let network_id = iroha_torii::test_utils::signed_query_network_id();
     let mut world = World::with([domain], accounts, [asset_definition]);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     {
         let mut block = world.block();
-        block.vrf_epochs_mut_for_testing().insert(
-            0,
-            VrfEpochRecord {
-                epoch: 0,
-                seed: [0xAB; 32],
-                epoch_length: 1,
-                commit_deadline_offset: 0,
-                reveal_deadline_offset: 0,
-                roster_len: 1,
-                finalized: true,
-                updated_at_height: 0,
-                participants: Vec::new(),
-                late_reveals: Vec::new(),
-                committed_no_reveal: Vec::new(),
-                no_participation: Vec::new(),
-                penalties_applied: true,
-                penalties_applied_at_height: Some(0),
-                validator_election: None,
-            },
-        );
+        let (key_record, pulse) = signed_faucet_beacon_fixture(network_id);
+        block
+            .install_global_beacon_fixture_for_testing(key_record, pulse)
+            .expect("install proof-valid faucet beacon fixture");
         block.commit();
     }
     if let Some(selector) = faucet_selector {
@@ -159,8 +160,6 @@ fn build_faucet_test_context_with_registration(
             block.commit();
         }
     }
-    let chain_id = iroha_data_model::ChainId::from("test-chain");
-    let network_id = iroha_torii::test_utils::signed_query_network_id();
     let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         world,
         kura.clone(),
@@ -207,6 +206,14 @@ fn build_faucet_test_context_with_registration(
         let committed = valid.commit_unchecked().unpack(|_| {});
         iroha_torii::test_utils::finalize_committed_block(&state, state_block, committed);
     }
+    advance_faucet_state_chain(
+        &state,
+        &chain_id,
+        &authority_id,
+        &authority_kp,
+        4,
+        "reach faucet beacon pulse height",
+    );
     let pow_difficulty_bits = 5;
     let pow_scrypt_log_n = 4;
     let pow_scrypt_r = 1;
@@ -230,7 +237,7 @@ fn build_faucet_test_context_with_registration(
         pow_adaptive_lookback_blocks: 8,
         pow_adaptive_claims_per_extra_bit: 1,
         pow_adaptive_max_extra_bits: 2,
-        pow_vrf_seed_enabled: true,
+        pow_beacon_seed_enabled: true,
     });
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -322,16 +329,15 @@ fn leading_zero_bits(bytes: &[u8]) -> u32 {
     }
     total
 }
-fn faucet_vrf_seed_for_anchor(state: &State, anchor_height: u64) -> Option<[u8; 32]> {
-    state
-        .view()
-        .world()
-        .vrf_epochs()
-        .iter()
-        .filter_map(|(_, record)| {
-            (record.finalized && record.updated_at_height <= anchor_height).then_some(record.seed)
-        })
-        .last()
+fn faucet_beacon_seed_for_anchor(state: &State, anchor_height: u64) -> Option<[u8; 32]> {
+    let view = state.view();
+    iroha_core::beacon::verified_global_threshold_beacon_pulse_at_or_before_v1(
+        view.world(),
+        state.network_id_ref(),
+        anchor_height,
+    )
+    .ok()
+    .map(|pulse| pulse.seed)
 }
 fn faucet_pow_scrypt_params(log_n: u8, r: u32, p: u32) -> ScryptParams {
     ScryptParams::new(log_n, r, p, 32).expect("valid test scrypt params")
@@ -414,7 +420,7 @@ fn faucet_pow_challenge(state: &State, account_id: &AccountId, anchor_height: u6
         )
         .expect("anchor block");
     let anchor_hash = anchor_block.hash();
-    let challenge_salt = faucet_vrf_seed_for_anchor(state, anchor_height);
+    let challenge_salt = faucet_beacon_seed_for_anchor(state, anchor_height);
     let mut hasher = Sha256::new();
     hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
     hasher.update(state.network_id_ref().as_bytes());
@@ -445,29 +451,46 @@ fn solve_faucet_pow(
     }
     unreachable!("u64 nonce space exhausted");
 }
-fn advance_faucet_chain(context: &FaucetTestContext, blocks: u64) {
+fn advance_faucet_state_chain(
+    state: &State,
+    chain_id: &iroha_data_model::ChainId,
+    authority_id: &AccountId,
+    authority_key_pair: &KeyPair,
+    blocks: u64,
+    message: &str,
+) {
     for index in 0..blocks {
         let tx = TransactionBuilder::new(
-            *context.state.network_id_ref(),
-            context.authority_id.clone(),
+            *state.network_id_ref(),
+            authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([Log::new(Level::INFO, format!("age faucet anchor {index}"))])
-        .sign(context.authority_key_pair.private_key());
+        .with_instructions([Log::new(Level::INFO, format!("{message} {index}"))])
+        .sign(authority_key_pair.private_key());
         let leader = checked_faucet_block_leader_fixture();
         let unverified =
             BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))])
-                .chain(0, context.state.view().latest_block().as_deref())
+                .chain(0, state.view().latest_block().as_deref())
                 .sign(leader.private_key())
                 .unpack(|_| {});
-        let mut state_block = context.state.block(unverified.header());
-        state_block.chain_id = context.chain_id.clone();
+        let mut state_block = state.block(unverified.header());
+        state_block.chain_id = chain_id.clone();
         let valid = unverified
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
-        iroha_torii::test_utils::finalize_committed_block(&context.state, state_block, committed);
+        iroha_torii::test_utils::finalize_committed_block(state, state_block, committed);
     }
+}
+fn advance_faucet_chain(context: &FaucetTestContext, blocks: u64) {
+    advance_faucet_state_chain(
+        &context.state,
+        &context.chain_id,
+        &context.authority_id,
+        &context.authority_key_pair,
+        blocks,
+        "age faucet anchor",
+    );
 }
 #[tokio::test]
 async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
@@ -1015,6 +1038,11 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
     let payload =
         norito::json::from_slice::<norito::json::Value>(body.as_ref()).expect("parse puzzle json");
     let object = payload.as_object().expect("puzzle object");
+    let anchor_height = u64::try_from(state.committed_height()).expect("height fits");
+    let expected_salt = hex::encode(
+        faucet_beacon_seed_for_anchor(&state, anchor_height)
+            .expect("proof-valid faucet beacon seed"),
+    );
     assert_eq!(
         object
             .get("difficulty_bits")
@@ -1025,7 +1053,7 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
         object
             .get("anchor_height")
             .and_then(norito::json::Value::as_u64),
-        Some(u64::try_from(state.committed_height()).expect("height fits"))
+        Some(anchor_height)
     );
     assert_eq!(
         object
@@ -1037,7 +1065,7 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
         object
             .get("challenge_salt_hex")
             .and_then(norito::json::Value::as_str),
-        Some("abababababababababababababababababababababababababababababababab")
+        Some(expected_salt.as_str())
     );
     assert_eq!(
         object

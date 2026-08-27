@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 
-import { ToriiClient as SourceToriiClient } from "../src/toriiClient.js";
+import {
+  OperatorSigningContext as SourceOperatorSigningContext,
+  ToriiClient as SourceToriiClient,
+} from "../src/toriiClient.js";
+import { NetworkId as SourceNetworkId } from "../src/networkId.js";
 import {
   __sumeragiNativeAmxTestHelpers as sourceNativeAmxTestHelpers,
 } from "../src/sumeragiTyped.js";
@@ -17,8 +21,12 @@ const distToriiClientUrl = distToriiClientPath
   ? pathToFileURL(distToriiClientPath)
   : new URL("../dist/toriiClient.js", import.meta.url);
 const {
+  OperatorSigningContext: DistOperatorSigningContext,
   ToriiClient: DistToriiClient,
 } = await import(distToriiClientUrl);
+const { NetworkId: DistNetworkId } = await import(
+  new URL("./networkId.js", distToriiClientUrl)
+);
 const {
   __sumeragiNativeAmxTestHelpers: distNativeAmxTestHelpers,
 } = await import(new URL("./sumeragiTyped.js", distToriiClientUrl));
@@ -283,8 +291,34 @@ const clientImplementations = [
   ["dist", DistToriiClient],
 ];
 
+const operatorSigningContexts = new Map([
+  [
+    SourceToriiClient,
+    new SourceOperatorSigningContext(
+      SourceNetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+      {
+        publicKey:
+          "ed012066BE7E332C7A453332BD9D0A7F7DB055F5C5EF1A06ADA66D98B39FB6810C473A",
+        sign: () => Buffer.of(1),
+      },
+    ),
+  ],
+  [
+    DistToriiClient,
+    new DistOperatorSigningContext(
+      DistNetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+      {
+        publicKey:
+          "ed012066BE7E332C7A453332BD9D0A7F7DB055F5C5EF1A06ADA66D98B39FB6810C473A",
+        sign: () => Buffer.of(1),
+      },
+    ),
+  ],
+]);
+
 function diagnosticsClient(payload, Client = SourceToriiClient) {
   return new Client("https://fixture.invalid", {
+    operatorSigningContext: operatorSigningContexts.get(Client),
     fetchImpl: async (url) => {
       assert.equal(url, "https://fixture.invalid/v1/sumeragi/diagnostics");
       return new Response(JSON.stringify(payload), {

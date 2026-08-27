@@ -2071,7 +2071,8 @@ def test_async_source_fidelity_pins_certified_body_serving_authority(
         'CertifiedServeCanRespond(server, request) ==\n'
         '  /\\ request.kind = "CertifiedRequest"\n'
         '  /\\ request.envelope.recipient = server\n'
-        '  /\\ server \\in request.envelope.certificate.signers\n'
+        '  /\\ \\/ NodeHasApplication(server)\n'
+        '     \\/ server \\in request.envelope.certificate.signers\n'
         '  /\\ BodyHeldBy(durableBodies, server, request.envelope.certificate.context,\n'
         '                request.envelope.view, request.envelope.subject)'
     )
@@ -2080,8 +2081,9 @@ def test_async_source_fidelity_pins_certified_body_serving_authority(
         async_source.replace(
             needle,
             needle.replace(
+                '  /\\ \\/ NodeHasApplication(server)\n'
+                '     \\/ server \\in request.envelope.certificate.signers\n',
                 '  /\\ server \\in request.envelope.certificate.signers\n',
-                "",
             ),
             1,
         ),
@@ -2090,8 +2092,10 @@ def test_async_source_fidelity_pins_certified_body_serving_authority(
 
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "CertifiedServeCanRespond must equal only" in error for error in errors
-    )
+        "CertifiedServeCanRespond must equal only the reviewed normalized "
+        "operator body digest" in error
+        for error in errors
+    ), errors
 
 
 def test_async_source_fidelity_pins_deferred_cursor_and_rank(

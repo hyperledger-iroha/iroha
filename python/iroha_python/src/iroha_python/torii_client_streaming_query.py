@@ -18,7 +18,7 @@ def create_torii_client_streaming_query_mixin(
     expect_sorafs_reputation_status: Callable[..., None],
     normalize_count_mode_arg: Callable[[Optional[str]], Optional[str]],
     normalize_optional_string: Callable[[Any, str], Optional[str]],
-) -> type:
+) -> Any:
     """Bind client-local hooks to the reusable streaming/query implementation."""
 
     _require_crypto = require_crypto
@@ -27,6 +27,8 @@ def create_torii_client_streaming_query_mixin(
     _normalize_optional_string = normalize_optional_string
 
     class ToriiClientStreamingQueryMixin:
+        _base_url: str
+
         @staticmethod
         def _maybe_json(response: requests.Response) -> Optional[Any]:
             if not hasattr(response, "content"):

@@ -30575,7 +30575,7 @@ Self::start_with_crypto_and_initial_trusted_sources(
             """
 let P2pIdentityKeys {
     node: key_pair,
-    soranet_transport: soranet_transport_key_pair,
+    soranet_transport,
 } = identity_keys;
 let topic_frame_caps = TopicFrameCaps {
     consensus: max_frame_bytes_consensus,
@@ -31678,6 +31678,27 @@ Ok(())
         errors,
         count=0,
     )
+    _require_rust_source_token_sequence(
+        p2p_network_path,
+        p2p_network_source,
+        "debug_packet_loss",
+        "the retired executable P2P packet-loss path must remain absent",
+        errors,
+        count=0,
+    )
+    for retired_malformed_frame_token in (
+        "pending_malformed_payload",
+        "MALFORMED_PAYLOAD_FRAME_THRESHOLD",
+        "note_malformed_payload_frame",
+    ):
+        _require_rust_source_token_sequence(
+            p2p_peer_path,
+            p2p_peer_source,
+            retired_malformed_frame_token,
+            "the retired authenticated malformed-frame recovery path must remain absent",
+            errors,
+            count=0,
+        )
     normalized_p2p_text = " ".join(
         re.sub(r"(?m)^\s*//[/!]?\s?", "", p2p_network_source).split()
     )
@@ -41344,7 +41365,7 @@ def _certified_response_registration_production_source_fidelity_errors(
         "CertifiedResponseAuthorized": (
             '/\\ item.kind = "CertifiedResponse" '
             "/\\ CertifiedResponseAuthenticatedOccurrence(item) "
-            "/\\ item.envelope.archiveServer \\in AsyncArchiveServerIds "
+            "/\\ item.envelope.responder \\in AsyncArchiveServerIds "
             "/\\ MatchingCertifiedRequests(item) # {} "
             "/\\ \\E request \\in MatchingCertifiedRequests(item): "
             "FrozenCertifiedResponseBinding(item, request)"
@@ -47402,6 +47423,7 @@ def _adequate_leader_three_way_service_outcome_contract_errors(
                     "incarnation:",
                     "proposer:",
                     "requester:",
+                    "responder:",
                     "archiveServer:",
                     "citedResponder:",
                     "signatureOwner:",
@@ -49354,7 +49376,8 @@ asyncServeProducerTurnReady' =
         "CertifiedServeCanRespond": (
             '/\\ request.kind = "CertifiedRequest" '
             "/\\ request.envelope.recipient = server "
-            "/\\ server \\in request.envelope.certificate.signers "
+            "/\\ \\/ NodeHasApplication(server) "
+            "\\/ server \\in request.envelope.certificate.signers "
             "/\\ BodyHeldBy(durableBodies, server, "
             "request.envelope.certificate.context, "
             "request.envelope.view, request.envelope.subject)"
@@ -51538,7 +51561,7 @@ asyncServeProducerTurnReady' =
             "719961293fc8b6ca063020df8d820b2d6714203b48c896b1eb30b96f9df6436e"
         ),
         "CertifiedServeCanRespond": (
-            "0d691be03f02bfd35124b3f192906e2fbf5af5208bcdc3da47528c76b29119cd"
+            "8fcb675ef2590bab85bb5665a985ecccf657b3378de4ef5d6b9182a01273e68d"
         ),
         "AsyncControlServiceIdentityServicedOrAdvancedIn": (
             "8e5fe148b229c92f05813e873a62bc86f7e26f711d0f2717205c422d74d45811"
@@ -53267,7 +53290,7 @@ asyncServeProducerTurnReady' =
             'AsyncNetworkItem("Chunk", source, envelope)',
             '"CertifiedResponse", source,',
             "AsyncCertifiedResponseEnvelope(",
-            "archiveServer \\in AsyncArchiveServerIds",
+            "responder \\in AsyncArchiveServerIds",
         ),
         "InjectUntrustedTransportCompletion": (
             "kind \\in IngressTransportCompletionKinds",
@@ -66939,6 +66962,13 @@ if self
 {
     return Ok(true);
 }
+if self
+    .fanouts
+    .iter()
+    .any(|pending| pending.is_same_acquisition_topology_retry(fanout))
+{
+    return Ok(false);
+}
 if let Some(pending) = self
     .fanouts
     .iter()
@@ -66954,7 +66984,7 @@ if let Some(pending) = self
 }
 self.ownership_capacity_available(&fanout.admission_reservation_counts()?)
 """,
-        "capacity preflight must reuse identical topology ownership, otherwise enforce route-source geometry before charging only newly appended source ownership",
+        "capacity preflight must reuse identical topology ownership, leave a different rotating acquisition batch with its durable source while the incumbent drains, and otherwise enforce route-source geometry before charging only newly appended source ownership",
         errors,
     )
     _require_rust_token_sequence(
@@ -67000,6 +67030,13 @@ if self
 if self
     .fanouts
     .iter()
+    .any(|pending| pending.is_same_acquisition_topology_retry(fanout))
+{
+    return Ok(false);
+}
+if self
+    .fanouts
+    .iter()
     .any(|pending| pending.can_coalesce_retry(fanout))
 {
     return self.capacity_available_for(fanout);
@@ -67011,6 +67048,7 @@ self.capacity_available_for(fanout)
 """,
         "lane-effect preflight must validate geometry, preflight a safely "
         "replaceable responder control, reuse identical topology ownership, "
+        "retain a different rotating acquisition batch at source while ranked targets drain, "
         "retain a distinct reply duplicate at lane ownership, and otherwise "
         "charge reservation capacity",
         errors,
@@ -67093,6 +67131,13 @@ if self
 {
     return Ok(ExactFanoutOwnership::Owned);
 }
+if self
+    .fanouts
+    .iter()
+    .any(|pending| pending.is_same_acquisition_topology_retry(&fanout))
+{
+    return Ok(ExactFanoutOwnership::SourceRetained);
+}
 if let Some(index) = self
     .fanouts
     .iter()
@@ -67100,8 +67145,8 @@ if let Some(index) = self
 {
 """,
         "worker exact output must retire a safely stranded responder control, "
-        "then coalesce identical topology ownership before an authenticated "
-        "reply retry",
+        "then coalesce identical topology ownership and leave a different rotating "
+        "acquisition batch at its durable source before an authenticated reply retry",
         errors,
     )
     _require_rust_token_sequence(

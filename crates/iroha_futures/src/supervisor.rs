@@ -10,6 +10,7 @@
 //!   Note: this might not be always the desirable behaviour, but _currently_ there are no other
 //!   cases in Iroha.
 //!   This behaviour could be easily extended to support refined strategies.
+//! - Cancels monitored Tokio tasks if the supervisor or its running future is dropped.
 //! - Logs children's lifecycle
 //!
 //! What it doesn't:
@@ -23,7 +24,7 @@ use iroha_logger::{InstrumentFutures, prelude::Span};
 use std::{future::Future, time::Duration};
 use tokio::{
     sync::{mpsc, oneshot},
-    task::{JoinHandle, JoinSet},
+    task::{AbortHandle, JoinHandle, JoinSet},
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
@@ -67,19 +68,67 @@ impl Supervisor {
     /// Start actual supervision and wait until all children terminate.
     ///
     /// Returns [`Ok`] if all children exited/aborted as expected after shutdown signal being sent.
+    /// Dropping this future signals shutdown and aborts every monitored Tokio task.
     ///
     /// # Errors
     /// If any child panicked during execution or exited/aborted before shutdown signal being sent.
-    pub async fn start(self) -> Result<()> {
+    pub async fn start(mut self) -> Result<()> {
         // technically - should work without this check too
         if self.children.is_empty() {
             return Ok(());
         }
-        LoopBuilder::new(self.shutdown_signal)
-            .monitor(self.children)
+        let shutdown_signal = std::mem::take(&mut self.shutdown_signal);
+        let children = std::mem::take(&mut self.children);
+        let mut cancellation = SupervisionCancellation::new(&shutdown_signal, &children);
+        let result = LoopBuilder::new(shutdown_signal)
+            .monitor(children)
             .into_loop()
             .run()
-            .await
+            .await;
+        cancellation.disarm();
+        result
+    }
+}
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        self.shutdown_signal.send();
+        for child in &self.children {
+            child.task.abort();
+        }
+    }
+}
+struct SupervisionCancellation {
+    shutdown_signal: ShutdownSignal,
+    child_abort_handles: Vec<AbortHandle>,
+    armed: bool,
+}
+impl SupervisionCancellation {
+    fn new(shutdown_signal: &ShutdownSignal, children: &[Child]) -> Self {
+        Self {
+            shutdown_signal: shutdown_signal.clone(),
+            child_abort_handles: children
+                .iter()
+                .map(|child| child.task.abort_handle())
+                .collect(),
+            armed: true,
+        }
+    }
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+impl Drop for SupervisionCancellation {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.shutdown_signal.send();
+        for child in &self.child_abort_handles {
+            child.abort();
+        }
     }
 }
 #[cfg(unix)]
@@ -508,6 +557,71 @@ mod tests {
             .await
             .expect("should exit immediately")
             .expect("should not emit error");
+    }
+    #[tokio::test]
+    async fn dropping_unpolled_supervision_aborts_monitored_children() {
+        struct DropFlag(Arc<AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = oneshot::channel();
+        let child_dropped = Arc::clone(&dropped);
+        let child = tokio::spawn(async move {
+            let _drop_flag = DropFlag(child_dropped);
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        started_rx.await.expect("child should start");
+
+        let mut supervisor = Supervisor::new();
+        supervisor.monitor(child);
+        let supervision = supervisor.start();
+        drop(supervision);
+
+        timeout(TICK_TIMEOUT * 10, async {
+            while !dropped.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("dropping unpolled supervision should abort its child");
+    }
+    #[tokio::test]
+    async fn cancelling_running_supervision_aborts_monitored_children() {
+        struct DropFlag(Arc<AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = oneshot::channel();
+        let child_dropped = Arc::clone(&dropped);
+        let child = tokio::spawn(async move {
+            let _drop_flag = DropFlag(child_dropped);
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let mut supervisor = Supervisor::new();
+        supervisor.monitor(child);
+        let supervision = tokio::spawn(supervisor.start());
+        started_rx.await.expect("child should start");
+
+        supervision.abort();
+        let _ = supervision.await;
+
+        timeout(TICK_TIMEOUT * 10, async {
+            while !dropped.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelling running supervision should abort its child");
     }
     #[tokio::test]
     async fn happy_graceful_shutdown() {

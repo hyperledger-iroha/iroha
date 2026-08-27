@@ -2059,9 +2059,7 @@ fn target_lifecycle_context(
                 response.certificate.round.context_id,
                 response.certificate.round.height,
             )),
-            wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
-            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
+            wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
         },
         BlockMessage::V2(_) => return None,
         BlockMessage::KuraReplicaAdvert(_)
@@ -2222,6 +2220,7 @@ mod tests {
     fn certified_body_response(
         context_id: wire::HeightContextId,
         height: wire::Height,
+        responder: &PeerId,
     ) -> BlockMessage {
         let body = vec![0xA5];
         let payload_hash = Hash::new(&body);
@@ -2257,7 +2256,7 @@ mod tests {
                 )),
                 manifest,
                 body,
-                responder: 0,
+                responder: responder.clone(),
                 signature: vec![0x5A],
             }),
         ))
@@ -3017,7 +3016,7 @@ mod tests {
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
-        let mut invalid_response = certified_body_response(context_id, HEIGHT);
+        let mut invalid_response = certified_body_response(context_id, HEIGHT, &peer);
         let BlockMessage::V2(response_message) = &mut invalid_response else {
             unreachable!("response fixture uses the v2 carrier")
         };
@@ -3065,7 +3064,7 @@ mod tests {
             .expect("two validator lanes fit the identity test queue");
         ingress.state.lock().leader_wire_context = Some((context_id, HEIGHT));
         ingress.open().expect("open identity test ingress");
-        let response = certified_body_response(context_id, HEIGHT);
+        let response = certified_body_response(context_id, HEIGHT, &first);
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 response.clone(),

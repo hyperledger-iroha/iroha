@@ -60,7 +60,7 @@ impl PreparedControlFlow {
         let mut nodes = Vec::with_capacity(decoded.len());
         for op in decoded {
             let opcode = wide::opcode(op.inst);
-            let fallthrough = op.pc.checked_add(u64::from(op.len));
+            let fallthrough = op.pc.checked_add(4);
             let mut node = PreparedControlFlowNode::new(op.pc);
             match opcode {
                 wide::control::HALT => {}

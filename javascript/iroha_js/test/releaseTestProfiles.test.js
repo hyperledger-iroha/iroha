@@ -42,6 +42,7 @@ test("release test profiles separate provisioned lanes and reject skipped result
     '"sorafsOrderbookSubmission.test.js"',
     '"sorafsOrchestrator.parity.test.js"',
     '"sorafsPdpValidation.test.js"',
+    'testArguments.push("--test-concurrency=1")',
     '/# (?:SKIP|TODO)(?:\\s|$)/u',
   ]) {
     assert.ok(runner.includes(required), `test profile runner must contain ${required}`);

@@ -459,7 +459,9 @@ internal static class SccpSubmitValidation
         "iroha_sccp::SccpGroth16Bn254ProofArtifactV1";
     internal const string NativeInboundProofSchemaName =
         "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
-    private const string SubmitBridgeProofWireName =
+    private const string SubmitBridgeProofWireId =
+        "iroha.instruction.v1::bridge::SubmitBridgeProof";
+    private const string SubmitBridgeProofSchemaName =
         "iroha_data_model::isi::bridge::SubmitBridgeProof";
     private const string TairaChainId = "fc56984b-2be7-431d-840e-21514d1883f0";
     private const ulong DefaultTransactionTimeToLiveMilliseconds = 100_000;
@@ -741,7 +743,7 @@ internal static class SccpSubmitValidation
             "executable.instruction.payload");
         if (!instructions.IsFinished
             || !instruction.IsFinished
-            || wireName != SubmitBridgeProofWireName)
+            || wireName != SubmitBridgeProofWireId)
         {
             throw new ArgumentException(
                 "SCCP transaction instruction must be exactly SubmitBridgeProof.");
@@ -751,7 +753,7 @@ internal static class SccpSubmitValidation
             archive,
             "executable.instruction.payload",
             MaximumTransactionPayloadBytes,
-            SubmitBridgeProofWireName);
+            SubmitBridgeProofSchemaName);
         return InspectCanonicalDetachedSubmitBridgeProof(archive, expectedProof);
     }
 
@@ -1360,7 +1362,7 @@ internal static class SccpSubmitValidation
             var archive = DecodeRawByteVector(
                 instruction.TakeField("executable.instruction.payload"),
                 "executable.instruction.payload");
-            if (wireName != SubmitBridgeProofWireName
+            if (wireName != SubmitBridgeProofWireId
                 || !instruction.IsFinished)
             {
                 throw new ArgumentException("SCCP transaction instruction must be SubmitBridgeProof.");
@@ -1370,7 +1372,7 @@ internal static class SccpSubmitValidation
                 archive,
                 "executable.instruction.payload",
                 MaximumTransactionPayloadBytes,
-                SubmitBridgeProofWireName);
+                SubmitBridgeProofSchemaName);
             RequireCanonicalSubmitBridgeProof(
                 archive,
                 backend,

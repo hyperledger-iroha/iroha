@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 namespace Hyperledger.Iroha.Torii;
@@ -95,6 +97,7 @@ public sealed partial class ToriiClient
         {
             throw new InvalidDataException($"Kagemusha command expected HTTP 202, got {(int)response.StatusCode}.");
         }
+        RequireKagemushaRetryAfter(response);
 
         using var document = await ReadKagemushaJsonAsync(
             response,
@@ -121,11 +124,49 @@ public sealed partial class ToriiClient
             throw new InvalidDataException($"{context} must use Content-Type application/json.");
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var body = await ReadBoundedKagemushaJsonBodyAsync(
+            response.Content,
+            context,
+            cancellationToken);
+        await using var stream = new MemoryStream(body, writable: false);
         return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
             stream,
             context,
             cancellationToken);
+    }
+
+    private static async Task<byte[]> ReadBoundedKagemushaJsonBodyAsync(
+        HttpContent content,
+        string context,
+        CancellationToken cancellationToken)
+    {
+        var declaredLength = content.Headers.ContentLength;
+        if (declaredLength is > ToriiKagemushaTransport.MaxJsonResponseBytes)
+        {
+            throw new InvalidDataException(
+                $"{context} exceeds the {ToriiKagemushaTransport.MaxJsonResponseBytes}-byte limit.");
+        }
+
+        await using var input = await content.ReadAsStreamAsync(cancellationToken);
+        using var output = declaredLength is > 0
+            ? new MemoryStream(checked((int)declaredLength.Value))
+            : new MemoryStream();
+        var buffer = new byte[8 * 1024];
+        while (true)
+        {
+            var read = await input.ReadAsync(buffer.AsMemory(), cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+            if (output.Length > ToriiKagemushaTransport.MaxJsonResponseBytes - read)
+            {
+                throw new InvalidDataException(
+                    $"{context} exceeds the {ToriiKagemushaTransport.MaxJsonResponseBytes}-byte limit.");
+            }
+            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+        }
+        return output.ToArray();
     }
 
     private ToriiOfflineStatus ParseOfflineCapability(JsonElement root)
@@ -200,7 +241,7 @@ public sealed partial class ToriiClient
             State = state,
             TransactionHash = transactionHash,
             StatusUri = statusUri,
-            SubmittedAtMilliseconds = RequireJsonUInt64(root.GetProperty("submitted_at_ms"), "submitted_at_ms"),
+            SubmittedAtMilliseconds = RequireJsonPositiveUInt64(root.GetProperty("submitted_at_ms"), "submitted_at_ms"),
         };
     }
 
@@ -245,7 +286,7 @@ public sealed partial class ToriiClient
             State = ToriiKagemushaOperationState.Pending,
             Kind = ParseTaggedKind(value.GetProperty("kind"), "value.kind"),
             TransactionHash = RequireJsonHash(value.GetProperty("transaction_hash"), "value.transaction_hash"),
-            SubmittedAtMilliseconds = RequireJsonUInt64(value.GetProperty("submitted_at_ms"), "value.submitted_at_ms"),
+            SubmittedAtMilliseconds = RequireJsonPositiveUInt64(value.GetProperty("submitted_at_ms"), "value.submitted_at_ms"),
         };
     }
 
@@ -272,8 +313,8 @@ public sealed partial class ToriiClient
                 RedeemResult = new ToriiKagemushaRedeemResultV4
                 {
                     TransactionHash = RequireJsonHash(result.GetProperty("transaction_hash"), "result.transaction_hash"),
-                    FinalizedBlockHeight = RequireJsonUInt64(result.GetProperty("finalized_block_height"), "result.finalized_block_height"),
-                    ServerTimeMilliseconds = RequireJsonUInt64(result.GetProperty("server_time_ms"), "result.server_time_ms"),
+                    FinalizedBlockHeight = RequireJsonPositiveUInt64(result.GetProperty("finalized_block_height"), "result.finalized_block_height"),
+                    ServerTimeMilliseconds = RequireJsonPositiveUInt64(result.GetProperty("server_time_ms"), "result.server_time_ms"),
                 },
             };
         }
@@ -290,17 +331,47 @@ public sealed partial class ToriiClient
             "server_time_ms",
             "anchor",
             "finality_proof");
-        var anchor = result.GetProperty("anchor");
-        if (RequireJsonUInt64(anchor.GetProperty("version"), "result.anchor.version") != KagemushaManifestVersion)
+        var anchor = RequireJsonObject(result.GetProperty("anchor"), "result.anchor");
+        if (RequireJsonUInt64(
+                RequireJsonProperty(anchor, "version", "result.anchor"),
+                "result.anchor.version") != KagemushaManifestVersion)
         {
             throw new JsonException("Kagemusha top-up anchor must use V4.");
         }
-        var artifactBinding = anchor.GetProperty("artifact_binding");
-        if (RequireJsonUInt64(artifactBinding.GetProperty("version"), "result.anchor.artifact_binding.version")
+        var artifactBinding = RequireJsonObject(
+            RequireJsonProperty(anchor, "artifact_binding", "result.anchor"),
+            "result.anchor.artifact_binding");
+        if (RequireJsonUInt64(
+                RequireJsonProperty(artifactBinding, "version", "result.anchor.artifact_binding"),
+                "result.anchor.artifact_binding.version")
             != KagemushaManifestVersion)
         {
             throw new JsonException("Kagemusha top-up artifact binding must use V4.");
         }
+        RequireJsonFixedBytes32MatchesOperationId(
+            RequireJsonProperty(anchor, "topup_operation_id", "result.anchor"),
+            operationId,
+            "result.anchor.topup_operation_id");
+
+        var finalityProof = RequireJsonObject(
+            result.GetProperty("finality_proof"),
+            "result.finality_proof");
+        if (RequireJsonUInt64(
+                RequireJsonProperty(finalityProof, "version", "result.finality_proof"),
+                "result.finality_proof.version") != 1)
+        {
+            throw new JsonException("Kagemusha top-up finality proof must use V1.");
+        }
+        var finalityAnchor = RequireJsonObject(
+            RequireJsonProperty(finalityProof, "anchor", "result.finality_proof"),
+            "result.finality_proof.anchor");
+        RequireJsonFixedBytes32MatchesOperationId(
+            RequireJsonProperty(
+                finalityAnchor,
+                "topup_operation_id",
+                "result.finality_proof.anchor"),
+            operationId,
+            "result.finality_proof.anchor.topup_operation_id");
 
         return new ToriiKagemushaOperationStatus
         {
@@ -310,10 +381,10 @@ public sealed partial class ToriiClient
             TopUpResult = new ToriiKagemushaTopUpResultV4
             {
                 TransactionHash = RequireJsonHash(result.GetProperty("transaction_hash"), "result.transaction_hash"),
-                FinalizedBlockHeight = RequireJsonUInt64(result.GetProperty("finalized_block_height"), "result.finalized_block_height"),
-                ServerTimeMilliseconds = RequireJsonUInt64(result.GetProperty("server_time_ms"), "result.server_time_ms"),
+                FinalizedBlockHeight = RequireJsonPositiveUInt64(result.GetProperty("finalized_block_height"), "result.finalized_block_height"),
+                ServerTimeMilliseconds = RequireJsonPositiveUInt64(result.GetProperty("server_time_ms"), "result.server_time_ms"),
                 Anchor = anchor.Clone(),
-                FinalityProof = result.GetProperty("finality_proof").Clone(),
+                FinalityProof = finalityProof.Clone(),
             },
         };
     }
@@ -332,9 +403,21 @@ public sealed partial class ToriiClient
         {
             throw new JsonException("Kagemusha rejection error must be an object.");
         }
-        var details = error.TryGetProperty("details", out var detailValue) && detailValue.ValueKind != JsonValueKind.Null
-            ? detailValue.Clone()
-            : (JsonElement?)null;
+        var hasDetails = error.TryGetProperty("details", out var detailValue);
+        if (hasDetails)
+        {
+            RequireExactFields(error, "Kagemusha rejection error", "code", "message", "details");
+            if (detailValue.ValueKind != JsonValueKind.Object)
+            {
+                throw new JsonException("value.error.details must be an object when present.");
+            }
+        }
+        else
+        {
+            RequireExactFields(error, "Kagemusha rejection error", "code", "message");
+        }
+
+        var details = hasDetails ? detailValue.Clone() : (JsonElement?)null;
         return new ToriiKagemushaOperationStatus
         {
             OperationId = operationId,
@@ -343,8 +426,8 @@ public sealed partial class ToriiClient
             TransactionHash = RequireJsonHash(value.GetProperty("transaction_hash"), "value.transaction_hash"),
             Error = new ToriiKagemushaOperationError
             {
-                Code = RequireJsonString(error.GetProperty("code"), "value.error.code"),
-                Message = RequireJsonString(error.GetProperty("message"), "value.error.message"),
+                Code = RequireJsonErrorCode(error.GetProperty("code"), "value.error.code"),
+                Message = RequireJsonExactText(error.GetProperty("message"), "value.error.message"),
                 Details = details,
             },
         };
@@ -400,6 +483,11 @@ public sealed partial class ToriiClient
     {
         var value = RequireJsonString(element, context);
         RequireLowerHex32(value, context);
+        if ("13579bdf".IndexOf(value[^1]) < 0)
+        {
+            throw new JsonException(
+                $"{context} must be an exact canonical marker-bearing lowercase 32-byte Iroha hash.");
+        }
         return value;
     }
 
@@ -419,6 +507,141 @@ public sealed partial class ToriiClient
             throw new JsonException($"{context} must be an unsigned 64-bit integer.");
         }
         return value;
+    }
+
+    private static ulong RequireJsonPositiveUInt64(JsonElement element, string context)
+    {
+        var value = RequireJsonUInt64(element, context);
+        if (value == 0)
+        {
+            throw new JsonException($"{context} must be a positive unsigned 64-bit integer.");
+        }
+        return value;
+    }
+
+    private static JsonElement RequireJsonProperty(
+        JsonElement element,
+        string propertyName,
+        string context)
+    {
+        RequireJsonObject(element, context);
+        if (!element.TryGetProperty(propertyName, out var property))
+        {
+            throw new JsonException($"{context} is missing {propertyName}.");
+        }
+        return property;
+    }
+
+    private static void RequireJsonFixedBytes32MatchesOperationId(
+        JsonElement element,
+        string operationId,
+        string context)
+    {
+        if (element.ValueKind != JsonValueKind.Array || element.GetArrayLength() != 32)
+        {
+            throw new JsonException($"{context} must be an array of 32 bytes.");
+        }
+
+        var index = 0;
+        foreach (var item in element.EnumerateArray())
+        {
+            if (!item.TryGetInt32(out var value) || value is < 0 or > byte.MaxValue)
+            {
+                throw new JsonException($"{context} must be an array of 32 bytes.");
+            }
+            var expected = byte.Parse(
+                operationId.AsSpan(index * 2, 2),
+                NumberStyles.AllowHexSpecifier,
+                CultureInfo.InvariantCulture);
+            if (value != expected)
+            {
+                throw new JsonException($"{context} does not match the requested operation id.");
+            }
+            index++;
+        }
+    }
+
+    private static string RequireJsonErrorCode(JsonElement element, string context)
+    {
+        var value = RequireJsonExactText(element, context, 64, 64);
+        if (value.Any(static character =>
+                character is not (>= 'a' and <= 'z')
+                    and not (>= '0' and <= '9')
+                    and not '_')
+            || value[0] == '_')
+        {
+            throw new JsonException($"{context} must be a stable lowercase error code.");
+        }
+        return value;
+    }
+
+    private static string RequireJsonExactText(
+        JsonElement element,
+        string context,
+        int maximumScalars = 1024,
+        int maximumUtf8Bytes = 4096)
+    {
+        var value = RequireJsonString(element, context);
+        var scalarCount = 0;
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (character is >= '\u0000' and <= '\u001f'
+                or >= '\u007f' and <= '\u009f')
+            {
+                throw new JsonException($"{context} must be exact non-empty text.");
+            }
+            if (char.IsHighSurrogate(character))
+            {
+                if (index + 1 >= value.Length || !char.IsLowSurrogate(value[index + 1]))
+                {
+                    throw new JsonException($"{context} must be exact non-empty text.");
+                }
+                index++;
+            }
+            else if (char.IsLowSurrogate(character))
+            {
+                throw new JsonException($"{context} must be exact non-empty text.");
+            }
+            scalarCount++;
+        }
+
+        if (value[0] == '\ufeff'
+            || value[^1] == '\ufeff'
+            || !string.Equals(value.Trim(), value, StringComparison.Ordinal)
+            || scalarCount > maximumScalars
+            || Encoding.UTF8.GetByteCount(value) > maximumUtf8Bytes)
+        {
+            throw new JsonException($"{context} must be exact non-empty text.");
+        }
+        return value;
+    }
+
+    private static void RequireKagemushaRetryAfter(HttpResponseMessage response)
+    {
+        if (!response.Headers.NonValidated.TryGetValues("Retry-After", out var values))
+        {
+            throw new InvalidDataException(
+                "Kagemusha operation reference must include a positive Retry-After value.");
+        }
+
+        var rawValues = values.ToArray();
+        if (rawValues.Length != 1)
+        {
+            throw new InvalidDataException(
+                "Kagemusha operation reference has an ambiguous Retry-After header.");
+        }
+
+        var raw = rawValues[0];
+        if (raw.Length == 0
+            || raw.Length > 20
+            || raw.Any(static character => character is < '0' or > '9')
+            || !ulong.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds)
+            || seconds == 0)
+        {
+            throw new InvalidDataException(
+                "Kagemusha operation reference Retry-After must be a positive u64 number of seconds.");
+        }
     }
 
     private static void RequireLowerHex32(string? value, string context)

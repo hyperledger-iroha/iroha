@@ -120,13 +120,16 @@ def test_iso_operator_auth_is_mandatory_one_shot_and_rejects_retired_shapes() ->
     )
     for options in retired_options:
         session = RecordingSession([])
-        client = ToriiClient(
-            "https://torii.example",
-            session=session,
-            operator_signing_context=context(),
-            **options,
-        )
-        with pytest.raises(ValueError, match="generated operator signing"):
+        with pytest.raises(
+            ValueError,
+            match="canonical authentication headers|generated operator signing",
+        ):
+            client = ToriiClient(
+                "https://torii.example",
+                session=session,
+                operator_signing_context=context(),
+                **options,
+            )
             client.get_iso_message_status("signed-1")
         assert session.calls == []
 

@@ -819,12 +819,6 @@ fn applied_height_reconstruction_covers(
                     wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
                         round_matches(response.certificate.round)
                     }
-                    wire::ConsensusMessageV2Payload::VrfCommit(commit) => {
-                        commit.epoch == artifact.height_context.epoch
-                    }
-                    wire::ConsensusMessageV2Payload::VrfReveal(reveal) => {
-                        reveal.epoch == artifact.height_context.epoch
-                    }
                     wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => {
                         round_matches(partial.round)
                     }

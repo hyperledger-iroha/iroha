@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,31 +18,63 @@ def _timestamp() -> str:
     )
 
 
-def _round(value: Optional[float]) -> Optional[float]:
-    if value is None:
-        return None
-    return round(value, 3)
+def _is_valid_count(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value >= 0
+    return (
+        isinstance(value, float)
+        and math.isfinite(value)
+        and value >= 0
+        and value.is_integer()
+    )
 
 
-def _percent(value: Optional[float]) -> Optional[str]:
-    if value is None:
+def _finite_float(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return f"{value * 100:.1f}%"
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _round(value: Any) -> Optional[float]:
+    number = _finite_float(value)
+    if number is None:
+        return None
+    return round(number, 3)
+
+
+def _percent(value: Any) -> Optional[str]:
+    number = _finite_float(value)
+    if number is None:
+        return None
+    return f"{number * 100:.1f}%"
+
+
+def _wait_ratio_from_durations(flatten_value: Any, wait_value: Any) -> Optional[float]:
+    flatten = _finite_float(flatten_value)
+    wait = _finite_float(wait_value)
+    if flatten is None or wait is None or flatten < 0 or wait < 0:
+        return None
+    scale = max(flatten, wait)
+    if scale == 0:
+        return None
+    scaled_flatten = flatten / scale
+    scaled_wait = wait / scale
+    return scaled_wait / (scaled_flatten + scaled_wait)
 
 
 def _phase_wait_ratio(stats: Optional[Dict[str, Any]]) -> Optional[float]:
     if not isinstance(stats, dict):
         return None
-    ratio = stats.get("wait_ratio")
-    if isinstance(ratio, (int, float)):
-        return float(ratio)
-    flatten = stats.get("flatten_ms")
-    wait = stats.get("wait_ms")
-    if isinstance(flatten, (int, float)) and isinstance(wait, (int, float)):
-        total = float(flatten) + float(wait)
-        if total > 0:
-            return float(wait) / total
-    return None
+    ratio = _finite_float(stats.get("wait_ratio"))
+    if ratio is not None and 0 <= ratio <= 1:
+        return ratio
+    return _wait_ratio_from_durations(stats.get("flatten_ms"), stats.get("wait_ms"))
 
 
 def _max_wait_ratio(samples: Any) -> Optional[float]:
@@ -51,22 +84,18 @@ def _max_wait_ratio(samples: Any) -> Optional[float]:
     for entry in samples:
         if not isinstance(entry, dict):
             continue
-        ratio = entry.get("wait_ratio")
-        if not isinstance(ratio, (int, float)):
-            flatten = entry.get("flatten_ms")
-            wait = entry.get("wait_ms")
-            if isinstance(flatten, (int, float)) and isinstance(wait, (int, float)):
-                total = float(flatten) + float(wait)
-                if total > 0:
-                    ratio = float(wait) / total
-        if isinstance(ratio, (int, float)):
-            ratio = float(ratio)
+        ratio = _finite_float(entry.get("wait_ratio"))
+        if ratio is None or not 0 <= ratio <= 1:
+            ratio = _wait_ratio_from_durations(
+                entry.get("flatten_ms"), entry.get("wait_ms")
+            )
+        if ratio is not None and 0 <= ratio <= 1:
             if max_ratio is None or ratio > max_ratio:
                 max_ratio = ratio
     return max_ratio
 
 
-def _load_json(path: Path) -> Dict[str, Any]:
+def _load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:  # pragma: no cover - defensive guard
@@ -74,14 +103,15 @@ def _load_json(path: Path) -> Dict[str, Any]:
 
 
 def _extract_phase(payload: Dict[str, Any], phase: str) -> Dict[str, Any]:
-    entry = payload.get("phases", {}).get(phase) if isinstance(payload, dict) else None
+    phases = payload.get("phases") if isinstance(payload, dict) else None
+    entry = phases.get(phase) if isinstance(phases, dict) else None
     if not isinstance(entry, dict):
         return {}
     return {
         "batches": entry.get("batches"),
-        "flatten_ms": entry.get("flatten_ms"),
-        "wait_ms": entry.get("wait_ms"),
-        "wait_ratio": entry.get("wait_ratio"),
+        "flatten_ms": _finite_float(entry.get("flatten_ms")),
+        "wait_ms": _finite_float(entry.get("wait_ms")),
+        "wait_ratio": _phase_wait_ratio(entry),
     }
 
 
@@ -140,41 +170,55 @@ def summarize_report(
     min_batches: int,
     max_wait_ratio: Optional[float],
 ) -> ReportSummary:
-    payload = _load_json(path)
+    if min_dispatch < 0 or min_batches < 0:
+        raise ValueError("minimum telemetry counts must be non-negative")
+    if max_wait_ratio is not None:
+        threshold = _finite_float(max_wait_ratio)
+        if threshold is None or not 0 <= threshold <= 1:
+            raise ValueError("max_wait_ratio must be finite and within [0, 1]")
+        max_wait_ratio = threshold
+    raw_payload = _load_json(path)
     issues: List[str] = []
-    run_status = payload.get("run_status") if isinstance(payload, dict) else None
-    queue = _extract_queue(payload.get("metal_dispatch_queue"))
-    column_staging = payload.get("column_staging")
+    if isinstance(raw_payload, dict):
+        payload = raw_payload
+    else:
+        payload = {}
+        issues.append("benchmark payload must be a JSON object")
+    run_status = payload.get("run_status")
+    queue_block = payload.get("metal_dispatch_queue")
+    queue = _extract_queue(queue_block)
+    raw_column_staging = payload.get("column_staging")
+    column_staging = raw_column_staging if isinstance(raw_column_staging, dict) else None
     poseidon_queue = _extract_queue(
-        payload.get("metal_dispatch_queue", {}).get("poseidon")
+        queue_block.get("poseidon") if isinstance(queue_block, dict) else None
     )
     poseidon_pipeline = _extract_pipeline(
-        payload.get("metal_dispatch_queue", {}).get("poseidon_pipeline")
+        queue_block.get("poseidon_pipeline") if isinstance(queue_block, dict) else None
     )
 
     if queue is None:
         issues.append("missing metal_dispatch_queue block")
     else:
         dispatch_count = queue.get("dispatch_count")
-        if isinstance(dispatch_count, (int, float)):
-            if int(dispatch_count) < min_dispatch:
+        if _is_valid_count(dispatch_count):
+            if dispatch_count < min_dispatch:
                 issues.append(
                     f"dispatch_count<{min_dispatch} (queue telemetry missing or CPU fallback)"
                 )
         else:
-            issues.append("dispatch_count missing in queue telemetry")
+            issues.append("dispatch_count missing or invalid in queue telemetry")
 
     if column_staging is None:
         issues.append("missing column_staging block")
     else:
         batches = column_staging.get("batches")
-        if isinstance(batches, (int, float)):
-            if int(batches) < min_batches:
+        if _is_valid_count(batches):
+            if batches < min_batches:
                 issues.append(
                     f"column staging batches<{min_batches} (host staging telemetry missing)"
                 )
         else:
-            issues.append("column_staging.batches missing")
+            issues.append("column_staging.batches missing or invalid")
         if not isinstance(column_staging.get("phases"), dict):
             issues.append("column_staging phases missing")
 
@@ -191,16 +235,23 @@ def summarize_report(
         if phase_max is None:
             phase_max = _phase_wait_ratio(metrics)
         phase_max_wait_ratio[phase] = phase_max
-        if max_wait_ratio is not None and phase_max is not None and phase_max > max_wait_ratio:
-            issues.append(
-                f"{phase} wait ratio {phase_max:.3f} exceeds threshold {max_wait_ratio:.3f}"
-            )
+        if max_wait_ratio is not None:
+            if phase_max is None:
+                issues.append(f"{phase} wait ratio missing or invalid")
+            elif phase_max > max_wait_ratio:
+                issues.append(
+                    f"{phase} wait ratio {phase_max:.3f} exceeds threshold {max_wait_ratio:.3f}"
+                )
 
     if isinstance(run_status, dict):
         state = run_status.get("state")
+        raw_reasons = run_status.get("reasons", [])
+        if not isinstance(raw_reasons, list):
+            issues.append("run_status.reasons must be a list")
+            raw_reasons = []
         if isinstance(state, str) and state.lower() != "ok":
             reason_list = [
-                reason for reason in run_status.get("reasons", []) if isinstance(reason, str)
+                reason for reason in raw_reasons if isinstance(reason, str)
             ]
             suffix = f" ({', '.join(reason_list)})" if reason_list else ""
             issues.append(f"run_status={state}{suffix}")
@@ -336,6 +387,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.min_dispatch < 0 or args.min_batches < 0:
+        parser.error("--min-dispatch/--min-batches must be non-negative")
+    if args.max_wait_ratio is not None and (
+        not math.isfinite(args.max_wait_ratio)
+        or not 0 <= args.max_wait_ratio <= 1
+    ):
+        parser.error("--max-wait-ratio must be finite and within [0, 1]")
     report_args = _parse_report_args(list(args.reports))
     summaries = [
         summarize_report(

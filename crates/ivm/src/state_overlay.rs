@@ -5,10 +5,12 @@ use iroha_data_model::state_path::StatePath;
 use norito::json;
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
     fs,
-    io::{self, Read as _},
+    io::{self, Read as _, Write as _},
     ops::Bound,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 /// Maximum number of entries retained by one first-release development overlay.
 pub(crate) const STATE_OVERLAY_MAX_ENTRIES_V1: usize = 4_096;
@@ -23,6 +25,7 @@ const STATE_OVERLAY_MAX_BASE64_VALUE_BYTES_V1: usize =
 const STATE_OVERLAY_MAX_RAW_JSON_PATH_BYTES_V1: usize = crate::syscalls::STATE_MAX_PATH_BYTES * 6;
 const STATE_OVERLAY_MAX_RAW_JSON_VALUE_BYTES_V1: usize =
     STATE_OVERLAY_MAX_BASE64_VALUE_BYTES_V1 * 6;
+static STATE_OVERLAY_TEMP_NONCE: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const STATE_OVERLAY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -59,6 +62,9 @@ struct OverlayResourceUsage {
 /// path. Pointer-ABI envelopes exist only at the guest/host boundary.
 /// When a persistence path is provided, the overlay writes a Norito JSON map
 /// `{ path: base64(raw_payload_bytes) }` so test runs can survive VM restarts.
+/// The configured path's ancestor directories are an operator-owned trust
+/// boundary; leaf publication itself is exclusive, single-link checked, and
+/// atomic so a replaced link or special file is never opened for writing.
 #[derive(Clone, Debug, Default)]
 pub struct DurableStateOverlay {
     persist_path: Option<PathBuf>,
@@ -274,9 +280,6 @@ impl DurableStateOverlay {
         if usage.path_bytes != self.path_bytes || usage.value_bytes != self.value_bytes {
             return Err(VMError::NoritoInvalid);
         }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|_| VMError::NoritoInvalid)?;
-        }
         let encoded_len = persisted_json_encoded_len(&self.data)?;
         let mut serialized = String::with_capacity(encoded_len);
         serialized.push('{');
@@ -294,7 +297,8 @@ impl DurableStateOverlay {
         if serialized.len() != encoded_len || serialized.len() > STATE_OVERLAY_MAX_FILE_BYTES_V1 {
             return Err(VMError::NoritoInvalid);
         }
-        fs::write(path, serialized.as_bytes()).map_err(|_| VMError::NoritoInvalid)?;
+        write_persisted_overlay_file(path, serialized.as_bytes())
+            .map_err(|_| VMError::NoritoInvalid)?;
         Ok(())
     }
     fn reload_from_disk(&mut self) -> Result<(), VMError> {
@@ -417,6 +421,196 @@ fn preflight_persisted_json(bytes: &[u8]) -> Result<(), VMError> {
         cursor.skip_whitespace();
     }
 }
+fn write_persisted_overlay_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "durable state overlay path must name a file",
+        )
+    })?;
+    let (temporary_path, mut temporary_file) = (0..128)
+        .find_map(|_| {
+            let nonce = STATE_OVERLAY_TEMP_NONCE.fetch_add(1, Ordering::Relaxed);
+            let mut name = OsString::from(".");
+            name.push(file_name);
+            name.push(format!(".ivm-state-tmp-{}-{nonce}", std::process::id()));
+            let candidate = parent.join(name);
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                options
+                    .mode(0o600)
+                    .custom_flags(STATE_OVERLAY_O_NOFOLLOW_FLAG);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+                options
+                    .share_mode(STATE_OVERLAY_WINDOWS_FILE_SHARE_READ_WRITE_DELETE)
+                    .custom_flags(STATE_OVERLAY_WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT);
+            }
+            match options.open(&candidate) {
+                Ok(file) => Some(Ok((candidate, file))),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .transpose()?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "could not reserve a durable state overlay temporary file",
+            )
+        })?;
+    let result = (|| {
+        validate_persisted_overlay_open_file(&temporary_path, &temporary_file)?;
+        temporary_file.write_all(bytes)?;
+        temporary_file.sync_all()?;
+        let observed_len = temporary_file.metadata()?.len();
+        if observed_len
+            != u64::try_from(bytes.len()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "durable state overlay length cannot be represented",
+                )
+            })?
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "durable state overlay temporary write was incomplete",
+            ));
+        }
+        validate_persisted_overlay_open_file(&temporary_path, &temporary_file)?;
+        validate_persisted_overlay_destination(path)?;
+        replace_persisted_overlay_file(&temporary_path, path)?;
+        sync_overlay_parent_best_effort(parent);
+        Ok(())
+    })();
+    if result.is_err()
+        && validate_persisted_overlay_open_file(&temporary_path, &temporary_file).is_ok()
+    {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
+}
+#[cfg(not(windows))]
+fn validate_persisted_overlay_open_file(path: &Path, file: &fs::File) -> io::Result<()> {
+    let named = fs::symlink_metadata(path)?;
+    let opened = file.metadata()?;
+    if state_overlay_metadata_is_link(&named)
+        || !named.is_file()
+        || !opened.is_file()
+        || !state_overlay_metadata_is_single_link(&named)
+        || !state_overlay_metadata_is_single_link(&opened)
+        || !state_overlay_metadata_identifies_same_file(&named, &opened)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "durable state overlay temporary changed identity or type",
+        ));
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn validate_persisted_overlay_open_file(path: &Path, file: &fs::File) -> io::Result<()> {
+    let opened = state_overlay_windows_file_snapshot(file)?;
+    let named_file = open_state_overlay_windows_file(path)?;
+    let named = state_overlay_windows_file_snapshot(&named_file)?;
+    if !opened.is_direct_single_link_regular_file()
+        || !named.is_direct_single_link_regular_file()
+        || !opened.same_identity(named)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "durable state overlay temporary changed identity or type",
+        ));
+    }
+    Ok(())
+}
+#[cfg(not(windows))]
+fn validate_persisted_overlay_destination(path: &Path) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if state_overlay_metadata_is_link(&metadata)
+        || !metadata.is_file()
+        || !state_overlay_metadata_is_single_link(&metadata)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "durable state overlay destination must be a direct single-link regular file",
+        ));
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn validate_persisted_overlay_destination(path: &Path) -> io::Result<()> {
+    let file = match open_state_overlay_windows_file(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !state_overlay_windows_file_snapshot(&file)?.is_direct_single_link_regular_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "durable state overlay destination must be a direct single-link regular file",
+        ));
+    }
+    Ok(())
+}
+#[cfg(not(windows))]
+fn replace_persisted_overlay_file(temporary_path: &Path, path: &Path) -> io::Result<()> {
+    fs::rename(temporary_path, path)
+}
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn replace_persisted_overlay_file(temporary_path: &Path, path: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    let wide_path = |value: &Path| -> io::Result<Vec<u16>> {
+        let mut wide = value.as_os_str().encode_wide().collect::<Vec<_>>();
+        if wide.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "durable state overlay path contains a null code unit",
+            ));
+        }
+        wide.push(0);
+        Ok(wide)
+    };
+    let temporary_path = wide_path(temporary_path)?;
+    let path = wide_path(path)?;
+    // SAFETY: both slices are null-terminated and remain alive for the call.
+    let succeeded = unsafe {
+        state_overlay_move_file_ex(
+            temporary_path.as_ptr(),
+            path.as_ptr(),
+            STATE_OVERLAY_WINDOWS_MOVEFILE_REPLACE_EXISTING
+                | STATE_OVERLAY_WINDOWS_MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if succeeded == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+#[cfg(unix)]
+fn sync_overlay_parent_best_effort(parent: &Path) {
+    if let Ok(directory) = fs::File::open(parent) {
+        let _ = directory.sync_all();
+    }
+}
+#[cfg(not(unix))]
+fn sync_overlay_parent_best_effort(_parent: &Path) {}
 struct FlatOverlayJsonCursor<'a> {
     bytes: &'a [u8],
     offset: usize,
@@ -482,7 +676,10 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    if state_overlay_metadata_is_link(&named_before) || !named_before.is_file() {
+    if state_overlay_metadata_is_link(&named_before)
+        || !named_before.is_file()
+        || !state_overlay_metadata_is_single_link(&named_before)
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "durable state overlay must be a direct regular file",
@@ -504,6 +701,7 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     let opened_before = file.metadata()?;
     if state_overlay_metadata_is_link(&opened_before)
         || !opened_before.is_file()
+        || !state_overlay_metadata_is_single_link(&opened_before)
         || !state_overlay_metadata_identifies_same_file(&named_before, &opened_before)
         || opened_before.len() > maximum
     {
@@ -519,7 +717,7 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
         )
     })?;
     let mut bytes = Vec::with_capacity(capacity);
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(maximum.saturating_add(1))
         .read_to_end(&mut bytes)?;
     if bytes.len() > STATE_OVERLAY_MAX_FILE_BYTES_V1 {
@@ -535,6 +733,8 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     })?;
     if state_overlay_metadata_is_link(&named_after)
         || !named_after.is_file()
+        || !state_overlay_metadata_is_single_link(&opened_after)
+        || !state_overlay_metadata_is_single_link(&named_after)
         || !state_overlay_metadata_identifies_same_file(&opened_before, &opened_after)
         || !state_overlay_metadata_identifies_same_file(&opened_after, &named_after)
         || opened_before.len() != opened_after.len()
@@ -560,6 +760,10 @@ const STATE_OVERLAY_WINDOWS_FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 const STATE_OVERLAY_WINDOWS_FILE_SHARE_READ_WRITE_DELETE: u32 =
     0x0000_0001 | 0x0000_0002 | 0x0000_0004;
 #[cfg(windows)]
+const STATE_OVERLAY_WINDOWS_MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
+#[cfg(windows)]
+const STATE_OVERLAY_WINDOWS_MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+#[cfg(windows)]
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct StateOverlayWindowsFileTime {
@@ -577,7 +781,7 @@ struct StateOverlayWindowsByHandleFileInformation {
     volume_serial_number: u32,
     file_size_high: u32,
     file_size_low: u32,
-    _number_of_links: u32,
+    number_of_links: u32,
     file_index_high: u32,
     file_index_low: u32,
 }
@@ -594,6 +798,7 @@ struct StateOverlayWindowsFileSnapshot {
     volume_serial_number: u32,
     file_size: u64,
     file_index: u64,
+    number_of_links: u32,
 }
 #[cfg(windows)]
 impl StateOverlayWindowsFileSnapshot {
@@ -602,6 +807,9 @@ impl StateOverlayWindowsFileSnapshot {
             & (STATE_OVERLAY_WINDOWS_FILE_ATTRIBUTE_DIRECTORY
                 | STATE_OVERLAY_WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT)
             == 0
+    }
+    const fn is_direct_single_link_regular_file(self) -> bool {
+        self.is_direct_regular_file() && self.number_of_links == 1
     }
     const fn same_identity(self, other: Self) -> bool {
         self.volume_serial_number == other.volume_serial_number
@@ -622,6 +830,12 @@ unsafe extern "system" {
     fn state_overlay_get_file_information_by_handle(
         file: *mut std::ffi::c_void,
         information: *mut StateOverlayWindowsByHandleFileInformation,
+    ) -> i32;
+    #[link_name = "MoveFileExW"]
+    fn state_overlay_move_file_ex(
+        existing_file_name: *const u16,
+        new_file_name: *const u16,
+        flags: u32,
     ) -> i32;
 }
 #[cfg(windows)]
@@ -659,6 +873,7 @@ fn state_overlay_windows_file_snapshot(
         volume_serial_number: information.volume_serial_number,
         file_size: combine(information.file_size_high, information.file_size_low),
         file_index: combine(information.file_index_high, information.file_index_low),
+        number_of_links: information.number_of_links,
     })
 }
 #[cfg(windows)]
@@ -682,7 +897,7 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
         Err(error) => return Err(error),
     };
     let opened_before = state_overlay_windows_file_snapshot(&file)?;
-    if !opened_before.is_direct_regular_file() {
+    if !opened_before.is_direct_single_link_regular_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "durable state overlay must be a direct regular file",
@@ -700,7 +915,7 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
         )
     })?;
     let mut bytes = Vec::with_capacity(capacity);
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(maximum.saturating_add(1))
         .read_to_end(&mut bytes)?;
     if bytes.len() > STATE_OVERLAY_MAX_FILE_BYTES_V1 {
@@ -715,8 +930,8 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
             "durable state overlay byte count cannot be represented",
         )
     })?;
-    if !opened_after.is_direct_regular_file()
-        || !named_after.is_direct_regular_file()
+    if !opened_after.is_direct_single_link_regular_file()
+        || !named_after.is_direct_single_link_regular_file()
         || !opened_before.same_identity(opened_after)
         || !opened_after.same_identity(named_after)
         || !opened_before.same_revision(opened_after)
@@ -741,6 +956,15 @@ fn state_overlay_metadata_is_link(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 #[cfg(unix)]
+fn state_overlay_metadata_is_single_link(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    metadata.nlink() == 1
+}
+#[cfg(not(any(unix, windows)))]
+fn state_overlay_metadata_is_single_link(_metadata: &fs::Metadata) -> bool {
+    true
+}
+#[cfg(unix)]
 fn state_overlay_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev() && left.ino() == right.ino()
@@ -760,6 +984,86 @@ mod tests {
     use super::*;
     fn path(value: &str) -> StatePath {
         value.parse().expect("canonical state path")
+    }
+    fn temporary_directory(label: &str) -> PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        std::env::temp_dir().join(format!(
+            "ivm_state_overlay_{label}_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time after epoch")
+                .as_nanos()
+        ))
+    }
+    #[cfg(unix)]
+    #[test]
+    fn atomic_flush_rejects_replaced_symlink_without_writing_its_target() {
+        use std::os::unix::fs::symlink;
+        let directory = temporary_directory("symlink_swap");
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        let overlay_path = directory.join("state.json");
+        let victim_path = directory.join("victim.json");
+        let mut overlay = DurableStateOverlay::with_persist_path(overlay_path.clone())
+            .expect("create persisted overlay");
+        overlay
+            .set(&path("seed"), b"one".to_vec())
+            .expect("seed persisted overlay");
+        fs::write(&victim_path, b"do not replace").expect("write victim fixture");
+        fs::remove_file(&overlay_path).expect("remove overlay leaf");
+        symlink(&victim_path, &overlay_path).expect("replace leaf with symlink");
+
+        assert_eq!(
+            overlay.set(&path("second"), b"two".to_vec()),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(fs::read(&victim_path).unwrap(), b"do not replace");
+        assert!(overlay.get_ref(&path("second")).is_none());
+        fs::remove_dir_all(directory).expect("remove temporary directory");
+    }
+    #[test]
+    fn atomic_flush_rejects_replaced_hard_link_without_writing_its_alias() {
+        let directory = temporary_directory("hard_link_swap");
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        let overlay_path = directory.join("state.json");
+        let victim_path = directory.join("victim.json");
+        let mut overlay = DurableStateOverlay::with_persist_path(overlay_path.clone())
+            .expect("create persisted overlay");
+        overlay
+            .set(&path("seed"), b"one".to_vec())
+            .expect("seed persisted overlay");
+        fs::write(&victim_path, b"do not replace").expect("write victim fixture");
+        fs::remove_file(&overlay_path).expect("remove overlay leaf");
+        fs::hard_link(&victim_path, &overlay_path).expect("replace leaf with hard link");
+
+        assert_eq!(
+            overlay.set(&path("second"), b"two".to_vec()),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(fs::read(&victim_path).unwrap(), b"do not replace");
+        assert!(overlay.get_ref(&path("second")).is_none());
+        fs::remove_dir_all(directory).expect("remove temporary directory");
+    }
+    #[test]
+    fn atomic_flush_rejects_replaced_directory_without_blocking() {
+        let directory = temporary_directory("directory_swap");
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        let overlay_path = directory.join("state.json");
+        let mut overlay = DurableStateOverlay::with_persist_path(overlay_path.clone())
+            .expect("create persisted overlay");
+        overlay
+            .set(&path("seed"), b"one".to_vec())
+            .expect("seed persisted overlay");
+        fs::remove_file(&overlay_path).expect("remove overlay leaf");
+        fs::create_dir(&overlay_path).expect("replace leaf with directory");
+
+        assert_eq!(
+            overlay.set(&path("second"), b"two".to_vec()),
+            Err(VMError::NoritoInvalid)
+        );
+        assert!(overlay_path.is_dir());
+        assert!(overlay.get_ref(&path("second")).is_none());
+        fs::remove_dir_all(directory).expect("remove temporary directory");
     }
     #[test]
     fn raw_payload_ingress_enforces_value_bound() {

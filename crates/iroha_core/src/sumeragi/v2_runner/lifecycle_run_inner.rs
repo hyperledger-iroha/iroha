@@ -674,7 +674,6 @@ fn run_lifecycle_active_height(
     output_guard: &Arc<ConsensusOutputGuard>,
     cleanup_supervisor: &mut V2CleanupSupervisor,
     liveness_watchdog: &mut crate::sumeragi::status::V2LivenessWatchdog,
-    npos_vrf: &mut V2NposVrfLifecycle,
     npos_beacon: &mut V2GlobalBeaconLifecycle,
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_server: &mut V2BlockSyncServer,
@@ -693,7 +692,7 @@ fn run_lifecycle_active_height(
     let mut next_block_sync_attempt =
         initial_block_sync_deadline(height_started_at, round_timeout, *eager_block_sync);
     let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval);
-    let mut next_npos_vrf_retransmit = deadline_after(height_started_at, retransmit_interval);
+    let mut next_npos_beacon_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut block_sync_request = None;
     let mut admitted_discovered_commit_qc = false;
     let mut producer_claim = LifecycleProducerClaimDispositionV1::initial();
@@ -808,6 +807,17 @@ fn run_lifecycle_active_height(
                     // dispatched, the decided-lane recovery seam may consume one
                     // authenticated carrier needed to serve or persist that
                     // certified artifact, including while Apply completion waits.
+                    if executor
+                        .local_proposal_directive()?
+                        .decided_subject()
+                        .is_some()
+                    {
+                        let _ = retire_block_sync_request_after_decision(
+                            &mut block_sync_request,
+                            block_sync,
+                            services,
+                        )?;
+                    }
                     if producer_claim.permits_decided_lane_recovery_ingress() {
                         let permit =
                             producer_claim
@@ -878,24 +888,19 @@ fn run_lifecycle_active_height(
                     npos_beacon
                         .begin_round(executor.current_tag().view())
                         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
-                    broadcast_npos_vrf_messages(
+                    broadcast_npos_beacon_messages(
                         npos_beacon.take_outbound(),
                         output_guard.as_ref(),
                         services,
                     )?;
                     let now = Instant::now();
-                    if now >= next_npos_vrf_retransmit {
-                        broadcast_npos_vrf_messages(
-                            npos_vrf.retransmission(),
-                            output_guard.as_ref(),
-                            services,
-                        )?;
-                        broadcast_npos_vrf_messages(
+                    if now >= next_npos_beacon_retransmit {
+                        broadcast_npos_beacon_messages(
                             npos_beacon.retransmission(),
                             output_guard.as_ref(),
                             services,
                         )?;
-                        next_npos_vrf_retransmit = deadline_after(now, retransmit_interval);
+                        next_npos_beacon_retransmit = deadline_after(now, retransmit_interval);
                     }
                     Ok::<_, V2RunnerError>(())
                 },
@@ -910,6 +915,17 @@ fn run_lifecycle_active_height(
             activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, executor, services, local_proposal| {
+                    if executor
+                        .local_proposal_directive()?
+                        .decided_subject()
+                        .is_some()
+                    {
+                        let _ = retire_block_sync_request_after_decision(
+                            &mut block_sync_request,
+                            block_sync,
+                            services,
+                        )?;
+                    }
                     let _ = retry_exact_output_and_apply_sidecar_admissions(
                         &mut lane_work,
                         services,
@@ -1015,7 +1031,6 @@ fn run_lifecycle_active_height(
             block_sync_server,
             block_sync,
             &mut block_sync_request,
-            npos_vrf,
             npos_beacon,
             body_queue_capacity,
             producer_claim,
@@ -1049,6 +1064,17 @@ fn run_lifecycle_active_height(
             activated.with_runner_runtime(
                 &mut active_runner,
                 |owner, executor, services, local_proposal| {
+                    if executor
+                        .local_proposal_directive()?
+                        .decided_subject()
+                        .is_some()
+                    {
+                        let _ = retire_block_sync_request_after_decision(
+                            &mut block_sync_request,
+                            block_sync,
+                            services,
+                        )?;
+                    }
                     let _ = retry_exact_output_and_apply_sidecar_admissions(
                         &mut lane_work,
                         services,
@@ -1106,6 +1132,13 @@ fn run_lifecycle_active_height(
                         control_queue_capacity,
                     )?;
                     let directive = reconcile_executor_locked_body(executor, services)?;
+                    if directive.decided_subject().is_some() {
+                        let _ = retire_block_sync_request_after_decision(
+                            &mut block_sync_request,
+                            block_sync,
+                            services,
+                        )?;
+                    }
                     local_proposal
                         .state
                         .reconcile(LocalProposalOwner::from(directive));
@@ -1255,7 +1288,6 @@ fn run_lifecycle_active_height(
                         executor,
                         services,
                         &mut lane_work,
-                        npos_vrf,
                         npos_beacon,
                         retransmit_interval,
                     )?;
@@ -1412,6 +1444,23 @@ fn run_lifecycle_active_height(
         }
 
         if rollover_ready {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, _local_proposal| {
+                    if executor
+                        .local_proposal_directive()?
+                        .decided_subject()
+                        .is_some()
+                    {
+                        let _ = retire_block_sync_request_after_decision(
+                            &mut block_sync_request,
+                            block_sync,
+                            services,
+                        )?;
+                    }
+                    Ok::<_, V2RunnerError>(())
+                },
+            )?;
             if !finalized_ingress_closed {
                 activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;
                 finalized_ingress_closed = true;
@@ -1695,12 +1744,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
         )?;
         let candidate_limits = candidate_limits(&context, &shared_config)?;
         let local_validator = local_validator_index(&context, &local_peer, config.role)?;
-        let mut npos_vrf = V2NposVrfLifecycle::open(
-            &context,
-            state.as_ref(),
-            local_validator,
-            &common_config.key_pair,
-        )?;
         let mut npos_beacon = V2GlobalBeaconLifecycle::open(
             &context,
             state.as_ref(),
@@ -1723,10 +1766,18 @@ pub(super) fn run_non_pending_lifecycle_loop(
         let consensus_key_hash: [u8; 32] =
             Hash::new(common_config.key_pair.public_key().encode()).into();
         let storage_root = kura.sumeragi_v2_storage_root();
-        let body_store = V2BodyStore::open_with_policy(
+        let body_store_capacity =
+            V2BodyStoreCapacity::new(config.storage.body_store_max_bytes_per_height.get())
+                .map_err(|error| {
+                    V2RunnerError::Effect(super::super::v2_effects::EffectExecutorError::BodyStore(
+                        error.to_string(),
+                    ))
+                })?;
+        let body_store = V2BodyStore::open_with_policy_and_capacity(
             storage_root.join("bodies"),
             context.clone(),
             signature_policy.clone(),
+            body_store_capacity,
         )
         .map_err(|error| {
             V2RunnerError::Effect(super::super::v2_effects::EffectExecutorError::BodyStore(
@@ -2083,12 +2134,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
         activated.with_runner_runtime(
             &mut active_runner,
             |_owner, _executor, services, _local_proposal| {
-                broadcast_npos_vrf_messages(
-                    npos_vrf.take_outbound(),
-                    output_guard.as_ref(),
-                    services,
-                )?;
-                broadcast_npos_vrf_messages(
+                broadcast_npos_beacon_messages(
                     npos_beacon.take_outbound(),
                     output_guard.as_ref(),
                     services,
@@ -2115,7 +2161,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
             &output_guard,
             &mut cleanup_supervisor,
             &mut liveness_watchdog,
-            &mut npos_vrf,
             &mut npos_beacon,
             &mut block_sync,
             block_sync_server

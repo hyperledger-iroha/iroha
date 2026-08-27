@@ -1,4 +1,4 @@
-use ivm::{IVM, ProgramMetadata, cost_of_with_params, encoding, instruction};
+use ivm::{IVM, ProgramMetadata, cost_of_with_vector_len, encoding, instruction};
 fn header() -> Vec<u8> {
     // Enable VECTOR mode to allow vector-related opcodes in the stream,
     // though SETVL/PAR* are logical/no-op and do not require hardware vectors.
@@ -19,9 +19,9 @@ fn setvl_sets_logical_length() {
     vm.load_program(&code).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.vector_length(), 1);
-    // Gas consumed equals cost_of_with_params for SETVL + HALT (0)
+    // Gas consumed equals the vector-aware cost for SETVL + HALT (0).
     let expected =
-        cost_of_with_params(setvl, /*vl*/ 1, 0).expect("valid opcode must have gas cost");
+        cost_of_with_vector_len(setvl, /*vl*/ 1).expect("valid opcode must have gas cost");
     assert_eq!(10 - vm.remaining_gas(), expected);
 }
 #[test]

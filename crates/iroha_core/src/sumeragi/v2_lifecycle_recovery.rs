@@ -6,8 +6,8 @@
 //! the durable payload. The caller may publish the Queue startup gate only after this function
 //! returns its original combined V1 receipt.
 use super::v2_apply::{
-    LaneReservationSnapshotPlannerEvidence, recover_pending_autonomous_lifecycle_terminal_outcome,
-    recover_autonomous_lane_replica_with_queue_disposition,
+    LaneReservationSnapshotPlannerEvidence, recover_autonomous_lane_replica_with_queue_disposition,
+    recover_pending_autonomous_lifecycle_terminal_outcome,
     retire_autonomous_lane_replica_with_queue_disposition,
 };
 use super::v2_core::{

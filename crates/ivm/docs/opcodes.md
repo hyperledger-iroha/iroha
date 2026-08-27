@@ -11,7 +11,7 @@ Bulk helpers like `load_bytes` and `store_bytes` enable efficient block copies u
 
 Conventions and notes
 - Hex values in the tables refer to the primary opcode byte in the wide encoding (8-bit).
-- Mode gating: vector/SIMD instructions execute only when the program header `VECTOR` bit is set; otherwise they deterministically trap with a mode-disabled error. ZK-specific instructions execute only when the `ZK` bit is set. Reserved HTM instructions are disabled unless an explicit feature/mode enables them.
+- Mode gating: vector/SIMD instructions execute only when the program header `VECTOR` bit is set; otherwise they deterministically trap with a mode-disabled error. ZK-specific instructions execute only when the `ZK` bit is set. ABI v1 accepts no other mode bits.
 - Pointer-ABI: instructions that dereference Norito TLV pointers (e.g., signature verify opcodes) follow the pointer-ABI documented in `syscalls.md`/`tlv_examples.md`. Hosts/VM validate TLVs on first dereference and trap on invalid envelopes.
 - Memory: all loads/stores require natural alignment; region permissions (INPUT/OUTPUT/CODE/HEAP/STACK) are enforced uniformly. Misaligned accesses deterministically trap with `MisalignedAccess`.
 - Control flow: `JALR` adds its signed immediate to the register base with 64-bit two's-complement wrapping, then masks the low two bits of the target so control transfers are 4-byte aligned. `JAL` carries `rd` plus a signed 16-bit word offset. `JMP` and `JALS` use the whole low 24 bits as a signed word offset; `JALS` writes its return address to `r1`. Deployable artifacts carrying a `CNTR` interface additionally enforce protected returns: direct calls linking `r1` push the expected return PC onto a host-protected stack, and only canonical `JALR r0, r1, 0` returns may pop it. A mismatch, noncanonical indirect transfer, or depth above 1,024 traps before the target executes. At invocation start the VM captures the aligned initial `r1`; an empty protected stack must return to that exact captured address, which must also be a `HALT` instruction or the host's end-of-code sentinel. Raw code loaded with `IVM::load_code` retains the general opcode semantics for low-level tests and tooling, and each load installs the default non-vector, non-ZK execution profile independently of the previously loaded image.
@@ -152,9 +152,9 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x88 | `AESENC` | AES encryption round |
 | 0x89 | `AESDEC` | AES decryption round |
 | 0x8A | `BLAKE2S` | BLAKE2s compression (rs1=&input[64], writes first 16 bytes to rd/rd+1) |
-| 0x8B | `ED25519VERIFY` | Ed25519 signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0) |
-| 0x8C | `ECDSAVERIFY` | ECDSA (secp256k1) signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0) |
-| 0x8D | `DILITHIUMVERIFY` | Dilithium signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0) |
+| 0x8B | `ED25519VERIFY` | Ed25519 signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
+| 0x8C | `ECDSAVERIFY` | ECDSA (secp256k1) signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
+| 0x8D | `DILITHIUMVERIFY` | Dilithium signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
 | 0x8E | `PAIRING` | BLS12-381 pairing check |
 | 0x8F | `ED25519BATCHVERIFY` | Ordered strict Ed25519 verification using `rs1=&NoritoBytes(Ed25519BatchRequest { entries })`; writes 1/0 to `rd` and the first failing index to `rs2`; accepts 1–512 entries and at most 512 KiB of encoded payload; gas = 500 base + 1 per payload byte + 1,000 per admitted entry |
 
@@ -164,7 +164,7 @@ all public or all private. A mixed public/private tuple traps with
 hash operation is the explicit commitment/declassification boundary.
 
 Notes
-- Vector ops (`VADD*`/`VAND`/`VXOR`/`VOR`/`VROT32`, `LOAD128`/`STORE128`) are available only when the header `VECTOR` bit is set; otherwise a deterministic mode-disabled trap occurs. `SETVL` sets the logical vector length used for gas scaling and ILP vector helpers; it does not change the physical SIMD width.
+- Vector ops (`VADD*`/`VAND`/`VXOR`/`VOR`/`VROT32`, `LOAD128`/`STORE128`) are available only when the header `VECTOR` bit is set; otherwise a deterministic mode-disabled trap occurs. `SETVL` sets the logical vector length used for gas scaling and vector helpers; it does not change the physical SIMD width.
 - Signature verify opcodes and hash/compression ops consume or produce data via TLV pointers when specified; see `syscalls.md` for pointer-ABI TLV layout and examples. Signature verification checks the privacy classification of the complete TLV envelope (header, payload, and checksum) before parsing. A private overlap traps with `PrivacyViolation` rather than being converted into a public false result.
 - Signature-result writes follow the ordinary register rule: selecting `r0` as the result register discards the result and leaves the hardwired zero value and public tag unchanged in every execution path.
 - `ED25519BATCHVERIFY` debits its byte charge before checksum hashing or bounded Norito decoding, then debits the complete entry charge before cryptographic work. It verifies each entry exactly once with strict CPU semantics in canonical input order; optional GPU helper results never participate in opcode acceptance.
@@ -204,10 +204,10 @@ and consensus execution.
 |----:|----------|-------------|
 | 0xA0 | `ASSERT` | Assert zero; private operands are rejected |
 | 0xA1 | `ASSERT_EQ` | Assert registers equal; private operands are rejected |
-| 0xA2 | `FADD` | Field addition |
-| 0xA3 | `FSUB` | Field subtraction |
-| 0xA4 | `FMUL` | Field multiplication |
-| 0xA5 | `FINV` | Field inverse; private operands are rejected because zero is exceptional |
+| 0xA2 | `FADD` | Goldilocks field addition; each raw `u64` operand is reduced modulo the field prime |
+| 0xA3 | `FSUB` | Goldilocks field subtraction; each raw `u64` operand is reduced modulo the field prime |
+| 0xA4 | `FMUL` | Goldilocks field multiplication; each raw `u64` operand is reduced modulo the field prime |
+| 0xA5 | `FINV` | Goldilocks field inverse after reducing the raw `u64` operand; private operands are rejected because zero is exceptional |
 | 0xA6 | `ASSERT_RANGE` | Assert numeric range; private operands are rejected |
 
 For detailed semantics see the `instruction` module in the API reference.

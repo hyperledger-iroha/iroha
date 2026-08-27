@@ -73,6 +73,16 @@ def test_first_release_crypto_module_excludes_camel_case_aliases() -> None:
         assert not hasattr(crypto_module, name)
 
 
+def test_sm2_fixture_generation_requires_the_native_implementation(monkeypatch) -> None:
+    class MissingSm2Fixture:
+        pass
+
+    monkeypatch.setattr(crypto_module, "_crypto", MissingSm2Fixture())
+
+    with pytest.raises(AttributeError, match="sm2_fixture_from_seed"):
+        crypto_module.sm2_fixture_from_seed("1234567812345678", b"seed", b"message")
+
+
 def _signed_byte_array(data: bytes) -> array[int]:
     return array("b", (byte if byte < 128 else byte - 256 for byte in data))
 
@@ -294,6 +304,11 @@ def test_algorithm_labels_reject_empty_strings_across_public_api() -> None:
             call()
 
 
+def test_mldsa_seed_derivation_rejects_empty_input() -> None:
+    with pytest.raises(ValueError, match="ML-DSA seed material must not be empty"):
+        derive_keypair_from_seed(b"", ML_DSA_ALGORITHM)
+
+
 def test_algorithm_labels_reject_surrounding_whitespace_across_public_api() -> None:
     keypair = derive_keypair_from_seed(b"strict algorithm label boundary", ED25519_ALGORITHM)
     message = b"strict algorithm label boundary message"
@@ -382,6 +397,26 @@ def test_algorithm_labels_reject_empty_and_padded_native_inputs(
     ],
 )
 def test_algorithm_labels_reject_control_and_confusable_native_inputs(label: str) -> None:
+    with pytest.raises(ValueError, match="unsupported crypto algorithm"):
+        normalize_crypto_algorithm(label)
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "ml dsa",
+        "ml.dsa",
+        "ml/dsa",
+        "ml@dsa",
+        "ml#dsa",
+        "\u212ad25519",
+        "ML-DSA-44",
+        "ML_DSA_87",
+    ],
+)
+def test_algorithm_labels_reject_punctuation_confusables_and_other_mldsa_suites(
+    label: str,
+) -> None:
     with pytest.raises(ValueError, match="unsupported crypto algorithm"):
         normalize_crypto_algorithm(label)
 

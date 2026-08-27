@@ -1,6 +1,6 @@
 #[test]
 fn network_defaults_carry_maximal_sumeragi_v2_progress_frames() {
-    const MAX_CERTIFIED_BODY_RESPONSE_BYTES: usize = 16_811_581;
+    const MAX_CERTIFIED_BODY_RESPONSE_BYTES: usize = 16_828_108;
     assert_eq!(
         defaults::network::MAX_FRAME_BYTES.get(),
         17 * 1024 * 1024 + defaults::network::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES

@@ -62,13 +62,22 @@ pub(crate) struct MatchedRouteMetadata {
     listener: Option<Listener>,
     effect: Option<RouteEffect>,
     admission: Option<AdmissionPolicy>,
+    private_no_store: bool,
     projections: RouteProjections,
 }
 impl MatchedRouteMetadata {
     /// Metadata used when no router template was selected.
     #[must_use]
     pub(crate) fn unmatched() -> Self {
-        Self::framework("http.route_not_found", "unmatched", None, None, None, None)
+        Self::framework(
+            "http.route_not_found",
+            "unmatched",
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
     }
     /// Stable, bounded route identifier suitable for logs and metric labels.
     #[must_use]
@@ -100,6 +109,11 @@ impl MatchedRouteMetadata {
     pub(crate) const fn admission(&self) -> Option<AdmissionPolicy> {
         self.admission
     }
+    /// Whether the catalog requires every response to be private and non-cacheable.
+    #[must_use]
+    pub(crate) const fn requires_private_no_store(&self) -> bool {
+        self.private_no_store
+    }
     /// Documentation/tooling projections declared by the catalog.
     #[must_use]
     pub(crate) const fn projections(&self) -> RouteProjections {
@@ -114,6 +128,7 @@ impl MatchedRouteMetadata {
             listener: Some(descriptor.listener()),
             effect: Some(descriptor.effect()),
             admission: Some(descriptor.admission()),
+            private_no_store: descriptor.requires_private_no_store(),
             projections: descriptor.projections(),
         }
     }
@@ -124,6 +139,7 @@ impl MatchedRouteMetadata {
         listener: Option<Listener>,
         effect: Option<RouteEffect>,
         admission: Option<AdmissionPolicy>,
+        private_no_store: bool,
     ) -> Self {
         Self {
             stable_route_id,
@@ -132,6 +148,7 @@ impl MatchedRouteMetadata {
             listener,
             effect,
             admission,
+            private_no_store,
             projections: RouteProjections::NONE,
         }
     }
@@ -142,6 +159,7 @@ impl MatchedRouteMetadata {
 pub(crate) struct MountedRouteIndex {
     explicit: Arc<BTreeMap<(&'static str, &'static str), RouteDescriptor>>,
     by_path: Arc<BTreeMap<&'static str, RouteDescriptor>>,
+    private_no_store_paths: Arc<BTreeSet<&'static str>>,
     cors_paths: Arc<BTreeSet<&'static str>>,
 }
 impl MountedRouteIndex {
@@ -170,6 +188,7 @@ impl MountedRouteIndex {
         }
         if method == Method::OPTIONS && self.cors_paths.contains(path_template) {
             let descriptor = self.by_path.get(path_template).copied();
+            let private_no_store = self.private_no_store_paths.contains(path_template);
             return MatchedRouteMetadata::framework(
                 "http.cors_preflight",
                 Arc::<str>::from(path_template),
@@ -177,9 +196,11 @@ impl MountedRouteIndex {
                 descriptor.map(RouteDescriptor::listener),
                 descriptor.map(RouteDescriptor::effect),
                 descriptor.map(RouteDescriptor::admission),
+                private_no_store,
             );
         }
         if let Some(descriptor) = self.by_path.get(path_template) {
+            let private_no_store = self.private_no_store_paths.contains(path_template);
             return MatchedRouteMetadata::framework(
                 "http.method_not_allowed",
                 Arc::<str>::from(path_template),
@@ -187,6 +208,7 @@ impl MountedRouteIndex {
                 Some(descriptor.listener()),
                 Some(descriptor.effect()),
                 Some(descriptor.admission()),
+                private_no_store,
             );
         }
         // Axum selected a path absent from the immutable mounted index. Keep
@@ -199,6 +221,7 @@ impl MountedRouteIndex {
             None,
             None,
             None,
+            false,
         )
     }
 }
@@ -231,6 +254,15 @@ impl MountedRouteManifest {
             .iter()
             .map(|descriptor| (descriptor.path(), *descriptor))
             .collect();
+        // Framework OPTIONS and method-not-allowed responses represent a path rather than one
+        // exact method. Preserve the strictest cache requirement across every method mounted at
+        // that path instead of inheriting whichever descriptor was collected last.
+        let private_no_store_paths = self
+            .explicit_routes
+            .iter()
+            .filter(|descriptor| descriptor.requires_private_no_store())
+            .map(|descriptor| descriptor.path())
+            .collect();
         let cors_paths = self
             .implicit_routes
             .iter()
@@ -243,6 +275,7 @@ impl MountedRouteManifest {
         MountedRouteIndex {
             explicit: Arc::new(explicit),
             by_path: Arc::new(by_path),
+            private_no_store_paths: Arc::new(private_no_store_paths),
             cors_paths: Arc::new(cors_paths),
         }
     }

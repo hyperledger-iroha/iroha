@@ -1225,8 +1225,7 @@ fn remote_hint_free_loser_without_queue_reservation_binds_empty_winner() {
         } else {
             "strict absence"
         };
-        let (mut adapter, keys) =
-            autonomous_test_fixture(wire::ConsensusMode::Permissioned, false);
+        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, false);
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
         prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
@@ -1730,8 +1729,6 @@ pub(in crate::sumeragi) fn historical_autonomous_lane_certificate_fixture()
     assert_eq!(finality_receipt.block_hash(), carrier.hash());
     let committed = ValidBlock::committed_from_replay_signed_block(carrier.clone());
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
-    install_finalized_vrf_epoch(&adapter, adapter.context.epoch, adapter.context.height);
-
     let payload = payload
         .attach_global_hint_exact(
             LaneBlockProposalPayloadHintV1 {
@@ -2200,9 +2197,6 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     );
     let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
-    let historical_epoch = adapter.context.epoch;
-    let historical_height = adapter.context.height;
-    install_finalized_vrf_epoch(&adapter, historical_epoch, historical_height);
     let current_context = adapter.context.clone();
     let mut sidecar_only_successor = successor_context_for_parent(&adapter, &block);
     sidecar_only_successor.epoch = {

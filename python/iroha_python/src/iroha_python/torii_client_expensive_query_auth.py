@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hmac
-from typing import Any
+from typing import Any, Callable
 
 from .crypto import NetworkId
 
@@ -41,3 +41,8 @@ class ToriiClientExpensiveQueryAuthMixin:
             expected_status=(200,),
             context=context,
         )
+    _require_local_signing_context: Callable[..., Any]
+    _require_canonical_auth: Callable[..., Any]
+    _canonical_request_auth: Any
+    _require_exact_i105_account_id: Callable[..., str]
+    _account_request_json: Callable[..., Any]

@@ -298,11 +298,11 @@ for sdk_diagnostics_suite in \
   '    ("python", 129),' \
   '    ("javascript", 88),' \
   '    ("swift", 34),' \
-  '    ("kotlin", 43),' \
-  '    ("java", 42),'; do
+  '    ("kotlin", 44),' \
+  '    ("java", 43),'; do
   require_exact_token "$release_receipt_writer" "$sdk_diagnostics_suite"
 done
-for sdk_diagnostics_test_count in 129 88 34 43 42; do
+for sdk_diagnostics_test_count in 129 88 34 44 43; do
   require_exact_token \
     "$sdk_diagnostics_harness" \
     "    observed_test_count=${sdk_diagnostics_test_count}"

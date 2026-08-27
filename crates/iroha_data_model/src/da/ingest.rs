@@ -1,4 +1,6 @@
 #[cfg(feature = "json")]
+use crate::parameter::CustomParameter;
+#[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
@@ -8,15 +10,459 @@ use crate::{
         FecScheme, MetadataEncryption, MetadataVisibility, RetentionPolicy, StorageTicketId,
     },
     nexus::LaneId,
+    parameter::CustomParameterId,
     sorafs::pin_registry::StorageClass,
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
+#[cfg(feature = "json")]
+use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use thiserror::Error;
 /// Domain separator for version-one DA ingest request signatures.
 pub const DA_INGEST_REQUEST_SIGNING_DOMAIN_V1: &[u8] = b"iroha:da-ingest-request:v1\0";
 /// Domain separator for the immutable request-content commitment carried into consensus.
 pub const DA_INGEST_REQUEST_CONTENT_DOMAIN_V1: &[u8] = b"iroha:da-ingest-request:content:v1\0";
+/// Consensus-wide ceiling for lane/epoch windows retained by DA admission.
+pub const MAX_DA_INGEST_ADMISSION_WINDOWS_V1: usize = 1_024;
+/// Consensus-wide ceiling for lane records retained by DA admission.
+pub const MAX_DA_INGEST_ADMISSION_LANES_V1: usize = 1_024;
+/// Consensus-wide ceiling for producer identities retained by DA admission.
+pub const MAX_DA_INGEST_ADMISSION_PRODUCERS_V1: usize = 4_096;
+/// One incarnation-bound lane entry in the governed DA ingest policy.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct DaIngestAdmissionLaneV1 {
+    /// Exact lane governed by this entry.
+    pub lane_id: LaneId,
+    /// Non-zero commitment identifying the exact active lane incarnation.
+    pub lane_incarnation: Hash,
+    /// Canonically ordered accounts allowed to produce for the admitted epochs.
+    ///
+    /// An empty list is a durable tombstone. Tombstones preserve the epoch
+    /// floor when a lane is disabled or retired, but admit no requests and
+    /// consume no replay-window capacity.
+    pub producers: Vec<AccountId>,
+    /// Current governed producer epoch.
+    pub current_epoch: u64,
+    /// Optional immediately preceding grace epoch.
+    #[norito(required)]
+    pub grace_epoch: Option<u64>,
+}
+impl DaIngestAdmissionLaneV1 {
+    /// Return whether this entry admits an exact producer and epoch.
+    #[must_use]
+    pub fn authorizes(&self, owner: &AccountId, epoch: u64) -> bool {
+        self.admits_epoch(epoch) && self.producers.binary_search(owner).is_ok()
+    }
+
+    /// Return whether this entry retains an exact replay window.
+    #[must_use]
+    pub fn admits_epoch(&self, epoch: u64) -> bool {
+        !self.producers.is_empty()
+            && (epoch == self.current_epoch || self.grace_epoch == Some(epoch))
+    }
+}
+/// Versioned, consensus-replayed producer and epoch policy for DA ingest.
+///
+/// The predecessor commitment gives updates compare-and-swap semantics. Lane
+/// entries are never dropped: an empty producer list acts as a bounded durable
+/// tombstone, preventing an old signed epoch from becoming valid again after a
+/// lane id is retired and later reused.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct DaIngestAdmissionPolicyV1 {
+    /// Payload layout version. This must be [`Self::VERSION`].
+    pub version: u8,
+    /// Strictly increasing policy revision, starting at one.
+    pub revision: u64,
+    /// Exact predecessor policy commitment, absent only for revision one.
+    #[norito(required)]
+    pub expected_previous_policy_hash: Option<Hash>,
+    /// Canonically lane-ordered admission entries and tombstones.
+    pub lanes: Vec<DaIngestAdmissionLaneV1>,
+}
+impl DaIngestAdmissionPolicyV1 {
+    /// Supported admission-policy layout version.
+    pub const VERSION: u8 = 1;
+    /// Reserved custom-parameter identifier for DA ingest admission.
+    pub const PARAMETER_ID_STR: &'static str = "iroha:da_ingest_admission_policy_v1";
+    /// Domain separator for policy commitments.
+    pub const HASH_DOMAIN_V1: &'static [u8] = b"iroha:da-ingest-admission-policy:v1\0";
+
+    /// Construct the reserved on-chain custom-parameter identifier.
+    #[must_use]
+    pub fn parameter_id() -> CustomParameterId {
+        Self::PARAMETER_ID_STR
+            .parse()
+            .expect("valid DA ingest admission custom parameter identifier")
+    }
+
+    /// Compute the canonical domain-separated commitment to this policy.
+    #[must_use]
+    pub fn policy_hash(&self) -> Hash {
+        let encoded = self.encode();
+        Hash::new_from_chunks(&[Self::HASH_DOMAIN_V1, encoded.as_slice()])
+    }
+
+    /// Validate the bounded, canonical shape of this policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DaIngestAdmissionPolicyError`] when the version, ordering,
+    /// incarnation, epoch, or resource bounds are invalid.
+    pub fn validate(&self) -> Result<(), DaIngestAdmissionPolicyError> {
+        if self.version != Self::VERSION {
+            return Err(DaIngestAdmissionPolicyError::UnsupportedVersion {
+                actual: self.version,
+                expected: Self::VERSION,
+            });
+        }
+        if self.revision == 0 {
+            return Err(DaIngestAdmissionPolicyError::ZeroRevision);
+        }
+        if self.lanes.len() > MAX_DA_INGEST_ADMISSION_LANES_V1 {
+            return Err(DaIngestAdmissionPolicyError::TooManyLanes {
+                actual: self.lanes.len(),
+                maximum: MAX_DA_INGEST_ADMISSION_LANES_V1,
+            });
+        }
+        if self
+            .lanes
+            .windows(2)
+            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
+        {
+            return Err(DaIngestAdmissionPolicyError::NonCanonicalLaneOrder);
+        }
+        let mut producers = 0_usize;
+        let mut windows = 0_usize;
+        for lane in &self.lanes {
+            if lane.lane_incarnation.as_ref().iter().all(|byte| *byte == 0) {
+                return Err(DaIngestAdmissionPolicyError::ZeroLaneIncarnation {
+                    lane_id: lane.lane_id,
+                });
+            }
+            if lane.current_epoch == u64::MAX {
+                return Err(DaIngestAdmissionPolicyError::TerminalEpoch {
+                    lane_id: lane.lane_id,
+                });
+            }
+            if lane.producers.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(DaIngestAdmissionPolicyError::NonCanonicalProducerOrder {
+                    lane_id: lane.lane_id,
+                });
+            }
+            producers = producers.saturating_add(lane.producers.len());
+            if producers > MAX_DA_INGEST_ADMISSION_PRODUCERS_V1 {
+                return Err(DaIngestAdmissionPolicyError::TooManyProducers {
+                    actual: producers,
+                    maximum: MAX_DA_INGEST_ADMISSION_PRODUCERS_V1,
+                });
+            }
+            if let Some(grace_epoch) = lane.grace_epoch
+                && grace_epoch.checked_add(1) != Some(lane.current_epoch)
+            {
+                return Err(
+                    DaIngestAdmissionPolicyError::GraceEpochNotImmediatelyPrevious {
+                        lane_id: lane.lane_id,
+                        grace_epoch,
+                        current_epoch: lane.current_epoch,
+                    },
+                );
+            }
+            if !lane.producers.is_empty() {
+                windows = windows.saturating_add(1 + usize::from(lane.grace_epoch.is_some()));
+                if windows > MAX_DA_INGEST_ADMISSION_WINDOWS_V1 {
+                    return Err(DaIngestAdmissionPolicyError::TooManyWindows {
+                        actual: windows,
+                        maximum: MAX_DA_INGEST_ADMISSION_WINDOWS_V1,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate optimistic-concurrency and non-reuse rules against a predecessor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DaIngestAdmissionPolicyError`] when a revision is stale, a
+    /// previous lane tombstone is dropped, or a changed lane does not advance
+    /// its epoch floor.
+    pub fn validate_transition(
+        &self,
+        previous: Option<&Self>,
+    ) -> Result<(), DaIngestAdmissionPolicyError> {
+        self.validate()?;
+        let Some(previous) = previous else {
+            if self.revision != 1 {
+                return Err(DaIngestAdmissionPolicyError::InitialRevisionMismatch {
+                    actual: self.revision,
+                });
+            }
+            if self.expected_previous_policy_hash.is_some() {
+                return Err(DaIngestAdmissionPolicyError::UnexpectedPreviousPolicyHash);
+            }
+            return Ok(());
+        };
+        previous.validate()?;
+        let expected_revision = previous.revision.checked_add(1).ok_or(
+            DaIngestAdmissionPolicyError::RevisionOverflow {
+                previous: previous.revision,
+            },
+        )?;
+        if self.revision != expected_revision {
+            return Err(DaIngestAdmissionPolicyError::RevisionMismatch {
+                actual: self.revision,
+                expected: expected_revision,
+            });
+        }
+        let expected_hash = previous.policy_hash();
+        if self.expected_previous_policy_hash != Some(expected_hash) {
+            return Err(DaIngestAdmissionPolicyError::PreviousPolicyHashMismatch {
+                actual: self.expected_previous_policy_hash,
+                expected: expected_hash,
+            });
+        }
+        for prior in &previous.lanes {
+            let Ok(index) = self
+                .lanes
+                .binary_search_by_key(&prior.lane_id, |lane| lane.lane_id)
+            else {
+                return Err(DaIngestAdmissionPolicyError::PriorLaneDropped {
+                    lane_id: prior.lane_id,
+                });
+            };
+            let next = &self.lanes[index];
+            if next == prior {
+                continue;
+            }
+            if next.current_epoch <= prior.current_epoch {
+                return Err(DaIngestAdmissionPolicyError::EpochDidNotAdvance {
+                    lane_id: prior.lane_id,
+                    previous: prior.current_epoch,
+                    next: next.current_epoch,
+                });
+            }
+            if next.lane_incarnation != prior.lane_incarnation && next.grace_epoch.is_some() {
+                return Err(DaIngestAdmissionPolicyError::CrossIncarnationGrace {
+                    lane_id: prior.lane_id,
+                });
+            }
+            if let Some(grace_epoch) = next.grace_epoch
+                && grace_epoch != prior.current_epoch
+            {
+                return Err(DaIngestAdmissionPolicyError::GraceEpochNotPredecessor {
+                    lane_id: prior.lane_id,
+                    grace_epoch,
+                    previous_epoch: prior.current_epoch,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Find the exact canonical entry for a lane.
+    #[must_use]
+    pub fn lane(&self, lane_id: LaneId) -> Option<&DaIngestAdmissionLaneV1> {
+        self.lanes
+            .binary_search_by_key(&lane_id, |lane| lane.lane_id)
+            .ok()
+            .map(|index| &self.lanes[index])
+    }
+
+    /// Return whether the committed policy authorizes an exact request scope.
+    #[must_use]
+    pub fn authorizes(
+        &self,
+        owner: &AccountId,
+        lane_id: LaneId,
+        lane_incarnation: Hash,
+        epoch: u64,
+    ) -> bool {
+        self.lane(lane_id).is_some_and(|lane| {
+            lane.lane_incarnation == lane_incarnation && lane.authorizes(owner, epoch)
+        })
+    }
+
+    /// Return whether the committed policy retains an exact replay window.
+    #[must_use]
+    pub fn retains(&self, lane_id: LaneId, epoch: u64) -> bool {
+        self.lane(lane_id)
+            .is_some_and(|lane| lane.admits_epoch(epoch))
+    }
+
+    /// Convert this policy into the reserved custom parameter.
+    #[cfg(feature = "json")]
+    #[must_use]
+    pub fn into_custom_parameter(self) -> CustomParameter {
+        CustomParameter::new(Self::parameter_id(), Json::new(self))
+    }
+
+    /// Decode and structurally validate the reserved custom parameter.
+    ///
+    /// Non-matching identifiers return `Ok(None)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::json::Error`] for malformed, unsupported, unbounded,
+    /// or non-canonical payloads.
+    #[cfg(feature = "json")]
+    pub fn from_custom_parameter(
+        custom: &CustomParameter,
+    ) -> Result<Option<Self>, norito::json::Error> {
+        if custom.id() != &Self::parameter_id() {
+            return Ok(None);
+        }
+        let policy = norito::json::from_str::<Self>(custom.payload().get())?;
+        policy
+            .validate()
+            .map_err(|error| norito::json::Error::Message(error.to_string()))?;
+        Ok(Some(policy))
+    }
+}
+/// Validation failures for a governed DA ingest admission policy.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum DaIngestAdmissionPolicyError {
+    /// The payload used an unsupported layout version.
+    #[error("unsupported DA ingest admission policy version {actual}; expected {expected}")]
+    UnsupportedVersion {
+        /// Observed version.
+        actual: u8,
+        /// Supported version.
+        expected: u8,
+    },
+    /// Revision zero is not a valid committed revision.
+    #[error("DA ingest admission policy revision must start at one")]
+    ZeroRevision,
+    /// The initial policy did not use revision one.
+    #[error("initial DA ingest admission policy revision must be one, got {actual}")]
+    InitialRevisionMismatch {
+        /// Observed initial revision.
+        actual: u64,
+    },
+    /// An initial policy unexpectedly named a predecessor.
+    #[error("initial DA ingest admission policy must not name a predecessor hash")]
+    UnexpectedPreviousPolicyHash,
+    /// A revision counter overflowed.
+    #[error("DA ingest admission policy revision cannot advance past {previous}")]
+    RevisionOverflow {
+        /// Previous revision.
+        previous: u64,
+    },
+    /// A successor carried the wrong revision.
+    #[error("DA ingest admission policy revision {actual} does not follow {expected}")]
+    RevisionMismatch {
+        /// Observed revision.
+        actual: u64,
+        /// Required revision.
+        expected: u64,
+    },
+    /// A successor did not bind the exact predecessor.
+    #[error("DA ingest admission policy predecessor hash mismatch")]
+    PreviousPolicyHashMismatch {
+        /// Observed predecessor commitment.
+        actual: Option<Hash>,
+        /// Required predecessor commitment.
+        expected: Hash,
+    },
+    /// The lane vector exceeded the protocol bound.
+    #[error("DA ingest admission policy has {actual} lanes; maximum is {maximum}")]
+    TooManyLanes {
+        /// Observed lane count.
+        actual: usize,
+        /// Protocol maximum.
+        maximum: usize,
+    },
+    /// Lane entries were not strictly ordered.
+    #[error("DA ingest admission lanes are not in canonical lane-id order")]
+    NonCanonicalLaneOrder,
+    /// A lane carried an all-zero incarnation.
+    #[error("DA ingest admission lane {lane_id} has an all-zero incarnation")]
+    ZeroLaneIncarnation {
+        /// Invalid lane.
+        lane_id: LaneId,
+    },
+    /// A lane selected the terminal epoch and could never advance or retire.
+    #[error("DA ingest admission lane {lane_id} cannot use terminal epoch u64::MAX")]
+    TerminalEpoch {
+        /// Invalid lane.
+        lane_id: LaneId,
+    },
+    /// Producer identities were not strictly ordered and unique.
+    #[error("DA ingest admission lane {lane_id} producers are not canonically ordered")]
+    NonCanonicalProducerOrder {
+        /// Invalid lane.
+        lane_id: LaneId,
+    },
+    /// Producer identities exceeded the protocol bound.
+    #[error("DA ingest admission policy has {actual} producers; maximum is {maximum}")]
+    TooManyProducers {
+        /// Observed producer count.
+        actual: usize,
+        /// Protocol maximum.
+        maximum: usize,
+    },
+    /// A grace epoch was not immediately before the current epoch.
+    #[error(
+        "DA ingest admission lane {lane_id} grace epoch {grace_epoch} is not immediately before current epoch {current_epoch}"
+    )]
+    GraceEpochNotImmediatelyPrevious {
+        /// Invalid lane.
+        lane_id: LaneId,
+        /// Observed grace epoch.
+        grace_epoch: u64,
+        /// Current epoch.
+        current_epoch: u64,
+    },
+    /// Retained replay windows exceeded the protocol bound.
+    #[error("DA ingest admission policy retains {actual} windows; maximum is {maximum}")]
+    TooManyWindows {
+        /// Observed retained window count.
+        actual: usize,
+        /// Protocol maximum.
+        maximum: usize,
+    },
+    /// A successor omitted a durable lane tombstone.
+    #[error("DA ingest admission policy dropped prior lane {lane_id}")]
+    PriorLaneDropped {
+        /// Omitted lane.
+        lane_id: LaneId,
+    },
+    /// A changed lane did not advance its epoch floor.
+    #[error(
+        "DA ingest admission lane {lane_id} changed without advancing epoch {previous}; got {next}"
+    )]
+    EpochDidNotAdvance {
+        /// Changed lane.
+        lane_id: LaneId,
+        /// Previous current epoch.
+        previous: u64,
+        /// Successor current epoch.
+        next: u64,
+    },
+    /// A successor carried a grace epoch across a lane incarnation boundary.
+    #[error("DA ingest admission lane {lane_id} cannot carry grace across an incarnation change")]
+    CrossIncarnationGrace {
+        /// Changed lane.
+        lane_id: LaneId,
+    },
+    /// A successor grace epoch did not equal its predecessor current epoch.
+    #[error(
+        "DA ingest admission lane {lane_id} grace epoch {grace_epoch} does not equal predecessor epoch {previous_epoch}"
+    )]
+    GraceEpochNotPredecessor {
+        /// Changed lane.
+        lane_id: LaneId,
+        /// Observed grace epoch.
+        grace_epoch: u64,
+        /// Previous current epoch.
+        previous_epoch: u64,
+    },
+}
 /// One canonical account-controller signature over a DA ingest authorization.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -506,4 +952,135 @@ pub struct DaIngestReceipt {
     pub rent_quote: DaRentQuote,
     /// Signature generated by the Torii DA service.
     pub operator_signature: Signature,
+}
+
+#[cfg(all(test, feature = "json"))]
+mod admission_policy_tests {
+    use super::*;
+    use iroha_crypto::Algorithm;
+
+    fn account(seed: u8) -> AccountId {
+        AccountId::new(
+            KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+    }
+
+    fn lane(
+        lane_id: u32,
+        incarnation: u8,
+        producers: Vec<AccountId>,
+        current_epoch: u64,
+        grace_epoch: Option<u64>,
+    ) -> DaIngestAdmissionLaneV1 {
+        DaIngestAdmissionLaneV1 {
+            lane_id: LaneId::new(lane_id),
+            lane_incarnation: Hash::prehashed([incarnation; Hash::LENGTH]),
+            producers,
+            current_epoch,
+            grace_epoch,
+        }
+    }
+
+    fn initial_policy() -> DaIngestAdmissionPolicyV1 {
+        DaIngestAdmissionPolicyV1 {
+            version: DaIngestAdmissionPolicyV1::VERSION,
+            revision: 1,
+            expected_previous_policy_hash: None,
+            lanes: vec![lane(0, 0xA1, vec![account(0x11)], 7, Some(6))],
+        }
+    }
+
+    #[test]
+    fn admission_policy_roundtrips_and_rejects_arbitrary_epochs() {
+        let policy = initial_policy();
+        policy
+            .validate_transition(None)
+            .expect("canonical initial policy");
+        let custom = policy.clone().into_custom_parameter();
+        let decoded = DaIngestAdmissionPolicyV1::from_custom_parameter(&custom)
+            .expect("decode policy")
+            .expect("matching custom parameter");
+        assert_eq!(decoded, policy);
+        let producer = account(0x11);
+        let incarnation = Hash::prehashed([0xA1; Hash::LENGTH]);
+        assert!(policy.authorizes(&producer, LaneId::new(0), incarnation, 7));
+        assert!(policy.authorizes(&producer, LaneId::new(0), incarnation, 6));
+        assert!(!policy.authorizes(&producer, LaneId::new(0), incarnation, 8));
+        assert!(!policy.authorizes(&account(0x12), LaneId::new(0), incarnation, 7));
+    }
+
+    #[test]
+    fn changed_lane_scope_must_advance_epoch() {
+        let previous = initial_policy();
+        let mut next = previous.clone();
+        next.revision = 2;
+        next.expected_previous_policy_hash = Some(previous.policy_hash());
+        next.lanes[0].producers = vec![account(0x12)];
+        assert!(matches!(
+            next.validate_transition(Some(&previous)),
+            Err(DaIngestAdmissionPolicyError::EpochDidNotAdvance { .. })
+        ));
+        next.lanes[0].current_epoch = 8;
+        next.lanes[0].grace_epoch = Some(7);
+        next.validate_transition(Some(&previous))
+            .expect("producer rotation with an epoch advance");
+    }
+
+    #[test]
+    fn incarnation_rotation_forbids_epoch_reuse_and_grace() {
+        let previous = initial_policy();
+        let mut next = previous.clone();
+        next.revision = 2;
+        next.expected_previous_policy_hash = Some(previous.policy_hash());
+        next.lanes[0].lane_incarnation = Hash::prehashed([0xA2; Hash::LENGTH]);
+        next.lanes[0].current_epoch = 8;
+        next.lanes[0].grace_epoch = Some(7);
+        assert!(matches!(
+            next.validate_transition(Some(&previous)),
+            Err(DaIngestAdmissionPolicyError::CrossIncarnationGrace { .. })
+        ));
+        next.lanes[0].grace_epoch = None;
+        next.validate_transition(Some(&previous))
+            .expect("incarnation rotation with a fresh epoch and no grace");
+    }
+
+    #[test]
+    fn lane_tombstones_cannot_be_dropped_or_retain_capacity() {
+        let previous = initial_policy();
+        let mut tombstone = previous.clone();
+        tombstone.revision = 2;
+        tombstone.expected_previous_policy_hash = Some(previous.policy_hash());
+        tombstone.lanes[0].producers.clear();
+        tombstone.lanes[0].current_epoch = 8;
+        tombstone.lanes[0].grace_epoch = None;
+        tombstone
+            .validate_transition(Some(&previous))
+            .expect("bounded lane tombstone");
+        assert!(!tombstone.retains(LaneId::new(0), 8));
+        let dropped = DaIngestAdmissionPolicyV1 {
+            version: DaIngestAdmissionPolicyV1::VERSION,
+            revision: 3,
+            expected_previous_policy_hash: Some(tombstone.policy_hash()),
+            lanes: Vec::new(),
+        };
+        assert!(matches!(
+            dropped.validate_transition(Some(&tombstone)),
+            Err(DaIngestAdmissionPolicyError::PriorLaneDropped { .. })
+        ));
+    }
+
+    #[test]
+    fn terminal_epoch_is_rejected() {
+        let mut policy = initial_policy();
+        policy.lanes[0].current_epoch = u64::MAX;
+        policy.lanes[0].grace_epoch = Some(u64::MAX - 1);
+        assert_eq!(
+            policy.validate_transition(None),
+            Err(DaIngestAdmissionPolicyError::TerminalEpoch {
+                lane_id: LaneId::new(0),
+            })
+        );
+    }
 }

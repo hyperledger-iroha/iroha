@@ -4051,6 +4051,21 @@ fn authoritative_service_deployment_bundle(
     })?;
     Ok((deployment, bundle))
 }
+fn ensure_authoritative_rollout_draft_supported(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+) -> Result<(), SoracloudError> {
+    let (deployment, bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    if bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+        && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+    {
+        return Err(SoracloudError::bad_request(format!(
+            "service `{}` uses the first-release HttpService+Inrou runtime; staged rollout drafts are not supported; publish an atomic upgrade as the sole current revision",
+            deployment.service_name
+        )));
+    }
+    Ok(())
+}
 fn decode_public_service_discovery_registry(
     entry: &SoraServiceConfigEntryV1,
 ) -> Result<SoracloudPublicServiceDiscoveryRegistryV1, SoracloudError> {
@@ -6173,6 +6188,14 @@ pub(crate) async fn handle_rollout(
         Ok(service_name) => service_name,
         Err(err) => return err.into_response(),
     };
+    {
+        let state_view = app.state.view();
+        if let Err(err) =
+            ensure_authoritative_rollout_draft_supported(state_view.world(), service_name.as_ref())
+        {
+            return err.into_response();
+        }
+    }
     soracloud_draft_response(
         &signer,
         vec![InstructionBox::from(
@@ -8495,7 +8518,6 @@ mod tests {
         bundle.container.entrypoint = "/app/main".to_owned();
         bundle.container.inrou = Some(iroha_data_model::soracloud::SoraInrouManifestV1 {
             schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
-            guest_os: iroha_data_model::soracloud::SoraInrouGuestOsV1::DebianSlim,
             guest_images: BTreeMap::from([
                 (
                     iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
@@ -8503,8 +8525,13 @@ mod tests {
                         kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                         initrd_image_path: None,
-                        distribution: Default::default(),
-                        published_artifact: None,
+                        published_artifact:
+                            iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+                                manifest_digest_hex: "31".repeat(32),
+                                content_cid:
+                                    "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
+                                        .to_owned(),
+                            },
                     },
                 ),
                 (
@@ -8513,13 +8540,16 @@ mod tests {
                         kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                         initrd_image_path: None,
-                        distribution: Default::default(),
-                        published_artifact: None,
+                        published_artifact:
+                            iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+                                manifest_digest_hex: "32".repeat(32),
+                                content_cid:
+                                    "bafyr6ibsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgi"
+                                        .to_owned(),
+                            },
                     },
                 ),
             ]),
-            bootstrap_user_data_path: None,
-            ssh_authorized_keys: vec!["ssh-ed25519 test-key torii-tests".to_owned()],
         });
         bundle.service.execution_plane =
             iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
@@ -8539,7 +8569,7 @@ mod tests {
                 volume_name: "service_state".parse().expect("volume name"),
                 kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::ServiceLeaseVolume,
                 storage_class: StorageClass::Warm,
-                mount_path: "/var/lib/soracloud/service".to_owned(),
+                mount_path: "/var/lib/soracloud/volumes/service_state".to_owned(),
                 max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero volume size"),
             },
         ];
@@ -8594,6 +8624,7 @@ mod tests {
                 |binding| iroha_data_model::soracloud::SoraServiceLeaseVolumeStateV1 {
                     schema_version:
                         iroha_data_model::soracloud::SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
+                    economic_clock: lease.economic_clock,
                     volume_name: binding.volume_name.clone(),
                     kind: binding.kind,
                     storage_class: binding.storage_class,
@@ -10420,6 +10451,32 @@ mod tests {
         assert!(error.message.contains("fails authoritative SCR admission"));
     }
 
+    #[test]
+    fn rollout_draft_rejects_inrou_and_preserves_deterministic_ivm() {
+        use iroha_core::state::World;
+
+        let inrou_bundle = fixture_hosted_http_inrou_bundle("2026.03.0");
+        let inrou_service_name = inrou_bundle.service.service_name.clone();
+        let mut inrou_world = World::new();
+        install_fixture_service(&mut inrou_world, &inrou_bundle, &inrou_service_name);
+        let error = ensure_authoritative_rollout_draft_supported(
+            &inrou_world.view(),
+            inrou_service_name.as_ref(),
+        )
+        .expect_err("first-release Inrou must not expose staged rollout drafts");
+        assert_eq!(error.kind, SoracloudErrorKind::BadRequest);
+        assert!(error.message.contains("HttpService+Inrou"));
+        assert!(error.message.contains("atomic upgrade"));
+        assert!(error.message.contains("sole current revision"));
+
+        let ivm_bundle = fixture_bundle("2026.03.0");
+        let ivm_service_name = ivm_bundle.service.service_name.clone();
+        let mut ivm_world = World::new();
+        install_fixture_service(&mut ivm_world, &ivm_bundle, &ivm_service_name);
+        ensure_authoritative_rollout_draft_supported(&ivm_world.view(), ivm_service_name.as_ref())
+            .expect("deterministic IVM services must retain generic staged rollouts");
+    }
+
     #[tokio::test]
     async fn resolve_public_local_read_route_uses_authoritative_service_route_state() {
         use iroha_core::state::World;
@@ -10461,8 +10518,11 @@ mod tests {
         let service_name = bundle.service.service_name.clone();
         let lease = iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
             schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+            economic_clock:
+                iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
             status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
             quota_class: "taira-open".to_string(),
+            replica_count: bundle.service.replicas,
             deployment_deposit: "1".parse().expect("deployment deposit quantity"),
             prepaid_runtime_balance: "50".parse().expect("prepaid runtime quantity"),
             runtime_price_per_block: "0.00025".parse().expect("runtime price quantity"),
@@ -10499,51 +10559,21 @@ mod tests {
         insert_revision(&mut world, &bundle, bundle.service.service_name.to_string());
         world
             .soracloud_service_deployments_mut_for_testing()
-            .insert(
-            service_name.clone(),
-            SoraServiceDeploymentStateV1 {
-                schema_version:
-                    iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                service_name,
-                current_service_version: bundle.service.service_version.clone(),
-                current_service_manifest_hash: bundle.service_manifest_hash(),
-                current_container_manifest_hash: bundle.container_manifest_hash(),
-                revision_count: 1,
-                process_generation: 1,
-                process_started_sequence: 1,
-                active_rollout: None,
-                last_rollout: None,
-                config_generation: 0,
-                secret_generation: 0,
-                service_configs: BTreeMap::new(),
-                service_secrets: BTreeMap::new(),
-                fhe_policy_records: BTreeMap::new(),
-                service_lease: Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
-                    economic_clock:
-                        iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
-                    status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                    quota_class: "taira-open".to_string(),
-                    replica_count: std::num::NonZeroU16::new(1).expect("nonzero"),
-                    deployment_deposit: "1".parse().expect("deployment deposit quantity"),
-                    prepaid_runtime_balance: "50".parse().expect("prepaid runtime quantity"),
-                    runtime_price_per_block: "0.00025".parse().expect("runtime price quantity"),
-                    storage_price_per_gib_block: "0.000025"
-                        .parse()
-                        .expect("storage price quantity"),
-                    egress_price_per_mib: "0.000005".parse().expect("egress price quantity"),
-                    lease_started_height: 1,
-                    lease_expires_height: 100,
-                    reporting_epoch: 1,
-                    settled_egress_bytes: 0,
-                    egress_reporter_checkpoints: Vec::new(),
-                    accounted_egress_bytes: 0,
-                    last_status_reason: None,
-                }),
-                lease_volume_states: Vec::new(),
-            },
+            .insert(service_name.clone(), deployment.clone());
+        let mut invalid_deployment = deployment;
+        invalid_deployment
+            .lease_volume_states
+            .pop()
+            .expect("hosted deployment has a lease-volume row");
+        let mut invalid_volume_world = World::new();
+        insert_revision(
+            &mut invalid_volume_world,
+            &bundle,
+            bundle.service.service_name.to_string(),
         );
+        invalid_volume_world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(service_name.clone(), invalid_deployment);
 
         let app = mk_app_state_for_tests_with_world(world);
         let route_match = resolve_public_route(&app, "portal.sora", "GET", "/app/v1/health")
@@ -10630,8 +10660,11 @@ mod tests {
                 Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
                     schema_version:
                         iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+                    economic_clock:
+                        iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
                     status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
                     quota_class: "taira-open".to_string(),
+                    replica_count: bundle.service.replicas,
                     deployment_deposit: "1".parse().expect("deployment deposit quantity"),
                     prepaid_runtime_balance: "50".parse().expect("prepaid runtime quantity"),
                     runtime_price_per_block: "0.00025".parse().expect("runtime price quantity"),
@@ -10673,45 +10706,8 @@ mod tests {
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
                         fhe_policy_records: BTreeMap::new(),
-                        service_lease: if bundle.service.execution_plane
-                            == iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
-                        {
-                            Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
-                                schema_version:
-                                    iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
-                                economic_clock: iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
-                                status:
-                                    iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                                quota_class: "taira-open".to_string(),
-                                replica_count: std::num::NonZeroU16::new(1).expect("nonzero"),
-                                deployment_deposit: "1"
-                                    .parse()
-                                    .expect("deployment deposit quantity"),
-                                prepaid_runtime_balance: "50"
-                                    .parse()
-                                    .expect("prepaid runtime quantity"),
-                                runtime_price_per_block: "0.00025"
-                                    .parse()
-                                    .expect("runtime price quantity"),
-                                storage_price_per_gib_block: "0.000025"
-                                    .parse()
-                                    .expect("storage price quantity"),
-                                egress_price_per_mib: "0.000005"
-                                    .parse()
-                                    .expect("egress price quantity"),
-                                lease_started_height: 1,
-                                lease_expires_height: 100,
-                                reporting_epoch: 1,
-                                settled_egress_bytes: 0,
-                                egress_reporter_checkpoints: Vec::new(),
-                                accounted_egress_bytes: 0,
-                                last_status_reason: None,
-                            })
-                        } else {
-                            None
-                        },
-                        lease_volume_states: Vec::new(),
-
+                        service_lease,
+                        lease_volume_states,
                     },
                 );
         }
@@ -10744,15 +10740,18 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn resolve_public_route_rejects_http_service_when_app_event_expires_lease() {
+    async fn resolve_public_route_rejects_http_service_with_expired_lease() {
         use iroha_core::state::World;
         let mut world = World::new();
         let bundle = fixture_hosted_http_inrou_bundle("2026.04.1");
         let service_name = bundle.service.service_name.clone();
         let lease = iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
             schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
-            status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+            economic_clock:
+                iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
+            status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Expired,
             quota_class: "taira-open".to_string(),
+            replica_count: bundle.service.replicas,
             deployment_deposit: "1".parse().expect("deployment deposit quantity"),
             prepaid_runtime_balance: "50".parse().expect("prepaid runtime quantity"),
             runtime_price_per_block: "0.00025".parse().expect("runtime price quantity"),
@@ -10771,55 +10770,33 @@ mod tests {
         world
             .soracloud_service_deployments_mut_for_testing()
             .insert(
-            service_name,
-            SoraServiceDeploymentStateV1 {
-                schema_version:
-                    iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                service_name: bundle.service.service_name.clone(),
-                current_service_version: bundle.service.service_version.clone(),
-                current_service_manifest_hash: bundle.service_manifest_hash(),
-                current_container_manifest_hash: bundle.container_manifest_hash(),
-                revision_count: 1,
-                process_generation: 1,
-                process_started_sequence: 1,
-                active_rollout: None,
-                last_rollout: None,
-                config_generation: 0,
-                secret_generation: 0,
-                service_configs: BTreeMap::new(),
-                service_secrets: BTreeMap::new(),
-                fhe_policy_records: BTreeMap::new(),
-                service_lease: Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
+                service_name,
+                SoraServiceDeploymentStateV1 {
                     schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
-                    economic_clock:
-                        iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
-                    status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                    quota_class: "taira-open".to_string(),
-                    replica_count: std::num::NonZeroU16::new(1).expect("nonzero"),
-                    deployment_deposit: "1".parse().expect("deployment deposit quantity"),
-                    prepaid_runtime_balance: "50".parse().expect("prepaid runtime quantity"),
-                    runtime_price_per_block: "0.00025".parse().expect("runtime price quantity"),
-                    storage_price_per_gib_block: "0.000025"
-                        .parse()
-                        .expect("storage price quantity"),
-                    egress_price_per_mib: "0.000005".parse().expect("egress price quantity"),
-                    lease_started_height: 1,
-                    lease_expires_height: 0,
-                    reporting_epoch: 1,
-                    settled_egress_bytes: 0,
-                    egress_reporter_checkpoints: Vec::new(),
-                    accounted_egress_bytes: 0,
-                    last_status_reason: None,
-                }),
-                lease_volume_states: Vec::new(),
-            },
-        );
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: bundle.service.service_name.clone(),
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
+                    service_lease: Some(lease),
+                    lease_volume_states,
+                },
+            );
 
         let app = mk_app_state_for_tests_with_world(world);
         assert!(
             resolve_public_route(&app, "portal.sora", "GET", "/app/v1/health").is_none(),
-            "an app-infra event at the hosted-lease boundary must fail closed before proxy routing"
+            "an expired hosted lease must fail closed before proxy routing"
         );
     }
     #[tokio::test]

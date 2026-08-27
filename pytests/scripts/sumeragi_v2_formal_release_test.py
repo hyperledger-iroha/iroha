@@ -1185,14 +1185,12 @@ def test_certified_response_source_lineage_mutation_is_release_gated_and_pinned(
     model = (
         formal_dir / "SumeragiV2CertifiedResponseSourceLineageMutation.tla"
     ).read_text(encoding="utf-8")
-    assert (
-        "CertifiedResponse.envelope.citedResponder \\in CommitQc.signers"
-        in model
-    )
+    assert "CertifiedResponse.envelope.responder \\in Validators" in model
+    assert "RotatedArchive \\notin CommitQc.signers" in model
     assert "CertifiedResponse.source \\in CommitQc.signers" in model
     assert (
         'IF Mode = "EmbeddedCitedSignerSurrogate"\n'
-        "  THEN ExplicitCitedResponderOwnsResponse\n"
+        "  THEN AuthenticatedResponderOwnsResponse\n"
         "  ELSE OuterTransportSourceOwnsResponse"
         in model
     )
@@ -1275,22 +1273,18 @@ def test_certified_response_identity_separation_mutation_is_release_gated_and_pi
     ).read_text(encoding="utf-8")
     for field in (
         "via |-> UntrustedRelay",
-        "archiveServer |-> RotatedArchive",
+        "responder |-> RotatedArchive",
         "requestHash |-> ExactRequestHash",
-        "citedResponder |-> FrozenSigner",
     ):
         assert field in model
     assert "routeTarget |-> OriginalRouteTarget" in model
     assert "OriginalRouteTarget \\in CurrentVotingRoster" in model
     assert "RotatedArchive \\notin CurrentVotingRoster" in model
     assert "CurrentVotingPower(RotatedArchive) = 0" in model
-    assert "response.signatureOwner = response.archiveServer" in model
-    assert (
-        "response.citedResponder \\in CertifiedRequest.certificate.signers"
-        in model
-    )
+    assert "response.signatureOwner = response.responder" in model
+    assert "response.responder \\in CurrentArchivePeers" in model
     assert "FrozenSigner \\in CommitQc.signers \\ {Requester}" in model
-    assert "response.archiveServer \\in CommitQc.signers" in model
+    assert "response.responder \\in CommitQc.signers" in model
     assert (
         "WrongRequestPreimage ==\n"
         '  [ExactRequestPreimage EXCEPT !.subject = "different-decided-block-12"]'
@@ -1311,13 +1305,13 @@ def test_certified_response_identity_separation_mutation_is_release_gated_and_pi
     assert (
         "RouteBoundResponseAuthorized(response) ==\n"
         "  /\\ SeparatedResponseAuthorized(response)\n"
-        "  /\\ response.archiveServer = CertifiedRequest.routeTarget"
+        "  /\\ response.responder = CertifiedRequest.routeTarget"
         in model
     )
     for negative in (
         "RequestHashMismatchResponse",
         "CoordinateMismatchResponse",
-        "CitedSignerMismatchResponse",
+        "ResponderIdentityMismatchResponse",
         "RelaySignedResponse",
     ):
         assert f"~SeparatedResponseAuthorized({negative})" in model

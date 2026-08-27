@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from ._account_id import decode_canonical_i105_account_id
 from .governance_proposals import GovernanceProposalKind
@@ -44,6 +44,16 @@ PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1 = (
 PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1 = (
     "iroha.governance.parliament.transition.submit.v1"
 )
+_PARLIAMENT_INSTRUCTION_TYPE_NAME_BY_WIRE_ID_V1 = {
+    PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1: (
+        "iroha_data_model::isi::governance::parliament::"
+        "CreateParliamentGovernanceAttemptV1"
+    ),
+    PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1: (
+        "iroha_data_model::isi::governance::parliament::"
+        "SubmitParliamentLifecycleTransitionV1"
+    ),
+}
 PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1 = (
     "iroha.torii.v1.parliament.timed_ovn_casting_proof.request"
 )
@@ -720,10 +730,17 @@ def _instruction(
     wire_id = _text(record["wire_id"], f"{context}[0].wire_id")
     if wire_id != expected_wire_id:
         raise ValueError(f"{context}[0].wire_id is not the canonical Parliament instruction")
+    try:
+        expected_type_name = _PARLIAMENT_INSTRUCTION_TYPE_NAME_BY_WIRE_ID_V1[
+            expected_wire_id
+        ]
+    except KeyError as exc:
+        raise ValueError(f"{context}[0].wire_id has no exact first-release schema") from exc
     payload_hex = _lower_hex(record["payload_hex"], f"{context}[0].payload_hex")
-    validate_opaque_norito_frame(
+    validate_norito_frame(
         bytes.fromhex(payload_hex),
         context=f"{context}[0].payload_hex",
+        expected_type_name=expected_type_name,
     )
     return ParliamentInstructionDraftV1(wire_id=wire_id, payload_hex=payload_hex)
 
@@ -1531,14 +1548,14 @@ def _validate_certificate_outer(
         "public_finding",
         "ballot",
     }
-    seen_body_instance_ids = set()
-    seen_election_attempt_ids = set()
-    seen_sortition_request_ids = set()
-    seen_ballot_attempt_ids = set()
-    seen_tle_session_ids = set()
-    seen_release_pulse_ids = set()
-    seen_release_slots = set()
-    sortition_pulse_ids = set()
+    seen_body_instance_ids: set[str] = set()
+    seen_election_attempt_ids: set[str] = set()
+    seen_sortition_request_ids: set[str] = set()
+    seen_ballot_attempt_ids: set[str] = set()
+    seen_tle_session_ids: set[str] = set()
+    seen_release_pulse_ids: set[str] = set()
+    seen_release_slots: set[Tuple[str, int]] = set()
+    sortition_pulse_ids: set[str] = set()
     for index, item in enumerate(bindings):
         context = f"certificate.body_bindings[{index}]"
         binding = _exact(item, binding_fields, context)
@@ -2413,6 +2430,14 @@ def _parse_capabilities(value: Any, expected_network_id: str) -> GovernanceCapab
 
 class ParliamentApiV1Mixin:
     """Authenticated, bounded transport methods for the canonical Parliament routes."""
+
+    _canonical_request_headers: Callable[..., Any]
+    _encode_json_body: Callable[..., bytes]
+    _expect_status: Callable[..., None]
+    _request: Callable[..., Any]
+    _require_canonical_auth: Callable[..., Any]
+    _require_exact_i105_account_id: Callable[..., str]
+    _session: Any
 
     def _reject_parliament_ambient_auth(self, context: str) -> None:
         session = self._session

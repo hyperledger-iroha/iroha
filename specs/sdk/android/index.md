@@ -284,12 +284,14 @@ Android-specific follow-up, and the parity evidence bundle so governance can
 confirm AND3’s determinism guarantees.
 
 - StrongBox attestation capture guidelines:
-  `readiness/android_strongbox_attestation_bundle.md` breaks down the bundle
-  layout (`chain.pem`, `challenge.hex`, `alias.txt`) and ties into the
+  `strongbox_attestation_harness_plan.md` breaks down the bundle
+  untrusted evidence layout (`chain.pem`) and separately authenticated alias,
+  challenge, leaf-SPKI digest, and trust-root inventory, and ties into the
   `scripts/android_keystore_attestation.sh` verifier harness for lab workflows.
-- `IrohaKeyManager.generateAttestation(alias, challenge)` requests fresh
-  hardware-backed attestation for an existing alias and surfaces the resulting
-  `KeyAttestation` bundle when the active provider supports it (StrongBox/TEE).
+- Android Keystore challenge binding happens at key creation. Provision a new
+  alias with `KeyGenParameters.setAttestationChallenge(...)`; verification
+  rereads that recorded chain and fails if the challenge, alias key, or
+  separately trusted leaf-SPKI expectation differs.
 - `TransactionBuilder.encodeAndSignEnvelopeWithAttestation(...)` returns an
   `OfflineTransactionBundle` combining the offline envelope and any generated
   attestation so mobile apps can forward both artifacts together.

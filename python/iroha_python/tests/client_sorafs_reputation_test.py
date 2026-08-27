@@ -21,7 +21,7 @@ from iroha_python.client import (
     _SORAFS_REPUTATION_RESPONSE_MAX_BYTES,
     _SORAFS_REPUTATION_SSE_MAX_EVENT_BYTES,
 )
-from iroha_python.crypto import NetworkId
+from iroha_python.crypto import Ed25519KeyPair, NetworkId
 
 from .helpers import StubResponse
 
@@ -213,6 +213,35 @@ class SequencedSession(requests.Session):
 
     def get(self, url: str | bytes, **kwargs: Any) -> requests.Response:
         return self.request("GET", url, **kwargs)
+
+    def send(
+        self, request: requests.PreparedRequest, **kwargs: Any
+    ) -> requests.Response:
+        self.calls.append(
+            {
+                "method": request.method,
+                "url": request.url,
+                "params": {},
+                "headers": dict(request.headers),
+                "data": request.body,
+                "stream": kwargs.get("stream"),
+                "allow_redirects": kwargs.get("allow_redirects"),
+            }
+        )
+        if not self._responses:
+            raise AssertionError("unexpected prepared HTTP request")
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        if (
+            self._honor_stream
+            and kwargs.get("stream") is True
+            and isinstance(response._content, bytes)
+        ):
+            response.raw = io.BytesIO(response._content)
+            response._content = False
+            response._content_consumed = False
+        return response
 
 
 class SseStubResponse(StubResponse):
@@ -519,8 +548,9 @@ def test_sorafs_reputation_rejects_adapter_retries_before_signing() -> None:
 
 
 def test_sorafs_reputation_auth_honors_client_chain_discriminant() -> None:
+    public_key = Ed25519KeyPair.from_private_key(bytes([0x5A]) * 32).public_key
     testnet_account = AccountAddress.from_account(
-        public_key=bytes([0x5A] * 32),
+        public_key=public_key,
     ).to_i105(0x0171)
     session = SequencedSession([StubResponse(200, snapshot_payload())])
     client = ToriiClient(

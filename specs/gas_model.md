@@ -160,18 +160,42 @@ bounds, and every Norito decode limit. A change to any of those values or to
 the charge-point ordering therefore changes `ivm::gas::schedule_hash()` and is
 rejected by the signed peer handshake when validators disagree.
 
-## Vector scaling and HTM retries
+## Direct signature-verification gas
+
+`ED25519VERIFY`, `ECDSAVERIFY`, and `DILITHIUMVERIFY` charge their opcode base
+plus one gas for every payload byte in the message, signature, and public-key
+TLVs:
+
+```text
+gas = opcode_base
+    + message_payload_bytes
+    + signature_payload_bytes
+    + public_key_payload_bytes
+```
+
+The VM validates the three public TLV ranges and debits the complete byte
+surcharge before checksum hashing or cryptographic verification. Operand roles
+are charged independently even when two or more registers alias the same TLV,
+because each role is validated independently. Malformed public pointers and
+unsupported versions found in the fixed TLV header retain the historical
+boolean-failure behavior and consume only the fixed base. A version-1 envelope
+with a malformed checksum is still charged by its declared payload length, and
+a private range always traps instead of being converted into a public result.
+
+The schedule descriptor commits formula version 1 and the per-payload-byte
+rate, so peers with different direct-signature metering derive different
+schedule hashes.
+
+## Vector scaling
 
 - Vector ops (`VADD*`, `VAND`, `VXOR`, `VOR`, `VROT32`) scale with the logical
   vector length set by `SETVL`. The base costs in the table are scaled by
   `min(vector_len, VECTOR_BASE_LANES) / VECTOR_BASE_LANES` (baseline = 2 lanes).
-- HTM retries multiply the cost by `(retries + 1)`; most consensus paths do not
-  incur retries.
 
 ## Canonical opcode gas table
 
 The table below lists the base costs used by `ivm::gas::cost_of`. Vector scaling
-and HTM retries are applied on top of these base values as noted above.
+is applied on top of these base values as noted above.
 
 | Category | Opcode | Mnemonic | Base gas |
 |---|---:|---|---:|

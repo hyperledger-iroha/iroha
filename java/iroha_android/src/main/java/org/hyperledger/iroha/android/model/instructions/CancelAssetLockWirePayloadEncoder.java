@@ -16,7 +16,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /** Canonical native Norito encoder/decoder for {@link CancelAssetLockInstruction}. */
 public final class CancelAssetLockWirePayloadEncoder {
 
-  /** Registered native instruction type and Norito schema path. */
+  /** Canonical native instruction wire identifier. */
   public static final String WIRE_NAME = CancelAssetLockInstruction.WIRE_NAME;
 
   private static final TypeAdapter<Long> UINT32_ADAPTER = NoritoAdapters.uint(32);
@@ -36,14 +36,16 @@ public final class CancelAssetLockWirePayloadEncoder {
   public static byte[] encodePayload(final CancelAssetLockInstruction instruction) {
     return NoritoCodec.encode(
         Objects.requireNonNull(instruction, "instruction"),
-        WIRE_NAME,
+        CancelAssetLockInstruction.SCHEMA_NAME,
         PAYLOAD_ADAPTER);
   }
 
   /** Decode a canonical native {@code CancelAssetLock} Norito frame. */
   public static CancelAssetLockInstruction decodePayload(final byte[] payload) {
     return NoritoCodec.decode(
-        Objects.requireNonNull(payload, "payload"), PAYLOAD_ADAPTER, WIRE_NAME);
+        Objects.requireNonNull(payload, "payload"),
+        PAYLOAD_ADAPTER,
+        CancelAssetLockInstruction.SCHEMA_NAME);
   }
 
   private static final class PayloadAdapter

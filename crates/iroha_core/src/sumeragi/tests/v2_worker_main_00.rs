@@ -87,6 +87,97 @@ fn test_io_command_channel(
     );
     (sender, receiver, admission)
 }
+#[test]
+fn archive_peer_cursor_skips_local_only_batch_and_reaches_rotated_peers() {
+    let mut topology = (0_u8..3)
+        .map(|marker| {
+            PeerId::new(
+                KeyPair::try_from_seed(vec![marker.wrapping_add(40); 32], Algorithm::Ed25519)
+                    .expect("deterministic archive peer")
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    topology.sort();
+    let local = topology[0].clone();
+    let cursor = AtomicUsize::new(0);
+    let snapshot = |start: usize, limit: usize| {
+        let total_peer_count = topology.len();
+        let start = start % total_peer_count;
+        let take = limit.min(total_peer_count);
+        let peer_ids = topology[start..]
+            .iter()
+            .chain(topology[..start].iter())
+            .take(take)
+            .cloned()
+            .collect();
+        let advance = if take == total_peer_count { 1 } else { take };
+        ConfiguredPeerBatch {
+            generation: 1,
+            total_peer_count,
+            peer_ids,
+            next_start_index: (start + advance) % total_peer_count,
+        }
+    };
+    assert_eq!(
+        rotating_current_archive_targets(&local, &cursor, 1, snapshot),
+        vec![topology[1].clone()],
+        "a local-only first batch must be skipped within the same fetch attempt"
+    );
+    assert_eq!(
+        rotating_current_archive_targets(&local, &cursor, 1, snapshot),
+        vec![topology[2].clone()],
+        "the retained cursor must reach a current peer beyond the first batch"
+    );
+}
+#[test]
+fn global_topology_fanout_accepts_current_peer_outside_frozen_roster() {
+    let (service, _) = fixture();
+    let current_archive = PeerId::new(
+        KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
+            .expect("deterministic rotated archive key")
+            .public_key()
+            .clone(),
+    );
+    assert!(
+        service
+            .context
+            .roster
+            .iter()
+            .all(|entry| entry.validator != current_archive)
+    );
+    let request = wire::CommitCertificateRequest {
+        protocol_version: wire::PROTOCOL_VERSION,
+        network_id: service.context.network_id.clone(),
+        context_id: service.context.id(),
+        height: service.context.height,
+        requester: service.local_peer.clone(),
+        signature: vec![0xA1],
+    };
+    let message =
+        ProductionV2Services::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CommitCertificateRequest(request),
+        ))
+        .expect("encode historical discovery request");
+    let fanout = PendingExactFanout::claimed(
+        vec![message],
+        vec![current_archive.clone()],
+        ExactOutputRolloverClaim::GlobalV2(service.exact_output_scope()),
+    )
+    .expect("current archive is a valid topology target")
+    .expect("nonempty current archive fanout");
+    let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("single current-peer slot");
+    assert!(
+        pending
+            .can_enqueue(&fanout)
+            .expect("validate current archive fanout")
+    );
+    pending
+        .enqueue(fanout)
+        .expect("retain current archive outside frozen roster");
+    assert_eq!(pending.fanouts[0].semantic_peers(), vec![current_archive]);
+}
 fn authenticated_serve_request(
     context: &wire::HeightContext,
     requester_key: &KeyPair,
@@ -204,7 +295,7 @@ fn certified_serve_response(
         request_hash: request.request_hash(),
         manifest,
         body,
-        responder: 0,
+        responder: PeerId::new(responder_key.public_key().clone()),
         signature: Vec::new(),
     };
     response.signature =
@@ -346,6 +437,10 @@ impl EffectRuntime for SaturatedCompletionRuntime {
         ingress_ownership: &FairV2IngressOwnershipEvidence,
     ) -> bool {
         self.admits_network_ingress
+            && matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            )
             && ingress_ownership.validate_exact()
             && ingress_ownership.matches_message(&BlockMessage::V2(message.clone()))
     }
@@ -767,6 +862,7 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         local_validator: Some(0),
         key_pair: keys[0].clone(),
         network: crate::IrohaNetwork::closed_for_tests(),
+        archive_peer_cursor: AtomicUsize::new(0),
         kura,
         chunk_root: PathBuf::new(),
         io: None,

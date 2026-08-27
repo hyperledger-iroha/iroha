@@ -256,7 +256,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
             request_hash: HashOf::new(&body_request),
             manifest: manifest.clone(),
             body: body.to_vec(),
-            responder: 0,
+            responder: context.roster[0].validator.clone(),
             signature: vec![3],
         }),
     );

@@ -42,7 +42,9 @@ pub mod isi {
         asset::{
             CanBurnAsset, CanBurnAssetWithDefinition, CanMintAssetToAccount,
             CanMintAssetWithDefinition, CanModifyAssetMetadata,
-            CanModifyAssetMetadataWithDefinition, CanTransferAsset, CanTransferAssetWithDefinition,
+            CanModifyAssetMetadataWithDefinition, CanSetAssetHoldingLimit,
+            CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit, CanTransferAsset,
+            CanTransferAssetWithDefinition,
         },
         asset_definition::{
             AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
@@ -57,10 +59,14 @@ pub mod isi {
             CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
             CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         },
-        nexus::{CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram},
+        nexus::{
+            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
+            CanPublishSpaceDirectoryManifestForAccountDomain,
+        },
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
         peer::CanManageLaneRelayEmergency,
         sccp::CanProposeSccpRouteGovernance,
+        settlement::CanExecuteSettlement,
         smart_contract::CanRegisterSmartContractCode,
     };
     use std::{
@@ -382,6 +388,165 @@ pub mod isi {
                     "invalid ivm_gas_units_per_gas volatility `{value}` for asset `{}`",
                     rate.asset
                 )));
+            }
+        }
+        Ok(())
+    }
+    fn validate_hijiri_parameters(
+        custom: &iroha_data_model::parameter::CustomParameter,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::hijiri::{HijiriAccountRiskV1, HijiriParametersV1};
+
+        if let Some(next) = HijiriParametersV1::from_custom_parameter(custom).map_err(|error| {
+            invalid_smart_contract_parameter(format!("invalid Hijiri parameters: {error}"))
+        })? {
+            let previous = state_transaction
+                .world
+                .parameters
+                .get()
+                .custom()
+                .get(custom.id())
+                .map(|previous| {
+                    HijiriParametersV1::from_custom_parameter(previous)
+                        .map_err(|error| {
+                            invalid_smart_contract_parameter(format!(
+                                "active Hijiri parameters are malformed: {error}"
+                            ))
+                        })?
+                        .ok_or_else(|| {
+                            invalid_smart_contract_parameter(
+                                "active Hijiri parameter changed its reserved identity",
+                            )
+                        })
+                })
+                .transpose()?;
+            return HijiriParametersV1::validate_transition(previous.as_ref(), &next).map_err(
+                |error| {
+                    invalid_smart_contract_parameter(format!(
+                        "invalid Hijiri parameter transition: {error}"
+                    ))
+                },
+            );
+        }
+
+        let Some(next) = HijiriAccountRiskV1::from_custom_parameter(custom).map_err(|error| {
+            invalid_smart_contract_parameter(format!("invalid Hijiri account-risk record: {error}"))
+        })?
+        else {
+            return Ok(());
+        };
+        let previous = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(custom.id())
+            .map(|previous| {
+                HijiriAccountRiskV1::from_custom_parameter(previous)
+                    .map_err(|error| {
+                        invalid_smart_contract_parameter(format!(
+                            "active Hijiri account-risk record is malformed: {error}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        invalid_smart_contract_parameter(
+                            "active Hijiri account-risk record changed its reserved identity",
+                        )
+                    })
+            })
+            .transpose()?;
+        HijiriAccountRiskV1::validate_transition(previous.as_ref(), &next).map_err(|error| {
+            invalid_smart_contract_parameter(format!(
+                "invalid Hijiri account-risk transition: {error}"
+            ))
+        })
+    }
+    fn validate_da_ingest_admission_policy(
+        custom: &iroha_data_model::parameter::CustomParameter,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1;
+
+        let Some(next) =
+            DaIngestAdmissionPolicyV1::from_custom_parameter(custom).map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid DA ingest admission policy: {error}"
+                ))
+            })?
+        else {
+            return Ok(());
+        };
+        let previous = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(custom.id())
+            .map(|previous| {
+                DaIngestAdmissionPolicyV1::from_custom_parameter(previous)
+                    .map_err(|error| {
+                        invalid_smart_contract_parameter(format!(
+                            "active DA ingest admission policy is malformed: {error}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        invalid_smart_contract_parameter(
+                            "active DA ingest admission policy changed its reserved identity",
+                        )
+                    })
+            })
+            .transpose()?;
+        next.validate_transition(previous.as_ref())
+            .map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid DA ingest admission policy transition: {error}"
+                ))
+            })?;
+        for lane in &next.lanes {
+            if let Some(owner) = lane
+                .producers
+                .iter()
+                .find(|owner| state_transaction.world.accounts.get(*owner).is_none())
+            {
+                return Err(invalid_smart_contract_parameter(format!(
+                    "DA ingest admission lane {} names unknown producer {owner}",
+                    lane.lane_id
+                )));
+            }
+            match state_transaction
+                .lane_incarnation_at_height(lane.lane_id, state_transaction.block_height())
+            {
+                Some(incarnation) if incarnation == lane.lane_incarnation => {}
+                Some(incarnation) => {
+                    return Err(invalid_smart_contract_parameter(format!(
+                        "DA ingest admission lane {} binds incarnation {}, but the active incarnation is {}",
+                        lane.lane_id, lane.lane_incarnation, incarnation
+                    )));
+                }
+                None if !lane.producers.is_empty() => {
+                    return Err(invalid_smart_contract_parameter(format!(
+                        "DA ingest admission lane {} is inactive but still has producers",
+                        lane.lane_id
+                    )));
+                }
+                None => {
+                    let Some(previous_lane) = previous
+                        .as_ref()
+                        .and_then(|policy| policy.lane(lane.lane_id))
+                    else {
+                        return Err(invalid_smart_contract_parameter(format!(
+                            "DA ingest admission policy introduced tombstone for unknown inactive lane {}",
+                            lane.lane_id
+                        )));
+                    };
+                    if previous_lane.lane_incarnation != lane.lane_incarnation {
+                        return Err(invalid_smart_contract_parameter(format!(
+                            "DA ingest admission tombstone for lane {} changed its inactive incarnation",
+                            lane.lane_id
+                        )));
+                    }
+                }
             }
         }
         Ok(())
@@ -11005,6 +11170,34 @@ pub mod isi {
             ..crate::state::SccpVerifierWorkV1::default()
         })
     }
+    fn sccp_bsc_native_verifier_work(
+        estimate: iroha_sccp::BscNativeFinalityWorkEstimateV1,
+    ) -> crate::state::SccpVerifierWorkV1 {
+        crate::state::SccpVerifierWorkV1 {
+            native_headers: u64::from(estimate.continuation_headers),
+            native_header_bytes: u64::from(estimate.framed_header_bytes),
+            secp256k1_recoveries: u64::from(estimate.secp256k1_recoveries),
+            bls_aggregate_checks: u64::from(estimate.bls_aggregate_checks_upper_bound),
+            bls_signer_contributions: u64::from(estimate.bls_signer_contributions_upper_bound),
+            ..crate::state::SccpVerifierWorkV1::default()
+        }
+    }
+    /// Project BSC verifier-work counters through the production mapper for isolated tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn sccp_bsc_native_verifier_work_fields_for_testing(
+        estimate: iroha_sccp::BscNativeFinalityWorkEstimateV1,
+    ) -> [u64; 5] {
+        let work = sccp_bsc_native_verifier_work(estimate);
+        [
+            work.native_headers,
+            work.native_header_bytes,
+            work.secp256k1_recoveries,
+            work.bls_aggregate_checks,
+            work.bls_signer_contributions,
+        ]
+    }
     fn sccp_native_verifier_work(
         decoded: &iroha_sccp::SccpNativeInboundMessageProofV1,
         encoded_envelope_len: usize,
@@ -11050,25 +11243,7 @@ pub mod isi {
                             "SCCP BSC native proof exceeds verifier work bounds: {error:?}"
                         ))
                     })?;
-                // The governed anchor can validate active, pending, and header-embedded
-                // 64-validator rosters. Across the admitted 1,004-header interval at most two
-                // continuation epoch rosters can also be decoded. Attestation contributions are
-                // already covered by the estimator's 64-per-header term, so five extra rosters
-                // conservatively cover all independent public-key validation passes.
-                let bls_signer_contributions =
-                    u64::from(estimate.bls_signer_contributions_upper_bound)
-                        .checked_add(5 * 64)
-                        .ok_or_else(|| {
-                            invalid_bridge_proof("SCCP BSC BLS work estimate overflow")
-                        })?;
-                Ok(crate::state::SccpVerifierWorkV1 {
-                    native_headers: u64::from(estimate.continuation_headers),
-                    native_header_bytes: u64::from(estimate.framed_header_bytes),
-                    secp256k1_recoveries: u64::from(estimate.secp256k1_recoveries),
-                    bls_aggregate_checks: u64::from(estimate.bls_aggregate_checks_upper_bound),
-                    bls_signer_contributions,
-                    ..crate::state::SccpVerifierWorkV1::default()
-                })
+                Ok(sccp_bsc_native_verifier_work(estimate))
             }
             SccpNativeSourceProofV1::SolanaAgave(_) => {
                 sccp_solana_native_verifier_work(encoded_envelope_len)
@@ -11084,6 +11259,23 @@ pub mod isi {
                     native_headers: u64::from(estimate.continuation_headers),
                     native_header_bytes: u64::from(estimate.framed_header_bytes),
                     secp256k1_recoveries: u64::from(estimate.secp256k1_recoveries),
+                    ..crate::state::SccpVerifierWorkV1::default()
+                })
+            }
+            SccpNativeSourceProofV1::TonMasterchain(proof) => {
+                let estimate =
+                    iroha_sccp::ton_native_source_work_estimate(proof).map_err(|error| {
+                        invalid_bridge_proof(format!(
+                            "SCCP TON native proof exceeds verifier work bounds: {error:?}"
+                        ))
+                    })?;
+                Ok(crate::state::SccpVerifierWorkV1 {
+                    native_headers: u64::from(estimate.continuation_blocks),
+                    native_header_bytes: u64::from(estimate.framed_boc_bytes),
+                    ed25519_signature_checks: u64::from(estimate.ed25519_signature_checks),
+                    ed25519_validator_key_checks: u64::from(
+                        estimate.validator_key_checks_upper_bound,
+                    ),
                     ..crate::state::SccpVerifierWorkV1::default()
                 })
             }
@@ -11243,6 +11435,10 @@ pub mod isi {
                 // Bounded parsing exposes the replay key, so exact replay consumes no verifier work.
                 // The one-proof transaction cap prevents this conservative reservation from
                 // crowding out another legitimate proof.
+                let (bn254_pairing_checks, bls12_381_pairing_checks) = match parsed.crypto_work() {
+                    iroha_sccp::SccpDestinationProofCryptoWorkV1::Groth16Bn254Pairing => (1, 0),
+                    iroha_sccp::SccpDestinationProofCryptoWorkV1::Groth16Bls12381Pairing => (0, 1),
+                };
                 state_transaction.register_sccp_proof(
                     proof_size,
                     crate::state::SccpVerifierWorkV1 {
@@ -11255,7 +11451,8 @@ pub mod isi {
                         .ok_or_else(|| {
                             invalid_bridge_proof("SCCP Taira validator work bound overflows u64")
                         })?,
-                        bn254_pairing_checks: 1,
+                        bn254_pairing_checks,
+                        bls12_381_pairing_checks,
                         ..crate::state::SccpVerifierWorkV1::default()
                     },
                 )?;
@@ -12027,18 +12224,29 @@ pub mod isi {
         route: &iroha_data_model::bridge::SccpGovernedRouteV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let verifying_key = match route.destination {
+        let verifying_key_is_well_formed = match route.destination {
             iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(deployment) => {
-                deployment.verifying_key
+                iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                    &deployment.verifying_key,
+                )
             }
             iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(deployment) => {
-                deployment.verifying_key
+                iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                    &deployment.verifying_key,
+                )
             }
             iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(deployment) => {
-                deployment.verifying_key
+                iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                    &deployment.verifying_key,
+                )
+            }
+            iroha_data_model::bridge::SccpDestinationDeploymentV1::Ton(deployment) => {
+                iroha_sccp::sccp_groth16_bls12381_verifying_key_is_well_formed_v1(
+                    &deployment.verifying_key,
+                )
             }
         };
-        if !iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(&verifying_key) {
+        if !verifying_key_is_well_formed {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "SCCP governed Groth16 key contains an invalid curve, infinity, or subgroup point"
@@ -12440,6 +12648,18 @@ pub mod isi {
                         )
                     })?;
                 let route = &payload.lanes[lane_index].routes[route_index];
+                if matches!(
+                    route.source_identity.emitter,
+                    iroha_data_model::bridge::SccpSourceEmitterV1::Tron(_)
+                ) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "registered TRON SCCP route revisions cannot be removed because their immutable addresses remain replay boundaries"
+                                .to_owned(),
+                        ),
+                    )
+                    .into());
+                }
                 if route.activation != iroha_data_model::bridge::SccpRouteActivationV1::Staged
                     || sccp_route_has_durable_history(route, state_transaction)?
                 {
@@ -12463,6 +12683,18 @@ pub mod isi {
             }
         };
         commit_sccp_registry_action(state_transaction, payload, operation, lane_id, event_route)
+    }
+    /// Exercise the production SCCP route-removal path from isolated integration tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[doc(hidden)]
+    pub fn remove_sccp_route_for_testing(
+        key: iroha_data_model::bridge::SccpRouteKeyV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        apply_sccp_route_governance_action(
+            bridge::SccpRouteGovernanceActionV1::Remove(key),
+            state_transaction,
+        )
     }
     impl Execute for bridge::ApplySccpRouteGovernance {
         fn execute(
@@ -17541,6 +17773,7 @@ pub mod isi {
         permission: &Permission,
         domain_id: &DomainId,
         asset_definition_ids: &BTreeSet<AssetDefinitionId>,
+        domain_dataspace: Option<DataSpaceId>,
     ) -> bool {
         let asset_definition_matches_domain = |asset_definition: &AssetDefinitionId| -> bool {
             asset_definition_ids.contains(asset_definition)
@@ -17628,6 +17861,27 @@ pub mod isi {
         if let Ok(permission) = CanModifyAssetMetadata::try_from(permission) {
             return asset_definition_matches_domain(permission.asset.definition());
         }
+        if let Ok(permission) = CanSetAssetTransferAvailability::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
+        }
+        if let Ok(permission) = CanSetAssetTransferDailyLimit::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition)
+                || domain_dataspace.is_some_and(|dataspace| {
+                    permission.account_dataspace == dataspace
+                        && permission.account_domain.name() == domain_id.name()
+                });
+        }
+        if let Ok(permission) = CanSetAssetHoldingLimit::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
+        }
+        if let Ok(permission) = CanExecuteSettlement::try_from(permission) {
+            return asset_definition_matches_domain(permission.debited_asset.definition());
+        }
+        if let Ok(permission) =
+            CanPublishSpaceDirectoryManifestForAccountDomain::try_from(permission)
+        {
+            return &permission.domain == domain_id;
+        }
         if let Ok(permission) = CanRegisterNft::try_from(permission) {
             return &permission.domain == domain_id;
         }
@@ -17646,6 +17900,7 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         domain_id: &DomainId,
         asset_definition_ids: &BTreeSet<AssetDefinitionId>,
+        domain_dataspace: Option<DataSpaceId>,
     ) {
         let account_ids: Vec<AccountId> = state_transaction
             .world
@@ -17660,7 +17915,12 @@ pub mod isi {
                 .get(&account_id)
                 .is_some_and(|permissions| {
                     permissions.iter().any(|permission| {
-                        is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                        is_permission_domain_associated(
+                            permission,
+                            domain_id,
+                            asset_definition_ids,
+                            domain_dataspace,
+                        )
                     })
                 });
             if !should_remove {
@@ -17672,7 +17932,12 @@ pub mod isi {
                 .get_mut(&account_id)
             {
                 permissions.retain(|permission| {
-                    !is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                    !is_permission_domain_associated(
+                        permission,
+                        domain_id,
+                        asset_definition_ids,
+                        domain_dataspace,
+                    )
                 });
                 permissions.is_empty()
             } else {
@@ -17699,7 +17964,12 @@ pub mod isi {
                 .get(&role_id)
                 .is_some_and(|role| {
                     role.permissions().any(|permission| {
-                        is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                        is_permission_domain_associated(
+                            permission,
+                            domain_id,
+                            asset_definition_ids,
+                            domain_dataspace,
+                        )
                     })
                 });
             if !should_remove {
@@ -17708,7 +17978,12 @@ pub mod isi {
             let impacted_accounts = state_transaction.accounts_with_role(&role_id);
             if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
                 role.permissions.retain(|permission| {
-                    !is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                    !is_permission_domain_associated(
+                        permission,
+                        domain_id,
+                        asset_definition_ids,
+                        domain_dataspace,
+                    )
                 });
                 role.permission_epochs
                     .retain(|permission, _| role.permissions.contains(permission));
@@ -17952,10 +18227,16 @@ pub mod isi {
                     .into());
                 }
             }
+            let domain_dataspace = state_transaction
+                .nexus
+                .dataspace_catalog
+                .by_alias(domain_id.dataspace().as_ref())
+                .map(|entry| entry.id);
             remove_domain_associated_permissions(
                 state_transaction,
                 &domain_id,
                 &remove_asset_definitions,
+                domain_dataspace,
             );
             state_transaction
                 .world
@@ -18522,6 +18803,8 @@ pub mod isi {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
                 validate_governed_pipeline_gas_parameter(custom)?;
+                validate_hijiri_parameters(custom, state_transaction)?;
+                validate_da_ingest_admission_policy(custom, state_transaction)?;
                 validate_reputation_archive_retention_request(custom, state_transaction)?;
                 match iroha_data_model::nexus::LaneLifecycleParameterV1::from_custom_parameter(
                     custom,
@@ -19157,11 +19440,10 @@ pub mod isi {
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
             let release_height = 41;
-            let (key_record, pulse) =
-                crate::beacon::tests::signed_persisted_pulse_fixture_for_world(
-                    state_transaction.network_id,
-                    release_height,
-                );
+            let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
+                state_transaction.network_id,
+                release_height,
+            );
             state_transaction
                 .world
                 .global_beacon_key_sessions
@@ -20859,6 +21141,66 @@ pub mod isi {
                 Some(&zero_rate)
             );
         });
+        world_test!(set_parameter_enforces_hijiri_global_and_account_lineage {
+            use iroha_data_model::hijiri::{
+                FeeMultiplierBand, HijiriAccountRiskV1, HijiriFeePolicy, HijiriParametersV1,
+                Q16,
+            };
+            blank_test_state_transaction!(checked state, block, stx);
+            let fee_policy = || {
+                HijiriFeePolicy::new(
+                    vec![FeeMultiplierBand::new(Q16::ONE, Q16::ONE)
+                        .expect("unit multiplier")],
+                    Q16::ONE,
+                )
+                .expect("valid fee policy")
+            };
+
+            let first = HijiriParametersV1::try_new(1, None, fee_policy(), Q16::ONE)
+                .expect("initial Hijiri parameters");
+            SetParameter::new(Parameter::Custom(first.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "install initial Hijiri parameters");
+            let second = HijiriParametersV1::try_new(
+                2,
+                Some(first.digest().expect("initial digest")),
+                fee_policy(),
+                Q16::ZERO,
+            )
+            .expect("successor Hijiri parameters");
+            SetParameter::new(Parameter::Custom(second.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "install strict Hijiri successor");
+            let replay_error = SetParameter::new(Parameter::Custom(second.into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("replayed Hijiri revision must fail");
+            assert!(
+                replay_error.to_string().contains("expected Hijiri parameter revision 3"),
+                "unexpected replay rejection: {replay_error}"
+            );
+
+            let first_risk =
+                HijiriAccountRiskV1::try_new(ALICE_ID.clone(), 1, None, Q16::ZERO)
+                    .expect("initial account risk");
+            SetParameter::new(Parameter::Custom(
+                first_risk
+                    .clone()
+                    .into_custom_parameter()
+                    .expect("risk custom parameter"),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "install initial account risk");
+            let second_risk = HijiriAccountRiskV1::try_new(
+                ALICE_ID.clone(),
+                2,
+                Some(first_risk.digest().expect("initial risk digest")),
+                Q16::ONE,
+            )
+            .expect("successor account risk");
+            SetParameter::new(Parameter::Custom(
+                second_risk
+                    .into_custom_parameter()
+                    .expect("risk successor custom parameter"),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "install strict account-risk successor");
+        });
         fn fee_sponsor_relay_allocation_fixture(
             program_id: iroha_data_model::nexus::FeeSponsorProgramId,
             asset_definition_id: AssetDefinitionId,
@@ -21202,6 +21544,26 @@ pub mod isi {
                 }
             );
         });
+        world_test!(bsc_native_verifier_work_uses_complete_sccp_estimate {
+            let estimate = iroha_sccp::BscNativeFinalityWorkEstimateV1 {
+                continuation_headers: 11,
+                framed_header_bytes: 12,
+                secp256k1_recoveries: 13,
+                bls_aggregate_checks_upper_bound: 14,
+                bls_signer_contributions_upper_bound: 15,
+            };
+            assert_eq!(
+                sccp_bsc_native_verifier_work(estimate),
+                crate::state::SccpVerifierWorkV1 {
+                    native_headers: 11,
+                    native_header_bytes: 12,
+                    secp256k1_recoveries: 13,
+                    bls_aggregate_checks: 14,
+                    bls_signer_contributions: 15,
+                    ..crate::state::SccpVerifierWorkV1::default()
+                }
+            );
+        });
         fn test_active_eth_registry() -> crate::state::SccpOnChainRegistryV1 {
             let (_, source_identity, trust_anchor) =
                 iroha_sccp::sccp_native_ethereum_inbound_test_fixture_v1();
@@ -21229,6 +21591,123 @@ pub mod isi {
                 }],
             }
         }
+        fn test_staged_tron_registry() -> crate::state::SccpOnChainRegistryV1 {
+            use iroha_data_model::bridge::{
+                SccpDestinationDeploymentV1, SccpGovernedLaneV1, SccpLaneIdV1, SccpNetworkV1,
+                SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronDestinationDeploymentV1,
+                SccpTronSourceEmitterV1,
+            };
+
+            let mut route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                SccpNetworkV1::EthereumMainnet,
+                iroha_data_model::bridge::SccpRouteActivationV1::Staged,
+            );
+            let SccpDestinationDeploymentV1::Evm(evm) = route.destination else {
+                panic!("exact EVM fixture must carry an EVM deployment")
+            };
+            let deployment = SccpTronDestinationDeploymentV1 {
+                token_address: evm.token_address,
+                token_code_hash: evm.token_code_hash,
+                verifier_address: evm.verifier_address,
+                verifier_code_hash: evm.verifier_code_hash,
+                verifying_key: evm.verifying_key,
+                verifier_key_hash: evm.verifier_key_hash,
+                outbound_proof_policy: evm.outbound_proof_policy,
+                route_address: evm.route_address,
+                route_code_hash: evm.route_code_hash,
+                taira_to_token_multiplier: evm.taira_to_token_multiplier,
+            };
+            let lane = SccpLaneIdV1 {
+                source: SccpNetworkV1::TronMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            };
+            route.lane_id = lane;
+            route.route_id = iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.to_owned();
+            route.destination = SccpDestinationDeploymentV1::Tron(deployment);
+            let route_config_hash = route
+                .destination
+                .route_configuration_hash(
+                    route.lane_id,
+                    &route.route_id,
+                    &route.asset_key,
+                    route.revision,
+                    route.settlement.payload_amount_scale,
+                )
+                .expect("exact staged TRON route configuration");
+            route.source_identity = SccpSourceIdentityV1 {
+                lane,
+                emitter: SccpSourceEmitterV1::Tron(SccpTronSourceEmitterV1 {
+                    address: deployment.route_address,
+                    runtime_code_hash: deployment.route_code_hash,
+                    route_config_hash,
+                }),
+            };
+            route
+                .validate_with_anchor(None)
+                .expect("exact staged TRON route must validate without an active anchor");
+            crate::state::SccpOnChainRegistryV1 {
+                version: 1,
+                lanes: vec![SccpGovernedLaneV1 {
+                    lane_id: lane,
+                    native_trust_anchors: Vec::new(),
+                    current_native_trust_anchor_hash: None,
+                    routes: vec![route],
+                }],
+            }
+        }
+        world_test!(registered_staged_tron_route_cannot_be_removed {
+            blank_state_transaction!(state, block, state_block, stx);
+            stx.chain_id =
+                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            let registry = test_staged_tron_registry();
+            let key = registry.lanes[0].routes[0].key();
+            stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
+                .expect("exact staged TRON registry");
+            let before = stx.sccp_registry.to_wire();
+
+            let error = apply_sccp_route_governance_action(
+                bridge::SccpRouteGovernanceActionV1::Remove(key.clone()),
+                &mut stx,
+            )
+            .expect_err("a registered TRON address must remain a permanent replay boundary");
+
+            assert_err!(
+                format!("{error:?}"),
+                "immutable addresses remain replay boundaries",
+                "{error:?}"
+            );
+            assert_eq!(stx.sccp_registry.to_wire(), before);
+            assert!(stx.sccp_registry.route(&key).is_some());
+        });
+        world_test!(never_used_staged_evm_route_remains_removable {
+            blank_state_transaction!(state, block, state_block, stx);
+            stx.chain_id =
+                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                iroha_data_model::bridge::SccpRouteActivationV1::Staged,
+            );
+            let key = route.key();
+            let registry = crate::state::SccpOnChainRegistryV1 {
+                version: 1,
+                lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                    lane_id: route.lane_id,
+                    native_trust_anchors: Vec::new(),
+                    current_native_trust_anchor_hash: None,
+                    routes: vec![route],
+                }],
+            };
+            stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
+                .expect("exact staged EVM registry");
+
+            apply_sccp_route_governance_action(
+                bridge::SccpRouteGovernanceActionV1::Remove(key),
+                &mut stx,
+            )
+            .expect("a never-used staged EVM route remains removable");
+
+            assert!(stx.sccp_registry.to_wire().lanes.is_empty());
+        });
         world_test!(old_sccp_destination_exempts_age_window_but_not_exact_finality_range {
             let finality_height = 7;
             let mut proof = BridgeProof {
@@ -27919,30 +28398,49 @@ seiyaku GovernanceLifecycle {
             let (bob_id, _) = gen_account_in(&owner_domain);
             Register::account(new_account_in_domain(&bob_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register bob account");
-            let permission: Permission = CanModifyDomainMetadata {
-                domain: domain_id.clone(),
+            let permissions = [
+                Permission::from(CanModifyDomainMetadata {
+                    domain: domain_id.clone(),
+                }),
+                Permission::from(CanSetAssetTransferDailyLimit {
+                    asset_definition: AssetDefinitionId::derive_from_components(
+                        owner_domain.clone(),
+                        "surviving".parse().expect("asset name"),
+                    ),
+                    account_domain: domain_id.name().clone().into(),
+                    account_dataspace: DataSpaceId::UNIVERSAL,
+                }),
+                Permission::from(CanPublishSpaceDirectoryManifestForAccountDomain {
+                    dataspace: DataSpaceId::UNIVERSAL,
+                    domain: domain_id.clone(),
+                }),
+            ];
+            for permission in &permissions {
+                Grant::account_permission(permission.clone(), bob_id.clone())
+                    .expect_execute(&ALICE_ID, &mut stx, "grant permission to bob");
             }
-            .into();
-            Grant::account_permission(permission.clone(), bob_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "grant permission to bob");
             let role_id: RoleId = "KINGDOM_ADMIN".parse().expect("role id parses");
             Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register role");
-            Grant::role_permission(permission.clone(), role_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "grant permission to role");
+            for permission in &permissions {
+                Grant::role_permission(permission.clone(), role_id.clone())
+                    .expect_execute(&ALICE_ID, &mut stx, "grant permission to role");
+            }
             Grant::account_role(role_id.clone(), bob_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "grant role to bob");
             assert!(
                 stx.world
                     .account_permissions
                     .get(&bob_id)
-                    .is_some_and(|perms| perms.contains(&permission)),
-                "bob should have permission before unregister"
+                    .is_some_and(|held| permissions.iter().all(|permission| held.contains(permission))),
+                "bob should have permissions before unregister"
             );
             let role = stx.world.roles.get(&role_id).expect("role should exist");
             assert!(
-                role.permissions().any(|perm| perm == &permission),
-                "role should have permission before unregister"
+                permissions
+                    .iter()
+                    .all(|permission| role.permissions().any(|held| held == permission)),
+                "role should have permissions before unregister"
             );
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "unregister domain");
@@ -27950,16 +28448,20 @@ seiyaku GovernanceLifecycle {
                 !stx.world
                     .account_permissions
                     .get(&bob_id)
-                    .is_some_and(|perms| perms.contains(&permission)),
-                "bob permission should be removed"
+                    .is_some_and(|held| permissions.iter().any(|permission| held.contains(permission))),
+                "bob permissions should be removed"
             );
             let role = stx.world.roles.get(&role_id).expect("role should exist");
             assert!(
-                !role.permissions().any(|perm| perm == &permission),
-                "role permission should be removed"
+                permissions
+                    .iter()
+                    .all(|permission| !role.permissions().any(|held| held == permission)),
+                "role permissions should be removed"
             );
             assert!(
-                !role.permission_epochs().contains_key(&permission),
+                permissions
+                    .iter()
+                    .all(|permission| !role.permission_epochs().contains_key(permission)),
                 "permission epochs should be pruned"
             );
         });
@@ -33026,6 +33528,72 @@ seiyaku GovernanceLifecycle {
                 stx.world.parameters.get().executor().max_output_bytes(),
                 max_bytes
             );
+        });
+        world_test!(set_parameter_enforces_da_ingest_admission_policy_lineage_and_scope {
+            use iroha_data_model::da::ingest::{
+                DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1,
+            };
+
+            alice_state_transaction!(state, block, state_block, stx);
+            let lane_id = LaneId::SINGLE;
+            let lane_incarnation = stx
+                .lane_incarnation_at_height(lane_id, stx.block_height())
+                .expect("the default lane is active in the test block");
+            let initial = DaIngestAdmissionPolicyV1 {
+                version: DaIngestAdmissionPolicyV1::VERSION,
+                revision: 1,
+                expected_previous_policy_hash: None,
+                lanes: vec![DaIngestAdmissionLaneV1 {
+                    lane_id,
+                    lane_incarnation,
+                    producers: vec![ALICE_ID.clone()],
+                    current_epoch: 7,
+                    grace_epoch: Some(6),
+                }],
+            };
+            SetParameter::new(Parameter::Custom(initial.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "install initial DA admission policy");
+
+            let unknown_producer = AccountId::new(
+                KeyPair::from_seed(vec![0xD4; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            );
+            let mut unknown_owner = initial.clone();
+            unknown_owner.revision = 2;
+            unknown_owner.expected_previous_policy_hash = Some(initial.policy_hash());
+            unknown_owner.lanes[0].current_epoch = 8;
+            unknown_owner.lanes[0].grace_epoch = Some(7);
+            unknown_owner.lanes[0].producers = vec![unknown_producer];
+            let error = SetParameter::new(Parameter::Custom(
+                unknown_owner.into_custom_parameter(),
+            ))
+            .expect_execute_err(&ALICE_ID, &mut stx, "unknown producer must fail closed");
+            assert_contains!(error.to_string(), "names unknown producer");
+
+            let mut wrong_incarnation = initial.clone();
+            wrong_incarnation.revision = 2;
+            wrong_incarnation.expected_previous_policy_hash = Some(initial.policy_hash());
+            wrong_incarnation.lanes[0].lane_incarnation = Hash::new(b"wrong DA lane incarnation");
+            wrong_incarnation.lanes[0].current_epoch = 8;
+            wrong_incarnation.lanes[0].grace_epoch = None;
+            let error = SetParameter::new(Parameter::Custom(
+                wrong_incarnation.into_custom_parameter(),
+            ))
+            .expect_execute_err(&ALICE_ID, &mut stx, "stale lane incarnation must fail closed");
+            assert_contains!(error.to_string(), "but the active incarnation is");
+
+            let mut successor = initial.clone();
+            successor.revision = 2;
+            successor.expected_previous_policy_hash = Some(initial.policy_hash());
+            successor.lanes[0].current_epoch = 8;
+            successor.lanes[0].grace_epoch = Some(7);
+            SetParameter::new(Parameter::Custom(successor.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "install exact policy successor");
+
+            let error = SetParameter::new(Parameter::Custom(successor.into_custom_parameter()))
+                .expect_execute_err(&ALICE_ID, &mut stx, "stale policy replay must fail closed");
+            assert_contains!(error.to_string(), "revision");
         });
         world_test!(set_parameter_retention_request_requires_exact_ancestor_and_lineage {
             use iroha_data_model::sorafs::reputation::{

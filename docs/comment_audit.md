@@ -5,7 +5,6 @@ Checked the following IVM modules and confirmed their inline/docs comments match
 - `crates/ivm/src/runtime.rs`
 
 - `crates/ivm/src/memory.rs`
-- `crates/ivm/src/register_file.rs`
 - `crates/ivm/src/registers.rs`
 - `crates/ivm/src/decoder.rs`
 - `crates/ivm/src/core_host.rs`

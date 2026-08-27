@@ -262,8 +262,6 @@ pub(crate) const fn network_ingress_is_certified_fence_escape(
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-        | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_)
         | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
     }
 }
@@ -4931,8 +4929,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
         }
     }

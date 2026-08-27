@@ -948,6 +948,9 @@ test(
         authority: AUTHORITY_ACCOUNT_ID,
         assetDefinition: {
           assetDefinitionId,
+          name: "integration_asset_mint",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
           metadata: {
             suite: "js-integration",
             step: "asset-mint",
@@ -1144,6 +1147,9 @@ test(
         authority: AUTHORITY_ACCOUNT_ID,
         assetDefinition: {
           assetDefinitionId,
+          name: "integration_asset_transfer",
+          owningDomain: null,
+          balanceScopePolicy: "Global",
           metadata: {
             suite: "js-integration",
             step: "asset-transfer",

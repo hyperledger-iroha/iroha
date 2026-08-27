@@ -50,7 +50,7 @@ pub struct IpaParams {
     pub version: u16,
     /// Curve identifier.
     pub curve_id: u16,
-    /// Vector length `n` (power of two).
+    /// Vector length `n` (power of two greater than one).
     pub n: u32,
 }
 impl IpaParams {

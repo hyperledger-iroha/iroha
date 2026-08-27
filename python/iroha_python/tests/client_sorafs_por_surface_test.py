@@ -3,11 +3,11 @@
 import ast
 from pathlib import Path
 
-import iroha_python
 import pytest
+
+import iroha_python
 from iroha_python import ToriiClient
 from iroha_python.client import _build_sorafs_por_export_params
-
 
 CLIENT_SOURCE = Path(__file__).resolve().parents[1] / "src" / "iroha_python" / "client.py"
 
