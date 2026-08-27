@@ -28,6 +28,7 @@ import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
 import org.hyperledger.iroha.android.tx.MultisigSignature;
 import org.hyperledger.iroha.android.tx.MultisigSignatures;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -461,6 +462,7 @@ public final class NoritoCodecAdapterTests {
             .setMemo("QR invoice 42")
             .setValidationFeePolicyVersion(7L)
             .setValidationFeePolicyHash("AB".repeat(32))
+            .setValidationFeeHijiriFeeQuoteHash(repeatText("CD", 32))
             .setValidationFeeInstructionIndex(1L)
             .setValidationFeeTransferEntryIndex(2L)
             .build();
@@ -523,6 +525,18 @@ public final class NoritoCodecAdapterTests {
                 NoritoAdapters.stringAdapter(),
                 "request.validation_fee_policy_hash"))
         : "validation fee policy hash mismatch";
+    final byte[] hijiriFeeQuoteHashPayload =
+        decodeOptionPayload(
+                readField(decoder, "request.validation_fee_hijiri_fee_quote_hash"),
+                "request.validation_fee_hijiri_fee_quote_hash")
+            .orElseThrow(
+                () -> new IllegalStateException("validation fee Hijiri quote hash missing"));
+    assert repeatText("cd", 32).equals(
+            decodeFieldPayload(
+                hijiriFeeQuoteHashPayload,
+                NoritoAdapters.stringAdapter(),
+                "request.validation_fee_hijiri_fee_quote_hash"))
+        : "validation fee Hijiri quote hash mismatch";
     final byte[] instructionsField = readField(decoder, "request.instructions");
     final NoritoDecoder instructionsDecoder = canonicalDecoder(instructionsField);
     final long instructionCount = instructionsDecoder.readLength(false);
@@ -568,6 +582,28 @@ public final class NoritoCodecAdapterTests {
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
                     .setValidationFeePolicyVersion(1L)
+                    .build(),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1));
+    expectNoritoFailure(
+        () ->
+            NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId(signerAccountId)
+                    .addInstructionBytes(new byte[] {1})
+                    .setValidationFeeHijiriFeeQuoteHash(repeatText("cd", 32))
+                    .build(),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1));
+    expectNoritoFailure(
+        () ->
+            NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId(signerAccountId)
+                    .addInstructionBytes(new byte[] {1})
+                    .setValidationFeePolicyVersion(1L)
+                    .setValidationFeePolicyHash(repeatText("ab", 32))
+                    .setValidationFeeHijiriFeeQuoteHash(repeatText("cd", 31))
                     .build(),
                 SccpV1.TAIRA_I105_DISCRIMINANT_V1));
     expectNoritoFailure(
@@ -662,7 +698,12 @@ public final class NoritoCodecAdapterTests {
         MultisigSignature.fromPublicKeyLiteral(sigBKeyLiteral, fill(0x44, 64));
     assert sigBKeyLiteral.equals(sigB.publicKeyMultihash())
         : "Multisig public key literal must round-trip";
-    final MultisigSignatures multisig = MultisigSignatures.of(List.of(sigA, sigB));
+    final byte[] mlDsaPublicKey =
+        fill(0x5A, MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH);
+    final MultisigSignature sigC =
+        MultisigSignature.fromCurveId(0x02, mlDsaPublicKey, fill(0x66, 64));
+    final MultisigSignatures multisig =
+        MultisigSignatures.of(Arrays.asList(sigA, sigB, sigC));
 
     final SignedTransaction signed =
         new SignedTransaction(encodedPayload, signature, publicKey, adapter.schemaName());
@@ -677,11 +718,13 @@ public final class NoritoCodecAdapterTests {
         decodedSigned
             .multisigSignatures()
             .orElseThrow(() -> new IllegalStateException("Decoded multisig bundle missing"));
-    assert decodedMultisig.signatures().size() == 2 : "Decoded multisig count must match";
+    assert decodedMultisig.signatures().size() == 3 : "Decoded multisig count must match";
     assert Arrays.equals(sigA.publicKey(), decodedMultisig.signatures().get(0).publicKey())
         : "Decoded first multisig public key must match";
     assert Arrays.equals(sigB.signature(), decodedMultisig.signatures().get(1).signature())
         : "Decoded second multisig signature must match";
+    assert Arrays.equals(sigC.publicKey(), decodedMultisig.signatures().get(2).publicKey())
+        : "Decoded ML-DSA multisig public key must match";
     assert Arrays.equals(encodedSigned, SignedTransactionEncoder.encode(decodedSigned))
         : "Decoded signed transaction must re-encode canonically";
 
@@ -704,7 +747,7 @@ public final class NoritoCodecAdapterTests {
     final NoritoDecoder multisigDecoder =
         canonicalDecoder(multisigPayload);
     final long count = multisigDecoder.readLength(false);
-    assert count == 2 : "Expected two multisig signatures";
+    assert count == 3 : "Expected three multisig signatures";
     final boolean compact = multisigDecoder.compactLenActive();
     final byte[] firstPayload = readSequenceElement(multisigDecoder, compact, "multisig[0]");
     final NoritoDecoder firstDecoder = canonicalDecoder(firstPayload);
@@ -715,7 +758,29 @@ public final class NoritoCodecAdapterTests {
     final NoritoDecoder secondDecoder = canonicalDecoder(secondPayload);
     assertMultisigSignaturePayload(secondDecoder, sigB, "multisig[1]");
     assert secondDecoder.remaining() == 0 : "multisig[1] payload should not have trailing bytes";
+
+    final byte[] thirdPayload = readSequenceElement(multisigDecoder, compact, "multisig[2]");
+    final NoritoDecoder thirdDecoder = canonicalDecoder(thirdPayload);
+    assertMultisigSignaturePayload(thirdDecoder, sigC, "multisig[2]");
+    assert thirdDecoder.remaining() == 0 : "multisig[2] payload should not have trailing bytes";
     assert multisigDecoder.remaining() == 0 : "Multisig payload should not have trailing bytes";
+
+    final byte[] encodedMlDsaPayload = encodeByteVector(sigC.publicKeyNoritoPayload());
+    final byte[] invalidMlDsaPayload =
+        new byte[1 + MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH];
+    invalidMlDsaPayload[0] = 4;
+    final byte[] encodedAllZeroMlDsaPayload = encodeByteVector(invalidMlDsaPayload);
+    assert encodedMlDsaPayload.length == encodedAllZeroMlDsaPayload.length;
+    final byte[] allZeroMlDsa = Arrays.copyOf(encodedSigned, encodedSigned.length);
+    final int mlDsaOffset = indexOf(allZeroMlDsa, encodedMlDsaPayload);
+    assert mlDsaOffset >= 0 : "Encoded ML-DSA multisig key must be present";
+    System.arraycopy(
+        encodedAllZeroMlDsaPayload,
+        0,
+        allZeroMlDsa,
+        mlDsaOffset,
+        encodedAllZeroMlDsaPayload.length);
+    expectNoritoFailure(() -> SignedTransactionEncoder.decode(allZeroMlDsa));
   }
 
   private static void javaCodecRejectsMalformedSignedTransactions() throws NoritoException {
@@ -1428,6 +1493,14 @@ public final class NoritoCodecAdapterTests {
     return Arrays.asList(items);
   }
 
+  private static String repeatText(final String value, final int count) {
+    final StringBuilder builder = new StringBuilder(value.length() * count);
+    for (int index = 0; index < count; index++) {
+      builder.append(value);
+    }
+    return builder.toString();
+  }
+
   private static Map<String, String> mapOf(final String... entries) {
     if (entries.length % 2 != 0) {
       throw new IllegalArgumentException("mapOf requires an even number of arguments");
@@ -1456,6 +1529,12 @@ public final class NoritoCodecAdapterTests {
     final byte[] out = new byte[length];
     Arrays.fill(out, (byte) value);
     return out;
+  }
+
+  private static byte[] encodeByteVector(final byte[] value) {
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
+    BYTE_VECTOR_ADAPTER.encode(encoder, value);
+    return encoder.toByteArray();
   }
 
   private static int indexOf(final byte[] haystack, final byte[] needle) {

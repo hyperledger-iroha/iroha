@@ -1894,8 +1894,8 @@ DecisionCertifiedFetchOwned(node, qc) ==
     /\ item.envelope.subject = qc.subject
     /\ item.envelope.requestHash =
          AsyncCertifiedRequestHashOf(node, recoveryQc, 0)
-    /\ item.envelope.signatureOwner = item.envelope.archiveServer
-    /\ item.envelope.citedResponder \in recoveryQc.signers
+    /\ item.envelope.signatureOwner = item.envelope.responder
+    /\ item.envelope.responder \in AsyncArchiveServerIds
     /\ CertifiedResponseCandidate(item) \in AsyncCandidateSet
     /\ CandidateScheduled(CertifiedResponseCandidate(item))
 

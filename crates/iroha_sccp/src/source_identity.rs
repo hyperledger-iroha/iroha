@@ -37,6 +37,8 @@ pub const fn sccp_network_from_tag_v1(tag: u8) -> Option<SccpNetworkV1> {
         11 => Some(SccpNetworkV1::TronNile),
         12 => Some(SccpNetworkV1::TronShasta),
         13 => Some(SccpNetworkV1::SolanaTestnet),
+        14 => Some(SccpNetworkV1::TonMainnet),
+        15 => Some(SccpNetworkV1::TonTestnet),
         _ => None,
     }
 }
@@ -227,6 +229,8 @@ mod tests {
             SccpNetworkV1::TronNile,
             SccpNetworkV1::TronShasta,
             SccpNetworkV1::SolanaTestnet,
+            SccpNetworkV1::TonMainnet,
+            SccpNetworkV1::TonTestnet,
         ];
         let tags = networks.map(sccp_network_tag_v1);
         for (network, tag) in networks.into_iter().zip(tags) {
@@ -235,7 +239,7 @@ mod tests {
         for (index, tag) in tags.iter().enumerate() {
             assert!(tags[index + 1..].iter().all(|other| tag != other));
         }
-        for unknown in core::iter::once(0).chain(6..=9).chain(14..=u8::MAX) {
+        for unknown in core::iter::once(0).chain(6..=9).chain(16..=u8::MAX) {
             assert!(sccp_network_from_tag_v1(unknown).is_none());
         }
     }

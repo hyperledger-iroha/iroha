@@ -227,6 +227,7 @@ class KaigiInstructionValidationTest {
             EndKaigiInstruction(callId),
             RecordKaigiUsageInstruction(callId, 1),
             RegisterKaigiRelayInstruction("relay", key(1), 1),
+            UnregisterKaigiRelayInstruction("relay"),
             SetKaigiRelayManifestInstruction.builder().setCallId(callId).build(),
             ReportKaigiRelayHealthInstruction(
                 callId,
@@ -242,6 +243,7 @@ class KaigiInstructionValidationTest {
             { EndKaigiInstruction.fromArguments(it) },
             { RecordKaigiUsageInstruction.fromArguments(it) },
             { RegisterKaigiRelayInstruction.fromArguments(it) },
+            { UnregisterKaigiRelayInstruction.fromArguments(it) },
             { SetKaigiRelayManifestInstruction.fromArguments(it) },
             { ReportKaigiRelayHealthInstruction.fromArguments(it) },
         )
@@ -259,6 +261,9 @@ class KaigiInstructionValidationTest {
         assertFailsWith<IllegalArgumentException> {
             RegisterKaigiRelayInstruction("relay", "AQ", 1)
         }
+        val unregistration = UnregisterKaigiRelayInstruction("relay")
+        assertEquals(unregistration, UnregisterKaigiRelayInstruction.fromArguments(unregistration.arguments))
+        assertFailsWith<IllegalArgumentException> { UnregisterKaigiRelayInstruction(" ") }
         assertTrue(parsedCreate.arguments["commitment.commitment"]!!.startsWith("hash:"))
     }
 

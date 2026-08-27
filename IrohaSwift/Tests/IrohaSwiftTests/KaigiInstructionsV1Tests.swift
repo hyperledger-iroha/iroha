@@ -4,7 +4,7 @@ import XCTest
 @testable import IrohaSwift
 
 final class KaigiInstructionsV1Tests: XCTestCase {
-  func testAllEightInstructionsUseCanonicalNativeFrames() throws {
+  func testAllNineInstructionsUseCanonicalNativeFrames() throws {
     let callID = try KaigiIdV1(domainID: "meetings.universal", callName: "standup")
     let host = try account(1)
     let participant = try account(2)
@@ -40,6 +40,7 @@ final class KaigiInstructionsV1Tests: XCTestCase {
       ),
       SetKaigiRelayManifestInstructionV1(callID: callID, relayManifest: manifest),
       RegisterKaigiRelayInstructionV1(relay: registration),
+      try UnregisterKaigiRelayInstructionV1(relayID: manifest.hops[0].relayID),
       try ReportKaigiRelayHealthInstructionV1(
         callID: callID,
         relayID: manifest.hops[0].relayID,
@@ -59,6 +60,7 @@ final class KaigiInstructionsV1Tests: XCTestCase {
         "iroha.instruction.v1::kaigi::RecordKaigiUsage",
         "iroha.instruction.v1::kaigi::SetKaigiRelayManifest",
         "iroha.instruction.v1::kaigi::RegisterKaigiRelay",
+        "iroha.instruction.v1::kaigi::UnregisterKaigiRelay",
         "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth",
       ]
     )

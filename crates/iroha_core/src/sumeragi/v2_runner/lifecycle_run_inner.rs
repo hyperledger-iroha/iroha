@@ -752,6 +752,17 @@ fn run_lifecycle_active_height(
                     // dispatched, the decided-lane recovery seam may consume one
                     // authenticated carrier needed to serve or persist that
                     // certified artifact, including while Apply completion waits.
+                    if executor
+                        .local_proposal_directive()?
+                        .decided_subject()
+                        .is_some()
+                    {
+                        let _ = retire_block_sync_request_after_decision(
+                            &mut block_sync_request,
+                            block_sync,
+                            services,
+                        )?;
+                    }
                     if producer_claim.permits_decided_lane_recovery_ingress() {
                         let permit =
                             producer_claim
@@ -844,6 +855,17 @@ fn run_lifecycle_active_height(
             activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, executor, services, local_proposal| {
+                    if executor
+                        .local_proposal_directive()?
+                        .decided_subject()
+                        .is_some()
+                    {
+                        let _ = retire_block_sync_request_after_decision(
+                            &mut block_sync_request,
+                            block_sync,
+                            services,
+                        )?;
+                    }
                     let _ = retry_exact_output_and_apply_sidecar_admissions(
                         &mut lane_work,
                         services,
@@ -1033,6 +1055,17 @@ fn run_lifecycle_active_height(
             activated.with_runner_runtime(
                 &mut active_runner,
                 |owner, executor, services, local_proposal| {
+                    if executor
+                        .local_proposal_directive()?
+                        .decided_subject()
+                        .is_some()
+                    {
+                        let _ = retire_block_sync_request_after_decision(
+                            &mut block_sync_request,
+                            block_sync,
+                            services,
+                        )?;
+                    }
                     let _ = retry_exact_output_and_apply_sidecar_admissions(
                         &mut lane_work,
                         services,
@@ -1090,6 +1123,13 @@ fn run_lifecycle_active_height(
                         control_queue_capacity,
                     )?;
                     let directive = reconcile_executor_locked_body(executor, services)?;
+                    if directive.decided_subject().is_some() {
+                        let _ = retire_block_sync_request_after_decision(
+                            &mut block_sync_request,
+                            block_sync,
+                            services,
+                        )?;
+                    }
                     local_proposal
                         .state
                         .reconcile(LocalProposalOwner::from(directive));
@@ -1267,6 +1307,23 @@ fn run_lifecycle_active_height(
         }
 
         if rollover_ready {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, _local_proposal| {
+                    if executor
+                        .local_proposal_directive()?
+                        .decided_subject()
+                        .is_some()
+                    {
+                        let _ = retire_block_sync_request_after_decision(
+                            &mut block_sync_request,
+                            block_sync,
+                            services,
+                        )?;
+                    }
+                    Ok::<_, V2RunnerError>(())
+                },
+            )?;
             if !finalized_ingress_closed {
                 activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;
                 finalized_ingress_closed = true;

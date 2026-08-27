@@ -152,9 +152,9 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x88 | `AESENC` | AES encryption round |
 | 0x89 | `AESDEC` | AES decryption round |
 | 0x8A | `BLAKE2S` | BLAKE2s compression (rs1=&input[64], writes first 16 bytes to rd/rd+1) |
-| 0x8B | `ED25519VERIFY` | Ed25519 signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three operands before hashing |
-| 0x8C | `ECDSAVERIFY` | ECDSA (secp256k1) signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three operands before hashing |
-| 0x8D | `DILITHIUMVERIFY` | Dilithium signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three operands before hashing |
+| 0x8B | `ED25519VERIFY` | Ed25519 signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
+| 0x8C | `ECDSAVERIFY` | ECDSA (secp256k1) signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
+| 0x8D | `DILITHIUMVERIFY` | Dilithium signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
 | 0x8E | `PAIRING` | BLS12-381 pairing check |
 | 0x8F | `ED25519BATCHVERIFY` | Ordered strict Ed25519 verification using `rs1=&NoritoBytes(Ed25519BatchRequest { entries })`; writes 1/0 to `rd` and the first failing index to `rs2`; accepts 1–512 entries and at most 512 KiB of encoded payload; gas = 500 base + 1 per payload byte + 1,000 per admitted entry |
 

@@ -5,6 +5,7 @@ package org.hyperledger.iroha.android.model.instructions;
 
 import java.util.Arrays;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.sccp.SccpV1;
@@ -260,7 +261,9 @@ public final class TransferWirePayloadEncoderTests {
       final AccountAddress.CurveSupportConfig curveSupport,
       final byte keyFill)
       throws Exception {
-    final byte[] key = filledKey(keyFill);
+    final int keyLength =
+        "ml-dsa".equals(algorithm) ? MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH : 32;
+    final byte[] key = filledKey(keyFill, keyLength);
     final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
     final String i105AccountId;
 
@@ -286,8 +289,8 @@ public final class TransferWirePayloadEncoderTests {
     return wirePayload.payloadBytes();
   }
 
-  private static byte[] filledKey(final byte fill) {
-    final byte[] key = new byte[32];
+  private static byte[] filledKey(final byte fill, final int length) {
+    final byte[] key = new byte[length];
     Arrays.fill(key, fill);
     return key;
   }

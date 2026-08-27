@@ -129,18 +129,23 @@ captured with provenance hashes.
 To satisfy AND2 acceptance criteria, every hardware-backed alias must publish
 attestation artefacts:
 
-1. **Generate** using `IrohaKeyManager.generateAttestation(alias, challenge)`; the
-   manager prioritises providers advertising
-   `supportsAttestationCertificates()` and returns a `KeyAttestation` bundle.
+1. **Provision** a new, unique alias with
+   `KeyGenParameters.Builder.setAttestationChallenge(challenge)` before calling
+   `generateOrLoad(...)`. Android binds the challenge while creating the key;
+   never reuse an existing alias when the verifier issued a new challenge.
 2. **Archive** the resulting PEM chain under
-   `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md` and
+   `specs/sdk/android/strongbox_attestation_harness_plan.md` and
    log the device in `android_strongbox_device_matrix.md`.
 3. **Verify** locally via `IrohaKeyManager.verifyAttestation(...)` or the
-   `scripts/android_keystore_attestation.sh --bundle-dir <dir>` helper. The
+   `scripts/android_keystore_attestation.sh --bundle-dir <dir>` helper. Supply
+   the alias, challenge, expected leaf-SPKI SHA-256, and trust roots from a
+   separately authenticated source, not from the evidence directory. The
    verifier enforces:
    - Certificate path to Google/Pixel roots (configurable for OEM deployments).
-   - A non-empty challenge binding (match against `--challenge-hex`,
-     `--challenge-file`, or the bundle's `challenge.hex`).
+   - A non-empty challenge binding (match against a separately trusted
+     `--challenge-hex` or `--challenge-file`).
+   - Exact leaf-key binding to the separately trusted SPKI digest and, in SDK
+     use, every configured provider that currently resolves the alias.
    - A caller-supplied governed Android status snapshot that is fresh at the
      explicit evaluation time and rejects every listed certificate serial or
      TBS SHA-256 digest, including configured trust anchors.
@@ -153,15 +158,13 @@ Attestation summaries flow into telemetry via
 `specs/sdk/android/telemetry_redaction.md`). During incidents, follow the
 override workflow in `android_support_playbook.md#8-telemetry-redaction--observability-and7`.
 
-> **Note:** Android’s public APIs only expose the attestation certificates that
-> were minted when the alias was provisioned. `IrohaKeyManager.generateAttestation`
-> therefore returns that recorded chain and relies on
-> `AttestationVerifier` to compare the embedded challenge with the value you pass
-> to the helper. Verification without a non-empty expected challenge or without
-> a fresh governed revocation snapshot fails closed. To refresh the challenge
-> itself, delete and recreate the alias
-> with a new `KeyGenParameterSpec.Builder#setAttestationChallenge(...)` before
-> capturing a fresh bundle.
+> **Note:** Android’s public APIs only expose certificates minted when the alias
+> was provisioned. `verifyAttestation(...)` rereads and verifies that recorded
+> chain; it does not claim to mint fresh evidence.
+> `generateAttestation(alias, nonEmptyChallenge)` therefore fails explicitly on
+> the platform backend. To answer a new challenge, deliberately provision a new
+> alias with `KeyGenParameterSpec.Builder#setAttestationChallenge(...)`, verify
+> its chain, and only then perform application-controlled key rotation.
 
 ## 6. Integrating With Transaction Builder
 

@@ -704,6 +704,11 @@ pub mod parameter {
         #[derive(Copy)]
         pub struct CanSetParameters;
     }
+    permission! {
+        /// Permission to update the consensus-owned Hijiri fee policy and account-risk records.
+        #[derive(Copy)]
+        pub struct CanSetHijiriParameters;
+    }
 }
 /// Permission tokens for governed SCCP consensus state.
 pub mod sccp {

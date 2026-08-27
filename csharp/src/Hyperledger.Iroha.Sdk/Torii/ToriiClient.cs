@@ -7276,6 +7276,51 @@ public sealed partial class ToriiClient : IDisposable
         var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
         var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
         ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        var hasValidationFeePolicyVersion = request.ValidationFeePolicyVersion.HasValue;
+        var hasValidationFeePolicyHash = request.ValidationFeePolicyHash is not null;
+        var hasValidationFeeHijiriFeeQuoteHash = request.ValidationFeeHijiriFeeQuoteHash is not null;
+        var hasValidationFeeInstructionIndex = request.ValidationFeeInstructionIndex.HasValue;
+        var hasValidationFeeTransferEntryIndex = request.ValidationFeeTransferEntryIndex.HasValue;
+        if (hasValidationFeePolicyVersion != hasValidationFeePolicyHash)
+        {
+            throw new ArgumentException(
+                "Validation fee policy version and hash must be provided together.",
+                hasValidationFeePolicyVersion
+                    ? nameof(request.ValidationFeePolicyHash)
+                    : nameof(request.ValidationFeePolicyVersion));
+        }
+        if (!hasValidationFeePolicyVersion && hasValidationFeeHijiriFeeQuoteHash)
+        {
+            throw new ArgumentException(
+                "Hijiri fee quote hash requires validation fee policy metadata.",
+                nameof(request.ValidationFeeHijiriFeeQuoteHash));
+        }
+        if (!hasValidationFeePolicyVersion && hasValidationFeeInstructionIndex)
+        {
+            throw new ArgumentException(
+                "Validation fee instruction index requires policy metadata.",
+                nameof(request.ValidationFeeInstructionIndex));
+        }
+        if (!hasValidationFeePolicyVersion && hasValidationFeeTransferEntryIndex)
+        {
+            throw new ArgumentException(
+                "Validation fee transfer entry index requires policy metadata.",
+                nameof(request.ValidationFeeTransferEntryIndex));
+        }
+        if (hasValidationFeeTransferEntryIndex && !hasValidationFeeInstructionIndex)
+        {
+            throw new ArgumentException(
+                "Validation fee transfer entry index requires an instruction index.",
+                nameof(request.ValidationFeeTransferEntryIndex));
+        }
+        var validationFeePolicyHash = NormalizeOptionalExactSizedHex(
+            request.ValidationFeePolicyHash,
+            nameof(request.ValidationFeePolicyHash),
+            32);
+        var validationFeeHijiriFeeQuoteHash = NormalizeOptionalExactSizedHex(
+            request.ValidationFeeHijiriFeeQuoteHash,
+            nameof(request.ValidationFeeHijiriFeeQuoteHash),
+            32);
         if (request.CreationTimeMilliseconds == 0)
         {
             throw new ArgumentOutOfRangeException(
@@ -7293,6 +7338,8 @@ public sealed partial class ToriiClient : IDisposable
             PrivateKey = privateKey,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
+            ValidationFeePolicyHash = validationFeePolicyHash,
+            ValidationFeeHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash,
             FeePayment = NormalizeFeePaymentIntent(
                 request.FeePayment,
                 nameof(request.FeePayment),

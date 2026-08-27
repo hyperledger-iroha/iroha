@@ -27,6 +27,7 @@ use tempfile::{NamedTempFile, TempDir};
 const LEGACY_PUBLIC_KEY_LITERAL: &str =
     "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@test";
 const XML_SIGNATURE_TEST_SIGNING_TIME: &str = "2026-06-02T12:00:00Z";
+const TEST_PACS008_NAMESPACE: &str = "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08";
 const OFFICIAL_XSD_PACS008_001_08: &str =
     include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.008.001.08.xsd");
 const OFFICIAL_XSD_PACS009_001_08: &str =
@@ -594,11 +595,18 @@ fn signed_pacs008_xml_with_sgntr_signature_carrier() -> String {
     let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
     let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
     let signed_info = signed_info_xml_prefixed(XML_C14N_1_0, &digest);
-    let inherited_namespaces = [CanonicalXmlAttribute {
-        name: "xmlns:ds".to_owned(),
-        value: XMLDSIG_NS.to_owned(),
-        kind: CanonicalXmlAttributeKind::Namespace,
-    }];
+    let inherited_namespaces = [
+        CanonicalXmlAttribute {
+            name: "xmlns".to_owned(),
+            value: TEST_PACS008_NAMESPACE.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        },
+        CanonicalXmlAttribute {
+            name: "xmlns:ds".to_owned(),
+            value: XMLDSIG_NS.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        },
+    ];
     let canonical_signed_info = canonicalize_supported_xml_with_mode(
         &signed_info,
         &inherited_namespaces,
@@ -750,7 +758,9 @@ fn signed_pacs008_xml_with_extra_reference_transform() -> String {
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1086,17 +1096,20 @@ fn signed_pacs008_xml_with_key_info_at(
     let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
     let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
     let signed_properties_id = "signed-props-001";
-    let signed_properties = xml_signature_x509_certificates(key_info)
-        .ok()
-        .and_then(|certificates| certificates.first().cloned())
-        .map(|leaf_der| {
-            signed_properties_xml_with_signing_certificate_v2_at(
-                signed_properties_id,
-                &leaf_der,
-                signing_time,
-            )
-            .0
-        });
+    let signed_properties = xml_signature_x509_certificates_with_namespaces(
+        key_info,
+        &default_xmlsig_namespace_bindings(),
+    )
+    .ok()
+    .and_then(|certificates| certificates.first().cloned())
+    .map(|leaf_der| {
+        signed_properties_xml_with_signing_certificate_v2_at(
+            signed_properties_id,
+            &leaf_der,
+            signing_time,
+        )
+        .0
+    });
     let signed_info = if let Some(signed_properties) = signed_properties.as_ref() {
         let canonical_signed_properties =
             canonicalize_supported_xml(signed_properties).expect("canonical SignedProperties");
@@ -1134,7 +1147,8 @@ fn signed_pacs008_xml_with_key_info_at(
         signed_info = signed_info,
         signature_value = signature_value,
         key_info = key_info,
-        qualifying_properties = qualifying_properties
+        qualifying_properties = qualifying_properties,
+        XMLDSIG_NS = XMLDSIG_NS
     );
     format!(
         "{}{}{}",
@@ -1176,7 +1190,9 @@ fn signed_pacs008_xml_with_signed_info_rewrite(
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1256,7 +1272,9 @@ fn signed_pacs008_xml_with_signed_properties(
         signed_info = signed_info,
         signature_value = signature_value,
         public_key = public_key,
-        signed_properties = signed_properties
+        signed_properties = signed_properties,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1273,7 +1291,8 @@ fn signed_properties_xml(id: &str) -> String {
             "</SignedSignatureProperties></SignedProperties>"
         ),
         id = id,
-        signing_time = XML_SIGNATURE_TEST_SIGNING_TIME
+        signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
+        XADES_NS = XADES_NS
     )
 }
 fn signed_properties_xml_prefixed(id: &str, xades_namespace: &str) -> String {
@@ -1334,7 +1353,9 @@ fn signed_properties_xml_with_signing_certificate_v2_at(
             id = id,
             signing_time = signing_time,
             sha256 = XMLDSIG_SHA256,
-            leaf_digest = leaf_digest
+            leaf_digest = leaf_digest,
+            XMLDSIG_NS = XMLDSIG_NS,
+            XADES_NS = XADES_NS
         ),
         leaf_digest,
     )
@@ -1368,7 +1389,9 @@ fn test_xades_signing_certificate_v2_xml_with_cert_extra(
         ),
         sha256 = XMLDSIG_SHA256,
         digest = digest,
-        cert_extra = cert_extra
+        cert_extra = cert_extra,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     )
 }
 fn test_xades_signed_properties_xml_with_extra(extra: &str) -> String {
@@ -1380,7 +1403,8 @@ fn test_xades_signed_properties_xml_with_extra(extra: &str) -> String {
             "</SignedSignatureProperties></SignedProperties>"
         ),
         signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
-        extra = extra
+        extra = extra,
+        XADES_NS = XADES_NS
     )
 }
 fn signed_properties_id_from_xml(signed_properties_xml: &str) -> &str {
@@ -1530,7 +1554,9 @@ fn signed_properties_xml_with_signing_certificate_v2_digest_bytes(
         ),
         id = id,
         signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
-        certs = certs
+        certs = certs,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     )
 }
 struct CertificateChainSignedPropertiesPayload {
@@ -1615,7 +1641,9 @@ fn signed_pacs008_xml_with_certificate_chain_signed_properties_reference()
         signature_value = signature_value,
         leaf_certificate = leaf_certificate,
         issuer_certificate = issuer_certificate,
-        signed_properties = signed_properties
+        signed_properties = signed_properties,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     CertificateChainSignedPropertiesPayload {
         payload: format!(
@@ -1662,7 +1690,9 @@ fn signed_pacs008_xml_with_comments() -> String {
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1754,7 +1784,9 @@ fn signed_pacs008_xml_with_signed_info_xml_namespace_attribute() -> String {
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1815,7 +1847,9 @@ fn signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute() -> String 
         ),
         signed_info = signed_info,
         signature_value = signature_value,
-        public_key = public_key
+        public_key = public_key,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     format!(
         "{}{}{}",
@@ -1920,11 +1954,18 @@ fn signed_pacs008_xml_with_prefixed_signature_namespace_options_and_namespace(
     let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
     let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
     let signed_info = signed_info_xml_prefixed(c14n_algorithm, &digest);
-    let mut inherited_namespaces = vec![CanonicalXmlAttribute {
-        name: "xmlns:ds".to_owned(),
-        value: xmldsig_namespace.to_owned(),
-        kind: CanonicalXmlAttributeKind::Namespace,
-    }];
+    let mut inherited_namespaces = vec![
+        CanonicalXmlAttribute {
+            name: "xmlns".to_owned(),
+            value: TEST_PACS008_NAMESPACE.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        },
+        CanonicalXmlAttribute {
+            name: "xmlns:ds".to_owned(),
+            value: xmldsig_namespace.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        },
+    ];
     if include_unused_namespace {
         inherited_namespaces.push(CanonicalXmlAttribute {
             name: "xmlns:unused".to_owned(),
@@ -2080,11 +2121,21 @@ fn signed_pacs008_xml_from_unsigned_with_reference_options(
         self_closing_signed_info_methods,
         reference_c14n_algorithm,
     );
-    let signature_namespaces = [CanonicalXmlAttribute {
-        name: "xmlns".to_owned(),
-        value: XMLDSIG_NS.to_owned(),
-        kind: CanonicalXmlAttributeKind::Namespace,
-    }];
+    let mut signature_namespace_scope = xml_namespace_bindings_before_offset(&unsigned, insertion)
+        .expect("signature ancestor namespace scope");
+    if let Some(default_namespace) = signature_namespace_scope
+        .iter_mut()
+        .find(|binding| binding.prefix.is_empty())
+    {
+        default_namespace.uri = XMLDSIG_NS.to_owned();
+    } else {
+        signature_namespace_scope.push(CanonicalXmlNamespaceBinding {
+            prefix: String::new(),
+            uri: XMLDSIG_NS.to_owned(),
+        });
+    }
+    let signature_namespaces =
+        inherited_namespace_attributes_from_scope(&signature_namespace_scope);
     let canonical_signed_info = if sign_canonical_signed_info {
         canonicalize_supported_xml_with_mode(
             &signed_info,
@@ -2674,7 +2725,9 @@ fn signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
         signature_value = signature_value,
         certificates_xml = certificates_xml,
         extra_x509_data_xml = extra_x509_data_xml,
-        signed_properties = signed_properties
+        signed_properties = signed_properties,
+        XMLDSIG_NS = XMLDSIG_NS,
+        XADES_NS = XADES_NS
     );
     CertificateChainSignedPayload {
         payload: format!(
@@ -3157,6 +3210,11 @@ fn sample_config_with_live_reference_data() -> (actual::IsoBridge, Vec<NamedTemp
         &[("{asset_definition_id}", &asset_definition_id)],
     ));
     let mut config = sample_config();
+    config.currency_assets.push(actual::IsoCurrencyAsset {
+        currency: "EUR".to_owned(),
+        asset_definition: asset_definition_id.clone(),
+        max_amount: Quantity::from(10_000_u64),
+    });
     config.reference_data.bic_lei_path = Some(bic_lei.path().to_path_buf());
     config.reference_data.isin_crosswalk_path = Some(isin_crosswalk.path().to_path_buf());
     config.reference_data.mic_directory_path = Some(mic_directory.path().to_path_buf());
@@ -4395,7 +4453,8 @@ rejected_signed_payload_tests! {
                 "</SignedSignatureProperties></SignedProperties>"
             ),
             id = signed_properties_id,
-            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME
+            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
+            XADES_NS = XADES_NS
         );
         signed_pacs008_xml_with_signed_properties(signed_properties_id, &signed_properties)
     } => "unsupported signed SigningTime attributes must fail closed";
@@ -5428,14 +5487,17 @@ fn supported_xml_signature_shape_requires_direct_children() {
 }
 #[test]
 fn supported_xml_signature_carrier_preserves_ancestor_namespace_scope() {
-    let payload = format!(concat!(
-        r#"<Envelope xmlns:ds="{XMLDSIG_NS}">"#,
-        r#"<ds:Signature xmlns="{XMLDSIG_NS}">"#,
-        "<SignedInfo></SignedInfo>",
-        "<SignatureValue>AQ==</SignatureValue>",
-        "<KeyInfo></KeyInfo>",
-        "</ds:Signature></Envelope>"
-    ));
+    let payload = format!(
+        concat!(
+            r#"<Envelope xmlns:ds="{XMLDSIG_NS}">"#,
+            r#"<ds:Signature xmlns="{XMLDSIG_NS}">"#,
+            "<SignedInfo></SignedInfo>",
+            "<SignatureValue>AQ==</SignatureValue>",
+            "<KeyInfo></KeyInfo>",
+            "</ds:Signature></Envelope>"
+        ),
+        XMLDSIG_NS = XMLDSIG_NS
+    );
     let carrier = xml_signature_carrier(&payload)
         .expect("carrier discovery")
         .expect("signature carrier");
@@ -6355,7 +6417,8 @@ fn require_verified_profile_rejects_x509_xades_signing_certificate_v2_outside_si
             "<SignedDataObjectProperties>{signing_certificate}</SignedDataObjectProperties>",
             "</SignedProperties>"
         ),
-        signing_certificate = signing_certificate
+        signing_certificate = signing_certificate,
+        XADES_NS = XADES_NS
     );
     let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
         &signed_properties_xml,
@@ -7587,6 +7650,18 @@ fn checked_in_securities_fixtures_reject_profile_version_and_root_drift() {
 #[test]
 fn checked_in_colr012_fixture_records_collateral_context() {
     let mut config = sample_config();
+    let asset_definition_id = sample_asset_definition_literal();
+    let isin_crosswalk = write_snapshot(&format!(
+        r#"{{
+            "version":"2024-05-01",
+            "source":"ISO 20022 collateral fixture",
+            "entries":[
+                {{"isin":"US0378331005","asset_definition_id":"{asset_definition_id}"}},
+                {{"isin":"US5949181045","asset_definition_id":"{asset_definition_id}"}}
+            ]
+        }}"#
+    ));
+    config.reference_data.isin_crosswalk_path = Some(isin_crosswalk.path().to_path_buf());
     config.profiles.push(live_collateral_lifecycle_profile());
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .expect("cfg")
@@ -8126,7 +8201,7 @@ fn live_rail_profile_xsd_fixtures_accept_prefixed_document_namespace() {
     )
     .replace(
         r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
-        r#"<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+        r#"<pacs:Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08" xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
     )
     .replace("<FIToFICstmrCdtTrf>", "<pacs:FIToFICstmrCdtTrf>")
     .replace("</FIToFICstmrCdtTrf>", "</pacs:FIToFICstmrCdtTrf>")
@@ -8477,6 +8552,41 @@ fn concurrent_admission_commits_one_complete_identity_tuple() {
     assert_eq!(runtime.uetr_index.len(), 1);
 }
 #[test]
+fn durable_in_flight_reservation_pins_capacity_until_transaction_binding() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.store_max_records = 1;
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let metadata = IsoMessageMetadata::inbound(
+        "generic-iso20022",
+        "pacs.008",
+        None,
+        Some("in-flight-biz".to_owned()),
+        Some("123e4567-e89b-12d3-a456-426614174550".to_owned()),
+        "in-flight-payload".to_owned(),
+        "snapshot".to_owned(),
+        false,
+    );
+    assert!(runtime.check_and_record_inbound("in-flight", metadata));
+    assert!(
+        !runtime.check_and_record_inbound("capacity-racer", inbound_metadata("racer", "pacs.008")),
+        "an unresolved reservation must not be evicted to admit another payment"
+    );
+    assert!(runtime.update_message_context("in-flight", IsoMessageContext::default()));
+    assert!(runtime.bind_transaction_hash("in-flight", "tx-in-flight"));
+    assert_eq!(
+        runtime
+            .message_status("in-flight")
+            .expect("reservation survives")
+            .transaction_hash(),
+        Some("tx-in-flight")
+    );
+    assert!(!runtime.update_message_context("missing", IsoMessageContext::default()));
+}
+#[test]
 fn rejected_retry_requires_the_exact_original_metadata() {
     let runtime = sample_runtime();
     let original = IsoMessageMetadata::inbound(
@@ -8499,6 +8609,106 @@ fn rejected_retry_requires_the_exact_original_metadata() {
     changed.payload_hash = Some("payload-replacement".to_owned());
     assert!(!runtime.check_and_record_inbound("exact-retry", changed));
     assert!(runtime.check_and_record_inbound("exact-retry", original));
+}
+#[test]
+fn queued_lifecycle_rejection_keeps_transaction_identity_and_blocks_retry() {
+    let runtime = sample_runtime();
+    let original_id = "queued-lifecycle-rejection";
+    let lifecycle_id = "queued-lifecycle-rejection-status";
+    let original = inbound_metadata(original_id, "pacs.008");
+    assert!(runtime.check_and_record_inbound(original_id, original.clone()));
+    runtime.mark_accepted(original_id, "tx-queued-lifecycle-rejection");
+    record_lifecycle(&runtime, lifecycle_id, "pacs.002");
+    assert_eq!(
+        runtime
+            .apply_lifecycle_update(
+                lifecycle_id,
+                original_id,
+                "pacs.002",
+                Some("RJCT"),
+                Some("AC04"),
+                Some("downstream rejection".to_owned()),
+            )
+            .expect("lifecycle rejection applies"),
+        "marked_rejected"
+    );
+    let status = runtime.message_status(original_id).expect("status");
+    assert_eq!(status.status_label(), "Rejected");
+    assert_eq!(
+        status.transaction_hash(),
+        Some("tx-queued-lifecycle-rejection")
+    );
+    assert_eq!(
+        runtime
+            .tx_hash_index
+            .get("tx-queued-lifecycle-rejection")
+            .as_deref()
+            .map(String::as_str),
+        Some(original_id)
+    );
+    assert!(
+        !runtime.check_and_record_inbound(original_id, original),
+        "an already-queued transaction must not become retryable from lifecycle status alone"
+    );
+    assert!(runtime.mark_transaction_applied("tx-queued-lifecycle-rejection", SystemTime::now()));
+    let settled = runtime.message_status(original_id).expect("settled status");
+    assert_eq!(settled.status_label(), "Accepted");
+    assert_eq!(settled.pacs002_code(), "ACSC");
+}
+#[test]
+fn pacs004_return_requires_settlement_and_preserves_original_transaction() {
+    let runtime = sample_runtime();
+    let original_id = "settled-payment-return";
+    let lifecycle_id = "settled-payment-return-message";
+    let original = inbound_metadata(original_id, "pacs.008");
+    assert!(runtime.check_and_record_inbound(original_id, original.clone()));
+    runtime.mark_accepted(original_id, "tx-settled-payment-return");
+    record_lifecycle(&runtime, lifecycle_id, "pacs.004");
+    assert_eq!(
+        runtime
+            .apply_lifecycle_update(
+                lifecycle_id,
+                original_id,
+                "pacs.004",
+                None,
+                Some("AC04"),
+                None,
+            )
+            .expect("unsettled return is ignored"),
+        "ignored_unsettled_return"
+    );
+    let unsettled = runtime
+        .message_status(original_id)
+        .expect("unsettled status");
+    assert_eq!(unsettled.status_label(), "Accepted");
+    assert_eq!(
+        unsettled.transaction_hash(),
+        Some("tx-settled-payment-return")
+    );
+    assert!(runtime.mark_settled(original_id, SystemTime::now()));
+    assert_eq!(
+        runtime
+            .apply_lifecycle_update(
+                lifecycle_id,
+                original_id,
+                "pacs.004",
+                None,
+                Some("AC04"),
+                None,
+            )
+            .expect("settled return applies"),
+        "marked_returned"
+    );
+    let returned = runtime
+        .message_status(original_id)
+        .expect("returned status");
+    assert_eq!(returned.status_label(), "Rejected");
+    assert!(returned.settled_at().is_some());
+    assert_eq!(
+        returned.transaction_hash(),
+        Some("tx-settled-payment-return")
+    );
+    assert!(!runtime.check_and_record_inbound(original_id, original));
 }
 #[test]
 fn retry_replacement_rejects_conflicting_uetr() {
@@ -8771,6 +8981,7 @@ fn durable_store_reload_streams_only_deterministic_newest_records() {
                 ),
             ));
             runtime.mark_accepted(message_id, &format!("tx-{message_id}"));
+            runtime.mark_settled(message_id, SystemTime::now());
         }
     }
     for (message_id, updated_at_ms) in [
@@ -8936,6 +9147,7 @@ fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
         ),
     ));
     runtime.mark_accepted("compact-old", "tx-compact-old");
+    runtime.mark_settled("compact-old", SystemTime::now());
     std::thread::sleep(Duration::from_millis(1));
     assert!(runtime.check_and_record_inbound(
         "compact-new",
@@ -9006,6 +9218,7 @@ fn durable_store_compacts_records_older_than_retention_window() {
         ),
     ));
     runtime.mark_accepted("age-expired", "tx-age-expired");
+    runtime.mark_settled("age-expired", SystemTime::now());
     {
         let mut record = runtime.records.get_mut("age-expired").expect("record");
         record.updated_at = SystemTime::UNIX_EPOCH;
@@ -10034,10 +10247,16 @@ fn dedupe_prevents_duplicates_within_ttl() {
 }
 #[test]
 fn build_transaction_extracts_transfer() {
-    let runtime = sample_runtime();
+    let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
+    let (expected_account, canonical_account, _) = sample_account_bundle();
+    let account_address = AccountAddress::from_account_id(&expected_account).expect("address");
+    let account_i105 = account_address
+        .to_i105_for_discriminant(iroha_data_model::account::address::chain_discriminant())
+        .expect("i105 encoding");
+    let canonical_address = account_address.canonical_hex().expect("canonical hex");
     let msg = parse_message(
             "pacs.008",
-            b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\nSplmtryData/SourceAccountAddress=0xdebtor\nSplmtryData/TargetAccountAddress=0xcreditor",
+            format!("MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\nSplmtryData/SourceAccountAddress={account_i105}\nSplmtryData/TargetAccountAddress={account_i105}").as_bytes(),
         )
         .expect("parsed");
     let world = sample_world(None);
@@ -10055,7 +10274,6 @@ fn build_transaction_extracts_transfer() {
         )
         .expect("build");
     assert_eq!(context.ledger_id.as_deref(), Some(chain_id.as_str()));
-    let (_expected_account, canonical_account, _) = sample_account_bundle();
     assert_eq!(
         context.source_account_id.as_deref(),
         Some(canonical_account.as_str())
@@ -10069,10 +10287,13 @@ fn build_transaction_extracts_transfer() {
         context.asset_definition_id.as_deref(),
         Some(asset_definition.as_str())
     );
-    assert_eq!(context.source_account_address.as_deref(), Some("0xdebtor"));
+    assert_eq!(
+        context.source_account_address.as_deref(),
+        Some(canonical_address.as_str())
+    );
     assert_eq!(
         context.target_account_address.as_deref(),
-        Some("0xcreditor")
+        Some(canonical_address.as_str())
     );
     assert!(context.asset_id.as_ref().is_some());
     assert_eq!(
@@ -10112,7 +10333,7 @@ fn build_transaction_extracts_transfer() {
 }
 #[test]
 fn build_transaction_accepts_asset_alias_hint() {
-    let runtime = sample_runtime();
+    let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
     let msg = parse_message(
             "pacs.008",
             b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\nSplmtryData/AssetDefinitionId=usd#test",
@@ -10379,9 +10600,14 @@ fn pacs008_rejects_unbound_currency() {
 #[test]
 fn build_pacs009_payload_extracts_transfer() {
     let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
+    let (expected_account, _, _) = sample_account_bundle();
+    let account_i105 = AccountAddress::from_account_id(&expected_account)
+        .expect("address")
+        .to_i105_for_discriminant(iroha_data_model::account::address::chain_discriminant())
+        .expect("i105 encoding");
     let msg = parse_message(
             "pacs.009",
-            b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\nSplmtryData/SourceAccountAddress=0xdebtor\nSplmtryData/TargetAccountAddress=0xcreditor",
+            format!("BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\nSplmtryData/SourceAccountAddress={account_i105}\nSplmtryData/TargetAccountAddress={account_i105}").as_bytes(),
         )
         .expect("parsed");
     let world = sample_world(None);
@@ -10514,33 +10740,18 @@ fn status_transitions_are_recorded() {
     assert_eq!(settled.pacs002_code(), "ACSC");
 }
 #[test]
-fn indeterminate_queue_outcome_keeps_exact_identity_reserved_and_reconcilable() {
+fn memory_only_runtime_refuses_transaction_binding_before_queue_admission() {
     let mut config = sample_config();
     config.dedupe_ttl_secs = 0;
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .expect("cfg")
         .expect("enabled");
     assert!(runtime.check_and_record_message("queue-unknown"));
-    assert!(runtime.bind_transaction_hash("queue-unknown", "tx-queue-unknown"));
-    assert!(runtime.mark_queue_outcome_unknown(
-        "queue-unknown",
-        "tx-queue-unknown",
-        "journal fsync acknowledgement was lost".to_owned(),
-    ));
+    assert!(!runtime.bind_transaction_hash("queue-unknown", "tx-queue-unknown"));
     let status = runtime.message_status("queue-unknown").expect("status");
     assert_eq!(status.status_label(), "Pending");
-    assert_eq!(status.transaction_hash(), Some("tx-queue-unknown"));
-    assert_eq!(status.pacs002_code(), "PDNG");
-    assert_eq!(
-        status.hold_reason_code(),
-        Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN")
-    );
-    assert!(!runtime.check_and_record_message("queue-unknown"));
-    assert!(runtime.check_and_record_message("prune-trigger"));
-    assert!(runtime.message_status("queue-unknown").is_some());
-    assert!(runtime.mark_transaction_applied("tx-queue-unknown", SystemTime::now()));
-    let reconciled = runtime.message_status("queue-unknown").expect("reconciled");
-    assert_eq!(reconciled.pacs002_code(), "ACSC");
+    assert_eq!(status.transaction_hash(), None);
+    assert!(!runtime.tx_hash_index.contains_key("tx-queue-unknown"));
 }
 #[test]
 fn durable_indeterminate_queue_outcome_survives_reload_and_pins_capacity() {
@@ -10747,12 +10958,22 @@ fn unknown_lifecycle_codes_refuse_unique_growth_before_memory_or_disk_mutation()
         .expect("cfg")
         .expect("enabled");
     let message_id = "bounded-unknown-lifecycle-codes";
+    let lifecycle_id = "bounded-unknown-lifecycle-codes-status";
     record_original(&runtime, message_id, "pacs.008");
+    assert!(runtime.mark_queued(message_id));
+    record_lifecycle(&runtime, lifecycle_id, "pacs.002");
     for index in 0..ISO_CHANGE_REASON_MAX_ENTRIES_V1 {
         let code = format!("U{index:03}");
         assert_eq!(
             runtime
-                .apply_lifecycle_update(message_id, "pacs.002", Some(&code), None, None)
+                .apply_lifecycle_update(
+                    lifecycle_id,
+                    message_id,
+                    "pacs.002",
+                    Some(&code),
+                    None,
+                    None,
+                )
                 .expect("unique code below cap must apply"),
             "recorded_status_code"
         );
@@ -10764,8 +10985,8 @@ fn unknown_lifecycle_codes_refuse_unique_growth_before_memory_or_disk_mutation()
     );
     assert_eq!(
         status.status_history().len(),
-        2,
-        "unique unknown codes must not evade their own cap when status history deduplicates"
+        3,
+        "unknown codes after the first ACWC transition must not grow status history"
     );
     let path = store
         .path()
@@ -10773,7 +10994,14 @@ fn unknown_lifecycle_codes_refuse_unique_growth_before_memory_or_disk_mutation()
         .join(message_filename(message_id));
     let before = fs::read(&path).expect("read exact-bound persisted record");
     assert_eq!(
-        runtime.apply_lifecycle_update(message_id, "pacs.002", Some("U_OVERFLOW"), None, None,),
+        runtime.apply_lifecycle_update(
+            lifecycle_id,
+            message_id,
+            "pacs.002",
+            Some("U_OVERFLOW"),
+            None,
+            None,
+        ),
         Err(IsoStatusHistoryLimitError::ChangeReasonCount)
     );
     assert_eq!(
@@ -10833,7 +11061,7 @@ fn message_context_is_preserved_in_status() {
 }
 #[test]
 fn payment_outbox_xml_uses_durable_amount_currency_and_escapes_reasons() {
-    let runtime = sample_runtime();
+    let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
     let msg = parse_message(
             "pacs.008",
             b"MsgId=m-outbox\nIntrBkSttlmAmt=10.25\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",

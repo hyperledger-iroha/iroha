@@ -14,10 +14,11 @@ Completed history lives in [`status.md`](./status.md).
 - Complete the remaining deferred review of offline and specialized signature
   consumers. Browser Connect now uses strict Ed25519 verification, Swift admits
   only canonical prime-order Ed25519 keys and signature points, and mirrored
-  Android attestation requires a fresh challenge, committed revocation snapshot,
-  and alias-to-leaf key binding. Qualify the Android controls on real TEE and
-  StrongBox devices, including older API behavior, with a governance-authenticated
-  snapshot commitment. Separately reconcile the operator `allow_node_key`
+  Android attestation requires a provisioning-time verifier challenge, committed
+  revocation snapshot, and collision-safe alias-to-leaf key binding. Qualify the
+  Android controls on real TEE and StrongBox devices, including older API
+  behavior, with a governance-authenticated snapshot commitment. Separately
+  reconcile the operator `allow_node_key`
   documentation with its effective key set and the validator-roster length
   helper with the proof-of-possession-filtered roster.
 
@@ -86,6 +87,12 @@ Completed history lives in [`status.md`](./status.md).
 
 ## P2P first-release closure
 
+- Carry application, exit, measurement, and VPN payload through the fixed-rate
+  scheduler before enabling strict SoraNet constant-rate negotiation. Make
+  DATAGRAM unavailability and send failure circuit-fatal in that mode, then add
+  mixed-hop, loss, and traffic-shape regressions proving payload and cover share
+  one schedule. Until those invariants are complete, the relay must continue to
+  reject strict mode instead of downgrading it.
 - Carry the already-signed broadcast envelope in reliable-progress retry
   ownership so retries across actor turns also avoid repeated BLS signing. Add
   deterministic signing, allocation, and retained-byte benchmarks for direct,
@@ -204,11 +211,17 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Data-model first-release closure
 
-- Either connect the parsed Hijiri fee policy to one deterministic runtime
-  pricing/admission owner, with end-to-end governance and wire tests, or remove
-  the inactive configuration surface and correct the broader integration claims.
-  Define canonical evidence-path semantics and bounded collection sizes before
-  exposing Hijiri evidence or observer records to untrusted ingress.
+- Qualify the signed native-Norito Hijiri fee-quote route, global-policy and
+  per-account-risk governance, transaction and nested multisig bindings,
+  missing-record defaults, and aggregate rounding in a real four-peer network
+  before calling the path release-qualified. Add typed quote convenience
+  wrappers to non-Rust SDKs as their native Norito transports expose the shared
+  request/response layouts; do not introduce a JSON fallback.
+- Keep observer and evidence ingestion, peer reputation, registry credits,
+  Hijiri checkpoints, and dedicated events or telemetry deferred until each has
+  authenticated bounded ingress and one deterministic state owner. Define the
+  exact evidence-path ingress semantics before exposing observer records to
+  untrusted callers.
 - Remove the always-rejected `RegisterProviderOwner` and
   `UnregisterProviderOwner` instruction surfaces from the registry, executor,
   fixtures, and SDKs instead of retaining inert pre-release operations.
@@ -368,34 +381,24 @@ Completed history lives in [`status.md`](./status.md).
   one profile change. Do not treat the existing arbitrary account witness or a
   copied NIZK as bearer authorization. Usage proofs and host-signed lifecycle
   operations are separate and remain valid.
-- Replace the Kaigi call-signal endpoint's now fail-closed cumulative history
-  walk with a persistent bounded projection keyed by fully qualified call id. Give its
-  pagination cursor a stable canonical tie-breaker such as transaction hash or
-  `(block height, transaction offset)` so later backdated metadata cannot shift
-  an already issued page boundary. Keep the current account-signed expensive-
-  compute admission and per-carrier plus cumulative physical-work budgets until
-  that index is deployed.
-- Finish non-Rust Kaigi parity against one Rust-generated eight-instruction
+- Profile startup rebuild cost for the derived Kaigi signal locator index on a
+  release-scale archive. Add a durable, version-bound rebuild checkpoint only if
+  that evidence warrants it; preserve fail-closed reads for incomplete,
+  poisoned, or pruning-recovery state and never restore the ledger-history scan.
+- Finish non-Rust Kaigi parity against one Rust-generated nine-instruction
   Norito fixture set. Wire the Kotlin/Java typed templates into canonical
-  `WirePayload` encoding and expose relay-health wherever the other seven
-  mutations exist; consume the same complete fixture set from JavaScript,
-  Python, Swift, Kotlin, and Java rather than maintaining handwritten wire
-  expectations.
+  `WirePayload` encoding and consume the same complete fixture set from
+  JavaScript, Python, Swift, Kotlin, and Java rather than maintaining
+  handwritten wire expectations.
 - Replace the opaque bounded Kaigi HPKE byte vector with a suite-tagged bounded
   descriptor before adding another cipher suite. Preserve the current 4 KiB
   protocol ceiling and 3–8-hop manifest bound, and add suite-specific exact-
   length validation without changing observable results across peers.
-- Add a typed, authorized retirement/migration path for stale Kaigi relay
-  descriptors and feedback after account-ID rekey. Current admission safely
-  keeps exact metadata-key/embedded-ID binding and resolves governance through
-  the active successor's domain-qualified primary alias, preserves only typed
-  `AccountIdRekey` continuity after lease expiry or reassignment, pins retained
-  descriptor or feedback state to that domain, rejects aliasless account rekeys
-  that would strand native dependencies, and blocks destructive account/domain
-  teardown while those dependencies remain. Corrupt key/payload identity rows
-  fail closed, but the implementation deliberately does not silently rewrite or
-  delete historical descriptor keys. Add explicit retirement/archive semantics
-  before relaxing those guards. Supporting aliasless relays would likewise
+- Define an explicit governance recovery/archive policy for abandoned or
+  corrupt Kaigi relay rows whose relay and canonical rekey successor cannot
+  authorize `UnregisterKaigiRelay`. Keep exact metadata-key/embedded-ID binding,
+  fail-closed corruption handling, domain pinning, and account/domain teardown
+  guards until that policy exists. Supporting aliasless relays would likewise
   require a signed home-domain field or a protected relay-to-home index; do not
   restore global allowlist discovery.
 - Decide whether the currently unreachable
@@ -28458,3 +28461,26 @@ advanced by each responsive validator.
 **Next checkpoints:** monthly X Spaces cadence, clearer contributor onboarding,
 public follow-up notes for LFDT governance review items, and commit/reveal
 hardening for SORA Parliament policy juries.
+
+## Kagemusha protected mobile production publication
+
+**Status:** outstanding deployment/release qualification work; the ABI-21/V4
+runtime and legitimate full/partial redemption paths are implemented.
+
+- Produce separate, attested Apple and Android build-authorization receipts
+  from their own protected physical-device qualification lanes. Each receipt
+  must bind the platform, source commit and closure, release/tag identity,
+  manifest/policy/promotion digests, ABI-21/native ABI-23, and the exact
+  `privacy-production-enabled` feature set.
+- Let each mobile build job enable only its own platform after independently
+  verifying its receipt and GitHub attestation. Receipt coordinates may select
+  evidence but must never act as a trusted boolean, and Apple evidence must not
+  authorize Android or vice versa.
+- Require both platform receipt digests before publishing the combined mobile
+  release, and embed the appropriate authorization digest in each artifact's
+  provenance. Tag builds without both receipts must not publish default-off
+  artifacts under the final production release identity.
+- The current protected promotion workflow validates physical iOS evidence but
+  emits no durable authorization receipt; there is no equivalent protected
+  Android evidence lane yet. Resolve both deployment-owned prerequisites before
+  advertising official production mobile packages.

@@ -112,6 +112,7 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
   for (const [snakeName, camelName] of [
     ["validation_fee_policy_version", "validationFeePolicyVersion"],
     ["validation_fee_policy_hash", "validationFeePolicyHash"],
+    ["validation_fee_hijiri_fee_quote_hash", "validationFeeHijiriFeeQuoteHash"],
     ["validation_fee_instruction_index", "validationFeeInstructionIndex"],
     ["validation_fee_transfer_entry_index", "validationFeeTransferEntryIndex"],
   ]) {
@@ -2301,6 +2302,17 @@ function normalizeRegisterRelayInput(options) {
         "registerKaigiRelay.bandwidthClass",
       ),
     },
+  };
+}
+
+function normalizeUnregisterRelayInput(options) {
+  const source = assertPlainObject(options, "unregisterKaigiRelay");
+  const relayId = source.relay_id ?? source.relayId;
+  return {
+    relay_id: normalizeAccountId(
+      relayId,
+      "unregisterKaigiRelay.relayId",
+    ),
   };
 }
 
@@ -4835,12 +4847,16 @@ export function buildMultisigProposeRequest(options) {
   }
   const validationFeePolicyVersion = source.validationFeePolicyVersion;
   const validationFeePolicyHash = source.validationFeePolicyHash;
+  const validationFeeHijiriFeeQuoteHash = source.validationFeeHijiriFeeQuoteHash;
   const validationFeeInstructionIndex = source.validationFeeInstructionIndex;
   const validationFeeTransferEntryIndex = source.validationFeeTransferEntryIndex;
   const hasValidationFeePolicyVersion =
     validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
   const hasValidationFeePolicyHash =
     validationFeePolicyHash !== undefined && validationFeePolicyHash !== null;
+  const hasValidationFeeHijiriFeeQuoteHash =
+    validationFeeHijiriFeeQuoteHash !== undefined &&
+    validationFeeHijiriFeeQuoteHash !== null;
   const hasValidationFeeInstructionIndex =
     validationFeeInstructionIndex !== undefined && validationFeeInstructionIndex !== null;
   const hasValidationFeeTransferEntryIndex =
@@ -4850,6 +4866,13 @@ export function buildMultisigProposeRequest(options) {
       ValidationErrorCode.INVALID_OBJECT,
       "multisigPropose validation fee policy version and hash must be provided together",
       "multisigPropose.validationFeePolicy",
+    );
+  }
+  if (!hasValidationFeePolicyVersion && hasValidationFeeHijiriFeeQuoteHash) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "multisigPropose Hijiri fee quote hash requires policy metadata",
+      "multisigPropose.validationFeeHijiriFeeQuoteHash",
     );
   }
   if (!hasValidationFeePolicyVersion && hasValidationFeeInstructionIndex) {
@@ -4884,6 +4907,12 @@ export function buildMultisigProposeRequest(options) {
       validationFeePolicyHash,
       "multisigPropose.validationFeePolicyHash",
     );
+    if (hasValidationFeeHijiriFeeQuoteHash) {
+      payload.validation_fee_hijiri_fee_quote_hash = normalizeOptionalHexString(
+        validationFeeHijiriFeeQuoteHash,
+        "multisigPropose.validationFeeHijiriFeeQuoteHash",
+      );
+    }
     if (hasValidationFeeInstructionIndex) {
       payload.validation_fee_instruction_index = String(
         asNonNegativeInteger(
@@ -5188,6 +5217,20 @@ export function buildRegisterKaigiRelayInstruction(options) {
   return {
     Kaigi: {
       RegisterKaigiRelay: normalized,
+    },
+  };
+}
+
+/**
+ * Build a `Kaigi::UnregisterKaigiRelay` instruction payload.
+ * @param {object} options
+ * @returns {{Kaigi: {UnregisterKaigiRelay: {relay_id: string}}}}
+ */
+export function buildUnregisterKaigiRelayInstruction(options) {
+  const normalized = normalizeUnregisterRelayInput(options);
+  return {
+    Kaigi: {
+      UnregisterKaigiRelay: normalized,
     },
   };
 }

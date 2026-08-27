@@ -194,8 +194,9 @@ canonical payloads:
 
 | Tag | Controller | Layout | Notes |
 |-----|------------|--------|-------|
-| `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong` (so single-key ML‑DSA public keys, which are >255 bytes, cannot be encoded and must use multisig). |
+| `0x00` | Compact single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | Canonical for key payloads up to 255 bytes. |
 | `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u16` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | The encoded member count is 16-bit; the old 255-member hard cap is gone. Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
+| `0x02` | Extended single key | `curve_id:u8` · `key_len:u16` · `key_bytes` | Canonical only for payloads longer than 255 bytes. The length is big-endian; shorter payloads encoded with this tag are rejected. |
 
 Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
 hosts and SDKs can verify the controller deterministically. See
@@ -212,7 +213,7 @@ All key bytes are encoded exactly as returned by `PublicKey::to_bytes`; decoders
 |-----------------|-----------|--------------|-------|
 | `0x00` | Reserved | — | MUST NOT be emitted; decoders surface `ERR_UNKNOWN_CURVE`. |
 | `0x01` | Ed25519 | — | Canonical v1 algorithm (`Algorithm::Ed25519`); enabled in the default config. |
-| `0x02` | ML‑DSA (Dilithium3) | — | Uses the Dilithium3 public key bytes (1952 bytes). Single‑key addresses cannot encode ML‑DSA because `key_len` is `u8`; multisig uses `u16` lengths. |
+| `0x02` | ML‑DSA-65 | — | Uses the protocol-fixed 1,952-byte, nonzero ML‑DSA-65 public key. Single-key addresses use extended controller tag `0x02`; multisig members use their existing `u16` lengths. |
 | `0x03` | BLS12‑381 (normal) | `bls` | Public keys in G1 (48 bytes), signatures in G2 (96 bytes). |
 | `0x04` | secp256k1 | — | Deterministic ECDSA over SHA‑256; public keys use the 33‑byte SEC1 compressed form and signatures use the canonical 64‑byte `r∥s` layout. |
 | `0x05` | BLS12‑381 (small) | `bls` | Public keys in G2 (96 bytes), signatures in G1 (48 bytes). |
@@ -301,6 +302,10 @@ Key implementation details:
   `0x0A | 0x01 | version:u8 | threshold:u16 | member_count:u16 | ...members`
   where each member is encoded as `(curve_id:u8, weight:u16, key_len:u16,
   key_bytes)`.
+- **Canonical ML-DSA-65 single-key layout**
+  `0x02 | 0x02 | 0x02 | 0x07A0 | key_bytes`, where the first `0x02` is the
+  single-key header, the second is the extended controller tag, the third is
+  the ML-DSA curve id, and `0x07A0` is the big-endian 1,952-byte key length.
 
 The fixture bundle in `fixtures/account/address_vectors.json` publishes I105
 outputs plus non-canonical vectors used to assert rejection on public
@@ -546,7 +551,7 @@ messages, plus recommended remediation guidance.
 | Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
 | `ERR_UNSUPPORTED_ALGORITHM` | Encoder received a signing algorithm not supported by the registry or build features. | Restrict account construction to curves enabled in the registry and configuration. |
-| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Single-key controllers are limited to `u8` lengths; use multisig for large public keys (e.g., ML‑DSA). |
+| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Single-key controllers support canonical `u16` lengths through extended tag `0x02`; reject payloads larger than 65,535 bytes. |
 | `ERR_INVALID_HEADER_VERSION` | Address header version is outside the supported range. | Emit header version `0` for V1 addresses. |
 | `ERR_INVALID_NORM_VERSION` | Normalisation version flag is not recognised. | Use normalisation version `1` and avoid toggling reserved bits. |
 

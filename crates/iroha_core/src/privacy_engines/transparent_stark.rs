@@ -2186,7 +2186,7 @@ mod tests {
     }
     #[test]
     fn query_indices_remain_unique_and_in_range_through_full_domains() {
-        for domain_size in [1, 2, 4, 8, 16, 64, 256] {
+        for domain_size in [1_usize, 2, 4, 8, 16, 64, 256] {
             for query_count in [1, domain_size.div_ceil(2), domain_size] {
                 let indices = derive_unique_query_indices_v1(&[0xa5; 32], domain_size, query_count)
                     .expect("valid query shape");

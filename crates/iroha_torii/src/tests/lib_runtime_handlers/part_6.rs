@@ -1663,13 +1663,23 @@ fn seed_authoritative_hosted_http_revision(
             supported_guest_isas: std::collections::BTreeSet::from([
                 iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
             ]),
+            trusted_guest_artifact: bundle
+                .container
+                .inrou
+                .as_ref()
+                .and_then(|manifest| {
+                    manifest
+                        .guest_images
+                        .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664)
+                })
+                .expect("hosted HTTP fixture must carry the selected guest artifact")
+                .published_artifact
+                .clone(),
             max_hosted_replica_capacity:
                 iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
             max_cpu_millis: u32::MAX,
             max_memory_bytes: u64::MAX,
             max_storage_bytes: u64::MAX,
-            geography_tags: Default::default(),
-            observed_latency_ms: None,
             advertised_at_ms: 1,
             heartbeat_expires_at_ms: u64::MAX,
         };
@@ -1918,6 +1928,7 @@ fn hosted_http_lease_volume_states(
             |volume| iroha_data_model::soracloud::SoraServiceLeaseVolumeStateV1 {
                 schema_version:
                     iroha_data_model::soracloud::SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
+                economic_clock: service_lease.economic_clock,
                 volume_name: volume.volume_name.clone(),
                 kind: volume.kind,
                 storage_class: volume.storage_class,

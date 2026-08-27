@@ -18,7 +18,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount},
     nexus::CanPublishSpaceDirectoryManifestForAccountDomain,
-    parameter::CanSetParameters,
+    parameter::{CanSetHijiriParameters, CanSetParameters},
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::json::Json;
@@ -92,6 +92,8 @@ pub fn default_manifest(
     let mint_cabbage =
         Mint::asset_quantity(44u32, AssetId::new(cabbage_definition, ALICE_ID.clone()));
     let grant_set_parameters = Grant::account_permission(CanSetParameters, ALICE_ID.clone());
+    let grant_set_hijiri_parameters =
+        Grant::account_permission(CanSetHijiriParameters, ALICE_ID.clone());
     let transfer_rose_definition = Transfer::asset_definition(
         genesis_account_id.clone(),
         rose_definition,
@@ -113,7 +115,8 @@ pub fn default_manifest(
         .append_instruction(mint_cabbage)
         .append_instruction(transfer_rose_definition)
         .append_instruction(transfer_wonderland)
-        .append_instruction(grant_set_parameters);
+        .append_instruction(grant_set_parameters)
+        .append_instruction(grant_set_hijiri_parameters);
     let gas_param_id = CustomParameterId::new("ivm_gas_limit_per_block".parse()?);
     let gas_param_val = ivm_gas_limit_per_block.unwrap_or(1_680_000u64);
     let gas_param = CustomParameter::new(gas_param_id, Json::new(gas_param_val));
@@ -416,6 +419,23 @@ mod tests {
             Some(gas_limit),
         )
         .expect("build default manifest");
+        let hijiri_permission = Permission::from(CanSetHijiriParameters);
+        let hijiri_admin_grants = manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+            .filter(|grant| {
+                matches!(
+                    grant,
+                    GrantBox::Permission(grant)
+                        if grant.destination() == &*ALICE_ID
+                            && grant.object() == &hijiri_permission
+                )
+            })
+            .count();
+        assert_eq!(
+            hijiri_admin_grants, 1,
+            "default manifest must preserve one bootstrap Hijiri administrator"
+        );
         assert_eq!(
             manifest.consensus_mode(),
             SumeragiConsensusMode::Npos,

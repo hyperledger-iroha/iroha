@@ -1119,6 +1119,31 @@ fn constant_rate_capability_rejects_future_versions() {
     }
 }
 #[test]
+fn constant_rate_capability_rejects_strict_mode_without_silent_downgrade() {
+    let strict = ConstantRateCapabilityConfig {
+        enabled: true,
+        version: 1,
+        strict: true,
+    };
+    let error = strict
+        .validate()
+        .expect_err("strict mode must fail until payload uses the fixed-rate scheduler");
+    assert!(
+        matches!(error, ConfigError::ConstantRateCapability(ref message) if message.contains("strict mode is unavailable") && message.contains("DATAGRAM failures")),
+        "unexpected error: {error:?}"
+    );
+
+    let best_effort = ConstantRateCapabilityConfig {
+        enabled: true,
+        version: 1,
+        strict: false,
+    };
+    best_effort
+        .validate()
+        .expect("best-effort cover traffic remains available");
+    assert_eq!(best_effort.capability().mode, ConstantRateMode::BestEffort);
+}
+#[test]
 fn constant_rate_capability_returns_none_when_disabled() {
     let json = config_fixture!("disabled_constant_rate.json");
     let path = write_config(json);
@@ -1538,6 +1563,49 @@ fn quota_tracker_capacity_accepts_exact_limit_and_rejects_plus_one() {
         .expect_err("per-mode tracker limit + 1 must fail");
     assert!(
         matches!(error, ConfigError::Quota(ref message) if message.contains("quotas_per_mode.middle.max_entries")),
+        "unexpected error: {error:?}"
+    );
+}
+#[test]
+fn quota_duration_horizon_accepts_boundary_and_rejects_overflow() {
+    let exact = QuotaConfig {
+        per_remote_window_secs: u64::MAX - 20,
+        cooldown_secs: 20,
+        ..QuotaConfig::default()
+    };
+    exact
+        .validate()
+        .expect("an exactly representable quota horizon must validate");
+
+    let overflow = QuotaConfig {
+        per_remote_window_secs: u64::MAX,
+        cooldown_secs: 1,
+        ..QuotaConfig::default()
+    };
+    let error = overflow
+        .validate()
+        .expect_err("an overflowing quota horizon must fail validation");
+    assert!(
+        matches!(error, ConfigError::Quota(ref message) if message.contains("quotas.per_remote_window_secs") && message.contains("overflow")),
+        "unexpected error: {error:?}"
+    );
+
+    let mut per_mode = PowConfig {
+        quotas_per_mode: Some(HopQuotaOverrides {
+            entry: Some(QuotaConfig {
+                per_remote_window_secs: u64::MAX,
+                cooldown_secs: 1,
+                ..QuotaConfig::default()
+            }),
+            ..HopQuotaOverrides::default()
+        }),
+        ..PowConfig::default()
+    };
+    let error = per_mode
+        .apply_defaults()
+        .expect_err("an overflowing per-mode quota horizon must fail validation");
+    assert!(
+        matches!(error, ConfigError::Quota(ref message) if message.contains("quotas_per_mode.entry.per_remote_window_secs") && message.contains("overflow")),
         "unexpected error: {error:?}"
     );
 }

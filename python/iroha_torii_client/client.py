@@ -11630,6 +11630,11 @@ class ToriiClient(
         public_key_hex: Optional[str] = None,
         signature_b64: Optional[str] = None,
         creation_time_ms: Optional[int] = None,
+        validation_fee_policy_version: Optional[int] = None,
+        validation_fee_policy_hash: Optional[str] = None,
+        validation_fee_hijiri_fee_quote_hash: Optional[str] = None,
+        validation_fee_instruction_index: Optional[int] = None,
+        validation_fee_transfer_entry_index: Optional[int] = None,
     ) -> MultisigResponse:
         """Propose a generic multisig instruction batch via ``POST /v1/multisig/propose``.
 
@@ -11700,6 +11705,70 @@ class ToriiClient(
         )
         if normalized_creation_time is not None:
             request_payload["creation_time_ms"] = normalized_creation_time
+        has_validation_fee_policy_version = validation_fee_policy_version is not None
+        has_validation_fee_policy_hash = validation_fee_policy_hash is not None
+        has_hijiri_fee_quote_hash = validation_fee_hijiri_fee_quote_hash is not None
+        has_validation_fee_instruction_index = validation_fee_instruction_index is not None
+        has_validation_fee_transfer_entry_index = (
+            validation_fee_transfer_entry_index is not None
+        )
+        if has_validation_fee_policy_version != has_validation_fee_policy_hash:
+            raise ValueError(
+                "propose_multisig validation fee policy version and hash must be provided together"
+            )
+        if not has_validation_fee_policy_version and has_hijiri_fee_quote_hash:
+            raise ValueError(
+                "propose_multisig validation fee Hijiri quote hash requires policy metadata"
+            )
+        if not has_validation_fee_policy_version and has_validation_fee_instruction_index:
+            raise ValueError(
+                "propose_multisig validation fee instruction index requires policy metadata"
+            )
+        if not has_validation_fee_policy_version and has_validation_fee_transfer_entry_index:
+            raise ValueError(
+                "propose_multisig validation fee transfer entry index requires policy metadata"
+            )
+        if has_validation_fee_transfer_entry_index and not has_validation_fee_instruction_index:
+            raise ValueError(
+                "propose_multisig validation fee transfer entry index requires instruction index"
+            )
+        if has_validation_fee_policy_version:
+            normalized_policy_version = _require_u64(
+                validation_fee_policy_version,
+                "propose_multisig.validation_fee_policy_version",
+            )
+            request_payload["validation_fee_policy_version"] = str(
+                normalized_policy_version
+            )
+            request_payload["validation_fee_policy_hash"] = self._normalize_hex32_string(
+                validation_fee_policy_hash,
+                context="propose_multisig.validation_fee_policy_hash",
+            )
+            if has_hijiri_fee_quote_hash:
+                request_payload["validation_fee_hijiri_fee_quote_hash"] = (
+                    self._normalize_hex32_string(
+                        validation_fee_hijiri_fee_quote_hash,
+                        context=(
+                            "propose_multisig.validation_fee_hijiri_fee_quote_hash"
+                        ),
+                    )
+                )
+            if has_validation_fee_instruction_index:
+                normalized_instruction_index = _require_u64(
+                    validation_fee_instruction_index,
+                    "propose_multisig.validation_fee_instruction_index",
+                )
+                request_payload["validation_fee_instruction_index"] = str(
+                    normalized_instruction_index
+                )
+            if has_validation_fee_transfer_entry_index:
+                normalized_transfer_entry_index = _require_u64(
+                    validation_fee_transfer_entry_index,
+                    "propose_multisig.validation_fee_transfer_entry_index",
+                )
+                request_payload["validation_fee_transfer_entry_index"] = str(
+                    normalized_transfer_entry_index
+                )
         body = self._post_json(
             "/v1/multisig/propose",
             request_payload,
@@ -16921,6 +16990,22 @@ class ToriiClient(
             bytes.fromhex(normalized)
         except ValueError as exc:
             raise RuntimeError(f"{context} must contain valid hexadecimal characters") from exc
+        return normalized
+
+    @classmethod
+    def _normalize_hex32_string(
+        cls,
+        value: Union[str, bytes, bytearray, memoryview],
+        *,
+        context: str,
+    ) -> str:
+        normalized = cls._normalize_hex_string(
+            value,
+            context=context,
+            expected_length=64,
+        )
+        if re.fullmatch(r"[0-9a-f]{64}", normalized) is None:
+            raise RuntimeError(f"{context} must contain exactly 64 hexadecimal characters")
         return normalized
 
     @staticmethod

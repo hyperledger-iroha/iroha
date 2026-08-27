@@ -31,6 +31,7 @@ public final class SigningAlgorithmTests {
 
   @Test
   public void aliasesNormalizeToCanonicalAlgorithms() {
+    assert SigningAlgorithm.fromAlgorithmName("ED-DSA") == SigningAlgorithm.ED25519;
     assert SigningAlgorithm.fromAlgorithmName("secp-256k1") == SigningAlgorithm.SECP256K1;
     assert SigningAlgorithm.fromAlgorithmName("bls-normal") == SigningAlgorithm.BLS_NORMAL;
     assert SigningAlgorithm.fromAlgorithmName("bls12-381-g2") == SigningAlgorithm.BLS_SMALL;
@@ -42,25 +43,29 @@ public final class SigningAlgorithmTests {
 
   @Test
   public void unsupportedAndUnicodeConfusableAliasesFailClosed() {
-    final String[] blankAlgorithms = {null, "", "   "};
+    final String[] blankAlgorithms = {null, ""};
     for (final String algorithm : blankAlgorithms) {
       final IllegalArgumentException error =
           assertThrows(() -> SigningAlgorithm.fromAlgorithmName(algorithm));
       assert error.getMessage().contains("non-empty string") : error.getMessage();
     }
 
-    final String[] paddedAlgorithms = {" ed25519", "ed25519 ", "\ted25519"};
-    for (final String algorithm : paddedAlgorithms) {
-      final IllegalArgumentException error =
-          assertThrows(() -> SigningAlgorithm.fromAlgorithmName(algorithm));
-      assert error.getMessage().contains("surrounding whitespace") : error.getMessage();
-    }
-
     final String[] algorithms = {
+      " ",
+      "   ",
+      " ed25519",
+      "ed25519 ",
+      "\ted25519",
       "unknown",
+      "ed 25519",
       "ed\t25519",
+      "ed.25519",
+      "ed/25519",
       "ed\u200B25519",
       "\u0435d25519",
+      "secp256\u212A1",
+      "ML.DSA/65",
+      "sm+2",
       "ml\uFF0Ddsa",
       "mldsa44",
       "ML-DSA-44",

@@ -418,8 +418,8 @@ pub struct ConsensusMessageControlHeld {
     pub execution_commitment: Option<ExecutionCommitment>,
     /// Inner validator signer or proposer index, when singular.
     pub signer: Option<ValidatorIndex>,
-    /// Frozen-QC signer cited by a certified-body response.
-    pub cited_responder: Option<ValidatorIndex>,
+    /// Current authenticated responder cited by a certified-body response.
+    pub cited_responder: Option<PeerId>,
     /// Exact signer indices carried by a QC or TC envelope.
     pub certificate_signers: Vec<ValidatorIndex>,
     /// Digest of the canonical Sumeragi v2 envelope retained by this receiver.
@@ -1369,10 +1369,7 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
         .map(ValidatorIndex::try_from)
         .transpose()
         .map_err(|_| eyre!("held descriptor signer exceeds the validator-index range"))?;
-    let cited_responder = optional_u64(object, "cited_responder")?
-        .map(ValidatorIndex::try_from)
-        .transpose()
-        .map_err(|_| eyre!("held descriptor cited responder exceeds the validator-index range"))?;
+    let cited_responder = parse_optional_canonical_peer(object, "cited_responder")?;
     let requires_single_signer = matches!(
         kind,
         ConsensusMessageControlKind::Proposal
@@ -1631,6 +1628,15 @@ fn parse_canonical_peer(object: &Map, field: &str) -> Result<PeerId> {
         return Err(eyre!("message-control peer `{field}` is not canonical"));
     }
     Ok(parsed)
+}
+fn parse_optional_canonical_peer(object: &Map, field: &str) -> Result<Option<PeerId>> {
+    let value = object
+        .get(field)
+        .ok_or_else(|| eyre!("message-control record lacks peer `{field}`"))?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    parse_canonical_peer(object, field).map(Some)
 }
 fn parse_optional_canonical_hash(object: &Map, field: &str) -> Result<Option<HashOf<BlockHeader>>> {
     let Some(value) = object.get(field) else {
@@ -1924,7 +1930,7 @@ mod tests {
         let commitment_value = norito::json::to_value(&descriptor_execution_commitment())
             .expect("encode descriptor execution commitment");
         let cited_responder = if kind == ConsensusMessageControlKind::CertifiedBodyResponse {
-            Value::from(0_u64)
+            Value::from(peer.clone())
         } else {
             Value::Null
         };
@@ -3056,7 +3062,7 @@ mod tests {
             assert_ne!(parsed.envelope_digest, CryptoHash::new(b""));
             if kind == ConsensusMessageControlKind::CertifiedBodyResponse {
                 assert_eq!(parsed.signer, None);
-                assert_eq!(parsed.cited_responder, Some(0));
+                assert_eq!(parsed.cited_responder, Some(descriptor_peer()));
             } else {
                 assert_eq!(parsed.cited_responder, None);
             }
@@ -3101,7 +3107,10 @@ mod tests {
         spurious_cited_responder
             .as_object_mut()
             .expect("vote descriptor")
-            .insert("cited_responder".to_owned(), Value::from(0_u64));
+            .insert(
+                "cited_responder".to_owned(),
+                Value::from(descriptor_peer().to_string()),
+            );
         assert!(parse_held(&spurious_cited_responder).is_err());
     }
     #[cfg(unix)]

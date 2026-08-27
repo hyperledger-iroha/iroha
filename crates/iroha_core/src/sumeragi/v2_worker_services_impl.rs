@@ -1214,6 +1214,7 @@ impl ProductionV2Services {
             local_validator,
             key_pair,
             network,
+            archive_peer_cursor: AtomicUsize::new(0),
             kura: durable_history,
             chunk_root: context_chunk_root,
             io: Some(io),
@@ -1487,17 +1488,27 @@ impl ProductionV2Services {
         &mut self,
         task: &BodyFetchTask,
     ) -> Result<PreparedCertifiedBodyFetchOwnerRemoval<'_>, String> {
-        if task.certified_request().is_none() {
+        let Some(request_hash) = task.certified_request().map(HashOf::new) else {
             return Err(format!(
                 "Sumeragi v2 body-fetch work {} completed without certified authority",
                 task.id().get()
             ));
-        }
+        };
         let owner = self.plan_exact_body_fetch_owner_removal(task)?;
+        let request_cancellation = {
+            let pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                debug_assert!(!pending.is_pending());
+                None
+            } else {
+                Some(pending.plan_certified_body_request_cancellation(request_hash)?)
+            }
+        };
         Ok(PreparedCertifiedBodyFetchOwnerRemoval {
             services: self,
             task: task.clone(),
             owner,
+            request_cancellation,
         })
     }
     /// Clone the process output guard before an exact service-removal token
@@ -1532,6 +1543,14 @@ impl ProductionV2Services {
     }
     fn remove_exact_body_fetch_owner(&mut self, task: &BodyFetchTask) -> Result<(), String> {
         let owner = self.plan_exact_body_fetch_owner_removal(task)?;
+        if let Some(request_hash) = task.certified_request().map(HashOf::new) {
+            let mut pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                debug_assert!(!pending.is_pending());
+            } else {
+                pending.cancel_certified_body_request(request_hash)?;
+            }
+        }
         self.commit_exact_body_fetch_owner_removal(task, owner);
         Ok(())
     }
@@ -1754,7 +1773,8 @@ impl ProductionV2Services {
             }
         }
     }
-    fn retry_locked_candidate_after_store(
+    /// Retry one waiting locked-body acquisition after matching bytes become durable.
+    pub(crate) fn retry_locked_candidate_after_durable_body(
         &mut self,
         subject: wire::BlockSubject,
     ) -> Result<(), String> {
@@ -1787,6 +1807,24 @@ impl ProductionV2Services {
         self.locked_candidate_acquisition
             .as_mut()
             .and_then(LockedCandidateAcquisition::take_ready)
+    }
+    /// Restore one exact ready delivery after transient executor capacity
+    /// prevented the current consumer from scheduling its locked proposal.
+    pub(crate) fn rearm_loaded_candidate_delivery(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Result<(), String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        self.locked_candidate_acquisition
+            .as_mut()
+            .ok_or_else(|| {
+                "Sumeragi v2 locked-body delivery rearm has no acquisition owner".to_owned()
+            })?
+            .rearm_ready_delivery(tag, round, subject)
     }
     /// Take the next exact validation deferral for bounded sidecar recovery.
     pub(crate) fn take_merge_sidecar_deferral(&mut self) -> Option<DeferredMergeSidecarWork> {
@@ -2952,7 +2990,8 @@ impl ProductionV2Services {
                     } => {
                         let stored_subject = completion.manifest().subject;
                         let _ = executor.complete_body_store(completion, self)?;
-                        if let Err(reason) = self.retry_locked_candidate_after_store(stored_subject)
+                        if let Err(reason) =
+                            self.retry_locked_candidate_after_durable_body(stored_subject)
                         {
                             return Err(executor.external_service_failed(reason, self));
                         }
@@ -3569,12 +3608,7 @@ impl ProductionV2Services {
                     .values()
                     .map(|tracked| tracked.state),
             )
-            .chain(
-                state
-                    .lifecycle_serves
-                    .values()
-                    .map(|tracked| tracked.state),
-            )
+            .chain(state.lifecycle_serves.values().map(|tracked| tracked.state))
         {
             match tracked_state {
                 V2IoWorkState::Queued => {
@@ -3584,16 +3618,13 @@ impl ProductionV2Services {
                     tracked_active = tracked_active.saturating_add(1);
                 }
                 V2IoWorkState::CompletionPending => {
-                    tracked_completion_pending =
-                        tracked_completion_pending.saturating_add(1);
+                    tracked_completion_pending = tracked_completion_pending.saturating_add(1);
                 }
             }
         }
         let queued_admissions = io.admission.queued();
         let capacity_generation = io.admission.lifecycle_capacity_generation();
-        let capacity_generation_exhausted = io
-            .admission
-            .lifecycle_capacity_generation_exhausted();
+        let capacity_generation_exhausted = io.admission.lifecycle_capacity_generation_exhausted();
         let queued_commands = state.commands.len();
         let mut queued_command_kinds = LifecycleIoQueuedCommandKindsV1::default();
         for command in &state.commands {
@@ -3611,9 +3642,7 @@ impl ProductionV2Services {
                 V2IoCommand::LifecycleDecisionApply(_) => {
                     &mut queued_command_kinds.decision_applies
                 }
-                V2IoCommand::RecoveredLifecycleSign(_) => {
-                    &mut queued_command_kinds.recovered_signs
-                }
+                V2IoCommand::RecoveredLifecycleSign(_) => &mut queued_command_kinds.recovered_signs,
                 #[cfg(test)]
                 V2IoCommand::LifecycleDecisionApplyFixture(_) => {
                     &mut queued_command_kinds.decision_applies
@@ -4128,6 +4157,19 @@ impl ProductionV2Services {
             return Ok(0);
         }
         pending.cancel_historical_lane_recovery_requests(request_hashes)
+    }
+    /// Cancel every retained transport fanout for one completed or superseded
+    /// CommitQC discovery request.
+    pub(crate) fn cancel_block_sync_request(
+        &self,
+        request_hash: HashOf<wire::CommitCertificateRequest>,
+    ) -> Result<usize, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            debug_assert!(!pending.is_pending());
+            return Ok(0);
+        }
+        pending.cancel_commit_certificate_request(request_hash)
     }
     /// Cancel requester-side sidecar output after its transport attempt retires.
     pub(crate) fn cancel_certified_merge_sidecar_requests(
@@ -5211,6 +5253,41 @@ impl ProductionV2Services {
             ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
             _permit,
         )
+    }
+    fn broadcast_preencoded_to_archive_peers_while_guarded(
+        &self,
+        data: &NetworkMessage,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<ExactFanoutOwnership, String> {
+        let frozen_sources = self.remote_voters();
+        self.enqueue_exact_fanout_while_guarded(
+            vec![data.clone()],
+            self.current_archive_targets_with_frozen_fallback(&frozen_sources),
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+            permit,
+        )
+    }
+    /// Broadcast historical block-sync discovery to the live authenticated
+    /// topology, retaining the immutable height roster as an empty-snapshot
+    /// fallback.
+    pub(crate) fn broadcast_block_sync_while_guarded(
+        &self,
+        message: wire::ConsensusMessageV2,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<(), String> {
+        if !matches!(
+            &message.payload,
+            wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        ) {
+            return Err("historical block-sync broadcast received another payload kind".to_owned());
+        }
+        let data = Self::preencode_v2_network_message(message)?;
+        if self.broadcast_preencoded_to_archive_peers_while_guarded(&data, permit)?
+            == ExactFanoutOwnership::SourceRetained
+        {
+            iroha_logger::debug!("deferred block-sync request to its retained discovery source");
+        }
+        Ok(())
     }
     /// Broadcast under a caller-owned output permit without reacquiring it.
     pub(crate) fn broadcast_to_voters_while_guarded(

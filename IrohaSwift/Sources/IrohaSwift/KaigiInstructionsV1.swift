@@ -539,6 +539,27 @@ public struct RegisterKaigiRelayInstructionV1: KaigiInstructionV1, Equatable {
   }
 }
 
+/// Retire one Kaigi relay descriptor and its retained health feedback.
+public struct UnregisterKaigiRelayInstructionV1: KaigiInstructionV1, Equatable {
+  public static let stableWireID = "iroha.instruction.v1::kaigi::UnregisterKaigiRelay"
+  public static let schemaName = "iroha_data_model::isi::kaigi::UnregisterKaigiRelay"
+
+  public let relayID: String
+
+  public init(relayID: String) throws {
+    self.relayID = try kaigiCanonicalAccountID(relayID, field: "relay_id")
+  }
+
+  public var wireID: String { Self.stableWireID }
+  public var concreteSchemaName: String { Self.schemaName }
+
+  public func barePayload() throws -> Data {
+    var writer = CompactNoritoWriter()
+    writer.writeField(try CanonicalNorito.encodeCompactAccountId(relayID))
+    return writer.data
+  }
+}
+
 /// Report observed health for a relay in an active Kaigi manifest.
 public struct ReportKaigiRelayHealthInstructionV1: KaigiInstructionV1, Equatable {
   public static let stableWireID = "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth"

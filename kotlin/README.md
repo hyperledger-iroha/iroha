@@ -492,9 +492,10 @@ and `ready=true`. Asset scale, committed snapshot, verifier identities, and
 release bindings are supplied through the exact command and proof types that
 consume them rather than a separate readiness archive.
 `prepareTopUp` accepts only Torii's authoritative `next_zero_path` and retains the local note
-opening. Init results do not yet carry a proof-bound output membership witness, so the JVM surface
-intentionally does not project or restore a spendable init branch. Persisted openings and
-submission archives use typed decoders so idempotent retries reuse exact canonical bytes.
+opening. Init results carry the proof-bound output membership witness, and the JVM surface validates
+and restores the resulting spendable branch together with its owned opening and top-up provenance.
+Persisted openings and submission archives use typed decoders so idempotent retries reuse exact
+canonical bytes.
 Secret-bearing append and redeem requests are single-use and zeroized after native consumption.
 Each projected branch carries its complete ordered exact-state claim set and authenticated V4
 artifact binding. Native `conflictsWith` compares every claim pair, rejecting equality and

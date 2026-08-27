@@ -83,6 +83,48 @@ fn locked_body_recovery_is_independent_of_reproposal_gates() {
     );
 }
 #[test]
+fn locked_body_reproposal_rearms_only_for_transient_executor_capacity() {
+    let (context, _) = context();
+    let tag = EventTag::new(context.height, 5, Generation::new(19));
+    let subject = proposal_subject(b"capacity-blocked locked-body reproposal");
+    let locked_round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 3,
+    };
+    let leader = context.leader(tag.view());
+    let nonleader = if leader == 0 { 1 } else { 0 };
+    let directive =
+        LocalProposalDirective::for_test(tag, leader, Some(locked_round), Some(subject), None);
+    let owner = LocalProposalOwner::from(directive);
+    let blocked_plan = locked_body_recovery_plan(directive, leader, None, false);
+    assert!(locked_body_reproposal_is_capacity_blocked(
+        blocked_plan,
+        directive,
+        leader,
+        None,
+        false,
+    ));
+    assert!(
+        !locked_body_reproposal_is_capacity_blocked(blocked_plan, directive, leader, None, true),
+        "a consumed runtime producer reservation must not hot-rearm"
+    );
+    assert!(!locked_body_reproposal_is_capacity_blocked(
+        blocked_plan,
+        directive,
+        nonleader,
+        None,
+        false,
+    ));
+    assert!(!locked_body_reproposal_is_capacity_blocked(
+        blocked_plan,
+        directive,
+        leader,
+        Some(owner),
+        false,
+    ));
+}
+#[test]
 fn same_tag_higher_lock_retires_all_local_proposal_owners() {
     let (context, _) = context();
     let tag = EventTag::new(context.height, 5, Generation::new(11));
@@ -346,12 +388,9 @@ fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
     assert_eq!(encoded.manifest().subject, locked_subject);
     let (manifest, chunks) = encoded.into_parts();
     let acquisition_root = tempfile::tempdir().expect("chunk reconstruction directory");
-    let mut session = super::super::v2_chunks::V2ChunkSession::open(
-        acquisition_root.path(),
-        &context,
-        manifest,
-    )
-    .expect("open exact reproposal chunk session");
+    let mut session =
+        super::super::v2_chunks::V2ChunkSession::open(acquisition_root.path(), &context, manifest)
+            .expect("open exact reproposal chunk session");
     for (index, chunk) in chunks.iter().enumerate() {
         session
             .admit_bytes(
@@ -727,7 +766,7 @@ fn pending_kura_runner_activation_publishes_current_height_without_successor_aut
 fn pending_kura_finalization_closes_and_drains_before_rollover() {
     let source = include_str!("../v2_runner/lifecycle_pending_kura.rs");
     let start = source
-        .find("let rollover_ready = activated.with_runner_runtime(")
+        .find("let finalization_ready = activated.ready_for_finalized_rollover")
         .expect("pending-Kura finalization preflight remains explicit");
     let end = source[start..]
         .find("let prepared_successor = {")
@@ -736,6 +775,8 @@ fn pending_kura_finalization_closes_and_drains_before_rollover() {
     let finalization = &source[start..end];
     let mut cursor = 0;
     for token in [
+        "let finalization_ready = activated.ready_for_finalized_rollover",
+        "let rollover_ready = if finalization_ready",
         "if !rollover_ready",
         "if !finalized_ingress_closed",
         "close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)",

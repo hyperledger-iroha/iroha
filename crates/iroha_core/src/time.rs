@@ -1034,10 +1034,7 @@ fn status_from_reconciled_service(
             sample_count: 0,
             peer_count,
             fallback,
-            health: svc
-                .params
-                .health_policy
-                .evaluate(0, 0, 0, fallback),
+            health: svc.params.health_policy.evaluate(0, 0, 0, fallback),
         };
     };
     // Never initialize or advance smoothing from an unhealthy raw aggregate.

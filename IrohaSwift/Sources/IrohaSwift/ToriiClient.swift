@@ -3510,14 +3510,26 @@ private enum ToriiIdentifierReceiptVerifier {
         let rawHex: String
         var prefixedAlgorithm: SigningAlgorithm?
         if let separator = literal.firstIndex(of: ":") {
-            let prefix = String(literal[..<separator]).lowercased()
+            let rawPrefix = String(literal[..<separator])
+            guard !rawPrefix.isEmpty, rawPrefix.utf8.allSatisfy({ byte in
+                (byte >= 0x30 && byte <= 0x39)
+                    || (byte >= 0x41 && byte <= 0x5A)
+                    || (byte >= 0x61 && byte <= 0x7A)
+                    || byte == 0x2D
+                    || byte == 0x5F
+            }) else {
+                throw ToriiClientError.invalidPayload(
+                    "Unsupported resolver public-key prefix \(rawPrefix)."
+                )
+            }
+            let prefix = rawPrefix.lowercased()
             rawHex = String(literal[literal.index(after: separator)...])
             switch prefix {
             case "ed25519":
                 prefixedAlgorithm = .ed25519
             case "secp256k1":
                 prefixedAlgorithm = .secp256k1
-            case "ml-dsa", "mldsa":
+            case "ml-dsa", "mldsa", "mldsa65", "ml-dsa-65", "ml_dsa_65", "ml_dsa-65":
                 prefixedAlgorithm = .mlDsa
             case "bls_normal", "bls-normal", "blsnormal":
                 prefixedAlgorithm = .blsNormal
@@ -3670,7 +3682,12 @@ private enum ToriiIdentifierReceiptVerifier {
             }
             throw ToriiClientError.invalidPayload("SM2 receipt verification is unavailable.")
         case .mlDsa:
-            guard let suite = inferMlDsaSuite(publicKey: publicKey, signature: signature) else {
+            // The protocol discriminant is fixed to ML-DSA-65 even though the
+            // general-purpose bridge also exposes suites 44 and 87.
+            let suite = MlDsaSuite.mlDsa65
+            let params = suite.parameters()
+            guard publicKey.count == params.publicKeyLength,
+                  signature.count == params.signatureLength else {
                 return false
             }
             if let verified = NoritoNativeBridge.shared.verifyDetached(
@@ -3703,16 +3720,6 @@ private enum ToriiIdentifierReceiptVerifier {
             }
             throw ToriiClientError.invalidPayload("\(algorithm.wireName) receipt verification is unavailable.")
         }
-    }
-
-    private static func inferMlDsaSuite(publicKey: Data, signature: Data) -> MlDsaSuite? {
-        for suite in MlDsaSuite.allCases {
-            let params = suite.parameters()
-            if publicKey.count == params.publicKeyLength, signature.count == params.signatureLength {
-                return suite
-            }
-        }
-        return nil
     }
 }
 
@@ -16554,6 +16561,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
     public var memo: String?
     public var validationFeePolicyVersion: UInt64?
     public var validationFeePolicyHash: String?
+    public var validationFeeHijiriFeeQuoteHash: String?
     public var validationFeeInstructionIndex: UInt64?
     public var validationFeeTransferEntryIndex: UInt64?
     public var instructions: [ToriiMultisigProposeInstruction]
@@ -16566,6 +16574,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 memo: String? = nil,
                 validationFeePolicyVersion: UInt64? = nil,
                 validationFeePolicyHash: String? = nil,
+                validationFeeHijiriFeeQuoteHash: String? = nil,
                 validationFeeInstructionIndex: UInt64? = nil,
                 validationFeeTransferEntryIndex: UInt64? = nil,
                 instructions: [ToriiMultisigProposeInstruction],
@@ -16579,6 +16588,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         self.memo = memo
         self.validationFeePolicyVersion = validationFeePolicyVersion
         self.validationFeePolicyHash = validationFeePolicyHash
+        self.validationFeeHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash
         self.validationFeeInstructionIndex = validationFeeInstructionIndex
         self.validationFeeTransferEntryIndex = validationFeeTransferEntryIndex
         self.instructions = instructions
@@ -16592,6 +16602,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 memo: String? = nil,
                 validationFeePolicyVersion: UInt64? = nil,
                 validationFeePolicyHash: String? = nil,
+                validationFeeHijiriFeeQuoteHash: String? = nil,
                 validationFeeInstructionIndex: UInt64? = nil,
                 validationFeeTransferEntryIndex: UInt64? = nil,
                 noritoInstructionBoxBytes: [Data],
@@ -16605,6 +16616,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
             memo: memo,
             validationFeePolicyVersion: validationFeePolicyVersion,
             validationFeePolicyHash: validationFeePolicyHash,
+            validationFeeHijiriFeeQuoteHash: validationFeeHijiriFeeQuoteHash,
             validationFeeInstructionIndex: validationFeeInstructionIndex,
             validationFeeTransferEntryIndex: validationFeeTransferEntryIndex,
             instructions: noritoInstructionBoxBytes.map {
@@ -16625,6 +16637,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         case memo
         case validationFeePolicyVersion = "validation_fee_policy_version"
         case validationFeePolicyHash = "validation_fee_policy_hash"
+        case validationFeeHijiriFeeQuoteHash = "validation_fee_hijiri_fee_quote_hash"
         case validationFeeInstructionIndex = "validation_fee_instruction_index"
         case validationFeeTransferEntryIndex = "validation_fee_transfer_entry_index"
         case instructions
@@ -16644,11 +16657,17 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         let normalizedMemo = try ToriiRequestValidation.normalizedOptionalNonEmpty(memo, field: "memo")
         let hasValidationFeePolicyVersion = validationFeePolicyVersion != nil
         let hasValidationFeePolicyHash = validationFeePolicyHash != nil
+        let hasValidationFeeHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash != nil
         let hasValidationFeeInstructionIndex = validationFeeInstructionIndex != nil
         let hasValidationFeeTransferEntryIndex = validationFeeTransferEntryIndex != nil
         guard hasValidationFeePolicyVersion == hasValidationFeePolicyHash else {
             throw ToriiClientError.invalidPayload(
                 "validation_fee_policy_version and validation_fee_policy_hash must be provided together."
+            )
+        }
+        guard hasValidationFeePolicyVersion || !hasValidationFeeHijiriFeeQuoteHash else {
+            throw ToriiClientError.invalidPayload(
+                "validation_fee_hijiri_fee_quote_hash requires validation fee policy metadata."
             )
         }
         guard hasValidationFeePolicyVersion || !hasValidationFeeInstructionIndex else {
@@ -16670,6 +16689,10 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
             validationFeePolicyHash,
             field: "validation_fee_policy_hash"
         )
+        let normalizedValidationFeeHijiriFeeQuoteHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
+            validationFeeHijiriFeeQuoteHash,
+            field: "validation_fee_hijiri_fee_quote_hash"
+        )
         guard !instructions.isEmpty else {
             throw ToriiClientError.invalidPayload("instructions must not be empty.")
         }
@@ -16685,6 +16708,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         try container.encodeIfPresent(normalizedMemo, forKey: .memo)
         try container.encodeIfPresent(validationFeePolicyVersion.map(String.init), forKey: .validationFeePolicyVersion)
         try container.encodeIfPresent(normalizedValidationFeePolicyHash, forKey: .validationFeePolicyHash)
+        try container.encodeIfPresent(normalizedValidationFeeHijiriFeeQuoteHash, forKey: .validationFeeHijiriFeeQuoteHash)
         try container.encodeIfPresent(validationFeeInstructionIndex.map(String.init), forKey: .validationFeeInstructionIndex)
         try container.encodeIfPresent(validationFeeTransferEntryIndex.map(String.init), forKey: .validationFeeTransferEntryIndex)
         try container.encode(instructions, forKey: .instructions)

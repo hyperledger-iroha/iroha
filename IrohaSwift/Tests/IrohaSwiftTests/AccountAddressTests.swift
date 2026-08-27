@@ -380,11 +380,21 @@ final class AccountAddressTests: XCTestCase {
             "   ",
             " ed25519",
             "ed25519 ",
+            "\u{00A0}ML-DSA-65\u{00A0}",
+            "\u{2003}ML-DSA-65\u{2003}",
             "future-curve",
             "ed\t25519",
+            "ed 25519",
+            "ed.25519",
+            "ed/25519",
+            "ed@25519",
+            "ed#25519",
             "ed\u{200B}25519",
             "\u{0435}d25519",
+            "secp256\u{212A}1",
             "ml\u{FF0D}dsa",
+            "ML-DSA-44",
+            "ML_DSA_87",
             "gost256\u{0430}",
         ]
 
@@ -399,6 +409,89 @@ final class AccountAddressTests: XCTestCase {
             }
         }
     }
+
+    #if IROHASWIFT_ENABLE_MLDSA
+    func testMlDsaAccountAliasesRequireProtocolSuite65KeyMaterial() throws {
+        let publicKey = Data(repeating: 0xA5, count: 1_952)
+        for algorithm in ["mldsa", "ML-DSA-65", "ML_DSA_65", "ML_DSA-65"] {
+            let address = try AccountAddress.fromAccount(
+                publicKey: publicKey,
+                algorithm: algorithm
+            )
+            let canonical = try address.canonicalBytes()
+            XCTAssertEqual(
+                Data(canonical.prefix(5)),
+                Data([0x02, 0x02, 0x02, 0x07, 0xA0]),
+                algorithm
+            )
+            XCTAssertEqual(Data(canonical.suffix(publicKey.count)), publicKey, algorithm)
+            XCTAssertEqual(
+                try AccountAddress.fromCanonicalBytes(canonical).canonicalBytes(),
+                canonical,
+                algorithm
+            )
+            let i105 = try address.toI105(networkPrefix: 753)
+            XCTAssertEqual(
+                try AccountAddress.fromI105(i105, expectedPrefix: 753).canonicalBytes(),
+                canonical,
+                algorithm
+            )
+            let compact = try address.compactNoritoAccountControllerPayload()
+            XCTAssertTrue(
+                AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(compact),
+                algorithm
+            )
+        }
+
+        for malformedKey in [
+            Data(repeating: 0x44, count: 1_312),
+            Data(repeating: 0x65, count: 1_951),
+            Data(repeating: 0x65, count: 1_953),
+            Data(repeating: 0x87, count: 2_592),
+            Data(repeating: 0, count: 1_952),
+        ] {
+            XCTAssertThrowsError(
+                try AccountAddress.fromAccount(
+                    publicKey: malformedKey,
+                    algorithm: "ML-DSA-65"
+                )
+            ) { error in
+                guard case AccountAddressError.invalidPublicKey = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
+        }
+
+        var suite44Canonical = Data([0x02, 0x02, 0x02, 0x05, 0x20])
+        suite44Canonical.append(Data(repeating: 0x44, count: 1_312))
+        XCTAssertThrowsError(try AccountAddress.fromCanonicalBytes(suite44Canonical)) { error in
+            guard case AccountAddressError.invalidPublicKey = error else {
+                return XCTFail("unexpected wire-decoding error: \(error)")
+            }
+        }
+
+        for malformedKey in [
+            Data(repeating: 0x44, count: 1_312),
+            Data(repeating: 0x87, count: 2_592),
+            Data(repeating: 0, count: 1_952),
+        ] {
+            var algorithmAndPayload = Data([SigningAlgorithm.mlDsa.noritoDiscriminant])
+            algorithmAndPayload.append(malformedKey)
+            var compactPublicKey = CompactNoritoWriter()
+            compactPublicKey.writeUInt64LE(UInt64(algorithmAndPayload.count))
+            for byte in algorithmAndPayload {
+                compactPublicKey.writeLength(1)
+                compactPublicKey.writeUInt8(byte)
+            }
+            var controller = CompactNoritoWriter()
+            controller.writeUInt32LE(0)
+            controller.writeField(compactPublicKey.data)
+            XCTAssertFalse(
+                AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(controller.data)
+            )
+        }
+    }
+    #endif
 
     func testAccountControllerNoritoUsesAlgorithmTaggedPublicKeyBytes() throws {
         let publicKey = try validEd25519PublicKey(seed: 0x42)

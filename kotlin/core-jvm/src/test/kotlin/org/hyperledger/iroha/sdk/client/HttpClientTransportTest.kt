@@ -1130,6 +1130,7 @@ class HttpClientTransportTest {
                 memo = "QR invoice 42",
                 validationFeePolicyVersion = 7,
                 validationFeePolicyHash = "AB".repeat(32),
+                validationFeeHijiriFeeQuoteHash = "CD".repeat(32),
                 validationFeeInstructionIndex = 1,
                 validationFeeTransferEntryIndex = 2,
             )
@@ -1161,6 +1162,10 @@ class HttpClientTransportTest {
         assertEquals(creationTimeMs, (payload["creation_time_ms"] as Number).toLong())
         assertEquals("7", payload["validation_fee_policy_version"])
         assertEquals("ab".repeat(32), payload["validation_fee_policy_hash"])
+        assertEquals(
+            "cd".repeat(32),
+            payload["validation_fee_hijiri_fee_quote_hash"],
+        )
         assertEquals("1", payload["validation_fee_instruction_index"])
         assertEquals("2", payload["validation_fee_transfer_entry_index"])
         @Suppress("UNCHECKED_CAST")
@@ -1297,6 +1302,32 @@ class HttpClientTransportTest {
                     validationFeePolicyVersion = 7,
                 )
             )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    feePayment = testFeePayment(),
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                    validationFeeHijiriFeeQuoteHash = "cd".repeat(32),
+                )
+            )
+        }
+        for (invalidHijiriQuoteHash in listOf("cd".repeat(31), "gg".repeat(32))) {
+            assertFailsWith<IllegalArgumentException> {
+                HttpClientTransport.buildMultisigProposePayload(
+                    MultisigProposeRequest(
+                        feePayment = testFeePayment(),
+                        multisigAccountAlias = "cbdc@banka",
+                        signerAccountId = "alice",
+                        instructions = listOf(instruction),
+                        validationFeePolicyVersion = 7,
+                        validationFeePolicyHash = "ab".repeat(32),
+                        validationFeeHijiriFeeQuoteHash = invalidHijiriQuoteHash,
+                    )
+                )
+            }
         }
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(

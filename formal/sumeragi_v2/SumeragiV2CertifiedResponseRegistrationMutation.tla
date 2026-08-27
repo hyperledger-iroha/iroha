@@ -76,12 +76,11 @@ CertifiedRequest(route) ==
    certificate |-> CertifiedQc,
    requestHash |-> CertifiedRequestHash]
 
-CertifiedResponse(archiveServer) ==
+CertifiedResponse(responder) ==
   [kind |-> "CertifiedResponse",
    source |-> Relay,
-   archiveServer |-> archiveServer,
-   signatureOwner |-> archiveServer,
-   citedResponder |-> FrozenSigner,
+   responder |-> responder,
+   signatureOwner |-> responder,
    requestHash |-> CertifiedRequestHash,
    recipient |-> Requester,
    height |-> 7,
@@ -166,9 +165,8 @@ MatchingCertifiedRequests(response) ==
 CertifiedResponseAuthorized(response) ==
   /\ response.kind = "CertifiedResponse"
   /\ decisionInstalled
-  /\ response.archiveServer \in ArchiveServers
-  /\ response.signatureOwner = response.archiveServer
-  /\ response.citedResponder \in CertifiedQc.signers
+  /\ response.responder \in ArchiveServers
+  /\ response.signatureOwner = response.responder
   /\ IF RequireMatchingCertifiedRequest
      THEN MatchingCertifiedRequests(response) # {}
      ELSE TRUE

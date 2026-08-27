@@ -186,7 +186,7 @@ Follow these phases whenever you demo the console for operators or auditors.
    ```
 
 4. Archive the attestation digest under
-   `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md`
+   `specs/sdk/android/strongbox_attestation_harness_plan.md`
    as required by AND2/AND6.
 
 ### Step 2 — Compose & review a governance transaction

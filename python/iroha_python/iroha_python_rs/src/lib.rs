@@ -287,8 +287,8 @@ fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
         ));
     }
     if !algorithm
-        .chars()
-        .all(|ch| ch.is_ascii() && !ch.is_ascii_control())
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(PyValueError::new_err(format!(
             "unsupported crypto algorithm `{algorithm}`"
@@ -301,7 +301,7 @@ fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
     let compact = normalized
         .chars()
         .map(|ch| match ch {
-            '_' | ' ' | '.' => '-',
+            '_' => '-',
             _ => ch,
         })
         .collect::<String>();

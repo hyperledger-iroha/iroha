@@ -392,6 +392,165 @@ pub mod isi {
         }
         Ok(())
     }
+    fn validate_hijiri_parameters(
+        custom: &iroha_data_model::parameter::CustomParameter,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::hijiri::{HijiriAccountRiskV1, HijiriParametersV1};
+
+        if let Some(next) = HijiriParametersV1::from_custom_parameter(custom).map_err(|error| {
+            invalid_smart_contract_parameter(format!("invalid Hijiri parameters: {error}"))
+        })? {
+            let previous = state_transaction
+                .world
+                .parameters
+                .get()
+                .custom()
+                .get(custom.id())
+                .map(|previous| {
+                    HijiriParametersV1::from_custom_parameter(previous)
+                        .map_err(|error| {
+                            invalid_smart_contract_parameter(format!(
+                                "active Hijiri parameters are malformed: {error}"
+                            ))
+                        })?
+                        .ok_or_else(|| {
+                            invalid_smart_contract_parameter(
+                                "active Hijiri parameter changed its reserved identity",
+                            )
+                        })
+                })
+                .transpose()?;
+            return HijiriParametersV1::validate_transition(previous.as_ref(), &next).map_err(
+                |error| {
+                    invalid_smart_contract_parameter(format!(
+                        "invalid Hijiri parameter transition: {error}"
+                    ))
+                },
+            );
+        }
+
+        let Some(next) = HijiriAccountRiskV1::from_custom_parameter(custom).map_err(|error| {
+            invalid_smart_contract_parameter(format!("invalid Hijiri account-risk record: {error}"))
+        })?
+        else {
+            return Ok(());
+        };
+        let previous = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(custom.id())
+            .map(|previous| {
+                HijiriAccountRiskV1::from_custom_parameter(previous)
+                    .map_err(|error| {
+                        invalid_smart_contract_parameter(format!(
+                            "active Hijiri account-risk record is malformed: {error}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        invalid_smart_contract_parameter(
+                            "active Hijiri account-risk record changed its reserved identity",
+                        )
+                    })
+            })
+            .transpose()?;
+        HijiriAccountRiskV1::validate_transition(previous.as_ref(), &next).map_err(|error| {
+            invalid_smart_contract_parameter(format!(
+                "invalid Hijiri account-risk transition: {error}"
+            ))
+        })
+    }
+    fn validate_da_ingest_admission_policy(
+        custom: &iroha_data_model::parameter::CustomParameter,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1;
+
+        let Some(next) =
+            DaIngestAdmissionPolicyV1::from_custom_parameter(custom).map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid DA ingest admission policy: {error}"
+                ))
+            })?
+        else {
+            return Ok(());
+        };
+        let previous = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(custom.id())
+            .map(|previous| {
+                DaIngestAdmissionPolicyV1::from_custom_parameter(previous)
+                    .map_err(|error| {
+                        invalid_smart_contract_parameter(format!(
+                            "active DA ingest admission policy is malformed: {error}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        invalid_smart_contract_parameter(
+                            "active DA ingest admission policy changed its reserved identity",
+                        )
+                    })
+            })
+            .transpose()?;
+        next.validate_transition(previous.as_ref())
+            .map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid DA ingest admission policy transition: {error}"
+                ))
+            })?;
+        for lane in &next.lanes {
+            if let Some(owner) = lane
+                .producers
+                .iter()
+                .find(|owner| state_transaction.world.accounts.get(*owner).is_none())
+            {
+                return Err(invalid_smart_contract_parameter(format!(
+                    "DA ingest admission lane {} names unknown producer {owner}",
+                    lane.lane_id
+                )));
+            }
+            match state_transaction
+                .lane_incarnation_at_height(lane.lane_id, state_transaction.block_height())
+            {
+                Some(incarnation) if incarnation == lane.lane_incarnation => {}
+                Some(incarnation) => {
+                    return Err(invalid_smart_contract_parameter(format!(
+                        "DA ingest admission lane {} binds incarnation {}, but the active incarnation is {}",
+                        lane.lane_id, lane.lane_incarnation, incarnation
+                    )));
+                }
+                None if !lane.producers.is_empty() => {
+                    return Err(invalid_smart_contract_parameter(format!(
+                        "DA ingest admission lane {} is inactive but still has producers",
+                        lane.lane_id
+                    )));
+                }
+                None => {
+                    let Some(previous_lane) = previous
+                        .as_ref()
+                        .and_then(|policy| policy.lane(lane.lane_id))
+                    else {
+                        return Err(invalid_smart_contract_parameter(format!(
+                            "DA ingest admission policy introduced tombstone for unknown inactive lane {}",
+                            lane.lane_id
+                        )));
+                    };
+                    if previous_lane.lane_incarnation != lane.lane_incarnation {
+                        return Err(invalid_smart_contract_parameter(format!(
+                            "DA ingest admission tombstone for lane {} changed its inactive incarnation",
+                            lane.lane_id
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     fn validate_reputation_archive_retention_request(
         custom: &iroha_data_model::parameter::CustomParameter,
         state_transaction: &StateTransaction<'_, '_>,
@@ -11023,6 +11182,22 @@ pub mod isi {
             ..crate::state::SccpVerifierWorkV1::default()
         }
     }
+    /// Project BSC verifier-work counters through the production mapper for isolated tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn sccp_bsc_native_verifier_work_fields_for_testing(
+        estimate: iroha_sccp::BscNativeFinalityWorkEstimateV1,
+    ) -> [u64; 5] {
+        let work = sccp_bsc_native_verifier_work(estimate);
+        [
+            work.native_headers,
+            work.native_header_bytes,
+            work.secp256k1_recoveries,
+            work.bls_aggregate_checks,
+            work.bls_signer_contributions,
+        ]
+    }
     fn sccp_native_verifier_work(
         decoded: &iroha_sccp::SccpNativeInboundMessageProofV1,
         encoded_envelope_len: usize,
@@ -11084,6 +11259,23 @@ pub mod isi {
                     native_headers: u64::from(estimate.continuation_headers),
                     native_header_bytes: u64::from(estimate.framed_header_bytes),
                     secp256k1_recoveries: u64::from(estimate.secp256k1_recoveries),
+                    ..crate::state::SccpVerifierWorkV1::default()
+                })
+            }
+            SccpNativeSourceProofV1::TonMasterchain(proof) => {
+                let estimate =
+                    iroha_sccp::ton_native_source_work_estimate(proof).map_err(|error| {
+                        invalid_bridge_proof(format!(
+                            "SCCP TON native proof exceeds verifier work bounds: {error:?}"
+                        ))
+                    })?;
+                Ok(crate::state::SccpVerifierWorkV1 {
+                    native_headers: u64::from(estimate.continuation_blocks),
+                    native_header_bytes: u64::from(estimate.framed_boc_bytes),
+                    ed25519_signature_checks: u64::from(estimate.ed25519_signature_checks),
+                    ed25519_validator_key_checks: u64::from(
+                        estimate.validator_key_checks_upper_bound,
+                    ),
                     ..crate::state::SccpVerifierWorkV1::default()
                 })
             }
@@ -11243,6 +11435,10 @@ pub mod isi {
                 // Bounded parsing exposes the replay key, so exact replay consumes no verifier work.
                 // The one-proof transaction cap prevents this conservative reservation from
                 // crowding out another legitimate proof.
+                let (bn254_pairing_checks, bls12_381_pairing_checks) = match parsed.crypto_work() {
+                    iroha_sccp::SccpDestinationProofCryptoWorkV1::Groth16Bn254Pairing => (1, 0),
+                    iroha_sccp::SccpDestinationProofCryptoWorkV1::Groth16Bls12381Pairing => (0, 1),
+                };
                 state_transaction.register_sccp_proof(
                     proof_size,
                     crate::state::SccpVerifierWorkV1 {
@@ -11255,7 +11451,8 @@ pub mod isi {
                         .ok_or_else(|| {
                             invalid_bridge_proof("SCCP Taira validator work bound overflows u64")
                         })?,
-                        bn254_pairing_checks: 1,
+                        bn254_pairing_checks,
+                        bls12_381_pairing_checks,
                         ..crate::state::SccpVerifierWorkV1::default()
                     },
                 )?;
@@ -12027,18 +12224,29 @@ pub mod isi {
         route: &iroha_data_model::bridge::SccpGovernedRouteV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let verifying_key = match route.destination {
+        let verifying_key_is_well_formed = match route.destination {
             iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(deployment) => {
-                deployment.verifying_key
+                iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                    &deployment.verifying_key,
+                )
             }
             iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(deployment) => {
-                deployment.verifying_key
+                iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                    &deployment.verifying_key,
+                )
             }
             iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(deployment) => {
-                deployment.verifying_key
+                iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                    &deployment.verifying_key,
+                )
+            }
+            iroha_data_model::bridge::SccpDestinationDeploymentV1::Ton(deployment) => {
+                iroha_sccp::sccp_groth16_bls12381_verifying_key_is_well_formed_v1(
+                    &deployment.verifying_key,
+                )
             }
         };
-        if !iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(&verifying_key) {
+        if !verifying_key_is_well_formed {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "SCCP governed Groth16 key contains an invalid curve, infinity, or subgroup point"
@@ -12475,6 +12683,18 @@ pub mod isi {
             }
         };
         commit_sccp_registry_action(state_transaction, payload, operation, lane_id, event_route)
+    }
+    /// Exercise the production SCCP route-removal path from isolated integration tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[doc(hidden)]
+    pub fn remove_sccp_route_for_testing(
+        key: iroha_data_model::bridge::SccpRouteKeyV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        apply_sccp_route_governance_action(
+            bridge::SccpRouteGovernanceActionV1::Remove(key),
+            state_transaction,
+        )
     }
     impl Execute for bridge::ApplySccpRouteGovernance {
         fn execute(
@@ -18583,6 +18803,8 @@ pub mod isi {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
                 validate_governed_pipeline_gas_parameter(custom)?;
+                validate_hijiri_parameters(custom, state_transaction)?;
+                validate_da_ingest_admission_policy(custom, state_transaction)?;
                 validate_reputation_archive_retention_request(custom, state_transaction)?;
                 match iroha_data_model::nexus::LaneLifecycleParameterV1::from_custom_parameter(
                     custom,
@@ -20918,6 +21140,66 @@ pub mod isi {
                 stx.world.parameters.get().custom().get(&parameter_id),
                 Some(&zero_rate)
             );
+        });
+        world_test!(set_parameter_enforces_hijiri_global_and_account_lineage {
+            use iroha_data_model::hijiri::{
+                FeeMultiplierBand, HijiriAccountRiskV1, HijiriFeePolicy, HijiriParametersV1,
+                Q16,
+            };
+            blank_test_state_transaction!(checked state, block, stx);
+            let fee_policy = || {
+                HijiriFeePolicy::new(
+                    vec![FeeMultiplierBand::new(Q16::ONE, Q16::ONE)
+                        .expect("unit multiplier")],
+                    Q16::ONE,
+                )
+                .expect("valid fee policy")
+            };
+
+            let first = HijiriParametersV1::try_new(1, None, fee_policy(), Q16::ONE)
+                .expect("initial Hijiri parameters");
+            SetParameter::new(Parameter::Custom(first.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "install initial Hijiri parameters");
+            let second = HijiriParametersV1::try_new(
+                2,
+                Some(first.digest().expect("initial digest")),
+                fee_policy(),
+                Q16::ZERO,
+            )
+            .expect("successor Hijiri parameters");
+            SetParameter::new(Parameter::Custom(second.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "install strict Hijiri successor");
+            let replay_error = SetParameter::new(Parameter::Custom(second.into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("replayed Hijiri revision must fail");
+            assert!(
+                replay_error.to_string().contains("expected Hijiri parameter revision 3"),
+                "unexpected replay rejection: {replay_error}"
+            );
+
+            let first_risk =
+                HijiriAccountRiskV1::try_new(ALICE_ID.clone(), 1, None, Q16::ZERO)
+                    .expect("initial account risk");
+            SetParameter::new(Parameter::Custom(
+                first_risk
+                    .clone()
+                    .into_custom_parameter()
+                    .expect("risk custom parameter"),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "install initial account risk");
+            let second_risk = HijiriAccountRiskV1::try_new(
+                ALICE_ID.clone(),
+                2,
+                Some(first_risk.digest().expect("initial risk digest")),
+                Q16::ONE,
+            )
+            .expect("successor account risk");
+            SetParameter::new(Parameter::Custom(
+                second_risk
+                    .into_custom_parameter()
+                    .expect("risk successor custom parameter"),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "install strict account-risk successor");
         });
         fn fee_sponsor_relay_allocation_fixture(
             program_id: iroha_data_model::nexus::FeeSponsorProgramId,
@@ -33246,6 +33528,72 @@ seiyaku GovernanceLifecycle {
                 stx.world.parameters.get().executor().max_output_bytes(),
                 max_bytes
             );
+        });
+        world_test!(set_parameter_enforces_da_ingest_admission_policy_lineage_and_scope {
+            use iroha_data_model::da::ingest::{
+                DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1,
+            };
+
+            alice_state_transaction!(state, block, state_block, stx);
+            let lane_id = LaneId::SINGLE;
+            let lane_incarnation = stx
+                .lane_incarnation_at_height(lane_id, stx.block_height())
+                .expect("the default lane is active in the test block");
+            let initial = DaIngestAdmissionPolicyV1 {
+                version: DaIngestAdmissionPolicyV1::VERSION,
+                revision: 1,
+                expected_previous_policy_hash: None,
+                lanes: vec![DaIngestAdmissionLaneV1 {
+                    lane_id,
+                    lane_incarnation,
+                    producers: vec![ALICE_ID.clone()],
+                    current_epoch: 7,
+                    grace_epoch: Some(6),
+                }],
+            };
+            SetParameter::new(Parameter::Custom(initial.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "install initial DA admission policy");
+
+            let unknown_producer = AccountId::new(
+                KeyPair::from_seed(vec![0xD4; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            );
+            let mut unknown_owner = initial.clone();
+            unknown_owner.revision = 2;
+            unknown_owner.expected_previous_policy_hash = Some(initial.policy_hash());
+            unknown_owner.lanes[0].current_epoch = 8;
+            unknown_owner.lanes[0].grace_epoch = Some(7);
+            unknown_owner.lanes[0].producers = vec![unknown_producer];
+            let error = SetParameter::new(Parameter::Custom(
+                unknown_owner.into_custom_parameter(),
+            ))
+            .expect_execute_err(&ALICE_ID, &mut stx, "unknown producer must fail closed");
+            assert_contains!(error.to_string(), "names unknown producer");
+
+            let mut wrong_incarnation = initial.clone();
+            wrong_incarnation.revision = 2;
+            wrong_incarnation.expected_previous_policy_hash = Some(initial.policy_hash());
+            wrong_incarnation.lanes[0].lane_incarnation = Hash::new(b"wrong DA lane incarnation");
+            wrong_incarnation.lanes[0].current_epoch = 8;
+            wrong_incarnation.lanes[0].grace_epoch = None;
+            let error = SetParameter::new(Parameter::Custom(
+                wrong_incarnation.into_custom_parameter(),
+            ))
+            .expect_execute_err(&ALICE_ID, &mut stx, "stale lane incarnation must fail closed");
+            assert_contains!(error.to_string(), "but the active incarnation is");
+
+            let mut successor = initial.clone();
+            successor.revision = 2;
+            successor.expected_previous_policy_hash = Some(initial.policy_hash());
+            successor.lanes[0].current_epoch = 8;
+            successor.lanes[0].grace_epoch = Some(7);
+            SetParameter::new(Parameter::Custom(successor.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "install exact policy successor");
+
+            let error = SetParameter::new(Parameter::Custom(successor.into_custom_parameter()))
+                .expect_execute_err(&ALICE_ID, &mut stx, "stale policy replay must fail closed");
+            assert_contains!(error.to_string(), "revision");
         });
         world_test!(set_parameter_retention_request_requires_exact_ancestor_and_lineage {
             use iroha_data_model::sorafs::reputation::{

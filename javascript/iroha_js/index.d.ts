@@ -463,6 +463,7 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   creationTimeMs?: number | string | bigint | null;
   validationFeePolicyVersion?: number | string | bigint | null;
   validationFeePolicyHash?: string | null;
+  validationFeeHijiriFeeQuoteHash?: string | null;
   validationFeeInstructionIndex?: number | string | bigint | null;
   validationFeeTransferEntryIndex?: number | string | bigint | null;
   multisig_account_id?: string;
@@ -485,6 +486,7 @@ export interface MultisigProposePayload {
   creation_time_ms?: number;
   validation_fee_policy_version?: string;
   validation_fee_policy_hash?: string;
+  validation_fee_hijiri_fee_quote_hash?: string;
   validation_fee_instruction_index?: string;
   validation_fee_transfer_entry_index?: string;
 }
@@ -701,8 +703,14 @@ export interface SccpResourceLimits {
   readonly max_bls_aggregate_checks_per_block: number;
   readonly max_bls_signer_contributions_per_transaction: number;
   readonly max_bls_signer_contributions_per_block: number;
+  readonly max_ed25519_signature_checks_per_transaction: number;
+  readonly max_ed25519_signature_checks_per_block: number;
+  readonly max_ed25519_validator_key_checks_per_transaction: number;
+  readonly max_ed25519_validator_key_checks_per_block: number;
   readonly max_bn254_pairing_checks_per_transaction: number;
   readonly max_bn254_pairing_checks_per_block: number;
+  readonly max_bls12_381_pairing_checks_per_transaction: number;
+  readonly max_bls12_381_pairing_checks_per_block: number;
 }
 export interface SccpCapabilities { readonly version: 1; readonly registry_revision: string; readonly registry_path: "/v1/sccp/registry"; readonly message_bundle_path: "/v1/sccp/proofs/message/{message_id}"; readonly proof_request_path: "/v1/sccp/proof-requests/{message_id}"; readonly recent_messages_path: "/v1/sccp/messages/recent"; readonly sora_outbound_material_path: "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"; readonly registry_limits: SccpRegistryLimits; readonly resource_limits: SccpResourceLimits; readonly proof_submit_path: "/v1/bridge/proofs/submit" | null; readonly native_message_submit_path: "/v1/bridge/messages" | null; }
 export type SccpNetworkWireName = "sora_taira" | "ethereum_mainnet" | "ethereum_sepolia" | "bsc_mainnet" | "bsc_testnet" | "tron_mainnet" | "tron_nile" | "tron_shasta" | "solana_testnet";
@@ -6912,6 +6920,12 @@ export interface KaigiRelayRegistrationEvent {
   hpke_fingerprint_hex: string;
 }
 
+export interface KaigiRelayUnregistrationEvent {
+  kind: "unregistration";
+  domain: string;
+  relay_id: string;
+}
+
 export interface KaigiRelayHealthEvent {
   kind: "health";
   domain: string;
@@ -6923,6 +6937,7 @@ export interface KaigiRelayHealthEvent {
 
 export type KaigiRelayEventPayload =
   | KaigiRelayRegistrationEvent
+  | KaigiRelayUnregistrationEvent
   | KaigiRelayHealthEvent;
 
 export interface KaigiRelayEventsOptions {
@@ -6984,7 +6999,8 @@ export interface KaigiCallSignal {
 }
 
 export interface KaigiCallSignalsList {
-  total: ToriiU64;
+  has_more: boolean;
+  next_cursor?: string;
   items: ReadonlyArray<KaigiCallSignal>;
 }
 
@@ -6992,7 +7008,7 @@ export interface KaigiCallSignalsOptions {
   afterTimestampMs?: NumericLike;
   after_timestamp_ms?: NumericLike;
   limit?: NumericLike;
-  offset?: NumericLike;
+  cursor?: string;
   signal?: AbortSignal;
   /** Per-call signer; falls back to `ToriiClient`'s `canonicalRequestAuth`. */
   canonicalAuth?: CanonicalRequestAuth;
@@ -8000,6 +8016,10 @@ export interface RegisterKaigiRelayInput {
   relayId: string;
   hpkePublicKey: ArrayBufferView | ArrayBuffer | Buffer | string;
   bandwidthClass: NumericLike;
+}
+
+export interface UnregisterKaigiRelayInput {
+  relayId: string;
 }
 
 export type KaigiRelayHealthStatusInput =
@@ -10079,6 +10099,18 @@ export interface RegisterKaigiRelayTransactionInput {
   networkId: NetworkId;
   authority: string;
   relay: RegisterKaigiRelayInput;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: string | null;
+}
+
+export interface UnregisterKaigiRelayTransactionInput {
+  networkId: NetworkId;
+  authority: string;
+  relayId: string;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -12502,6 +12534,7 @@ export interface MultisigProposeNoritoRequest {
   memo?: string | null;
   validation_fee_policy_version?: string | null;
   validation_fee_policy_hash?: string | null;
+  validation_fee_hijiri_fee_quote_hash?: string | null;
   validation_fee_instruction_index?: string | null;
   validation_fee_transfer_entry_index?: string | null;
   instructions: Array<object | string | ArrayBufferView | ArrayBuffer | Buffer>;
@@ -13027,6 +13060,9 @@ export function buildSetKaigiRelayManifestTransaction(
 ): SignedTransactionResult;
 export function buildRegisterKaigiRelayTransaction(
   input: RegisterKaigiRelayTransactionInput & FeePaymentRequired,
+): SignedTransactionResult;
+export function buildUnregisterKaigiRelayTransaction(
+  input: UnregisterKaigiRelayTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildReportKaigiRelayHealthTransaction(
   input: ReportKaigiRelayHealthTransactionInput & FeePaymentRequired,
@@ -13639,6 +13675,10 @@ export function buildSetKaigiRelayManifestInstruction(
 
 export function buildRegisterKaigiRelayInstruction(
   relay: RegisterKaigiRelayInput,
+): object;
+
+export function buildUnregisterKaigiRelayInstruction(
+  input: UnregisterKaigiRelayInput,
 ): object;
 
 export function buildReportKaigiRelayHealthInstruction(

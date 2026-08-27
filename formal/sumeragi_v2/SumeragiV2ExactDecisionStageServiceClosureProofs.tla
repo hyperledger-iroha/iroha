@@ -1116,7 +1116,7 @@ BY ExactOutstandingCertifiedBodyResponseIsAuthorized,
        AsyncTransportContentTypeInvariant,
        AsyncTransportHistoryTypeInvariant,
        FrozenCertifiedRequestRegistration,
-       CertifiedResponseItem, AsyncCertifiedCitedResponder,
+       CertifiedResponseItem,
        AsyncCurrentResponsiveVoters, CurrentVoters,
        AsyncArchiveServerIds
 
@@ -1709,7 +1709,7 @@ matching claim is handled by the coalescing action above.
 ExactResponseRegisteredAndAuthenticated(item) ==
   /\ item.kind = "CertifiedResponse"
   /\ CertifiedResponseAuthenticatedOccurrence(item)
-  /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+  /\ item.envelope.responder \in AsyncArchiveServerIds
   /\ MatchingCertifiedRequests(item) # {}
 
 ExactDecisionResponseRegisteredAndAuthenticated(item) ==

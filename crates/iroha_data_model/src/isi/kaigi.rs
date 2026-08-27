@@ -118,6 +118,19 @@ isi! {
     }
 }
 isi! {
+    /// Remove a Kaigi relay descriptor and its retained health feedback.
+    ///
+    /// Native execution requires authorization by the relay account (or its
+    /// active canonical account-id rekey successor). Removal prevents future
+    /// manifest admission; existing manifests remain self-contained and retain
+    /// their pinned descriptor until the host refreshes or ends the call, or
+    /// until the manifest expires.
+    pub struct UnregisterKaigiRelay {
+        /// Relay account whose descriptor should be removed.
+        pub relay_id: AccountId,
+    }
+}
+isi! {
     /// Report the observed health for a relay participating in a Kaigi session.
     pub struct ReportKaigiRelayHealth {
         /// Identifier of the call where the relay was observed.
@@ -142,6 +155,7 @@ impl crate::seal::Instruction for EndKaigi {}
 impl crate::seal::Instruction for RecordKaigiUsage {}
 impl crate::seal::Instruction for SetKaigiRelayManifest {}
 impl crate::seal::Instruction for RegisterKaigiRelay {}
+impl crate::seal::Instruction for UnregisterKaigiRelay {}
 impl crate::seal::Instruction for ReportKaigiRelayHealth {}
 fn kaigi_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
@@ -214,6 +228,9 @@ impl_kaigi_decode_from_slice!(SetKaigiRelayManifest {
 });
 impl_kaigi_decode_from_slice!(RegisterKaigiRelay {
     relay: KaigiRelayRegistration,
+});
+impl_kaigi_decode_from_slice!(UnregisterKaigiRelay {
+    relay_id: AccountId,
 });
 impl_kaigi_decode_from_slice!(ReportKaigiRelayHealth {
     call_id: KaigiId,
@@ -380,6 +397,9 @@ mod tests {
         assert_slice_roundtrip(RegisterKaigiRelay {
             relay: relay_registration(),
         });
+        assert_slice_roundtrip(UnregisterKaigiRelay {
+            relay_id: account(4),
+        });
         assert_slice_roundtrip(ReportKaigiRelayHealth {
             call_id,
             relay_id: account(4),
@@ -471,6 +491,16 @@ mod tests {
         assert_canonical_wire_envelope(
             &registry,
             "iroha.instruction.v1::kaigi::RegisterKaigiRelay",
+            value,
+        );
+
+        let value = UnregisterKaigiRelay {
+            relay_id: account(4),
+        };
+        assert_registry_decodes(&registry, value.clone());
+        assert_canonical_wire_envelope(
+            &registry,
+            "iroha.instruction.v1::kaigi::UnregisterKaigiRelay",
             value,
         );
 

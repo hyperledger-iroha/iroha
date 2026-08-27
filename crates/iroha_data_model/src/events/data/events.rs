@@ -1124,6 +1124,12 @@ mod domain {
             #[has_origin(ticket_revoked => &ticket_revoked.domain)]
             /// Privacy streaming ticket was revoked.
             StreamingTicketRevoked(StreamingTicketRevoked),
+            #[has_origin(summary => &summary.domain)]
+            /// Kaigi relay descriptor and retained feedback were removed.
+            KaigiRelayUnregistered(model::KaigiRelayUnregistrationSummary),
+            #[has_origin(summary => &summary.call.domain_id)]
+            /// Kaigi lifecycle status changed.
+            KaigiStatusChanged(model::KaigiStatusSummary),
         }
     }
     #[model]
@@ -1132,7 +1138,7 @@ mod domain {
         use crate::{
             DataSpaceId, LaneId,
             account::AccountId,
-            kaigi::{KaigiId, KaigiPrivacyMode, KaigiRelayHealthStatus},
+            kaigi::{KaigiId, KaigiPrivacyMode, KaigiRelayHealthStatus, KaigiStatus},
             soranet::ticket::TicketEnvelopeV1,
         };
         use iroha_crypto::Hash;
@@ -1251,6 +1257,50 @@ mod domain {
                     relay,
                     bandwidth_class,
                     hpke_fingerprint,
+                }
+            }
+        }
+        /// Compact identity of a removed Kaigi relay descriptor.
+        #[derive(
+            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
+        )]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[getset(get = "pub")]
+        pub struct KaigiRelayUnregistrationSummary {
+            /// Domain from which the relay descriptor was removed.
+            pub domain: DomainId,
+            /// Relay identifier whose descriptor was removed.
+            pub relay: AccountId,
+        }
+        impl KaigiRelayUnregistrationSummary {
+            /// Construct a relay unregistration summary payload.
+            #[must_use]
+            pub fn new(domain: DomainId, relay: AccountId) -> Self {
+                Self { domain, relay }
+            }
+        }
+        /// Compact Kaigi lifecycle status snapshot.
+        #[derive(
+            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
+        )]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[getset(get = "pub")]
+        pub struct KaigiStatusSummary {
+            /// Call identifier.
+            pub call: KaigiId,
+            /// Current lifecycle status.
+            pub status: KaigiStatus,
+            /// End timestamp in milliseconds, populated only after the call ends.
+            pub ended_at_ms: Option<u64>,
+        }
+        impl KaigiStatusSummary {
+            /// Construct a lifecycle status summary payload.
+            #[must_use]
+            pub fn new(call: KaigiId, status: KaigiStatus, ended_at_ms: Option<u64>) -> Self {
+                Self {
+                    call,
+                    status,
+                    ended_at_ms,
                 }
             }
         }
@@ -2017,8 +2067,11 @@ mod domain {
 impl_json_via_norito_bytes!(
     DomainOwnerChanged,
     domain::KaigiRosterSummary,
+    domain::KaigiRelayRegistrationSummary,
+    domain::KaigiRelayUnregistrationSummary,
     domain::KaigiRelayManifestSummary,
     domain::KaigiRelayHealthSummary,
+    domain::KaigiStatusSummary,
     domain::KaigiUsageSummary,
     domain::StreamingSoranetRoute,
     domain::StreamingPrivacyRelay,
@@ -2405,11 +2458,12 @@ pub mod prelude {
         domain::{
             AccountDomainLinkChanged, DomainEvent, DomainEventSet, DomainOwnerChanged,
             KaigiRelayHealthSummary, KaigiRelayManifestSummary, KaigiRelayRegistrationSummary,
-            KaigiRosterSummary, KaigiUsageSummary, ScopedAccount, ScopedAsset,
-            ScopedAssetDefinition, StreamingPrivacyRelay, StreamingPrivacyRoute,
-            StreamingRouteBinding, StreamingSoranetAccessKind, StreamingSoranetRoute,
-            StreamingSoranetStreamTag, StreamingTicketCapabilities, StreamingTicketPolicy,
-            StreamingTicketReady, StreamingTicketRecord, StreamingTicketRevoked,
+            KaigiRelayUnregistrationSummary, KaigiRosterSummary, KaigiStatusSummary,
+            KaigiUsageSummary, ScopedAccount, ScopedAsset, ScopedAssetDefinition,
+            StreamingPrivacyRelay, StreamingPrivacyRoute, StreamingRouteBinding,
+            StreamingSoranetAccessKind, StreamingSoranetRoute, StreamingSoranetStreamTag,
+            StreamingTicketCapabilities, StreamingTicketPolicy, StreamingTicketReady,
+            StreamingTicketRecord, StreamingTicketRevoked,
         },
         executor::{ExecutorEvent, ExecutorEventSet, ExecutorUpgrade},
         nft::{NftEvent, NftEventSet, NftOwnerChanged},

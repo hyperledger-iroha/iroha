@@ -5,15 +5,18 @@ use std::{
     sync::{Arc, LazyLock, Mutex, Weak},
 };
 
+#[cfg(test)]
 use iroha_config::parameters::actual::SoranetPow as ActualSoranetPow;
 use tokio::sync::Semaphore;
 
 use crate::Error;
 
 /// Default number of concurrent outbound puzzle mints.
+#[cfg(test)]
 pub const DEFAULT_OUTBOUND_MINT_CAPACITY: NonZeroUsize =
     ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION;
 /// Default number of concurrent inbound puzzle verifications.
+#[cfg(test)]
 pub const DEFAULT_INBOUND_VERIFY_CAPACITY: NonZeroUsize =
     ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION;
 

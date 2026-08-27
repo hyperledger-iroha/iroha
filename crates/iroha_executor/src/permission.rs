@@ -164,6 +164,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::nft::{CanTransferNft},
     iroha_executor_data_model::permission::nft::{CanModifyNftMetadata},
     iroha_executor_data_model::permission::parameter::{CanSetParameters},
+    iroha_executor_data_model::permission::parameter::{CanSetHijiriParameters},
     iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
     iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
     iroha_executor_data_model::permission::offline::{CanManageOfflineEscrow},
@@ -941,7 +942,9 @@ mod role {
 mod parameter {
     //! Module with pass conditions for parameter related tokens
     use super::*;
-    use iroha_executor_data_model::permission::parameter::CanSetParameters;
+    use iroha_executor_data_model::permission::parameter::{
+        CanSetHijiriParameters, CanSetParameters,
+    };
     impl ValidateGrantRevoke for CanSetParameters {
         fn validate_grant(
             &self,
@@ -969,6 +972,36 @@ mod parameter {
             Err(ValidationFail::NotPermitted(
                 "Current authority doesn't have the permission to set parameters, therefore it can't revoke it from another account"
                     .to_owned()
+            ))
+        }
+    }
+    impl ValidateGrantRevoke for CanSetHijiriParameters {
+        fn validate_grant(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if CanSetHijiriParameters.is_owned_by(authority, host) {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "Current authority doesn't have the permission to set Hijiri parameters, therefore it can't grant it to another account"
+                    .to_owned(),
+            ))
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if CanSetHijiriParameters.is_owned_by(authority, host) {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "Current authority doesn't have the permission to set Hijiri parameters, therefore it can't revoke it from another account"
+                    .to_owned(),
             ))
         }
     }
@@ -1960,6 +1993,7 @@ mod tests {
             CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
             CanPublishSpaceDirectoryManifestForUaid,
         },
+        parameter::CanSetHijiriParameters,
         peer::CanManagePeers,
         query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace},
         sccp::CanProposeSccpRouteGovernance,
@@ -2004,6 +2038,7 @@ mod tests {
             PermissionObject::from(CanManageRuntimeUpgrades),
             PermissionObject::from(CanManageConsensusKeys),
             PermissionObject::from(CanManageConfidentialParams),
+            PermissionObject::from(CanSetHijiriParameters),
         ];
 
         for raw in permissions {

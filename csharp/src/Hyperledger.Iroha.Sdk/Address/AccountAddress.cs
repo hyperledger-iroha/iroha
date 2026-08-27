@@ -13,6 +13,8 @@ public sealed class AccountAddress
     private const byte DefaultNormalizationVersion = 1;
     private const byte SingleKeyControllerTag = 0x00;
     private const byte MultisigControllerTag = 0x01;
+    private const byte ExtendedSingleKeyControllerTag = 0x02;
+    private const int MlDsa65PublicKeyLength = 1_952;
     private const int I105ChecksumLength = 6;
     private const int I105Base = 105;
     private const int Bech32mConst = 0x2BC830A3;
@@ -43,6 +45,10 @@ public sealed class AccountAddress
         ["ml-dsa"] = CurveId.MlDsa,
         ["mldsa"] = CurveId.MlDsa,
         ["ml_dsa"] = CurveId.MlDsa,
+        ["mldsa65"] = CurveId.MlDsa,
+        ["ml-dsa-65"] = CurveId.MlDsa,
+        ["ml_dsa_65"] = CurveId.MlDsa,
+        ["ml_dsa-65"] = CurveId.MlDsa,
         ["sm2"] = CurveId.Sm2,
     };
 
@@ -151,16 +157,31 @@ public sealed class AccountAddress
             throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, $"unsupported signing algorithm: {algorithm}");
         }
 
-        if (publicKey.IsEmpty || publicKey.Length > byte.MaxValue)
+        if (publicKey.Length > ushort.MaxValue)
         {
-            throw NewError(AccountAddressErrorCode.InvalidPublicKey, "public key length must be between 1 and 255 bytes");
+            throw NewError(AccountAddressErrorCode.InvalidPublicKey, "public key length must be between 1 and 65535 bytes");
+        }
+        ValidateControllerPublicKey(curveId, publicKey);
+        if (publicKey.IsEmpty)
+        {
+            throw NewError(AccountAddressErrorCode.InvalidPublicKey, "public key length must be between 1 and 65535 bytes");
         }
 
-        var controllerBytes = new byte[3 + publicKey.Length];
-        controllerBytes[0] = SingleKeyControllerTag;
+        var extended = publicKey.Length > byte.MaxValue;
+        var keyOffset = extended ? 4 : 3;
+        var controllerBytes = new byte[keyOffset + publicKey.Length];
+        controllerBytes[0] = extended ? ExtendedSingleKeyControllerTag : SingleKeyControllerTag;
         controllerBytes[1] = (byte)curveId;
-        controllerBytes[2] = (byte)publicKey.Length;
-        publicKey.CopyTo(controllerBytes.AsSpan(3));
+        if (extended)
+        {
+            controllerBytes[2] = (byte)(publicKey.Length >> 8);
+            controllerBytes[3] = (byte)publicKey.Length;
+        }
+        else
+        {
+            controllerBytes[2] = (byte)publicKey.Length;
+        }
+        publicKey.CopyTo(controllerBytes.AsSpan(keyOffset));
 
         var canonicalBytes = new byte[1 + controllerBytes.Length];
         canonicalBytes[0] = EncodeHeader(AddressClass.SingleKey);
@@ -253,7 +274,7 @@ public sealed class AccountAddress
 
     private static AccountAddress ParseMultisig(byte[] canonicalBytes, byte headerVersion, byte normalizationVersion)
     {
-        if (canonicalBytes.Length < 3)
+        if (canonicalBytes.Length < 8)
         {
             throw NewError(AccountAddressErrorCode.InvalidLength, "invalid length for multisig address payload");
         }
@@ -261,6 +282,51 @@ public sealed class AccountAddress
         if (canonicalBytes[1] != MultisigControllerTag)
         {
             throw NewError(AccountAddressErrorCode.UnknownControllerTag, $"unknown multisig controller tag: {canonicalBytes[1]}");
+        }
+
+        var cursor = 2;
+        var policyVersion = canonicalBytes[cursor++];
+        if (policyVersion != 1)
+        {
+            throw NewError(AccountAddressErrorCode.InvalidLength, $"unsupported multisig policy version: {policyVersion}");
+        }
+        var threshold = ReadUInt16(canonicalBytes, ref cursor);
+        var memberCount = ReadUInt16(canonicalBytes, ref cursor);
+        if (threshold == 0 || memberCount == 0)
+        {
+            throw NewError(AccountAddressErrorCode.InvalidLength, "invalid multisig threshold or member count");
+        }
+        var totalWeight = 0UL;
+        for (var index = 0; index < memberCount; index++)
+        {
+            if (cursor >= canonicalBytes.Length)
+            {
+                throw NewError(AccountAddressErrorCode.InvalidLength, "truncated multisig member");
+            }
+            var curveRaw = canonicalBytes[cursor++];
+            if (!Enum.IsDefined(typeof(CurveId), curveRaw))
+            {
+                throw NewError(AccountAddressErrorCode.UnknownCurve, $"unknown curve id: {curveRaw}");
+            }
+            var weight = ReadUInt16(canonicalBytes, ref cursor);
+            var keyLength = ReadUInt16(canonicalBytes, ref cursor);
+            if (weight == 0 || keyLength == 0 || cursor + keyLength > canonicalBytes.Length)
+            {
+                throw NewError(AccountAddressErrorCode.InvalidLength, "invalid multisig member payload");
+            }
+            ValidateControllerPublicKey(
+                (CurveId)curveRaw,
+                canonicalBytes.AsSpan(cursor, keyLength));
+            cursor += keyLength;
+            totalWeight += weight;
+        }
+        if (cursor != canonicalBytes.Length)
+        {
+            throw NewError(AccountAddressErrorCode.UnexpectedTrailingBytes, "unexpected trailing bytes in canonical payload");
+        }
+        if (totalWeight < threshold)
+        {
+            throw NewError(AccountAddressErrorCode.InvalidLength, "multisig threshold exceeds total weight");
         }
 
         return new AccountAddress(
@@ -282,7 +348,7 @@ public sealed class AccountAddress
         }
 
         var tag = canonicalBytes[1];
-        if (tag != SingleKeyControllerTag)
+        if (tag != SingleKeyControllerTag && tag != ExtendedSingleKeyControllerTag)
         {
             throw NewError(AccountAddressErrorCode.UnknownControllerTag, $"unknown controller payload tag: {tag}");
         }
@@ -293,12 +359,25 @@ public sealed class AccountAddress
         }
 
         var curveId = (CurveId)canonicalBytes[2];
-        var length = canonicalBytes[3];
-        var expectedLength = 4 + length;
+        var extended = tag == ExtendedSingleKeyControllerTag;
+        if (extended && canonicalBytes.Length < 5)
+        {
+            throw NewError(AccountAddressErrorCode.InvalidLength, "invalid extended single-key address payload");
+        }
+        var length = extended
+            ? (canonicalBytes[3] << 8) | canonicalBytes[4]
+            : canonicalBytes[3];
+        if (extended && length <= byte.MaxValue)
+        {
+            throw NewError(AccountAddressErrorCode.InvalidLength, "short public keys must use the compact controller tag");
+        }
+        var keyOffset = extended ? 5 : 4;
+        var expectedLength = keyOffset + length;
         if (expectedLength != canonicalBytes.Length)
         {
             throw NewError(AccountAddressErrorCode.UnexpectedTrailingBytes, "unexpected trailing bytes in canonical payload");
         }
+        ValidateControllerPublicKey(curveId, canonicalBytes.AsSpan(keyOffset, length));
 
         return new AccountAddress(
             headerVersion,
@@ -308,7 +387,41 @@ public sealed class AccountAddress
             canonicalBytes[1..],
             curveId,
             CurveIdToAlgorithm(curveId),
-            canonicalBytes[4..].ToArray());
+            canonicalBytes[keyOffset..].ToArray());
+    }
+
+    private static ushort ReadUInt16(byte[] bytes, ref int cursor)
+    {
+        if (cursor + 1 >= bytes.Length)
+        {
+            throw NewError(AccountAddressErrorCode.InvalidLength, "truncated canonical address payload");
+        }
+        var value = (ushort)((bytes[cursor] << 8) | bytes[cursor + 1]);
+        cursor += 2;
+        return value;
+    }
+
+    private static void ValidateControllerPublicKey(CurveId curveId, ReadOnlySpan<byte> publicKey)
+    {
+        if (curveId == CurveId.MlDsa
+            && (publicKey.Length != MlDsa65PublicKeyLength || IsAllZero(publicKey)))
+        {
+            throw NewError(
+                AccountAddressErrorCode.InvalidPublicKey,
+                "invalid ML-DSA public key: expected a nonzero 1952-byte ML-DSA-65 key");
+        }
+    }
+
+    private static bool IsAllZero(ReadOnlySpan<byte> bytes)
+    {
+        foreach (var value in bytes)
+        {
+            if (value != 0)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static byte EncodeHeader(AddressClass addressClass)

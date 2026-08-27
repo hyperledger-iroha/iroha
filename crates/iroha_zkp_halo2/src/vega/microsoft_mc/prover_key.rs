@@ -7,11 +7,12 @@
 use super::{
     verifier_key::{
         HyraxKeyWire, McVerifierKeyWire, MultiRoundShapeWire, RegularShapeWire, SplitShapeWire,
-        read_hyrax_key, read_multi_round_shape, read_regular_shape, read_split_shape,
-        validate_prover_components, write_hyrax_key, write_multi_round_shape, write_regular_shape,
-        write_split_shape,
+        checked_sum, hyrax_key_encoded_len, multi_round_shape_encoded_len, read_hyrax_key,
+        read_multi_round_shape, read_regular_shape, read_split_shape, regular_shape_encoded_len,
+        split_shape_encoded_len, validate_prover_components, write_hyrax_key,
+        write_multi_round_shape, write_regular_shape, write_split_shape,
     },
-    wire::{McCodecError, Reader},
+    wire::{McCodecError, Reader, try_vec_with_capacity},
 };
 
 const MAX_PROVER_KEY_BYTES: usize = 512 * 1024 * 1024;
@@ -63,7 +64,11 @@ impl McProverKeyWire {
     /// Encode the ordinary Microsoft bincode-compatible proving-key value.
     pub(super) fn encode(&self) -> Result<Vec<u8>, McCodecError> {
         self.validate()?;
-        let mut output = Vec::new();
+        let encoded_len = self.encoded_len()?;
+        if encoded_len > MAX_PROVER_KEY_BYTES {
+            return Err(McCodecError::InvalidEncoding);
+        }
+        let mut output = try_vec_with_capacity(encoded_len)?;
         write_hyrax_key(&mut output, &self.application_key)?;
         write_split_shape(&mut output, &self.step_shape)?;
         write_split_shape(&mut output, &self.core_shape)?;
@@ -71,10 +76,22 @@ impl McProverKeyWire {
         write_multi_round_shape(&mut output, &self.verifier_shape)?;
         write_regular_shape(&mut output, &self.verifier_regular_shape)?;
         write_hyrax_key(&mut output, &self.verifier_commitment_key)?;
-        if output.len() > MAX_PROVER_KEY_BYTES {
+        if output.len() != encoded_len {
             return Err(McCodecError::InvalidEncoding);
         }
         Ok(output)
+    }
+
+    fn encoded_len(&self) -> Result<usize, McCodecError> {
+        checked_sum(&[
+            hyrax_key_encoded_len(&self.application_key)?,
+            split_shape_encoded_len(&self.step_shape)?,
+            split_shape_encoded_len(&self.core_shape)?,
+            VERIFIER_DIGEST_BYTES,
+            multi_round_shape_encoded_len(&self.verifier_shape)?,
+            regular_shape_encoded_len(&self.verifier_regular_shape)?,
+            hyrax_key_encoded_len(&self.verifier_commitment_key)?,
+        ])
     }
 
     /// Require every setup component and the verifier digest to match one VK.

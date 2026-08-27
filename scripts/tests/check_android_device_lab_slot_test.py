@@ -2291,6 +2291,43 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(count, 2, errors)
         self.assertEqual(errors, [])
 
+    def test_android_attestation_rechecks_status_freshness_for_each_chain(self) -> None:
+        metadata = android_attestation_metadata("pixel8-stale-status")
+        challenge = device_lab.derive_kagemusha_strongbox_challenge_v1(metadata)
+        chain = test_android_attestation_chain(
+            challenge,
+            metadata["app_package_name"],
+            bytes.fromhex(metadata["app_signing_certificate_sha256"]),
+        )
+        authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
+        assert authority is not None
+        receipt = authority["attestation_status_capture_receipt"]["payload"]
+        fresh_until_ms = receipt["fresh_until_ms"]
+        errors: list[str] = []
+
+        with mock.patch.object(
+            device_lab.time,
+            "time_ns",
+            return_value=fresh_until_ms * 1_000_000,
+        ):
+            self.assertIsNone(
+                device_lab._validate_android_attestation_certificate_chain(
+                    "attestation/keymint-certificate-chain.pem",
+                    chain,
+                    metadata,
+                    errors,
+                )
+            )
+
+        self.assertTrue(
+            any(
+                "Android attestation status capture is stale during chain validation"
+                in error
+                for error in errors
+            ),
+            errors,
+        )
+
     def test_failed_reconfiguration_and_missing_cli_cannot_reuse_stale_authority(self) -> None:
         bad = dict(self._authority_kwargs)
         bad["openssl_sha256"] = "0" * 64

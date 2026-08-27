@@ -36,9 +36,25 @@ static COMPILED_OPENAPI_JSON: LazyLock<String> = LazyLock::new(|| {
 });
 fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledFeatures<'_>) {
     const OPERATION_METHODS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
-    let enabled: BTreeSet<(String, &'static str)> = RouteCatalog::new(CATALOGED_ROUTES)
-        .project(CatalogProjection::OpenApi, enabled_features)
-        .into_iter()
+    let projected =
+        RouteCatalog::new(CATALOGED_ROUTES).project(CatalogProjection::OpenApi, enabled_features);
+    let enabled: BTreeSet<(String, &'static str)> = projected
+        .iter()
+        .filter_map(|route| {
+            let method = match route.method() {
+                CatalogHttpMethod::Get => "get",
+                CatalogHttpMethod::Post => "post",
+                CatalogHttpMethod::Put => "put",
+                CatalogHttpMethod::Patch => "patch",
+                CatalogHttpMethod::Delete => "delete",
+                CatalogHttpMethod::Any => return None,
+            };
+            Some((route.path().replace("{*", "{"), method))
+        })
+        .collect();
+    let private_no_store: BTreeSet<(String, &'static str)> = projected
+        .iter()
+        .filter(|route| route.requires_private_no_store())
         .filter_map(|route| {
             let method = match route.method() {
                 CatalogHttpMethod::Get => "get",
@@ -58,6 +74,40 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
         for method in OPERATION_METHODS {
             if !enabled.contains(&(path.clone(), method)) {
                 methods.remove(method);
+            }
+        }
+        for method in OPERATION_METHODS {
+            if !private_no_store.contains(&(path.clone(), method)) {
+                continue;
+            }
+            let Some(responses) = methods
+                .get_mut(method)
+                .and_then(Value::as_object_mut)
+                .and_then(|operation| operation.get_mut("responses"))
+                .and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            for response in responses.values_mut() {
+                let Some(response) = response.as_object_mut() else {
+                    continue;
+                };
+                let headers = response
+                    .entry("headers".to_owned())
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .expect("OpenAPI response headers must be an object");
+                headers.insert(
+                    "Cache-Control".to_owned(),
+                    norito::json!({
+                        "description": "Authenticated responses which must never be retained.",
+                        "required": true,
+                        "schema": {
+                            "const": "private, no-store",
+                            "type": "string"
+                        }
+                    }),
+                );
             }
         }
     }
@@ -148,6 +198,20 @@ mod tests {
     };
     use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
     use std::collections::{BTreeSet, VecDeque};
+
+    fn catalog_method_name(method: CatalogHttpMethod) -> &'static str {
+        match method {
+            CatalogHttpMethod::Get => "get",
+            CatalogHttpMethod::Post => "post",
+            CatalogHttpMethod::Put => "put",
+            CatalogHttpMethod::Patch => "patch",
+            CatalogHttpMethod::Delete => "delete",
+            CatalogHttpMethod::Any => {
+                panic!("ANY gateways cannot enter the OpenAPI surface")
+            }
+        }
+    }
+
     const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
         "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
     const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";
@@ -2377,6 +2441,37 @@ mod tests {
                     .any(|(name, _)| name == "X-Iroha-Account"),
                 "{method} {path} must retain its non-account admission contract"
             );
+        }
+    }
+    #[test]
+    fn compiled_private_cache_contract_follows_the_route_catalog() {
+        let document = generate_spec();
+        for route in RouteCatalog::new(CATALOGED_ROUTES)
+            .project(
+                CatalogProjection::OpenApi,
+                crate::router::builder::compiled_route_features(),
+            )
+            .into_iter()
+            .filter(|route| {
+                route.requires_private_no_store() && route.method() != CatalogHttpMethod::Any
+            })
+        {
+            let path = route.path().replace("{*", "{");
+            let method = catalog_method_name(route.method());
+            let operation = openapi_operation(&document, &path, method);
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{method} {path} responses"));
+            assert!(!responses.is_empty(), "{method} {path} responses");
+            for (status, response) in responses {
+                assert_eq!(
+                    response["headers"]["Cache-Control"]["schema"]["const"].as_str(),
+                    Some("private, no-store"),
+                    "{method} {path} response {status} must follow authentication {:?}",
+                    route.authentication(),
+                );
+            }
         }
     }
     #[test]
@@ -4726,6 +4821,83 @@ mod tests {
         }
     }
     #[test]
+    fn multisig_propose_schema_exposes_optional_validation_fee_bindings_as_strings() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        let request = schemas
+            .get("MultisigProposeRequest")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("allOf"))
+            .and_then(Value::as_array)
+            .and_then(|branches| branches.get(1))
+            .and_then(Value::as_object)
+            .expect("MultisigProposeRequest inline schema");
+        let properties = request
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("MultisigProposeRequest properties");
+        let required = request
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("MultisigProposeRequest required fields");
+
+        for field in [
+            "validation_fee_policy_version",
+            "validation_fee_policy_hash",
+            "validation_fee_hijiri_fee_quote_hash",
+            "validation_fee_instruction_index",
+            "validation_fee_transfer_entry_index",
+        ] {
+            let property = properties
+                .get(field)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("MultisigProposeRequest.{field}"));
+            assert_eq!(property.get("type").and_then(Value::as_str), Some("string"));
+            assert!(
+                property
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .is_some_and(|description| !description.is_empty()),
+                "MultisigProposeRequest.{field} description"
+            );
+            assert!(
+                !required
+                    .iter()
+                    .any(|required_field| required_field.as_str() == Some(field)),
+                "MultisigProposeRequest.{field} must remain optional"
+            );
+        }
+        for field in [
+            "validation_fee_policy_hash",
+            "validation_fee_hijiri_fee_quote_hash",
+        ] {
+            let property = properties[field]
+                .as_object()
+                .expect("validation-fee hash schema");
+            assert_eq!(property.get("minLength").and_then(Value::as_u64), Some(64));
+            assert_eq!(property.get("maxLength").and_then(Value::as_u64), Some(64));
+            assert_eq!(
+                property.get("pattern").and_then(Value::as_str),
+                Some("^[0-9a-f]{64}$")
+            );
+        }
+        for field in [
+            "validation_fee_policy_version",
+            "validation_fee_instruction_index",
+            "validation_fee_transfer_entry_index",
+        ] {
+            let property = properties[field]
+                .as_object()
+                .expect("validation-fee decimal u64 schema");
+            assert_eq!(property.get("minLength").and_then(Value::as_u64), Some(1));
+            assert_eq!(property.get("maxLength").and_then(Value::as_u64), Some(20));
+            assert_eq!(
+                property.get("pattern").and_then(Value::as_str),
+                Some("^(?:0|[1-9][0-9]*)$")
+            );
+        }
+    }
+    #[test]
     fn generated_operations_declare_tool_effects() {
         let doc = generate_spec();
         let paths = doc
@@ -5284,6 +5456,7 @@ mod tests {
     include!("openapi/tests/diagnostics_schemas.rs");
     include!("openapi/tests/fee_quote_contract.rs");
     include!("openapi/tests/finality_app_contracts.rs");
+    include!("openapi/tests/hijiri_quote_contract.rs");
     include!("openapi/tests/iso20022_auth.rs");
     include!("openapi/tests/json_value_contract.rs");
     include!("openapi/tests/prepared_account_contracts.rs");

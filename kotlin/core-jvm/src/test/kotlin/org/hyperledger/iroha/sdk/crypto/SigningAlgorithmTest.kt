@@ -29,6 +29,7 @@ class SigningAlgorithmTest {
 
     @Test
     fun aliasesNormalizeToCanonicalAlgorithms() {
+        assertEquals(SigningAlgorithm.ED25519, SigningAlgorithm.fromAlgorithmName("ED-DSA"))
         assertEquals(SigningAlgorithm.SECP256K1, SigningAlgorithm.fromAlgorithmName("secp-256k1"))
         assertEquals(SigningAlgorithm.BLS_NORMAL, SigningAlgorithm.fromAlgorithmName("bls-normal"))
         assertEquals(SigningAlgorithm.BLS_SMALL, SigningAlgorithm.fromAlgorithmName("bls12-381-g2"))
@@ -42,25 +43,29 @@ class SigningAlgorithmTest {
 
     @Test
     fun unsupportedAndUnicodeConfusableAliasesFailClosed() {
-        for (algorithm in listOf(null, "", "   ")) {
+        for (algorithm in listOf(null, "")) {
             val error = assertFailsWith<IllegalArgumentException> {
                 SigningAlgorithm.fromAlgorithmName(algorithm)
             }
             assertEquals("signing algorithm must be a non-empty string", error.message)
         }
 
-        for (algorithm in listOf(" ed25519", "ed25519 ", "\ted25519")) {
-            val error = assertFailsWith<IllegalArgumentException> {
-                SigningAlgorithm.fromAlgorithmName(algorithm)
-            }
-            assertEquals("signing algorithm must not contain surrounding whitespace", error.message)
-        }
-
         for (algorithm in listOf(
+            " ",
+            "   ",
+            " ed25519",
+            "ed25519 ",
+            "\ted25519",
             "unknown",
+            "ed 25519",
             "ed\t25519",
+            "ed.25519",
+            "ed/25519",
             "ed\u200B25519",
             "\u0435d25519",
+            "secp256\u212A1",
+            "ML.DSA/65",
+            "sm+2",
             "ml\uFF0Ddsa",
             "mldsa44",
             "ML-DSA-44",

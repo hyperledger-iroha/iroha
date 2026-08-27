@@ -609,14 +609,14 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
             Duration::from_secs(3),
             super::execute_incoming_torii_proxy_request(
                 &app,
-                ToriiProxyRequestV6 {
-                    schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+                ToriiProxyRequestV1 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V1,
                     request_id: Hash::new(b"incoming-hosted-sse-served-revision"),
                     deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
                     hop_count: 1,
                     max_hops: 3,
                     visited_peer_ids: vec![ingress_peer_id],
-                    request: ToriiProxyRequestKindV4::HostedHttp(ToriiHostedHttpProxyRequestV1 {
+                    request: ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
                         service_name: "web_portal".to_owned(),
                         service_version: "2026.02.0".to_owned(),
                         replica_slot: 1,

@@ -3090,6 +3090,7 @@ where
             let mut spool_dir: Option<PathBuf> = None;
             let mut copy_dir: Option<PathBuf> = None;
             let mut signing_key: Option<PathBuf> = None;
+            let mut receipt_public_key: Option<PublicKey> = None;
             let mut output: Option<JsonTarget> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
@@ -3112,6 +3113,18 @@ where
                         };
                         signing_key = Some(normalize_path(Path::new(&value))?);
                     }
+                    "--receipt-public-key" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected key after --receipt-public-key".into());
+                        };
+                        let key = value.parse::<PublicKey>().map_err(|err| {
+                            format!("invalid Taikai anchor receipt public key `{value}`: {err}")
+                        })?;
+                        if !matches!(key.try_algorithm(), Ok(Algorithm::Ed25519)) {
+                            return Err("Taikai anchor receipt public key must use Ed25519".into());
+                        }
+                        receipt_public_key = Some(key);
+                    }
                     "-o" | "--out" | "--output" => {
                         let Some(value) = pending.next() else {
                             return Err("expected path after --out/--output".into());
@@ -3132,6 +3145,7 @@ where
                     spool_dir: spool_dir.unwrap_or_else(default_taikai_spool_dir),
                     copy_dir,
                     signing_key,
+                    receipt_public_key,
                     output: output.unwrap_or(JsonTarget::Stdout),
                 },
             })

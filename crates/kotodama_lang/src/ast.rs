@@ -1705,6 +1705,47 @@ pub(crate) fn drop_expression_iterative(expression: Expr) {
         fixtures: Vec::new(),
     });
 }
+/// Destroy one parser-owned type through an explicit work list.
+///
+/// Syntax recovery can retain a complete boundary-depth type before a later
+/// token fails. Draining it here avoids recursive derived drop glue while the
+/// type has not yet been committed to a complete [`Program`].
+pub(crate) fn drop_type_iterative(ty: TypeExpr) {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        match ty {
+            TypeExpr::Source { ty, .. } | TypeExpr::Resolved { ty, .. } => {
+                pending.push(*ty);
+            }
+            TypeExpr::Generic { args, .. } | TypeExpr::Tuple(args) => {
+                pending.extend(args);
+            }
+            TypeExpr::Path(_) | TypeExpr::Const(_) => {}
+        }
+    }
+}
+/// Destroy one parser-owned block through the program's iterative drain.
+///
+/// Parser recovery uses this while a function body is still incomplete, so a
+/// missing closing brace cannot recursively drop already-accepted expressions.
+pub(crate) fn drop_block_iterative(block: Block) {
+    drop_program_iterative(Program {
+        unit: SourceUnit {
+            kind: SourceUnitKind::Module,
+            name: String::new(),
+        },
+        items: vec![Item::Function(Function {
+            name: String::new(),
+            params: Vec::new(),
+            ret_ty: None,
+            body: block,
+            modifiers: FunctionModifiers::default(),
+            location: SourceLocation { line: 0, column: 0 },
+        })],
+        test_target: None,
+        fixtures: Vec::new(),
+    });
+}
 #[cfg(test)]
 mod provenance_tests {
     use super::*;

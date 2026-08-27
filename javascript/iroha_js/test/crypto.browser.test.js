@@ -38,24 +38,41 @@ test("browser crypto normalizes all algorithm labels but only signs Ed25519 loca
     ["src", srcBrowserCrypto],
     ["dist", distBrowserCrypto],
   ]) {
-    assert.equal(crypto.normalizeCryptoAlgorithm("ed-25519"), "ed25519", `${label} keeps ASCII aliases`);
-    assert.throws(
-      () => crypto.normalizeCryptoAlgorithm("ed\t25519"),
-      /unsupported crypto algorithm/,
-      `${label} rejects control-character aliases`,
-    );
-    assert.throws(
-      () => crypto.normalizeCryptoAlgorithm("ed\u200B25519"),
-      /unsupported crypto algorithm/,
-      `${label} rejects zero-width aliases`,
-    );
-    assert.throws(
-      () => crypto.normalizeCryptoAlgorithm("\u0435d25519"),
-      /unsupported crypto algorithm/,
-      `${label} rejects Cyrillic aliases`,
-    );
+    for (const [algorithm, expected] of [
+      ["ed-25519", "ed25519"],
+      ["mldsa65", "ml-dsa"],
+      ["ML-DSA-65", "ml-dsa"],
+      ["ML_DSA_65", "ml-dsa"],
+      ["ML_DSA-65", "ml-dsa"],
+      ["GOST3410-2012-256-PARAMSET-A", "gost3410-2012-256-paramset-a"],
+    ]) {
+      assert.equal(
+        crypto.normalizeCryptoAlgorithm(algorithm),
+        expected,
+        `${label} keeps ${algorithm}`,
+      );
+    }
     for (const algorithm of [
+      "",
+      " ed25519",
+      "ed25519 ",
+      "\u00A0ed25519",
+      "ed25519\u00A0",
+      "\u2003ed25519",
+      "ed25519\u2003",
+      "ed 25519",
+      "ed\t25519",
+      "ed.25519",
+      "ed/25519",
+      "ed@25519",
+      "ed#25519",
+      "ed\u200B25519",
+      "\u0435d25519",
+      "secp256\u212A1",
+      "ml\uFF0Ddsa",
       "mldsa44",
+      "MLDSA44",
+      "MLDSA87",
       "ML-DSA-44",
       "ML_DSA_87",
       "Ml.DsA/44",
@@ -66,7 +83,7 @@ test("browser crypto normalizes all algorithm labels but only signs Ed25519 loca
       assert.throws(
         () => crypto.normalizeCryptoAlgorithm(algorithm),
         /unsupported crypto algorithm/,
-        `${label} must reject non-protocol suite alias ${algorithm}`,
+        `${label} must reject ${algorithm}`,
       );
     }
   }

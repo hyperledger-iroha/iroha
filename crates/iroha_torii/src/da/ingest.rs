@@ -8,8 +8,8 @@ use super::rs16::{
     build_chunk_commitments, validate_erasure_work_budget,
 };
 use super::{
-    DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, persistence,
-    storage_class_label, taikai, taikai::taikai_ingest,
+    DaIngestAdmissionSnapshot, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch,
+    DaSpoolBatchReport, persistence, storage_class_label, taikai, taikai::taikai_ingest,
 };
 use crate::{
     NoritoQuery, SharedAppState,
@@ -48,6 +48,7 @@ use iroha_data_model::{
         capacity::ProviderId,
         pin_registry::{ManifestDigest, StorageClass},
     },
+    taikai::TaikaiSegmentWindow,
 };
 use iroha_logger::{error, warn};
 use iroha_torii_shared::da::sampling::compute_sample_window;
@@ -85,6 +86,50 @@ struct FreshReplayReservation {
     cache: Arc<ReplayCache>,
     reservation: Option<ReplayReservation>,
     committed: bool,
+}
+struct PendingTaikaiLineageCommit {
+    guard: taikai_ingest::TrmLineageGuard,
+    segment_window: TaikaiSegmentWindow,
+    manifest_digest_hex: String,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: StorageTicketId,
+    fingerprint: ReplayFingerprint,
+}
+impl PendingTaikaiLineageCommit {
+    fn stage(&mut self) -> Result<(), String> {
+        self.guard
+            .persist_lineage_hint(
+                self.lane_id,
+                self.epoch,
+                self.sequence,
+                &self.storage_ticket,
+                &self.fingerprint,
+            )
+            .map_err(|(_, message)| message)?;
+        self.guard
+            .stage_ingest(
+                self.segment_window.clone(),
+                &self.manifest_digest_hex,
+                self.lane_id,
+                self.epoch,
+                self.sequence,
+                &self.storage_ticket,
+                &self.fingerprint,
+            )
+            .map_err(|(_, message)| message)
+    }
+
+    fn recover(&mut self, receipt_log: &persistence::DaReceiptLog) -> Result<(), String> {
+        self.guard
+            .recover_pending(receipt_log)
+            .map_err(|(_, message)| message)
+    }
+
+    fn discard(&mut self) -> Result<(), String> {
+        self.guard.discard_pending().map_err(|(_, message)| message)
+    }
 }
 impl FreshReplayReservation {
     fn new(cache: Arc<ReplayCache>, reservation: ReplayReservation) -> Self {
@@ -285,6 +330,48 @@ struct DaManifestComputeArtifacts {
     taikai_trm_payload: Option<Vec<u8>>,
     queued_at_secs: u64,
 }
+
+fn admission_snapshot_for_request(
+    app: &crate::AppState,
+    owner: &AccountId,
+    lane_id: LaneId,
+    epoch: u64,
+) -> Result<DaIngestAdmissionSnapshot, (StatusCode, String)> {
+    let snapshot = super::committed_da_ingest_admission_snapshot(&app.state).map_err(|error| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("committed DA ingest admission policy is invalid: {error}"),
+        )
+    })?;
+    if !snapshot.is_configured() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DA ingest is disabled until governance installs an admission policy".to_owned(),
+        ));
+    }
+    if !snapshot.authorizes(owner, lane_id, epoch) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "authenticated account is not an authorised producer for this active DA lane/epoch"
+                .to_owned(),
+        ));
+    }
+    Ok(snapshot)
+}
+
+fn reconcile_da_replay_state(
+    snapshot: &DaIngestAdmissionSnapshot,
+    receipt_log: &super::DaReceiptLog,
+    replay_cache: &ReplayCache,
+) -> Result<(), String> {
+    let retired = receipt_log
+        .retain_lane_epochs(|lane_epoch| snapshot.retains(lane_epoch.lane_id, lane_epoch.epoch))
+        .map_err(|error| format!("failed to retire superseded DA replay windows: {error}"))?;
+    for lane_epoch in retired {
+        replay_cache.clear_lane_epoch(lane_epoch);
+    }
+    Ok(())
+}
 #[allow(clippy::too_many_arguments)]
 fn compute_da_manifest_artifacts(
     request: &DaIngestRequest,
@@ -396,6 +483,15 @@ pub async fn handler_post_da_ingest(
     validate_request_shape(&request).map_err(|(status, message)| {
         ResponseError::from(build_error_response(status, message, format))
     })?;
+    admission_snapshot_for_request(
+        app.as_ref(),
+        &authenticated_owner,
+        request.lane_id,
+        request.epoch,
+    )
+    .map_err(|(status, message)| {
+        ResponseError::from(build_error_response(status, &message, format))
+    })?;
     let nexus = app.state.nexus_snapshot();
     let committed_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let compute_request = request;
@@ -451,6 +547,28 @@ pub async fn handler_post_da_ingest(
     let fingerprint = manifest.fingerprint;
     let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
     let replay_key = ReplayKey::new(lane_epoch, request.sequence, fingerprint);
+    let replay_lifecycle_guard = app.da_replay_lifecycle_lock.lock();
+    let admission_snapshot = admission_snapshot_for_request(
+        app.as_ref(),
+        &authenticated_owner,
+        request.lane_id,
+        request.epoch,
+    )
+    .map_err(|(status, message)| {
+        ResponseError::from(build_error_response(status, &message, format))
+    })?;
+    reconcile_da_replay_state(
+        &admission_snapshot,
+        app.da_receipt_log.as_ref(),
+        app.da_replay_cache.as_ref(),
+    )
+    .map_err(|message| {
+        ResponseError::from(build_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &message,
+            format,
+        ))
+    })?;
     if let Some(artifacts) = load_duplicate_da_artifacts_if_receipt_present(
         app.da_receipt_log.as_ref(),
         &app.da_ingest.manifest_store_dir,
@@ -484,6 +602,7 @@ pub async fn handler_post_da_ingest(
         );
     }
     let (outcome, fresh_reservation) = app.da_replay_cache.reserve(replay_key, Instant::now());
+    drop(replay_lifecycle_guard);
     match outcome {
         ReplayInsertOutcome::Fresh { .. } | ReplayInsertOutcome::Duplicate { .. } => {
             let duplicate = matches!(&outcome, ReplayInsertOutcome::Duplicate { .. });
@@ -707,6 +826,7 @@ pub async fn handler_post_da_ingest(
                 }));
             }
             let mut taikai_alias_rotation_event = None;
+            let mut taikai_lineage_commit = None;
             if let Some(taikai) = taikai_artifacts {
                 {
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
@@ -820,6 +940,13 @@ pub async fn handler_post_da_ingest(
                     .map_err(|(status, message): (StatusCode, String)| {
                         ResponseError::from(build_error_response(status, &message, format))
                     })?;
+                    if let Some(guard) = lineage_guard.as_mut() {
+                        guard.recover_pending(app.da_receipt_log.as_ref()).map_err(
+                            |(status, message): (StatusCode, String)| {
+                                ResponseError::from(build_error_response(status, &message, format))
+                            },
+                        )?;
+                    }
                     let lineage_validation = if let Some(guard) = lineage_guard.as_ref() {
                         guard
                             .validate_ingest_retry(
@@ -843,8 +970,6 @@ pub async fn handler_post_da_ingest(
                     let lane_id = request.lane_id;
                     let epoch = request.epoch;
                     let sequence = request.sequence;
-                    let segment_window = routing_manifest.segment_window.clone();
-                    let manifest_digest_for_spool = manifest_digest_hex.clone();
                     let trm_bytes_for_spool = trm_bytes.clone();
                     spool_batch.push(DaSpoolAction::new("taikai_trm", move || {
                         if matches!(
@@ -863,7 +988,7 @@ pub async fn handler_post_da_ingest(
                             .map_err(|err| err.to_string())?;
                             return Ok(DaSpoolActionOutput::None);
                         }
-                        let persisted = taikai_ingest::persist_trm(
+                        taikai_ingest::persist_trm(
                             &spool_dir,
                             lane_id,
                             epoch,
@@ -873,33 +998,20 @@ pub async fn handler_post_da_ingest(
                             &trm_bytes_for_spool,
                         )
                         .map_err(|err| err.to_string())?;
-                        if persisted.is_some()
-                            && let Some(guard) = lineage_guard.as_mut()
-                        {
-                            guard
-                                .persist_lineage_hint(
-                                    lane_id,
-                                    epoch,
-                                    sequence,
-                                    &storage_ticket,
-                                    &fingerprint,
-                                )
-                                .map_err(|(_, message)| message)?;
-                            guard
-                                .commit_ingest(
-                                    segment_window,
-                                    &manifest_digest_for_spool,
-                                    lane_id,
-                                    epoch,
-                                    sequence,
-                                    &storage_ticket,
-                                    &fingerprint,
-                                )
-                                .map_err(|(_, message)| message)?;
-                        }
                         Ok(DaSpoolActionOutput::None)
                     }));
                     if lineage_validation.records_alias_rotation() {
+                        taikai_lineage_commit =
+                            lineage_guard.map(|guard| PendingTaikaiLineageCommit {
+                                guard,
+                                segment_window: routing_manifest.segment_window.clone(),
+                                manifest_digest_hex: manifest_digest_hex.clone(),
+                                lane_id: request.lane_id,
+                                epoch: request.epoch,
+                                sequence: request.sequence,
+                                storage_ticket: manifest.storage_ticket.clone(),
+                                fingerprint,
+                            });
                         taikai_alias_rotation_event =
                             Some((routing_manifest.clone(), manifest_digest_hex));
                     }
@@ -908,9 +1020,16 @@ pub async fn handler_post_da_ingest(
             }
             {
                 let receipt_log = Arc::clone(&app.da_receipt_log);
+                let replay_cache = Arc::clone(&app.da_replay_cache);
+                let replay_lifecycle_lock = Arc::clone(&app.da_replay_lifecycle_lock);
+                let state = Arc::clone(&app.state);
                 let receipt = receipt.clone();
                 let sequence = request.sequence;
+                let owner = authenticated_owner.clone();
+                let lane_id = request.lane_id;
+                let epoch = request.epoch;
                 let mut replay_reservation = replay_reservation;
+                let mut taikai_lineage_commit = taikai_lineage_commit;
                 let taikai_ready =
                     matches!(request.blob_class, BlobClass::TaikaiSegment).then(|| {
                         (
@@ -926,9 +1045,104 @@ pub async fn handler_post_da_ingest(
                 // reservation into the queued action keeps it live if the HTTP future is
                 // cancelled after the spool worker accepts the batch.
                 spool_batch.push_commit(DaSpoolAction::new("receipt_log", move || {
-                    let outcome = receipt_log
-                        .append(lane_epoch, sequence, receipt, fingerprint)
-                        .map_err(|err| err.to_string())?;
+                    let _lifecycle_guard = replay_lifecycle_lock.lock();
+                    let admission_snapshot = super::committed_da_ingest_admission_snapshot(&state)
+                        .map_err(|error| {
+                            format!("committed DA ingest admission policy is invalid: {error}")
+                        })?;
+                    if !admission_snapshot.is_configured() {
+                        return Err(
+                            "DA ingest admission policy was removed before durable commit"
+                                .to_owned(),
+                        );
+                    }
+                    if !admission_snapshot.authorizes(&owner, lane_id, epoch) {
+                        return Err(
+                            "DA ingest authorization was retired before durable commit".to_owned()
+                        );
+                    }
+                    reconcile_da_replay_state(
+                        &admission_snapshot,
+                        receipt_log.as_ref(),
+                        replay_cache.as_ref(),
+                    )?;
+                    if let Some(lineage) = taikai_lineage_commit.as_mut() {
+                        lineage.stage()?;
+                    }
+                    let outcome = match receipt_log.append(
+                        lane_epoch,
+                        sequence,
+                        receipt,
+                        fingerprint,
+                    ) {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            let append_error = error.to_string();
+                            if let Some(lineage) = taikai_lineage_commit.as_mut() {
+                                let recovery_snapshot =
+                                    super::committed_da_ingest_admission_snapshot(&state).map_err(
+                                        |snapshot_error| {
+                                            format!(
+                                                "{append_error}; could not reconcile staged Taikai lineage because the committed DA admission policy is invalid: {snapshot_error}"
+                                            )
+                                        },
+                                    )?;
+                                if !recovery_snapshot.authorizes(&owner, lane_id, epoch) {
+                                    reconcile_da_replay_state(
+                                        &recovery_snapshot,
+                                        receipt_log.as_ref(),
+                                        replay_cache.as_ref(),
+                                    )
+                                    .map_err(|reconcile_error| {
+                                        format!(
+                                            "{append_error}; could not retire a possibly written receipt before Taikai lineage recovery: {reconcile_error}"
+                                        )
+                                    })?;
+                                }
+                                lineage.recover(receipt_log.as_ref()).map_err(
+                                    |recovery_error| {
+                                        format!(
+                                            "{append_error}; failed to reconcile staged Taikai lineage against the receipt log: {recovery_error}"
+                                        )
+                                    },
+                                )?;
+                            }
+                            return Err(append_error);
+                        }
+                    };
+                    let post_commit_snapshot = super::committed_da_ingest_admission_snapshot(
+                        &state,
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "failed to recheck DA admission policy after receipt commit: {error}"
+                        )
+                    })?;
+                    if !post_commit_snapshot.authorizes(&owner, lane_id, epoch) {
+                        reconcile_da_replay_state(
+                            &post_commit_snapshot,
+                            receipt_log.as_ref(),
+                            replay_cache.as_ref(),
+                        )?;
+                        if let Some(lineage) = taikai_lineage_commit.as_mut() {
+                            lineage.discard()?;
+                        }
+                        return Err(
+                            "DA ingest authorization changed during durable commit; retired receipt"
+                                .to_owned(),
+                        );
+                    }
+                    if matches!(
+                        &outcome,
+                        ReceiptInsertOutcome::Stored { .. }
+                            | ReceiptInsertOutcome::Duplicate { .. }
+                    ) {
+                        if let Some(lineage) = taikai_lineage_commit.as_mut() {
+                            lineage.recover(receipt_log.as_ref())?;
+                        }
+                    } else if let Some(lineage) = taikai_lineage_commit.as_mut() {
+                        lineage.discard()?;
+                    }
                     if matches!(
                         &outcome,
                         ReceiptInsertOutcome::Stored { .. }
@@ -1031,6 +1245,7 @@ pub async fn handler_post_da_ingest(
         }
     }
 }
+#[derive(Debug)]
 struct DuplicateDaArtifacts {
     receipt_path: PathBuf,
     receipt: DaIngestReceipt,

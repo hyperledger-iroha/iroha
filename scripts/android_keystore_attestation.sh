@@ -6,15 +6,17 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/android_keystore_attestation.sh --bundle-dir <path> --trust-root <root.pem> [options]
+Usage: scripts/android_keystore_attestation.sh --bundle-dir <path> --trust-root <root.pem> --alias <alias> --challenge-hex <hex> --expected-leaf-spki-sha256 <hex> [options]
 
 Verify an Android Keystore attestation bundle using the Iroha Android attestation harness.
 
 Required:
-  --bundle-dir <path>      Directory containing chain.pem/alias.txt/challenge.hex (see docs).
+  --bundle-dir <path>      Untrusted evidence directory containing chain.pem (see docs).
   --trust-root <path>      Trusted root certificate (PEM/DER). Repeat for additional roots.
-                             Files named trust_root_*.pem in the bundle directory are detected
-                             automatically.
+  --alias <alias>          Separately trusted keystore alias label.
+  --challenge-hex <hex>    Separately trusted non-empty challenge (or use --challenge-file).
+  --expected-leaf-spki-sha256 <hex>
+                           Separately trusted SHA-256 of the alias public-key SPKI.
   --revocation-snapshot <path>  Canonical domain-separated governed V1 snapshot.
   --revocation-snapshot-sha256 <hex>  Separately trusted SHA-256 of that exact snapshot.
   --evaluation-time-ms <ms>  Explicit verification time within snapshot freshness.
@@ -23,8 +25,6 @@ Optional:
   --trust-root-dir <path>  Directory containing trusted roots (PEM/DER/CRT). Repeat as needed.
   --trust-root-bundle <zip>  ZIP archive containing trusted roots. Repeat as needed.
   --chain <path>           Explicit attestation chain file (PEM/DER). Overrides bundle-dir lookup.
-  --alias <alias>          Override alias value (defaults to alias.txt or a placeholder).
-  --challenge-hex <hex>    Hex-encoded challenge (overrides challenge.hex).
   --challenge-file <path>  Read hex challenge from the provided file.
   --require-strongbox      Enforce StrongBox attestation.
   --output <path>          Write JSON summary to <path>.
@@ -53,6 +53,7 @@ OUTPUT=""
 REVOCATION_SNAPSHOT=""
 REVOCATION_SNAPSHOT_SHA256=""
 EVALUATION_TIME_MS=""
+EXPECTED_LEAF_SPKI_SHA256=""
 REQUIRE_STRONGBOX=0
 declare -a TRUST_ROOTS
 declare -a TRUST_ROOT_DIRS
@@ -90,6 +91,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --evaluation-time-ms)
       EVALUATION_TIME_MS="$2"
+      shift 2
+      ;;
+    --expected-leaf-spki-sha256)
+      EXPECTED_LEAF_SPKI_SHA256="$2"
       shift 2
       ;;
     --trust-root)
@@ -130,14 +135,26 @@ if [[ -z "$BUNDLE_DIR" && -z "$CHAIN_FILE" ]]; then
   exit 1
 fi
 
-if [[ -z "$REVOCATION_SNAPSHOT" || -z "$REVOCATION_SNAPSHOT_SHA256" || -z "$EVALUATION_TIME_MS" ]]; then
-  echo "Canonical governed revocation snapshot, trusted commitment, and explicit evaluation time are required." >&2
+if [[ -z "$REVOCATION_SNAPSHOT" || -z "$REVOCATION_SNAPSHOT_SHA256" || -z "$EXPECTED_LEAF_SPKI_SHA256" || -z "$EVALUATION_TIME_MS" ]]; then
+  echo "Canonical governed revocation snapshot, trusted commitments, and explicit evaluation time are required." >&2
   usage >&2
   exit 1
 fi
 
-if [[ -z "$BUNDLE_DIR" && ${#TRUST_ROOTS[@]} -eq 0 && ${#TRUST_ROOT_DIRS[@]} -eq 0 && ${#TRUST_ROOT_BUNDLES[@]} -eq 0 ]]; then
+if [[ ${#TRUST_ROOTS[@]} -eq 0 && ${#TRUST_ROOT_DIRS[@]} -eq 0 && ${#TRUST_ROOT_BUNDLES[@]} -eq 0 ]]; then
   echo "At least one --trust-root, --trust-root-dir, or --trust-root-bundle must be supplied." >&2
+  usage >&2
+  exit 1
+fi
+
+if [[ -z "$ALIAS_OVERRIDE" ]]; then
+  echo "A separately trusted --alias must be supplied." >&2
+  usage >&2
+  exit 1
+fi
+
+if [[ -z "$CHALLENGE_HEX" && -z "$CHALLENGE_FILE" ]]; then
+  echo "A separately trusted --challenge-hex or --challenge-file must be supplied." >&2
   usage >&2
   exit 1
 fi
@@ -291,6 +308,7 @@ fi
 COMMAND+=(
   "--revocation-snapshot" "$(cd "$(dirname "$REVOCATION_SNAPSHOT")" && pwd)/$(basename "$REVOCATION_SNAPSHOT")"
   "--revocation-snapshot-sha256" "$REVOCATION_SNAPSHOT_SHA256"
+  "--expected-leaf-spki-sha256" "$EXPECTED_LEAF_SPKI_SHA256"
   "--evaluation-time-ms" "$EVALUATION_TIME_MS"
 )
 

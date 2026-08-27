@@ -751,7 +751,11 @@ impl Memory {
     /// Clear recorded access information.
     pub fn clear_tracking(&self) {
         self.read_log.lock().clear();
-        self.write_log.lock().clear();
+        let mut write_log = self.write_log.lock();
+        for entry in write_log.iter_mut() {
+            entry.bytes.fill(0);
+        }
+        write_log.clear();
     }
     /// Snapshot the set of ranges read since the last clear.
     pub fn read_set(&self) -> Vec<AccessRange> {

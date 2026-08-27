@@ -6,10 +6,10 @@ use crate::da::taikai::taikai_ingest::{
     AnchorSendError, AnchorSender, collect_pending_uploads, process_batch,
 };
 use crate::da::taikai::{
-    TAIKAI_ANCHOR_READY_PREFIX, TAIKAI_ANCHOR_READY_SUFFIX, TAIKAI_ANCHOR_REQUEST_PREFIX,
-    TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX, TAIKAI_ANCHOR_SENTINEL_SUFFIX,
-    TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX, TAIKAI_TRM_LINEAGE_SUFFIX,
-    TAIKAI_TRM_LOCK_PREFIX, TAIKAI_TRM_LOCK_SUFFIX,
+    TAIKAI_ANCHOR_INVALID_SUFFIX, TAIKAI_ANCHOR_READY_PREFIX, TAIKAI_ANCHOR_READY_SUFFIX,
+    TAIKAI_ANCHOR_REQUEST_PREFIX, TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX,
+    TAIKAI_ANCHOR_SENTINEL_SUFFIX, TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX,
+    TAIKAI_TRM_LINEAGE_SUFFIX, TAIKAI_TRM_LOCK_PREFIX, TAIKAI_TRM_LOCK_SUFFIX,
 };
 use crate::da::{
     DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
@@ -22,14 +22,15 @@ use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::{
     DaTaikaiAnchor, LaneConfig as ConfigLaneConfig, Nexus as ConfigNexus, TelemetryProfile,
 };
-use iroha_core::{da::LaneEpoch, telemetry::Telemetry};
+use iroha_core::{da::LaneEpoch, state::StateReadOnly, telemetry::Telemetry};
 use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature, SignatureOf};
 use iroha_data_model::{
     Encode,
     account::AccountId,
+    block::BlockHeader,
     da::{
         commitment::DaCommitmentBundle,
-        ingest::DaStripeLayout,
+        ingest::{DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1, DaStripeLayout},
         types::{BlobDigest, DaRentQuote, StorageTicketId},
     },
     name::Name,
@@ -37,19 +38,22 @@ use iroha_data_model::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
         LaneConfig as ModelLaneConfig, LaneId,
     },
+    parameter::{Parameter, custom::CustomParameter},
     sorafs::{
         capacity::ProviderId,
         pin_registry::{ManifestAliasBinding, ManifestDigest},
     },
     taikai::{
-        GuardDirectoryId, SegmentTimestamp, TaikaiAliasBinding, TaikaiAvailabilityClass,
-        TaikaiCarPointer, TaikaiCidIndexKey, TaikaiEnvelopeIndexes, TaikaiEventId,
-        TaikaiGuardPolicy, TaikaiRenditionId, TaikaiRenditionRouteV1, TaikaiRoutingManifestV1,
-        TaikaiSegmentEnvelopeV1, TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1,
-        TaikaiSegmentWindow, TaikaiStreamId, TaikaiTimeIndexKey,
+        GuardDirectoryId, SegmentTimestamp, TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1,
+        TAIKAI_ANCHOR_RECEIPT_VERSION_V1, TaikaiAliasBinding, TaikaiAnchorReceiptBodyV1,
+        TaikaiAnchorReceiptV1, TaikaiAvailabilityClass, TaikaiCarPointer, TaikaiCidIndexKey,
+        TaikaiEnvelopeIndexes, TaikaiEventId, TaikaiGuardPolicy, TaikaiRenditionId,
+        TaikaiRenditionRouteV1, TaikaiRoutingManifestV1, TaikaiSegmentEnvelopeV1,
+        TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1, TaikaiSegmentWindow,
+        TaikaiStreamId, TaikaiTimeIndexKey,
     },
 };
-use iroha_primitives::numeric::XorQuantity;
+use iroha_primitives::{json::Json, numeric::XorQuantity};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{
@@ -72,7 +76,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, ErrorKind, Read, Write},
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
@@ -1501,6 +1505,154 @@ fn sample_request() -> DaIngestRequest {
     .try_sign(&keypair)
     .expect("sign canonical DA request fixture")
 }
+
+fn active_da_admission_incarnation(app: &crate::SharedAppState, lane_id: LaneId) -> Hash {
+    let view = app.state.view();
+    let proposal_height = u64::try_from(view.height())
+        .expect("test state height fits u64")
+        .checked_add(1)
+        .expect("test proposal height advances");
+    view.lane_incarnation_at_height(lane_id, proposal_height)
+        .expect("test lane has an active incarnation")
+}
+
+fn seed_da_admission_parameter(app: &crate::SharedAppState, parameter: CustomParameter) {
+    let next_height = u64::try_from(app.state.view().height())
+        .expect("test state height fits u64")
+        .checked_add(1)
+        .expect("test block height advances");
+    let header = BlockHeader::new(
+        NonZeroU64::new(next_height).expect("test block height is non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = app.state.block(header);
+    let mut transaction = block.transaction();
+    transaction
+        .world_mut_for_testing()
+        .parameters_mut_for_testing()
+        .get_mut()
+        .set_parameter(Parameter::Custom(parameter));
+    transaction.apply();
+    block
+        .commit()
+        .expect("commit governed DA admission test parameter");
+}
+
+fn da_admission_policy(
+    lane_id: LaneId,
+    lane_incarnation: Hash,
+    producers: Vec<AccountId>,
+    current_epoch: u64,
+    grace_epoch: Option<u64>,
+) -> DaIngestAdmissionPolicyV1 {
+    let policy = DaIngestAdmissionPolicyV1 {
+        version: DaIngestAdmissionPolicyV1::VERSION,
+        revision: 1,
+        expected_previous_policy_hash: None,
+        lanes: vec![DaIngestAdmissionLaneV1 {
+            lane_id,
+            lane_incarnation,
+            producers,
+            current_epoch,
+            grace_epoch,
+        }],
+    };
+    policy
+        .validate()
+        .expect("DA admission test policy must be canonical");
+    policy
+}
+
+#[tokio::test]
+async fn da_ingest_admission_fails_closed_without_governed_policy() {
+    let app = crate::mk_app_state_for_tests();
+    let error = admission_snapshot_for_request(&app, &ALICE_ID, LaneId::SINGLE, 5)
+        .expect_err("DA ingest without a committed policy must fail closed");
+
+    assert_eq!(error.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(error.1.contains("governance installs an admission policy"));
+}
+
+#[tokio::test]
+async fn da_ingest_admission_fails_closed_for_malformed_governed_policy() {
+    let app = crate::mk_app_state_for_tests();
+    seed_da_admission_parameter(
+        &app,
+        CustomParameter::new(
+            DaIngestAdmissionPolicyV1::parameter_id(),
+            Json::new("not-a-da-admission-policy"),
+        ),
+    );
+
+    let error = admission_snapshot_for_request(&app, &ALICE_ID, LaneId::SINGLE, 5)
+        .expect_err("malformed committed DA admission policy must fail closed");
+    assert_eq!(error.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        error
+            .1
+            .contains("committed DA ingest admission policy is invalid")
+    );
+}
+
+#[tokio::test]
+async fn da_ingest_admission_rejects_wrong_producer_and_epoch() {
+    let app = crate::mk_app_state_for_tests();
+    let lane_id = LaneId::SINGLE;
+    let incarnation = active_da_admission_incarnation(&app, lane_id);
+    let policy = da_admission_policy(lane_id, incarnation, vec![ALICE_ID.clone()], 5, Some(4));
+    seed_da_admission_parameter(&app, policy.into_custom_parameter());
+
+    for (owner, epoch, label) in [
+        (&*BOB_ID, 5, "unlisted producer"),
+        (&*ALICE_ID, 3, "retired epoch"),
+        (&*ALICE_ID, 6, "future epoch"),
+    ] {
+        let error = admission_snapshot_for_request(&app, owner, lane_id, epoch).expect_err(label);
+        assert_eq!(error.0, StatusCode::FORBIDDEN, "{label}");
+    }
+}
+
+#[tokio::test]
+async fn da_ingest_admission_rejects_wrong_lane_incarnation() {
+    let app = crate::mk_app_state_for_tests();
+    let lane_id = LaneId::SINGLE;
+    let active_incarnation = active_da_admission_incarnation(&app, lane_id);
+    let mut wrong_incarnation = Hash::prehashed([0xE1; Hash::LENGTH]);
+    if wrong_incarnation == active_incarnation {
+        wrong_incarnation = Hash::prehashed([0xE2; Hash::LENGTH]);
+    }
+    let policy = da_admission_policy(
+        lane_id,
+        wrong_incarnation,
+        vec![ALICE_ID.clone()],
+        5,
+        Some(4),
+    );
+    seed_da_admission_parameter(&app, policy.into_custom_parameter());
+
+    let error = admission_snapshot_for_request(&app, &ALICE_ID, lane_id, 5)
+        .expect_err("policy for a retired lane incarnation must be rejected");
+    assert_eq!(error.0, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn da_ingest_admission_accepts_current_and_grace_epochs_for_exact_scope() {
+    let app = crate::mk_app_state_for_tests();
+    let lane_id = LaneId::SINGLE;
+    let incarnation = active_da_admission_incarnation(&app, lane_id);
+    let policy = da_admission_policy(lane_id, incarnation, vec![ALICE_ID.clone()], 5, Some(4));
+    seed_da_admission_parameter(&app, policy.into_custom_parameter());
+
+    for epoch in [4, 5] {
+        admission_snapshot_for_request(&app, &ALICE_ID, lane_id, epoch)
+            .unwrap_or_else(|error| panic!("exact admitted epoch {epoch} rejected: {error:?}"));
+    }
+}
+
 include!("tests/principal_binding_tests.rs");
 #[test]
 fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
@@ -2376,14 +2528,16 @@ impl AnchorSender for MockAnchorSender {
     async fn send(
         &self,
         endpoint: &Url,
-        body: String,
+        base_id: &str,
+        body: &str,
         api_token: Option<&str>,
-    ) -> Result<(), AnchorSendError> {
-        self.calls
-            .lock()
-            .await
-            .push((endpoint.clone(), body, api_token.map(str::to_owned)));
-        Ok(())
+    ) -> Result<Vec<u8>, AnchorSendError> {
+        self.calls.lock().await.push((
+            endpoint.clone(),
+            body.to_owned(),
+            api_token.map(str::to_owned),
+        ));
+        Ok(signed_anchor_receipt(base_id, body))
     }
 }
 struct BlockingSentinelAnchorSender {
@@ -2395,19 +2549,21 @@ impl AnchorSender for BlockingSentinelAnchorSender {
     async fn send(
         &self,
         endpoint: &Url,
-        body: String,
+        base_id: &str,
+        body: &str,
         api_token: Option<&str>,
-    ) -> Result<(), AnchorSendError> {
+    ) -> Result<Vec<u8>, AnchorSendError> {
         {
-            self.calls
-                .lock()
-                .await
-                .push((endpoint.clone(), body, api_token.map(str::to_owned)));
+            self.calls.lock().await.push((
+                endpoint.clone(),
+                body.to_owned(),
+                api_token.map(str::to_owned),
+            ));
         }
         async_fs::create_dir(&self.sentinel_path)
             .await
             .expect("block sentinel path");
-        Ok(())
+        Ok(signed_anchor_receipt(base_id, body))
     }
 }
 #[derive(Default)]
@@ -2419,13 +2575,15 @@ impl AnchorSender for FailingAnchorSender {
     async fn send(
         &self,
         endpoint: &Url,
-        body: String,
+        _base_id: &str,
+        body: &str,
         api_token: Option<&str>,
-    ) -> Result<(), AnchorSendError> {
-        self.calls
-            .lock()
-            .await
-            .push((endpoint.clone(), body, api_token.map(str::to_owned)));
+    ) -> Result<Vec<u8>, AnchorSendError> {
+        self.calls.lock().await.push((
+            endpoint.clone(),
+            body.to_owned(),
+            api_token.map(str::to_owned),
+        ));
         Err(Box::new(std::io::Error::new(
             ErrorKind::ConnectionRefused,
             "anchor service unavailable",
@@ -2441,12 +2599,17 @@ impl AnchorSender for FirstFailingAnchorSender {
     async fn send(
         &self,
         endpoint: &Url,
-        body: String,
+        base_id: &str,
+        body: &str,
         api_token: Option<&str>,
-    ) -> Result<(), AnchorSendError> {
+    ) -> Result<Vec<u8>, AnchorSendError> {
         let call_count = {
             let mut calls = self.calls.lock().await;
-            calls.push((endpoint.clone(), body.clone(), api_token.map(str::to_owned)));
+            calls.push((
+                endpoint.clone(),
+                body.to_owned(),
+                api_token.map(str::to_owned),
+            ));
             calls.len()
         };
         if call_count == 1 {
@@ -2455,7 +2618,7 @@ impl AnchorSender for FirstFailingAnchorSender {
                 "anchor service unavailable for first upload",
             )));
         }
-        Ok(())
+        Ok(signed_anchor_receipt(base_id, body))
     }
 }
 struct FirstBlockingSentinelAnchorSender {
@@ -2467,26 +2630,49 @@ impl AnchorSender for FirstBlockingSentinelAnchorSender {
     async fn send(
         &self,
         endpoint: &Url,
-        body: String,
+        base_id: &str,
+        body: &str,
         api_token: Option<&str>,
-    ) -> Result<(), AnchorSendError> {
+    ) -> Result<Vec<u8>, AnchorSendError> {
         let call_count = {
             let mut calls = self.calls.lock().await;
-            calls.push((endpoint.clone(), body.clone(), api_token.map(str::to_owned)));
+            calls.push((
+                endpoint.clone(),
+                body.to_owned(),
+                api_token.map(str::to_owned),
+            ));
             calls.len()
         };
         if call_count == 1 {
             let sentinel_path = self
                 .sentinel_paths_by_body
-                .get(&body)
+                .get(body)
                 .expect("first upload body should have a sentinel path");
             async_fs::create_dir(sentinel_path)
                 .await
                 .expect("block first sentinel path");
         }
-        Ok(())
+        Ok(signed_anchor_receipt(base_id, body))
     }
 }
+
+struct StaticAnchorResponseSender {
+    response: Vec<u8>,
+}
+
+#[async_trait]
+impl AnchorSender for StaticAnchorResponseSender {
+    async fn send(
+        &self,
+        _endpoint: &Url,
+        _base_id: &str,
+        _body: &str,
+        _api_token: Option<&str>,
+    ) -> Result<Vec<u8>, AnchorSendError> {
+        Ok(self.response.clone())
+    }
+}
+
 async fn write_minimal_taikai_anchor_artifacts(spool_dir: &Path, base_id: &str) {
     async_fs::create_dir_all(spool_dir)
         .await
@@ -2538,8 +2724,33 @@ fn taikai_anchor_config(api_token: Option<&str>) -> DaTaikaiAnchor {
     DaTaikaiAnchor {
         endpoint: Url::parse("http://localhost/anchor").unwrap(),
         api_token: api_token.map(str::to_owned),
+        receipt_public_key: anchor_signer().public_key().clone(),
         poll_interval: Duration::from_secs(5),
+        request_timeout: Duration::from_secs(5),
     }
+}
+fn anchor_signer() -> KeyPair {
+    checked_fixture_ed25519_keypair(0xA7)
+}
+fn signed_anchor_receipt(base_id: &str, request_body: &str) -> Vec<u8> {
+    signed_anchor_receipt_with_signer(base_id, request_body, &anchor_signer())
+}
+
+fn signed_anchor_receipt_with_signer(
+    base_id: &str,
+    request_body: &str,
+    signer: &KeyPair,
+) -> Vec<u8> {
+    let body = TaikaiAnchorReceiptBodyV1 {
+        schema: TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1.to_owned(),
+        version: TAIKAI_ANCHOR_RECEIPT_VERSION_V1,
+        base_id: base_id.to_owned(),
+        request_digest: *blake3_hash(request_body.as_bytes()).as_bytes(),
+        acknowledged_unix_secs: 1_750_000_000,
+    };
+    let receipt =
+        TaikaiAnchorReceiptV1::try_sign(body, signer).expect("sign Taikai anchor receipt");
+    json::to_vec(&receipt).expect("encode Taikai anchor receipt")
 }
 #[cfg(unix)]
 async fn replace_path_with_symlink(path: &Path, target_contents: &[u8]) -> PathBuf {
@@ -2784,6 +2995,272 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
         .expect("collect after upload");
     assert!(pending_after.is_empty());
 }
+
+#[tokio::test]
+async fn taikai_anchor_processing_rejects_status_only_success() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    let sender = StaticAnchorResponseSender {
+        response: Vec::new(),
+    };
+
+    let err = process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect_err("an empty 2xx response must not acknowledge an upload");
+
+    assert!(
+        err.contains("invalid Taikai receipt"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        spool_dir
+            .join(format!("taikai-envelope-{base_id}.norito"))
+            .is_file(),
+        "status-only success must leave source artefacts retryable"
+    );
+    assert!(
+        !spool_dir
+            .join(format!(
+                "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+            ))
+            .exists(),
+        "status-only success must not create an acknowledgement"
+    );
+    assert_eq!(
+        collect_pending_uploads(&spool_dir)
+            .await
+            .expect("collect after status-only success")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_rejects_receipt_for_different_request() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    let sender = StaticAnchorResponseSender {
+        response: signed_anchor_receipt(base_id, "different exact request bytes"),
+    };
+
+    let err = process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect_err("a receipt for different bytes must not acknowledge an upload");
+
+    assert!(
+        err.contains("request digest does not match"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        spool_dir
+            .join(format!("taikai-envelope-{base_id}.norito"))
+            .is_file(),
+        "request-binding failure must leave source artefacts retryable"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_rejects_receipt_for_different_base_id() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    let pending = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("prepare request capture");
+    let different_base_id = "00000001-0000000000000002-0000000000000004-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    let sender = StaticAnchorResponseSender {
+        response: signed_anchor_receipt(different_base_id, pending[0].body()),
+    };
+
+    let err = process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect_err("a receipt for another artefact must not acknowledge an upload");
+
+    assert!(
+        err.contains("receipt base_id") && err.contains("does not match"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        spool_dir
+            .join(format!("taikai-envelope-{base_id}.norito"))
+            .is_file(),
+        "artefact-binding failure must leave source artefacts retryable"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_rejects_receipt_from_unpinned_signer() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    let pending = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("prepare request capture");
+    let wrong_signer = checked_fixture_ed25519_keypair(0xB8);
+    let sender = StaticAnchorResponseSender {
+        response: signed_anchor_receipt_with_signer(base_id, pending[0].body(), &wrong_signer),
+    };
+
+    let err = process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect_err("an untrusted signer must not acknowledge an upload");
+
+    assert!(
+        err.contains("signature validation failed"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        spool_dir
+            .join(format!("taikai-envelope-{base_id}.norito"))
+            .is_file(),
+        "signer validation failure must leave source artefacts retryable"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_restart_quarantines_legacy_timestamp_sentinel() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    collect_pending_uploads(&spool_dir)
+        .await
+        .expect("prepare request capture");
+    let sentinel = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+    ));
+    async_fs::write(&sentinel, b"1750000000\n")
+        .await
+        .expect("write legacy timestamp sentinel");
+
+    let pending = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("a legacy marker should be quarantined without blocking retry");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].base_id(), base_id);
+    assert!(
+        spool_dir
+            .join(format!("taikai-envelope-{base_id}.norito"))
+            .is_file(),
+        "unverified restart state must not retire source artefacts"
+    );
+    assert!(
+        !sentinel.exists(),
+        "legacy marker must leave the live namespace"
+    );
+    let quarantine_prefix = format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}{TAIKAI_ANCHOR_INVALID_SUFFIX}-"
+    );
+    let quarantined = fs::read_dir(&spool_dir)
+        .expect("scan quarantine evidence")
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with(&quarantine_prefix))
+        .count();
+    assert_eq!(quarantined, 1, "legacy marker must be retained as evidence");
+}
+
+#[tokio::test]
+async fn taikai_anchor_prune_quarantines_orphan_legacy_sentinel() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    async_fs::create_dir(&spool_dir)
+        .await
+        .expect("create Taikai spool");
+    let sentinel = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{ANCHOR_BASE_ID}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+    ));
+    async_fs::write(&sentinel, b"1750000000\n")
+        .await
+        .expect("write orphan legacy sentinel");
+    let sender = MockAnchorSender::default();
+
+    process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect("orphan legacy marker should be quarantined during pruning");
+
+    assert!(
+        sender.calls.lock().await.is_empty(),
+        "an orphan acknowledgement must not trigger an upload"
+    );
+    assert!(
+        !sentinel.exists(),
+        "orphan legacy marker must leave the live acknowledgement namespace"
+    );
+    let quarantine_prefix = format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{ANCHOR_BASE_ID}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}{TAIKAI_ANCHOR_INVALID_SUFFIX}-"
+    );
+    let quarantined = fs::read_dir(&spool_dir)
+        .expect("scan orphan quarantine evidence")
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with(&quarantine_prefix))
+        .count();
+    assert_eq!(
+        quarantined, 1,
+        "orphan legacy marker must be retained as evidence"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_restart_accepts_exact_signed_receipt() {
+    let AnchorFixture {
+        _dir,
+        spool_dir,
+        base_id,
+    } = minimal_anchor_fixture(ANCHOR_BASE_ID).await;
+    let pending = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("prepare request capture");
+    let sentinel = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+    ));
+    async_fs::write(&sentinel, signed_anchor_receipt(base_id, pending[0].body()))
+        .await
+        .expect("persist signed receipt before simulated restart");
+
+    assert!(
+        collect_pending_uploads(&spool_dir)
+            .await
+            .expect("recover exact signed receipt")
+            .is_empty()
+    );
+    for source in [
+        format!("taikai-envelope-{base_id}.norito"),
+        format!("taikai-indexes-{base_id}.json"),
+        format!("taikai-ssm-{base_id}.norito"),
+        format!("{TAIKAI_ANCHOR_READY_PREFIX}{base_id}{TAIKAI_ANCHOR_READY_SUFFIX}"),
+    ] {
+        assert!(
+            !spool_dir.join(source).exists(),
+            "verified restart recovery must retire source artefacts"
+        );
+    }
+    assert!(
+        sentinel.is_file(),
+        "verified receipt remains as audit evidence"
+    );
+    assert!(
+        spool_dir
+            .join(format!(
+                "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
+            ))
+            .is_file(),
+        "exact request capture remains available for future verification"
+    );
+}
+
 #[tokio::test]
 async fn taikai_anchor_processing_reports_anchor_delivery_failure() {
     let AnchorFixture {
@@ -4368,7 +4845,7 @@ fn validate_taikai_publisher_owner_binds_outer_principal() {
     );
     let signing_manifest: TaikaiSegmentSigningManifestV1 =
         norito::decode_from_bytes(&ssm_bytes).expect("decode signing manifest");
-    let (_, telemetry) = telemetry_handle_for_tests();
+    let telemetry = crate::routing::MaybeTelemetry::disabled();
     let outcome = taikai::validate_taikai_ssm(
         &ssm_bytes,
         &manifest.manifest_hash,
@@ -4868,6 +5345,42 @@ fn validate_taikai_trm_rejects_invalid_window() {
     assert!(
         err.1.contains("invalid routing manifest"),
         "unexpected error message: {}",
+        err.1
+    );
+}
+
+#[test]
+fn validate_taikai_trm_rejects_terminal_window_before_lineage_mutation() {
+    let taikai = taikai_envelope_fixture();
+    let mut trm = sample_trm_manifest_for_envelope(&taikai);
+    trm.segment_window = TaikaiSegmentWindow::new(40, u64::MAX);
+    let trm_bytes = to_bytes(&trm).expect("encode terminal-window trm");
+
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &trm.alias_binding)
+        .expect_err("terminal TRM window must fail before a lineage guard is created");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("segment window end must be less than u64::MAX"),
+        "unexpected terminal-window error: {}",
+        err.1
+    );
+}
+
+#[test]
+fn validate_taikai_trm_rejects_oversized_window_before_lineage_mutation() {
+    let taikai = taikai_envelope_fixture();
+    let mut trm = sample_trm_manifest_for_envelope(&taikai);
+    trm.segment_window = TaikaiSegmentWindow::new(40, 160);
+    let trm_bytes = to_bytes(&trm).expect("encode oversized-window trm");
+
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &trm.alias_binding)
+        .expect_err("121-segment TRM window must fail before a lineage guard is created");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("segment window covers 121 sequences; maximum is 120"),
+        "unexpected oversized-window error: {}",
         err.1
     );
 }

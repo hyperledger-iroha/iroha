@@ -7497,7 +7497,7 @@ impl DeferredServiceEvidence {
                     && self.original_event.clone().retag_authenticated_ingress(to)
                         == self.effective_event
                     && self.original_admission.map(|mut admission| {
-                        admission.generation = to.generation();
+                        admission.consumer_tag = to;
                         admission
                     }) == self.effective_admission
             }
@@ -8390,7 +8390,7 @@ fn append_deferred_projection_admission(
             append_deferred_projection_field(projection, &reference.encode());
         }
     }
-    append_deferred_projection_u64(projection, admission.generation.get());
+    append_deferred_projection_tag(projection, admission.consumer_tag);
     projection.push(u8::from(admission.inserted_equivocation));
     projection.push(u8::from(admission.locked_commit_progress));
     projection.push(u8::from(admission.locked_reproposal_prepare_progress));
@@ -8867,7 +8867,7 @@ struct IngressEquivocationRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IngressDeliveryRecord {
     fingerprint: IngressFingerprint,
-    generation: reducer::Generation,
+    consumer_tag: reducer::EventTag,
     locked_commit_progress: bool,
     locked_reproposal_prepare_progress: bool,
 }
@@ -8875,7 +8875,7 @@ struct IngressDeliveryRecord {
 struct IngressAdmission {
     key: IngressSemanticKey,
     fingerprint: IngressFingerprint,
-    generation: reducer::Generation,
+    consumer_tag: reducer::EventTag,
     inserted_equivocation: bool,
     locked_commit_progress: bool,
     locked_reproposal_prepare_progress: bool,
@@ -11577,7 +11577,6 @@ impl SumeragiV2Adapter {
     ) -> Result<(Option<AdapterOutcome>, Option<IngressAdmission>), AdapterError> {
         let current_tag = self.reducer.current_tag();
         let current_view = current_tag.view();
-        let generation = current_tag.generation();
         self.prune_ingress_records();
         let retained_vote_views = u64::try_from(self.wire_context.roster.len()).unwrap_or(u64::MAX);
         let oldest_retained_view = current_view.saturating_sub(retained_vote_views);
@@ -11683,7 +11682,7 @@ impl SumeragiV2Adapter {
                         } else {
                             return true;
                         };
-                        exact_protected_epoch && delivered.generation == generation
+                        exact_protected_epoch && delivered.consumer_tag == current_tag
                     })
                 {
                     return Ok((
@@ -11694,7 +11693,7 @@ impl SumeragiV2Adapter {
                 let admission = IngressAdmission {
                     key,
                     fingerprint,
-                    generation,
+                    consumer_tag: current_tag,
                     inserted_equivocation: false,
                     locked_commit_progress,
                     locked_reproposal_prepare_progress,
@@ -11754,7 +11753,7 @@ impl SumeragiV2Adapter {
         let admission = IngressAdmission {
             key,
             fingerprint,
-            generation,
+            consumer_tag: current_tag,
             inserted_equivocation: true,
             locked_commit_progress,
             locked_reproposal_prepare_progress,
@@ -13874,7 +13873,7 @@ impl SumeragiV2Adapter {
                     admission_key,
                     IngressDeliveryRecord {
                         fingerprint,
-                        generation: tag.generation(),
+                        consumer_tag: tag,
                         locked_commit_progress: false,
                         locked_reproposal_prepare_progress: false,
                     },
@@ -16689,8 +16688,8 @@ impl SumeragiV2Adapter {
         // retransmission before conversion. A Commit ignored before its exact
         // lock is durable records an ordinary delivery; once that lock is
         // installed, `locked_commit_progress` changes the consumer epoch and
-        // admits the same authenticated vote once in the current generation.
-        // Later pool resets remain generation scoped.
+        // admits the same authenticated vote once under the current full event
+        // tag. Later pool resets remain scoped by view and generation.
         // One adapter invocation returns exactly one reducer macro-step. Busy-
         // deferred inputs remain adapter-owned and the serialized runtime
         // schedules them explicitly after this batch reaches the executor.
@@ -16741,7 +16740,7 @@ impl SumeragiV2Adapter {
             admission.key,
             IngressDeliveryRecord {
                 fingerprint: admission.fingerprint,
-                generation: admission.generation,
+                consumer_tag: admission.consumer_tag,
                 locked_commit_progress: admission.locked_commit_progress,
                 locked_reproposal_prepare_progress: admission.locked_reproposal_prepare_progress,
             },
@@ -17672,7 +17671,7 @@ impl SumeragiV2Adapter {
                 let current_tag = self.reducer.current_tag();
                 input.event = input.event.retag_authenticated_ingress(current_tag);
                 if let Some(admission) = &mut input.admission {
-                    admission.generation = current_tag.generation();
+                    admission.consumer_tag = current_tag;
                 }
                 DeferredRetagRelation::AuthenticatedIngress {
                     from: original_tag,

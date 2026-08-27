@@ -15,7 +15,7 @@ mod tests {
     };
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{
-        Signature,
+        SessionKey, Signature,
         soranet::{
             certificate::{
                 CapabilityToggle, RelayCapabilityFlagsV1, RelayCertificateBundleV2,
@@ -624,8 +624,23 @@ mod tests {
             vpn_flow_label_from_session_id([0xA1; 16]),
         )
         .expect("cover scheduler seed");
-        let (vpn_runtime, mut vpn_peer) = duplex(VPN_CELL_LEN * 8);
-        let (mut vpn_read, mut vpn_write) = tokio::io::split(vpn_runtime);
+        let record_context =
+            RecordStreamContext::new(RecordEndpoint::Client, RecordStreamKind::Bidirectional, 7);
+        let relay_record = RecordLayer::new(SessionKey::new(vec![0xA5; 32]), RecordEndpoint::Relay)
+            .expect("relay record layer")
+            .stream(record_context)
+            .expect("relay record stream");
+        let client_record =
+            RecordLayer::new(SessionKey::new(vec![0xA5; 32]), RecordEndpoint::Client)
+                .expect("client record layer")
+                .stream(record_context)
+                .expect("client record stream");
+        let (vpn_runtime, vpn_peer) = duplex(VPN_CELL_LEN * 8);
+        let (vpn_read, vpn_write) = tokio::io::split(vpn_runtime);
+        let (vpn_peer_read, _vpn_peer_write) = tokio::io::split(vpn_peer);
+        let mut vpn_read = RecordReader::new(vpn_read, relay_record.opener);
+        let mut vpn_write = RecordWriter::new(vpn_write, relay_record.sealer);
+        let mut vpn_peer = RecordReader::new(vpn_peer_read, client_record.opener);
         let (backend_runtime, mut backend_peer) = duplex(VPN_CELL_LEN * 8);
         let (mut backend_read, mut backend_write) = tokio::io::split(backend_runtime);
         let settlement_dir = secure_test_tempdir();
@@ -661,14 +676,18 @@ mod tests {
             .write_all(&payload)
             .await
             .expect("write backend payload");
+        let parsed = timeout(
+            Duration::from_secs(1),
+            crate::vpn::read_frame(overlay.as_ref(), &mut vpn_peer),
+        )
+        .await
+        .expect("one protected VPN frame must not wait for a second backend packet")
+        .expect("vpn frame");
+        assert_eq!(payload, parsed.payload);
         backend_peer
             .shutdown()
             .await
             .expect("shutdown backend peer");
-        let parsed = crate::vpn::read_frame(overlay.as_ref(), &mut vpn_peer)
-            .await
-            .expect("vpn frame");
-        assert_eq!(payload, parsed.payload);
         bridge_task.await.expect("bridge task joined");
     }
     #[tokio::test]
@@ -1782,6 +1801,37 @@ mod tests {
                 preflight.metadata.kem_id()
             );
         }
+    }
+    #[test]
+    fn relay_preflight_rejects_strict_constant_rate_without_downgrading() {
+        let (frame, capabilities) = current_client_hello_frame(HandshakeSuite::Nk2Hybrid, None);
+        let mut server_capabilities = matching_server_capabilities(&capabilities);
+        server_capabilities.constant_rate = Some(capability::ConstantRateCapability {
+            version: 1,
+            mode: ConstantRateMode::Strict,
+            cell_bytes: constant_rate::CONSTANT_RATE_CELL_BYTES as u16,
+        });
+
+        let error = match preflight_client_hello(&frame, &server_capabilities) {
+            Ok(_) => panic!("strict mode must fail before the relay handshake response"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            HandshakeError::StrictConstantRateUnavailable
+        ));
+
+        server_capabilities.constant_rate = Some(capability::ConstantRateCapability {
+            version: 1,
+            mode: ConstantRateMode::BestEffort,
+            cell_bytes: constant_rate::CONSTANT_RATE_CELL_BYTES as u16,
+        });
+        let negotiated = preflight_client_hello(&frame, &server_capabilities)
+            .expect("best-effort cover mode remains admissible")
+            .negotiated
+            .constant_rate
+            .expect("server best-effort mode must be negotiated");
+        assert_eq!(negotiated.mode, ConstantRateMode::BestEffort);
     }
     #[test]
     fn admission_transcript_commits_to_the_exact_client_hello() {

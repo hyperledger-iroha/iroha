@@ -10,12 +10,22 @@ pub mod set;
 pub mod specialized;
 /// Trigger metadata key toggled by `set_trigger_enabled` syscalls/ISIs.
 pub(crate) const TRIGGER_ENABLED_METADATA_KEY: &str = "__enabled";
+/// Internal registration-height metadata used to defer new trigger incarnations.
+pub(crate) const TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY: &str = "__registered_block_height";
 fn trigger_enabled_metadata_key() -> &'static Name {
     static KEY: OnceLock<Name> = OnceLock::new();
     KEY.get_or_init(|| {
         TRIGGER_ENABLED_METADATA_KEY
             .parse()
             .expect("trigger enabled metadata key must be valid")
+    })
+}
+fn trigger_registered_block_height_metadata_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| {
+        TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY
+            .parse()
+            .expect("trigger registration-height metadata key must be valid")
     })
 }
 /// Read the trigger enabled flag from metadata, defaulting to `true` when absent.
@@ -32,6 +42,20 @@ pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
     }
     false
 }
+/// Return whether this exact trigger incarnation predates `current_block_height`.
+///
+/// Missing, malformed, same-height, and future-height lifecycle metadata all fail
+/// closed. Call this again after materialized trigger IDs are reloaded because an
+/// earlier callback may have replaced the ID with a new incarnation.
+pub(crate) fn trigger_was_registered_before_block(
+    metadata: &Metadata,
+    current_block_height: u64,
+) -> bool {
+    metadata
+        .get(trigger_registered_block_height_metadata_key())
+        .and_then(|json| json.try_into_any_norito::<u64>().ok())
+        .is_some_and(|height| height < current_block_height)
+}
 /// All instructions related to triggers.
 /// - registering a trigger and validating the declared authority against
 ///   `CanRegisterTrigger{authority: ...}` permissions
@@ -41,12 +65,13 @@ pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
 pub mod isi {
     use super::{super::prelude::*, *};
     use iroha_data_model::{
-        events::EventFilter,
         isi::error::{InvalidParameterError, RepetitionError},
         name::Name,
     };
-    const RESERVED_TRIGGER_METADATA_KEYS: [&str; 2] =
-        ["__registered_block_height", "__registered_at_ms"];
+    const RESERVED_TRIGGER_METADATA_KEYS: [&str; 2] = [
+        TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY,
+        "__registered_at_ms",
+    ];
     pub(super) fn ensure_metadata_key_is_not_reserved(key: &Name) -> Result<(), Error> {
         if RESERVED_TRIGGER_METADATA_KEYS
             .iter()
@@ -379,12 +404,13 @@ pub mod isi {
                 }
             }
         }
-        // Mark triggers registered within the current block so they do not fire in the same block.
-        // This flag is used as a secondary guard in the execution path.
+        // Mark the registration block so scheduled time and pipeline callbacks do not
+        // inherit a same-block match from an older incarnation of the same ID. Data
+        // and explicit-call triggers intentionally remain executable in-transaction.
         {
             use iroha_primitives::json::Json;
             enforce_trigger_metadata_limits(new_trigger.action().metadata(), state_transaction)?;
-            let key_height = "__registered_block_height"
+            let key_height = TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY
                 .parse::<Name>()
                 .expect("Valid metadata key");
             let key_time = "__registered_at_ms"
@@ -670,50 +696,10 @@ pub mod isi {
                 authority: authority.clone(),
                 args: self.args().clone(),
             };
-            // Precompute permission check before borrowing `triggers` view to avoid
-            // conflicting borrows and to keep the closure `Fn`-compatible.
-            let perm_ok_global = state_transaction.can_execute_trigger_for(authority, id);
-            state_transaction
-                .world
-                .triggers
-                .inspect_by_id(id, |action| -> Result<(), Error> {
-                    // If the trigger has no remaining executions, treat it as not found.
-                    if action.repeats().is_depleted() {
-                        return Err(Error::Find(FindError::Trigger(id.clone())));
-                    }
-                    // Manual execution is only allowed for triggers with ExecuteTrigger filters
-                    // and only if (a) the event matches the filter and (b) the caller is authorized.
-                    let mut filter_event = event.clone();
-                    if perm_ok_global {
-                        filter_event.authority = action.authority().clone();
-                    }
-                    match action.clone_and_box().filter {
-                        EventFilterBox::ExecuteTrigger(filter) => {
-                            // Check filter match
-                            if !filter.matches(&filter_event) {
-                                return Err(Error::InvariantViolation(
-                                    "Trigger can't be executed manually: filter mismatch".into(),
-                                ));
-                            }
-                            // Authorization: owner of the trigger action OR explicit permission
-                            let owner_ok = action.authority() == authority;
-                            if owner_ok || perm_ok_global {
-                                Ok(())
-                            } else {
-                                Err(Error::InvariantViolation(
-                                    "Trigger can't be executed manually: not permitted".into(),
-                                ))
-                            }
-                        }
-                        _ => Err(Error::InvariantViolation(
-                            "Trigger can't be executed manually: not a by-call trigger".into(),
-                        )),
-                    }
-                })
-                .ok_or_else(|| Error::Find(FindError::Trigger(id.clone())))
-                .and_then(core::convert::identity)?;
-            // ExecuteTrigger remains supported; step output is intentionally dropped here
-            // because trigger completion is already surfaced via events.
+            // Keep lookup, lifecycle cleanup, filter matching, and authorization in
+            // one use-time boundary. A second preflight copy here can reject a stale
+            // depleted entry before the cleanup path or drift from helper semantics.
+            // Step output is intentionally dropped because completion is surfaced by events.
             let _step = state_transaction
                 .execute_called_trigger(id, &event)
                 .map_err(|rej| {
@@ -1610,6 +1596,98 @@ mod tests {
         ExecuteTrigger::new(trig_id)
             .execute(&BOB_ID, &mut stx)
             .expect_err("stale permission must not authorize the replacement trigger");
+    }
+    #[test]
+    fn by_call_self_replacement_keeps_the_fresh_repeat_budget() {
+        use crate::smartcontracts::triggers::specialized::LoadedActionTrait as _;
+        use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "by_call_self_replacement".parse().unwrap();
+        let filter = ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone());
+        let replacement = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(2),
+                ALICE_ID.clone(),
+                filter.clone(),
+            )
+            .expect("replacement action is valid"),
+        );
+        let original = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                vec![
+                    InstructionBox::from(Unregister::trigger(trigger_id.clone())),
+                    InstructionBox::from(Register::trigger(replacement)),
+                ],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                filter,
+            )
+            .expect("original action is valid"),
+        );
+        Register::trigger(original)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        ExecuteTrigger::new(trigger_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("original trigger executes and installs its replacement");
+
+        let replacement = stx
+            .world
+            .triggers
+            .by_call_triggers()
+            .get(&trigger_id)
+            .expect("replacement remains registered");
+        assert_eq!(replacement.repeats(), &Repeats::Exactly(2));
+
+        ExecuteTrigger::new(trigger_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("replacement remains callable in its registration transaction");
+        let replacement = stx
+            .world
+            .triggers
+            .by_call_triggers()
+            .get(&trigger_id)
+            .expect("replacement retains one invocation");
+        assert_eq!(replacement.repeats(), &Repeats::Exactly(1));
+
+        let mismatched_event = ExecuteTriggerEvent {
+            trigger_id: "different_trigger_id".parse().unwrap(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let rejection = stx
+            .execute_called_trigger(&trigger_id, &mismatched_event)
+            .expect_err("a stale ID/event pair must fail before action resolution");
+        assert!(matches!(
+            rejection,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
+        ));
     }
     #[test]
     fn register_trigger_without_permission_is_rejected() {

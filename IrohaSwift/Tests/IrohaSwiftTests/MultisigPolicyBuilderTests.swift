@@ -52,4 +52,36 @@ final class MultisigPolicyBuilderTests: XCTestCase {
         XCTAssertEqual(policy.members.first?.weight, 1)
         XCTAssertFalse(policy.ctap2Cbor.isEmpty)
     }
+
+    #if IROHASWIFT_ENABLE_MLDSA
+    func testBuilderRequiresProtocolMlDsa65MemberKeys() throws {
+        let publicKey = Data(repeating: 0xA5, count: 1_952)
+        let policy = try MultisigPolicyBuilder()
+            .setThreshold(1)
+            .addMember(algorithm: .mlDsa, weight: 1, publicKey: publicKey)
+            .build()
+        XCTAssertEqual(policy.members.first?.publicKey, publicKey)
+
+        for malformedKey in [
+            Data(),
+            Data(repeating: 0x20, count: 32),
+            Data(repeating: 0x44, count: 1_312),
+            Data(repeating: 0x65, count: 1_951),
+            Data(repeating: 0x65, count: 1_953),
+            Data(repeating: 0x87, count: 2_592),
+            Data(repeating: 0, count: 1_952),
+        ] {
+            XCTAssertThrowsError(
+                try MultisigPolicyBuilder()
+                    .setThreshold(1)
+                    .addMember(algorithm: .mlDsa, weight: 1, publicKey: malformedKey)
+                    .build()
+            ) { error in
+                guard case AccountAddressError.invalidPublicKey = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
+        }
+    }
+    #endif
 }

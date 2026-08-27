@@ -82,9 +82,9 @@ fn parse_program_internal(
 ) -> ProgramParseOutput {
     let lexed = lex(source, budget);
     let lossless_tokens = lexed.tokens.clone();
-    let (lowered_tokens, lexical_diagnostics) =
-        crate::lexer::lower_lexed_recovering(source, budget, lexed);
-    let lexical_failure = !lexical_diagnostics.is_empty();
+    let (lowered_tokens, mut lexical_diagnostics, mut omitted_lexical_diagnostics) =
+        crate::lexer::lower_lexed_recovering_with_omissions(source, budget, lexed);
+    let lexical_failure = !lexical_diagnostics.is_empty() || omitted_lexical_diagnostics != 0;
     let resource_failure = lexical_diagnostics
         .iter()
         .any(|diagnostic| matches!(diagnostic.code.as_str(), "K0001" | "K0002" | "K0003"));
@@ -149,8 +149,12 @@ fn parse_program_internal(
     if lexical_failure {
         // Recovery trees are tooling output only. No AST containing or
         // surrounding a malformed token can cross into semantic analysis.
-        program = None;
-        sourced_program = None;
+        if let Some(program) = program.take() {
+            crate::ast::drop_program_iterative(program);
+        }
+        if let Some(program) = sourced_program.take() {
+            crate::ast::drop_program_iterative(program);
+        }
         ast_facts = None;
     }
     // Parser recovery after a malformed token exists to preserve CST shape,
@@ -159,7 +163,28 @@ fn parse_program_internal(
     // failures first; syntax diagnostics become authoritative only when the
     // token stream itself was valid.
     let diagnostics = if lexical_failure {
-        DiagnosticBundle::new(lexical_diagnostics)
+        if let Some(nesting) = syntax_diagnostics
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "K0003")
+            .cloned()
+            && !lexical_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "K0003")
+        {
+            let retained = budget.max_diagnostics().saturating_sub(1);
+            if lexical_diagnostics.len() >= retained && retained != 0 {
+                lexical_diagnostics.pop();
+                omitted_lexical_diagnostics = omitted_lexical_diagnostics.saturating_add(1);
+            }
+            if retained != 0 {
+                lexical_diagnostics.push(nesting);
+            }
+        }
+        DiagnosticBundle::new(crate::lexer::finalize_recovering_diagnostics(
+            lexical_diagnostics,
+            omitted_lexical_diagnostics,
+        ))
     } else {
         syntax_diagnostics
     };

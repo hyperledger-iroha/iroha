@@ -121,8 +121,9 @@ class KeystoreKeyProvider @JvmOverloads constructor(
         }
 
     /**
-     * Requests fresh attestation for `alias`. Providers that do not support attestation return
-     * null.
+     * Requests backend-generated attestation for `alias`. Android Keystore cannot re-attest an
+     * existing alias with a new challenge; callers must provision a new alias with the challenge
+     * in [KeyGenParameters] when fresh evidence is required.
      */
     @Throws(KeyManagementException::class)
     fun generateAttestation(alias: String, challenge: ByteArray?): KeyAttestation? {
@@ -162,9 +163,17 @@ class KeystoreKeyProvider @JvmOverloads constructor(
         }
         val challenge = expectedChallenge.copyOf()
         val attestation = try {
-            fetchFreshAttestation(alias, challenge)
-        } catch (_: KeyManagementException) {
-            return null
+            fetchRecordedAttestation(alias)
+        } catch (ex: KeyManagementException) {
+            throw AttestationVerificationException(
+                "Failed to obtain challenge-bound attestation material",
+                ex,
+            )
+        } catch (ex: RuntimeException) {
+            throw AttestationVerificationException(
+                "Failed to obtain challenge-bound attestation material",
+                ex,
+            )
         } ?: return null
         try {
             val result = verifier.verify(attestation, challenge)
@@ -259,18 +268,15 @@ class KeystoreKeyProvider @JvmOverloads constructor(
 
     private fun fetchAttestation(alias: String, challenge: ByteArray?): KeyAttestation? {
         val normalized = challenge?.copyOf() ?: NO_CHALLENGE
-        if (normalized.isNotEmpty()) {
-            return backend.generateAttestation(alias, normalized)
-        }
         val cached = lookupCachedAttestation(alias, normalized)
         if (cached != null) return cached
         return backend.attestation(alias)?.let { cacheAttestation(alias, normalized, it) }
     }
 
-    private fun fetchFreshAttestation(alias: String, challenge: ByteArray): KeyAttestation? {
-        evictAttestationEntry(alias, fingerprintChallenge(challenge))
-        return backend.generateAttestation(alias, challenge.copyOf())
-    }
+    private fun fetchRecordedAttestation(alias: String): KeyAttestation? =
+        // Challenge-bound Android certificates are minted at key provisioning time. Always reread
+        // the recorded chain so verification cannot consume stale in-memory evidence.
+        backend.attestation(alias)
 
     private class CacheKey(val alias: String, challengeFingerprint: ByteArray) {
         private val _challengeFingerprint: ByteArray

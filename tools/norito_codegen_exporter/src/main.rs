@@ -119,6 +119,7 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::kaigi::RecordKaigiUsage);
         $macro!(iroha_data_model::isi::kaigi::SetKaigiRelayManifest);
         $macro!(iroha_data_model::isi::kaigi::RegisterKaigiRelay);
+        $macro!(iroha_data_model::isi::kaigi::UnregisterKaigiRelay);
         $macro!(iroha_data_model::isi::kaigi::ReportKaigiRelayHealth);
         $macro!(iroha_data_model::isi::zk::RegisterZkAsset);
         $macro!(iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition);
@@ -897,19 +898,26 @@ mod tests {
         );
     }
     #[test]
-    fn kaigi_relay_health_instruction_is_exported_with_canonical_wire_id() {
+    fn kaigi_relay_instructions_are_exported_with_canonical_wire_ids() {
         let specs = gather_instruction_specs(&instruction_registry::default(), None);
-        let spec = specs
-            .iter()
-            .find(|spec| {
-                spec.type_name
-                    == std::any::type_name::<iroha_data_model::isi::kaigi::ReportKaigiRelayHealth>()
-            })
-            .expect("Kaigi relay-health instruction must be exported");
-        assert_eq!(
-            spec.discriminant,
-            "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth"
-        );
+        for (type_name, wire_id) in [
+            (
+                std::any::type_name::<iroha_data_model::isi::kaigi::UnregisterKaigiRelay>(),
+                "iroha.instruction.v1::kaigi::UnregisterKaigiRelay",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::kaigi::ReportKaigiRelayHealth>(),
+                "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth",
+            ),
+        ] {
+            let spec = specs
+                .iter()
+                .find(|spec| spec.type_name == type_name)
+                .unwrap_or_else(|| {
+                    panic!("Kaigi relay instruction `{type_name}` must be exported")
+                });
+            assert_eq!(spec.discriminant, wire_id);
+        }
     }
     #[test]
     fn generic_privacy_types_are_absent_but_specialized_flows_remain_registered() {
@@ -917,7 +925,7 @@ mod tests {
         let specs = gather_instruction_specs(&registry, None);
         assert_eq!(
             specs.len(),
-            111,
+            112,
             "first-release generated instruction count"
         );
         let governance_specs = specs

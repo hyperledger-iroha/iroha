@@ -2312,6 +2312,7 @@ class HttpClientTransport(
                 payload,
                 request.validationFeePolicyVersion,
                 request.validationFeePolicyHash,
+                request.validationFeeHijiriFeeQuoteHash,
                 request.validationFeeInstructionIndex,
                 request.validationFeeTransferEntryIndex,
             )
@@ -2342,15 +2343,20 @@ class HttpClientTransport(
             payload: MutableMap<String, Any>,
             validationFeePolicyVersion: Long?,
             validationFeePolicyHash: String?,
+            validationFeeHijiriFeeQuoteHash: String?,
             validationFeeInstructionIndex: Long?,
             validationFeeTransferEntryIndex: Long?,
         ) {
             val hasPolicyVersion = validationFeePolicyVersion != null
             val hasPolicyHash = validationFeePolicyHash != null
+            val hasHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash != null
             val hasInstructionIndex = validationFeeInstructionIndex != null
             val hasTransferEntryIndex = validationFeeTransferEntryIndex != null
             require(hasPolicyVersion == hasPolicyHash) {
                 "validationFeePolicyVersion and validationFeePolicyHash must be provided together"
+            }
+            require(hasPolicyVersion || !hasHijiriFeeQuoteHash) {
+                "validationFeeHijiriFeeQuoteHash requires validationFeePolicyVersion and validationFeePolicyHash"
             }
             require(hasPolicyVersion || !hasInstructionIndex) {
                 "validationFeeInstructionIndex requires validation fee policy metadata"
@@ -2376,6 +2382,13 @@ class HttpClientTransport(
             }
             payload["validation_fee_policy_version"] = policyVersion.toString()
             payload["validation_fee_policy_hash"] = normalizeHex32(policyHash, "validationFeePolicyHash")
+            if (validationFeeHijiriFeeQuoteHash != null) {
+                payload["validation_fee_hijiri_fee_quote_hash"] =
+                    normalizeHex32(
+                        validationFeeHijiriFeeQuoteHash,
+                        "validationFeeHijiriFeeQuoteHash",
+                    )
+            }
             if (instructionIndex != null) {
                 payload["validation_fee_instruction_index"] = instructionIndex.toString()
             }

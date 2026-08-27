@@ -2818,6 +2818,7 @@ pub mod domain {
             | AnyPermission::CanManageConfidentialParams(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanSetParameters(_)
+            | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageOfflineEscrow(_)
@@ -3101,6 +3102,7 @@ pub mod account {
             | AnyPermission::CanTransferNft(_)
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanSetParameters(_)
+            | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageOfflineEscrow(_)
@@ -3408,6 +3410,7 @@ pub mod asset_definition {
             | AnyPermission::CanTransferNft(_)
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanSetParameters(_)
+            | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageOfflineEscrow(_)
@@ -4261,7 +4264,9 @@ pub mod nft {
 /// Permission-checked visitors for network parameter updates.
 pub mod parameter {
     use super::*;
-    use iroha_executor_data_model::permission::parameter::CanSetParameters;
+    use iroha_executor_data_model::permission::parameter::{
+        CanSetHijiriParameters, CanSetParameters,
+    };
     const SCCP_REGISTRY_PARAMETER_ID: &str = "sccp_registry_v1";
     fn updates_sccp_governance(isi: &SetParameter) -> bool {
         matches!(
@@ -4279,6 +4284,13 @@ pub mod parameter {
                 )
         )
     }
+    fn updates_hijiri_parameters(isi: &SetParameter) -> bool {
+        matches!(
+            isi.inner(),
+            Parameter::Custom(parameter)
+                if iroha_data_model::hijiri::is_hijiri_parameter_id(parameter.id())
+        )
+    }
     /// Applies a network parameter change when genesis or a parameter manager invokes it.
     pub fn visit_set_parameter<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &SetParameter) {
         if updates_sccp_governance(isi) {
@@ -4291,6 +4303,18 @@ pub mod parameter {
             deny!(
                 executor,
                 "Validation-fee governance parameters can only be changed by an enacted SORA Parliament proposal"
+            );
+        }
+        if updates_hijiri_parameters(isi) {
+            if executor.context().curr_block.is_genesis() {
+                execute!(executor, isi);
+            }
+            if CanSetHijiriParameters.is_owned_by(&executor.context().authority, executor.host()) {
+                execute!(executor, isi);
+            }
+            deny!(
+                executor,
+                "Can't set Hijiri parameters without CanSetHijiriParameters"
             );
         }
         if executor.context().curr_block.is_genesis() {
@@ -4785,6 +4809,7 @@ pub mod trigger {
             | AnyPermission::CanSetAssetTransferDailyLimit(_)
             | AnyPermission::CanSetAssetHoldingLimit(_)
             | AnyPermission::CanSetParameters(_)
+            | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageOfflineEscrow(_)
@@ -5315,7 +5340,9 @@ mod sorafs_permission_tests {
         CanSetSorafsReservePolicy, CanUpsertSorafsProviderCredit,
     };
     use iroha_executor_data_model::permission::{
-        domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
+        domain::CanRegisterDomain,
+        parameter::{CanSetHijiriParameters, CanSetParameters},
+        sccp::CanManageSccpGovernance,
     };
     const AUTHORITY_PUBLIC_KEY: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";

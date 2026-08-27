@@ -16,6 +16,7 @@ from iroha_python.kaigi import (
     KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
     KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
     REGISTER_KAIGI_RELAY_WIRE_ID_V1,
+    UNREGISTER_KAIGI_RELAY_WIRE_ID_V1,
     KaigiIdV1,
     KaigiInstructionWireV1,
     KaigiParticipantCommitmentV1,
@@ -28,6 +29,7 @@ from iroha_python.kaigi import (
     encode_leave_kaigi_instruction_v1,
     encode_record_kaigi_usage_instruction_v1,
     encode_register_kaigi_relay_instruction_v1,
+    encode_unregister_kaigi_relay_instruction_v1,
     encode_report_kaigi_relay_health_instruction_v1,
     encode_set_kaigi_relay_manifest_instruction_v1,
 )
@@ -120,6 +122,9 @@ def _minimal_wires() -> dict[str, KaigiInstructionWireV1]:
         "RegisterKaigiRelay": encode_register_kaigi_relay_instruction_v1(
             relay_id=account, hpke_public_key=b"key", bandwidth_class=1
         ),
+        "UnregisterKaigiRelay": encode_unregister_kaigi_relay_instruction_v1(
+            relay_id=account
+        ),
         "ReportKaigiRelayHealth": encode_report_kaigi_relay_health_instruction_v1(
             call_id=call_id,
             relay_id=account,
@@ -159,7 +164,7 @@ def _complex_create() -> KaigiInstructionWireV1:
     )
 
 
-def test_all_eight_builders_match_complete_instruction_box_golden_frames() -> None:
+def test_all_nine_builders_match_complete_instruction_box_golden_frames() -> None:
     wires = _minimal_wires()
     vectors = {entry["name"]: entry for entry in _FIXTURE["vectors"]}
     assert tuple(wire.wire_id for wire in wires.values()) == KAIGI_INSTRUCTION_WIRE_IDS_V1
@@ -355,6 +360,8 @@ def test_relay_manifest_and_hpke_key_v1_boundaries() -> None:
         bandwidth_class=1,
     )
     assert registration.wire_id == REGISTER_KAIGI_RELAY_WIRE_ID_V1
+    unregistration = encode_unregister_kaigi_relay_instruction_v1(relay_id=accounts[0])
+    assert unregistration.wire_id == UNREGISTER_KAIGI_RELAY_WIRE_ID_V1
     with pytest.raises(ValueError, match="4096-byte V1 limit"):
         encode_register_kaigi_relay_instruction_v1(
             relay_id=accounts[0],
@@ -365,7 +372,10 @@ def test_relay_manifest_and_hpke_key_v1_boundaries() -> None:
 
 def test_identity_codec_fails_closed_outside_single_key_ed25519() -> None:
     call_id = KaigiIdV1(**_FIXTURE["call_id"])
-    ml_dsa = AccountAddress.from_account(public_key=bytes([0xA5]) * 32, algorithm="ml-dsa")
+    ml_dsa = AccountAddress.from_account(
+        public_key=bytes([0xA5]) * 1_952,
+        algorithm="ml-dsa",
+    )
     with pytest.raises(ValueError, match="Ed25519 account controller"):
         encode_create_kaigi_instruction_v1(call_id=call_id, host=ml_dsa.to_i105())
 

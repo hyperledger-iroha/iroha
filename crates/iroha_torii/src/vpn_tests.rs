@@ -2225,7 +2225,7 @@ fn vpn_runtime_rejects_unsigned_quote_record_projections() {
     validate_quote_record_projection(&quote, app.state.network_id_ref())
         .expect("exact signed projection");
     quote.relay_tls_spki_sha256[0] ^= 1;
-    let error = insert_quote_locked(&app, &mut state, quote)
+    let error = insert_quote_locked(&app, &mut state, quote, 0)
         .expect_err("an unsigned flat-field substitution must fail before caching");
     assert!(format!("{error:?}").contains("TLS SPKI"));
     assert!(app.vpn_quotes.is_empty());
@@ -2262,6 +2262,7 @@ fn vpn_runtime_account_expiry_is_constant_and_isolated() {
             &app,
             &mut state,
             sample_quote_record(&account, quote_id.clone(), u64::MAX),
+            100,
         )
         .expect("unrelated quote");
         let session = sample_indexed_session_record(&account, ordinal, u64::MAX);
@@ -2274,6 +2275,7 @@ fn vpn_runtime_account_expiry_is_constant_and_isolated() {
         &app,
         &mut state,
         sample_quote_record(&target, target_quote_id.clone(), 100),
+        99,
     )
     .expect("target quote");
     let target_session = sample_indexed_session_record(&target, 1_000, 100);
@@ -2307,8 +2309,8 @@ fn vpn_runtime_replacement_and_exact_remove_keep_indexes_consistent() {
     let mut state = VpnRuntimeState::with_capacities(1, 1);
     let first_quote = sample_quote_record(&account, "11".repeat(32), u64::MAX);
     let second_quote = sample_quote_record(&account, "22".repeat(32), u64::MAX);
-    insert_quote_locked(&app, &mut state, first_quote.clone()).expect("first quote");
-    insert_quote_locked(&app, &mut state, second_quote.clone()).expect("replacement quote");
+    insert_quote_locked(&app, &mut state, first_quote.clone(), 100).expect("first quote");
+    insert_quote_locked(&app, &mut state, second_quote.clone(), 100).expect("replacement quote");
     assert_eq!(app.vpn_quotes.len(), 1);
     assert!(!app.vpn_quotes.contains_key(&first_quote.quote_id));
     assert_eq!(
@@ -2359,8 +2361,8 @@ fn vpn_runtime_caps_fail_closed_without_evicting_unrelated_accounts() {
     let mut state = VpnRuntimeState::with_capacities(1, 1);
     let first_quote = sample_quote_record(&first, "31".repeat(32), u64::MAX);
     let second_quote = sample_quote_record(&second, "32".repeat(32), u64::MAX);
-    insert_quote_locked(&app, &mut state, first_quote.clone()).expect("first quote");
-    let quote_error = insert_quote_locked(&app, &mut state, second_quote)
+    insert_quote_locked(&app, &mut state, first_quote.clone(), 100).expect("first quote");
+    let quote_error = insert_quote_locked(&app, &mut state, second_quote, 100)
         .expect_err("full quote cache must reject another account");
     assert!(format!("{quote_error:?}").contains("quote capacity"));
     assert_eq!(app.vpn_quotes.len(), 1);
@@ -2378,8 +2380,98 @@ fn vpn_runtime_caps_fail_closed_without_evicting_unrelated_accounts() {
             .contains_key(&first_session.payment_tx_hash)
     );
 }
+
 #[test]
-fn vpn_runtime_request_paths_cannot_reintroduce_global_cache_scans() {
+fn vpn_runtime_capacity_reclaims_expired_accounts_from_expiry_indexes() {
+    let expired_account = checked_vpn_account(0xE4);
+    let fresh_account = checked_vpn_account(0xE5);
+    let app = mk_app_state_for_tests_with_world(world_with_account(&expired_account));
+    let mut state = VpnRuntimeState::with_capacities(1, 1);
+
+    let expired_quote = sample_quote_record(&expired_account, "41".repeat(32), 100);
+    insert_quote_locked(&app, &mut state, expired_quote.clone(), 99)
+        .expect("unexpired first quote");
+    let fresh_quote = sample_quote_record(&fresh_account, "42".repeat(32), u64::MAX);
+    insert_quote_locked(&app, &mut state, fresh_quote.clone(), 100)
+        .expect("expired quote capacity must be reclaimed");
+    assert!(!app.vpn_quotes.contains_key(&expired_quote.quote_id));
+    assert!(app.vpn_quotes.contains_key(&fresh_quote.quote_id));
+    assert_eq!(state.quote_expirations.len(), 1);
+
+    let expired_session = sample_indexed_session_record(&expired_account, 41, 100);
+    insert_session_locked(&app, &mut state, expired_session.clone(), 99)
+        .expect("unexpired first session");
+    let fresh_session = sample_indexed_session_record(&fresh_account, 42, u64::MAX);
+    insert_session_locked(&app, &mut state, fresh_session.clone(), 100)
+        .expect("expired session capacity must be reclaimed");
+    assert!(!app.vpn_sessions.contains_key(&expired_session.session_id));
+    assert!(app.vpn_sessions.contains_key(&fresh_session.session_id));
+    assert!(
+        !app.vpn_used_payments
+            .contains_key(&expired_session.payment_tx_hash)
+    );
+    assert!(
+        app.vpn_used_payments
+            .contains_key(&fresh_session.payment_tx_hash)
+    );
+    assert_eq!(state.session_expirations.len(), 1);
+}
+
+#[test]
+fn vpn_runtime_reserved_expiry_survives_reclaim_and_later_frees_capacity() {
+    let account = checked_vpn_account(0xE6);
+    let replacement_account = checked_vpn_account(0xE7);
+    let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+    let expires_at_ms = u64::MAX - 1;
+    let session = sample_indexed_session_record(&account, 43, expires_at_ms);
+    {
+        let mut state = lock_vpn_runtime(&app);
+        state.session_capacity = 1;
+        insert_session_locked(
+            &app,
+            &mut state,
+            session.clone(),
+            expires_at_ms.saturating_sub(1),
+        )
+        .expect("session exists before its fixture expiry");
+    }
+    let reservation =
+        VpnSettlementReservation::reserve(&app, session.session_id.clone()).expect("reservation");
+    {
+        let mut state = lock_vpn_runtime(&app);
+        reclaim_expired_sessions_locked(&app, &mut state, expires_at_ms);
+        assert!(app.vpn_sessions.contains_key(&session.session_id));
+        assert!(
+            state
+                .session_expirations
+                .contains(&(expires_at_ms, session.session_id.clone()))
+        );
+    }
+    assert!(
+        now_ms() < expires_at_ms,
+        "fixture requires a simulated wall-clock rollback before reservation release"
+    );
+    drop(reservation);
+    let mut state = lock_vpn_runtime(&app);
+    assert!(app.vpn_sessions.contains_key(&session.session_id));
+    assert!(
+        state
+            .session_expirations
+            .contains(&(expires_at_ms, session.session_id.clone()))
+    );
+
+    let replacement = sample_indexed_session_record(&replacement_account, 44, u64::MAX);
+    insert_session_locked(&app, &mut state, replacement.clone(), expires_at_ms)
+        .expect("released expired reservation must free session capacity");
+    assert!(!app.vpn_sessions.contains_key(&session.session_id));
+    assert!(!state.session_ids_by_account.contains_key(&account));
+    assert!(!app.vpn_used_payments.contains_key(&session.payment_tx_hash));
+    assert_eq!(app.vpn_sessions.len(), 1);
+    assert!(app.vpn_sessions.contains_key(&replacement.session_id));
+}
+
+#[test]
+fn vpn_runtime_expiry_uses_indexes_without_global_cache_scans() {
     let source = include_str!("vpn.rs");
     let implementation = &source[..source
         .find("#[cfg(all(test, feature = \"app_api\"))]")
@@ -2388,12 +2480,12 @@ fn vpn_runtime_request_paths_cannot_reintroduce_global_cache_scans() {
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
-    assert!(!implementation.contains("prune_expired_quotes"));
-    assert!(!implementation.contains("prune_expired_sessions"));
     assert!(!implementation.contains("remove_existing_sessions_for_account"));
     assert!(!implementation.contains("allocate_session_id_and_address_plan"));
     assert!(!compact.contains("vpn_quotes.iter()"));
     assert!(!compact.contains("vpn_sessions.iter()"));
+    assert!(implementation.contains("quote_expirations"));
+    assert!(implementation.contains("session_expirations"));
 }
 #[tokio::test]
 async fn vpn_address_derivation_separates_active_session_fixtures() {

@@ -872,6 +872,8 @@ const DEFAULT_VPN_COVER_TO_DATA_PER_MILLE: u16 = 250;
 const DEFAULT_VPN_HEARTBEAT_MILLIS: u16 = 500;
 const DEFAULT_VPN_COVER_BURST_CELLS: u16 = 3;
 const DEFAULT_VPN_COVER_JITTER_MILLIS: u16 = 10;
+/// Maximum cover-cell burst accepted by the first-release relay scheduler.
+pub const VPN_MAX_COVER_BURST_CELLS_V1: u16 = 64;
 const DEFAULT_VPN_EXIT_CLASS: &str = "standard";
 const DEFAULT_VPN_LEASE_SECS: u32 = 10 * 60;
 const DEFAULT_VPN_DNS_PUSH_INTERVAL_SECS: u32 = 90;
@@ -2047,6 +2049,11 @@ impl VpnCoverTrafficConfig {
                 "vpn.cover.heartbeat_ms and vpn.cover.max_cover_burst must be non-zero".to_string(),
             ));
         }
+        if self.max_cover_burst > VPN_MAX_COVER_BURST_CELLS_V1 {
+            return Err(ConfigError::Vpn(format!(
+                "vpn.cover.max_cover_burst must not exceed {VPN_MAX_COVER_BURST_CELLS_V1}"
+            )));
+        }
         if self.cover_to_data_per_mille > 1_000 {
             return Err(ConfigError::Vpn(
                 "vpn.cover.cover_to_data_per_mille must be between 0 and 1000".to_string(),
@@ -2898,6 +2905,15 @@ impl QuotaConfig {
                 "{path}.per_descriptor_burst must be 0 because the descriptor commitment is relay-static; use per-remote quotas and authenticated credential limits"
             )));
         }
+        if self
+            .per_remote_window_secs
+            .checked_add(self.cooldown_secs)
+            .is_none()
+        {
+            return Err(ConfigError::Quota(format!(
+                "{path}.per_remote_window_secs + cooldown_secs must not overflow u64 seconds"
+            )));
+        }
         if self.max_entries > QUOTA_TRACKER_MAX_ENTRIES_V1 {
             return Err(ConfigError::Quota(format!(
                 "{path}.max_entries ({}) exceeds the first-release limit of {QUOTA_TRACKER_MAX_ENTRIES_V1}",
@@ -3080,16 +3096,18 @@ impl Default for PaddingConfig {
         }
     }
 }
-/// Capability advertisement for constant-rate transport lanes.
+/// Capability advertisement for best-effort constant-rate cover lanes.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct ConstantRateCapabilityConfig {
-    /// Whether constant-rate support is advertised.
+    /// Whether best-effort constant-rate cover support is advertised.
     #[norito(default = "ConstantRateCapabilityConfig::default_enabled")]
     pub enabled: bool,
     /// Protocol version for the capability handshake.
     #[norito(default = "ConstantRateCapabilityConfig::default_version")]
     pub version: u8,
     /// Whether to require peers to honour constant-rate strictly.
+    ///
+    /// Strict mode is rejected until application payload is carried by the fixed-rate scheduler.
     #[norito(default = "ConstantRateCapabilityConfig::default_strict")]
     pub strict: bool,
 }
@@ -3109,6 +3127,12 @@ impl ConstantRateCapabilityConfig {
                 "constant-rate version {} is not supported",
                 self.version
             )));
+        }
+        if self.enabled && self.strict {
+            return Err(ConfigError::ConstantRateCapability(
+                "strict mode is unavailable until application payload is carried by the fixed-rate scheduler and DATAGRAM failures close the circuit"
+                    .to_owned(),
+            ));
         }
         Ok(())
     }

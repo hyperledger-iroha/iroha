@@ -334,6 +334,11 @@ skip_optional_dependencies = true
 name = "swift_confidential_unshield_redeem"
 path = "tests/swift_confidential_unshield_redeem.rs"
 
+[[test]]
+name = "sccp_security"
+path = "tests/sccp_security.rs"
+required-features = ["iroha-core-tests"]
+
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
 [[test]]

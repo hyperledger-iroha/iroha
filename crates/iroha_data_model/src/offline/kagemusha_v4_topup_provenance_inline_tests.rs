@@ -630,12 +630,12 @@ mod kagemusha_v4_topup_provenance_tests {
             .expect("valid bundle-derived summary");
 
         let assert_rejected = |result: &KagemushaRecursiveSpendVerifyResultV4| {
-            assert_eq!(
+            assert!(matches!(
                 result.validate_public_binding(),
                 Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                     field: "verify_result.v4",
                 })
-            );
+            ));
         };
         let mut zero_commitment = result.clone();
         zero_commitment.summary.note_commitment = [0; 32];

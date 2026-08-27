@@ -1,11 +1,13 @@
 //! Roundtrip coverage for Kaigi domain event summaries.
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
-    events::data::prelude::KaigiRelayRegistrationSummary,
+    events::data::prelude::{
+        KaigiRelayRegistrationSummary, KaigiRelayUnregistrationSummary, KaigiStatusSummary,
+    },
     prelude::{
         AccountId, Decode, DomainEvent, DomainId, Encode, KaigiId, KaigiParticipantCommitment,
         KaigiPrivacyMode, KaigiRelayHealthStatus, KaigiRelayHealthSummary,
-        KaigiRelayManifestSummary, KaigiRosterSummary, KaigiUsageSummary, Name,
+        KaigiRelayManifestSummary, KaigiRosterSummary, KaigiStatus, KaigiUsageSummary, Name,
     },
 };
 fn sample_domain_id() -> DomainId {
@@ -111,6 +113,44 @@ fn relay_health_summary_roundtrips_via_norito() {
         assert_eq!(&decoded_summary.call, &call);
         assert_eq!(&decoded_summary.relay, &relay);
         assert_eq!(decoded_summary.status, KaigiRelayHealthStatus::Unavailable);
+    } else {
+        panic!("unexpected domain event variant");
+    }
+}
+#[test]
+fn relay_unregistration_summary_roundtrips_via_norito() {
+    let domain = sample_domain_id();
+    let relay = checked_random_account_id();
+    let summary = DomainEvent::KaigiRelayUnregistered(KaigiRelayUnregistrationSummary::new(
+        domain.clone(),
+        relay.clone(),
+    ));
+    let bytes = summary.encode();
+    let decoded =
+        DomainEvent::decode(&mut bytes.as_slice()).expect("decode relay unregistration summary");
+    assert_eq!(summary, decoded);
+    if let DomainEvent::KaigiRelayUnregistered(decoded_summary) = decoded {
+        assert_eq!(decoded_summary.domain(), &domain);
+        assert_eq!(decoded_summary.relay(), &relay);
+    } else {
+        panic!("unexpected domain event variant");
+    }
+}
+#[test]
+fn kaigi_status_summary_roundtrips_via_norito() {
+    let call = sample_call_id();
+    let summary = DomainEvent::KaigiStatusChanged(KaigiStatusSummary::new(
+        call.clone(),
+        KaigiStatus::Ended,
+        Some(123_456),
+    ));
+    let bytes = summary.encode();
+    let decoded = DomainEvent::decode(&mut bytes.as_slice()).expect("decode Kaigi status summary");
+    assert_eq!(summary, decoded);
+    if let DomainEvent::KaigiStatusChanged(decoded_summary) = decoded {
+        assert_eq!(decoded_summary.call(), &call);
+        assert_eq!(*decoded_summary.status(), KaigiStatus::Ended);
+        assert_eq!(*decoded_summary.ended_at_ms(), Some(123_456));
     } else {
         panic!("unexpected domain event variant");
     }

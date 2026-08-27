@@ -7990,6 +7990,35 @@ pub(crate) mod valid {
                         .map(|_| account.controller().clone())
                 },
             )?;
+            let admission_policy = world
+                .parameters()
+                .custom()
+                .get(&iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1::parameter_id())
+                .map(|custom| {
+                    iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1::from_custom_parameter(
+                        custom,
+                    )
+                    .map_err(|error| {
+                        BlockValidationError::DaPinIntentBundle(
+                            DaPinIntentValidationError::InvalidAdmissionPolicy {
+                                reason: error.to_string(),
+                            },
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        BlockValidationError::DaPinIntentBundle(
+                            DaPinIntentValidationError::InvalidAdmissionPolicy {
+                                reason: "reserved parameter changed identity".to_owned(),
+                            },
+                        )
+                    })
+                })
+                .transpose()?;
+            crate::da::validate_pin_intent_admission_policy(
+                bundle,
+                admission_policy.as_ref(),
+                |lane_id| state.lane_incarnation_at_height(lane_id, block.header().height().get()),
+            )?;
             crate::da::quota::prepare_ingest_quota_writes(
                 world.smart_contract_state(),
                 bundle,
@@ -16079,6 +16108,40 @@ pub(crate) mod valid {
                 ),
             );
         }
+        fn install_test_da_admission_policy(state: &State, epoch: u64) {
+            use iroha_data_model::da::ingest::{
+                DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1,
+            };
+
+            let lane_id = LaneId::SINGLE;
+            let view = state.view();
+            let proposal_height = u64::try_from(view.height())
+                .expect("test height fits u64")
+                .checked_add(1)
+                .expect("test proposal height advances");
+            let lane_incarnation =
+                StateReadOnly::lane_incarnation_at_height(&view, lane_id, proposal_height)
+                    .expect("default test lane is active at the candidate height");
+            drop(view);
+            let policy = DaIngestAdmissionPolicyV1 {
+                version: DaIngestAdmissionPolicyV1::VERSION,
+                revision: 1,
+                expected_previous_policy_hash: None,
+                lanes: vec![DaIngestAdmissionLaneV1 {
+                    lane_id,
+                    lane_incarnation,
+                    producers: vec![AccountId::new(test_da_owner_keypair().public_key().clone())],
+                    current_epoch: epoch,
+                    grace_epoch: None,
+                }],
+            };
+            policy
+                .validate_transition(None)
+                .expect("canonical test DA admission policy");
+            let mut parameters = state.world.parameters.block();
+            parameters.set_parameter(Parameter::Custom(policy.into_custom_parameter()));
+            parameters.commit();
+        }
         fn test_da_pin_intent(
             lane_id: LaneId,
             epoch: u64,
@@ -21178,6 +21241,7 @@ pub(crate) mod valid {
                 std::num::NonZeroU64::new(1).expect("non-zero quota fixture");
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            install_test_da_admission_policy(&state, 1);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             let bundle = DaPinIntentBundle::new(vec![
                 test_da_pin_intent(
@@ -21275,6 +21339,7 @@ pub(crate) mod valid {
             );
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            install_test_da_admission_policy(&state, 1);
             let validate_candidate = |intent: DaPinIntent,
                                       now: Duration|
              -> Box<BlockValidationError> {
@@ -28958,7 +29023,7 @@ mod tests {
         key: Name,
         filter: PipelineEventFilterBox,
     ) {
-        let action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
+        let mut action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
             vec![InstructionBox::from(SetKeyValue::account(
                 authority.clone(),
                 key,
@@ -28969,6 +29034,15 @@ mod tests {
             filter,
         )
         .expect("test pipeline-trigger action satisfies its authority invariant");
+        // This helper bypasses `Register<Trigger>`, so seed the lifecycle marker
+        // that normal registration would add. Height zero models an incarnation
+        // created before every non-genesis block exercised by these tests.
+        action.metadata.insert(
+            crate::smartcontracts::isi::triggers::TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY
+                .parse()
+                .expect("valid trigger lifecycle metadata key"),
+            Json::from(0_u64),
+        );
         let mut trigger_block = world.triggers.block();
         let mut trigger_transaction = trigger_block.transaction();
         trigger_transaction

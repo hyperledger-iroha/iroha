@@ -75,7 +75,8 @@ public final class KeystoreKeyProviderTests {
     challengeIsMandatoryAtProviderAndManagerBoundaries();
     verifyAttestationRoundTrip();
     verifyAttestationReturnsEmptyWhenMissing();
-    verifyAttestationGeneratesOnDemand();
+    verifyAttestationRereadsRecordedEvidence();
+    verifyAttestationPropagatesBackendReadFailures();
     verifyAttestationRejectsMismatchedAliasKey();
     keyAttestationDefensivelyCopiesCertificateBytes();
     attestationChallengeMismatchFails();
@@ -211,13 +212,6 @@ public final class KeystoreKeyProviderTests {
   private static void verifyAttestationReturnsEmptyWhenMissing() throws Exception {
     final FakeBackend backend =
         new FakeBackend(KeyProviderMetadata.builder("fake-strongbox-backend").build());
-    backend.setAttestation(
-        "alias",
-        KeyAttestation.builder()
-            .setAlias("alias")
-            .addCertificate(STRONGBOX_CERT)
-            .addCertificate(ROOT_CERT)
-            .build());
     final KeystoreKeyProvider provider =
         new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
     final AttestationVerifier verifier =
@@ -225,13 +219,13 @@ public final class KeystoreKeyProviderTests {
     final Optional<AttestationResult> result =
         provider.verifyAttestation("alias", verifier, STRONGBOX_CHALLENGE);
     assert result.isEmpty() : "Absent attestation should return empty optional";
-    assert backend.attestationGenerations() == 1
-        : "Challenge verification must request fresh attestation material";
-    assert backend.attestationReads() == 0
-        : "Challenge verification must not fall back to stored attestation material";
+    assert backend.attestationGenerations() == 0
+        : "Verification must not claim to regenerate an existing Android alias";
+    assert backend.attestationReads() == 1
+        : "Challenge verification must reread recorded attestation material";
   }
 
-  private static void verifyAttestationGeneratesOnDemand() throws Exception {
+  private static void verifyAttestationRereadsRecordedEvidence() throws Exception {
     final FakeBackend backend =
         new FakeBackend(
             KeyProviderMetadata.builder("fake-strongbox-backend")
@@ -240,24 +234,45 @@ public final class KeystoreKeyProviderTests {
                 .build());
     final KeystoreKeyProvider provider =
         new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
-    provider.generate("generated-alias");
+    backend.setAttestation(
+        "generated-alias",
+        KeyAttestation.builder()
+            .setAlias("generated-alias")
+            .addCertificate(STRONGBOX_CERT)
+            .addCertificate(ROOT_CERT)
+            .build());
     backend.setAttestedKey("generated-alias", STRONGBOX_CERT);
 
     final AttestationVerifier verifier =
         verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
     final Optional<AttestationResult> result =
         provider.verifyAttestation("generated-alias", verifier, STRONGBOX_CHALLENGE);
-    assert result.isPresent() : "Attestation should be generated when missing";
-    assert backend.attestationGenerations() == 1
-        : "Challenge verification should generate a fresh attestation";
-    assert backend.attestationReads() == 0
-        : "Generation path should not require a separate attestation read";
+    assert result.isPresent() : "Recorded challenge-bound attestation should verify";
+    assert backend.attestationGenerations() == 0
+        : "Verification must not claim to regenerate an existing Android alias";
+    assert backend.attestationReads() == 1
+        : "Verification should reread recorded attestation evidence";
 
     final Optional<AttestationResult> refreshed =
         provider.verifyAttestation("generated-alias", verifier, STRONGBOX_CHALLENGE);
-    assert refreshed.isPresent() : "Fresh attestation should verify";
-    assert backend.attestationGenerations() == 2
+    assert refreshed.isPresent() : "Recorded attestation should verify again";
+    assert backend.attestationReads() == 2
         : "Challenge verification must bypass cached attestation material";
+  }
+
+  private static void verifyAttestationPropagatesBackendReadFailures() throws Exception {
+    final FakeBackend backend =
+        new FakeBackend(
+            KeyProviderMetadata.builder("failing-attestation-backend")
+                .setSupportsAttestationCertificates(true)
+                .build());
+    backend.failAttestationReads();
+    final KeystoreKeyProvider provider =
+        new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
+    final AttestationVerifier verifier = verifierBuilder().addTrustedRoot(ROOT_CERT).build();
+
+    assertAttestationFails(
+        () -> provider.verifyAttestation("alias", verifier, STRONGBOX_CHALLENGE));
   }
 
   private static void keyAttestationDefensivelyCopiesCertificateBytes() {
@@ -364,10 +379,10 @@ public final class KeystoreKeyProviderTests {
       threw = true;
     }
     assert threw : "Verification must fail when cached attestation does not match the challenge";
-    assert backend.attestationGenerations() == 1
-        : "Verification should generate fresh attestation for the supplied challenge";
-    assert backend.attestationReads() == 0
-        : "Challenge verification must not read stored attestation material";
+    assert backend.attestationGenerations() == 0
+        : "Verification must not claim to regenerate an existing Android alias";
+    assert backend.attestationReads() == 1
+        : "Challenge verification must reread recorded attestation material";
 
     backend.setAttestation(
         "alias",
@@ -380,10 +395,8 @@ public final class KeystoreKeyProviderTests {
     final Optional<AttestationResult> refreshed =
         provider.verifyAttestation("alias", verifier, STRONGBOX_CHALLENGE);
     assert refreshed.isPresent() : "Verification should succeed after cache eviction";
-    assert backend.attestationGenerations() == 2
-        : "Fresh attestation should be generated after mismatch eviction";
-    assert backend.attestationReads() == 0
-        : "Challenge verification must keep bypassing stored attestation material";
+    assert backend.attestationReads() == 2
+        : "Verification must reread evidence after a challenge mismatch";
   }
 
   private static void generateAttestationStoresBundle() throws Exception {
@@ -762,6 +775,7 @@ public final class KeystoreKeyProviderTests {
     private final AtomicInteger attestationReads = new AtomicInteger();
     private final AtomicInteger attestationGenerations = new AtomicInteger();
     private volatile KeyGenParameters lastParameters;
+    private volatile boolean failAttestationReads;
 
     private FakeBackend(final KeyProviderMetadata metadata) {
       this(metadata, metadata);
@@ -810,8 +824,12 @@ public final class KeystoreKeyProviderTests {
     }
 
     @Override
-    public Optional<KeyAttestation> attestation(final String alias) {
+    public Optional<KeyAttestation> attestation(final String alias)
+        throws KeyManagementException {
       attestationReads.incrementAndGet();
+      if (failAttestationReads) {
+        throw new KeyManagementException("fixture attestation read failure");
+      }
       return Optional.ofNullable(attestations.get(alias));
     }
 
@@ -837,6 +855,10 @@ public final class KeystoreKeyProviderTests {
 
     void setAttestation(final String alias, final KeyAttestation attestation) {
       attestations.put(alias, attestation);
+    }
+
+    void failAttestationReads() {
+      failAttestationReads = true;
     }
 
     void setAttestedKey(final String alias, final byte[] certificateDer) throws Exception {

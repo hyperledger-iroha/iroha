@@ -34,6 +34,7 @@ import {
   buildCreateKaigiTransaction,
   buildJoinKaigiTransaction,
   buildRegisterKaigiRelayTransaction,
+  buildUnregisterKaigiRelayTransaction,
   buildReportKaigiRelayHealthTransaction,
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
@@ -2265,6 +2266,24 @@ test("submitIvmProvedContractCall rejects caller validation-fee metadata", async
     /metadata\.validation_fee_policy_hash is reserved/,
   );
   assert.equal(deriveCalled, false);
+
+  await assert.rejects(
+    () =>
+      submitIvmProvedContractCall(client, {
+        networkId: NETWORK_ID,
+        authority: AUTHORITY_ID_INPUT,
+        privateKey: PRIVATE_KEY,
+        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+        expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+        expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+        contractAlias: "dlmm_router::dlmm.universal",
+        feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
+        metadata: { validation_fee_hijiri_fee_quote_hash: "00".repeat(32) },
+        validationFeePolicy: {},
+      }),
+    /metadata\.validation_fee_hijiri_fee_quote_hash is reserved/,
+  );
+  assert.equal(deriveCalled, false);
 });
 
 
@@ -3056,6 +3075,38 @@ test("buildRegisterKaigiRelayTransaction encodes hpke key", () => {
     "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=",
   );
   assert.equal(relayInstruction.relay.bandwidth_class, 6);
+});
+
+test("buildUnregisterKaigiRelayTransaction composes relay retirement", () => {
+  const captures = [];
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x42]),
+    hash: Buffer.alloc(32, 0x77),
+  };
+  withNativeBinding(
+    {
+      buildTransaction: (_chain, authority, instructions) => {
+        captures.push({
+          authority,
+          instructions: instructions.map((payload) => JSON.parse(payload)),
+        });
+        return fakeResult;
+      },
+    },
+    () =>
+      buildUnregisterKaigiRelayTransaction({
+        networkId: NETWORK_ID,
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        relayId: RELAY_ACCOUNT_ID_INPUT,
+        privateKey: PRIVATE_KEY,
+      }),
+  );
+  assert.equal(captures.length, 1);
+  assert.equal(
+    captures[0].instructions[0].Kaigi.UnregisterKaigiRelay.relay_id,
+    RELAY_ACCOUNT_ID,
+  );
 });
 
 test("buildReportKaigiRelayHealthTransaction composes relay feedback", () => {

@@ -642,7 +642,29 @@ struct EmergencyThrottleDocument {
 struct RateEntry {
     window_start: Instant,
     count: u32,
-    cooldown_until: Option<Instant>,
+    cooldown: Option<RateCooldown>,
+}
+#[derive(Clone, Copy)]
+struct RateCooldown {
+    started_at: Instant,
+    duration: Duration,
+}
+impl RateCooldown {
+    fn new(started_at: Instant, duration: Duration) -> Self {
+        Self {
+            started_at,
+            duration,
+        }
+    }
+    fn remaining(self, now: Instant) -> Duration {
+        let elapsed = now
+            .checked_duration_since(self.started_at)
+            .unwrap_or_default();
+        self.duration.saturating_sub(elapsed)
+    }
+    fn is_active(self, now: Instant) -> bool {
+        !self.remaining(now).is_zero()
+    }
 }
 #[derive(Clone, Copy)]
 struct RateLimitParams {
@@ -723,10 +745,21 @@ where
         }
     }
     fn check(&mut self, key: K, now: Instant) -> Result<(), Duration> {
-        if self.params.burst == 0 {
-            return Ok(());
-        }
         self.cleanup(now);
+        if let Some(cooldown) = self.entries.get(&key).and_then(|entry| entry.cooldown) {
+            return Err(cooldown.remaining(now));
+        }
+        if self.params.burst == 0 {
+            // A zero burst disables ordinary quota accounting, but externally
+            // imposed cooldowns (for example slowloris penalties) still occupy
+            // the bounded table. Fail closed for unseen clients while every
+            // slot contains an active penalty.
+            return if self.entries.len() >= self.params.max_entries {
+                Err(self.params.cooldown)
+            } else {
+                Ok(())
+            };
+        }
         if !self.entries.contains_key(&key)
             && (self.entries.len() >= self.params.max_entries
                 || self.entries.try_reserve(1).is_err())
@@ -736,16 +769,8 @@ where
         let entry = self.entries.entry(key).or_insert(RateEntry {
             window_start: now,
             count: 0,
-            cooldown_until: None,
+            cooldown: None,
         });
-        if let Some(until) = entry.cooldown_until {
-            if until > now {
-                return Err(until.saturating_duration_since(now));
-            }
-            entry.cooldown_until = None;
-            entry.count = 0;
-            entry.window_start = now;
-        }
         let elapsed = now
             .checked_duration_since(entry.window_start)
             .unwrap_or_default();
@@ -755,17 +780,13 @@ where
         }
         entry.count = entry.count.saturating_add(1);
         if entry.count > self.params.burst {
-            let cooldown_until = now + self.params.cooldown;
-            entry.cooldown_until = Some(cooldown_until);
+            entry.cooldown = Some(RateCooldown::new(now, self.params.cooldown));
             entry.count = self.params.burst;
             return Err(self.params.cooldown);
         }
         Ok(())
     }
     fn impose_cooldown(&mut self, key: K, now: Instant, cooldown: Duration) {
-        if self.params.burst == 0 {
-            return;
-        }
         let cooldown = if cooldown.is_zero() {
             self.params.cooldown
         } else {
@@ -781,24 +802,36 @@ where
         let entry = self.entries.entry(key).or_insert(RateEntry {
             window_start: now,
             count: 0,
-            cooldown_until: None,
+            cooldown: None,
         });
         entry.window_start = now;
         entry.count = 0;
-        entry.cooldown_until = Some(now + cooldown);
+        if entry
+            .cooldown
+            .is_none_or(|current| current.remaining(now) < cooldown)
+        {
+            entry.cooldown = Some(RateCooldown::new(now, cooldown));
+        }
     }
     fn cooldown_count(&self, now: Instant) -> u64 {
         self.entries
             .values()
-            .filter(|entry| entry.cooldown_until.is_some_and(|until| until > now))
+            .filter(|entry| {
+                entry
+                    .cooldown
+                    .is_some_and(|cooldown| cooldown.is_active(now))
+            })
             .count() as u64
     }
     fn cleanup(&mut self, now: Instant) {
         if self.entries.is_empty() {
             return;
         }
-        let horizon = self.params.window + self.params.cooldown;
+        let horizon = self.params.window.saturating_add(self.params.cooldown);
         self.entries.retain(|_, entry| {
+            if let Some(cooldown) = entry.cooldown {
+                return cooldown.is_active(now);
+            }
             now.checked_duration_since(entry.window_start)
                 .unwrap_or_default()
                 <= horizon
@@ -971,6 +1004,20 @@ mod tests {
         assert!(!limiter.entries.contains_key(&overflow));
     }
     #[test]
+    fn rate_limiter_handles_max_durations_without_absolute_instant_arithmetic() {
+        let maximum = Duration::from_secs(u64::MAX);
+        let params = RateLimitParams::new(maximum, 1, maximum, 16);
+        let mut limiter = RateLimiter::new(params);
+        let now = Instant::now();
+        let throttled = IpAddr::from([127, 0, 0, 1]);
+        let other = IpAddr::from([127, 0, 0, 2]);
+
+        assert_eq!(limiter.check(throttled, now), Ok(()));
+        assert_eq!(limiter.check(throttled, now), Err(maximum));
+        assert_eq!(limiter.check(other, now), Ok(()));
+        assert_eq!(limiter.check(throttled, now), Err(maximum));
+    }
+    #[test]
     fn remote_quota_throttle_sets_active_gauge() {
         let metrics = Arc::new(Metrics::new());
         let mut pow_cfg = PowConfig {
@@ -1001,6 +1048,148 @@ mod tests {
         assert!(matches!(throttle.reason, ThrottleReason::RemoteQuota));
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.active_remote_cooldowns, 1);
+    }
+    #[test]
+    fn slowloris_penalty_is_enforced_when_remote_burst_is_disabled() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 0,
+                per_remote_window_secs: 1,
+                cooldown_secs: 2,
+                ..QuotaConfig::default()
+            },
+            slowloris: SlowlorisConfig {
+                enabled: true,
+                timeout_threshold: 1,
+                window_secs: 1,
+                penalty_secs: 5,
+                ..SlowlorisConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = DoSControls::new(
+            base_params(),
+            &pow_cfg,
+            None,
+            None,
+            Arc::clone(&metrics),
+            RelayMode::Entry,
+        )
+        .expect("dos controls");
+        let remote: SocketAddr = "127.0.0.20:2000".parse().expect("remote addr");
+        let other: SocketAddr = "127.0.0.21:2000".parse().expect("remote addr");
+        let now = Instant::now();
+        let attempt = controls
+            .begin_at(remote, None, now)
+            .expect("disabled burst quota must admit the initial attempt");
+
+        controls.record_timeout_at(&attempt, Duration::ZERO, now);
+        let throttle = controls
+            .begin_at(remote, None, now + Duration::from_secs(1))
+            .expect_err("slowloris penalty must survive a disabled burst quota");
+        assert_eq!(throttle.reason, ThrottleReason::RemoteQuota);
+        assert_eq!(throttle.cooldown, Duration::from_secs(4));
+        controls
+            .begin_at(other, None, now + Duration::from_secs(1))
+            .expect("one penalized remote must not block unrelated capacity");
+        controls
+            .begin_at(remote, None, now + Duration::from_secs(5))
+            .expect("remote must be admitted at the configured penalty boundary");
+        assert_eq!(metrics.snapshot().active_remote_cooldowns, 0);
+    }
+    #[test]
+    fn slowloris_penalty_outlives_the_quota_cleanup_horizon() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 4,
+                per_remote_window_secs: 1,
+                cooldown_secs: 1,
+                ..QuotaConfig::default()
+            },
+            slowloris: SlowlorisConfig {
+                enabled: true,
+                timeout_threshold: 1,
+                window_secs: 1,
+                penalty_secs: 10,
+                ..SlowlorisConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = DoSControls::new(
+            base_params(),
+            &pow_cfg,
+            None,
+            None,
+            metrics,
+            RelayMode::Entry,
+        )
+        .expect("dos controls");
+        let remote: SocketAddr = "127.0.0.22:2000".parse().expect("remote addr");
+        let now = Instant::now();
+        let attempt = controls
+            .begin_at(remote, None, now)
+            .expect("initial attempt");
+
+        controls.record_timeout_at(&attempt, Duration::ZERO, now);
+        let throttle = controls
+            .begin_at(remote, None, now + Duration::from_secs(3))
+            .expect_err("active penalty must not be evicted by quota cleanup");
+        assert_eq!(throttle.cooldown, Duration::from_secs(7));
+        controls
+            .begin_at(remote, None, now + Duration::from_secs(10))
+            .expect("remote must be admitted when the full penalty expires");
+    }
+    #[test]
+    fn maximum_slowloris_penalty_does_not_poison_remote_admission() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 0,
+                per_remote_window_secs: 1,
+                cooldown_secs: 1,
+                ..QuotaConfig::default()
+            },
+            slowloris: SlowlorisConfig {
+                enabled: true,
+                timeout_threshold: 1,
+                window_secs: 1,
+                penalty_secs: u64::MAX,
+                ..SlowlorisConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = DoSControls::new(
+            base_params(),
+            &pow_cfg,
+            None,
+            None,
+            metrics,
+            RelayMode::Entry,
+        )
+        .expect("dos controls");
+        let remote: SocketAddr = "127.0.0.23:2000".parse().expect("remote addr");
+        let other: SocketAddr = "127.0.0.24:2000".parse().expect("remote addr");
+        let now = Instant::now();
+        let attempt = controls
+            .begin_at(remote, None, now)
+            .expect("initial attempt");
+
+        controls.record_timeout_at(&attempt, Duration::ZERO, now);
+        let throttle = controls
+            .begin_at(remote, None, now)
+            .expect_err("maximum representable penalty must remain enforceable");
+        assert_eq!(throttle.cooldown, Duration::from_secs(u64::MAX));
+        controls
+            .begin_at(other, None, now)
+            .expect("maximum penalty must not poison shared admission state");
     }
     #[test]
     fn remote_quota_canonicalizes_ipv4_mapped_ipv6() {

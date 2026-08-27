@@ -382,6 +382,7 @@ function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
     "memo",
     "validation_fee_policy_version",
     "validation_fee_policy_hash",
+    "validation_fee_hijiri_fee_quote_hash",
   ]) {
     offset = readNoritoFieldPayload(
       payload,
@@ -18200,7 +18201,8 @@ test("listKaigiCallSignals encodes filters and normalizes payloads", async () =>
     return createResponse({
       status: 200,
       jsonData: {
-        total: 1,
+        has_more: true,
+        next_cursor: "Abcd_123",
         items: [
           {
             entrypoint_hash: KAIGI_HPKE_FINGERPRINT_HEX,
@@ -18221,12 +18223,12 @@ test("listKaigiCallSignals encodes filters and normalizes payloads", async () =>
   const signals = await client.listKaigiCallSignals(callId, {
     afterTimestampMs: 1700000000000,
     limit: 10,
-    offset: 2,
+    cursor: "Prev_123",
   });
   assert.ok(requested?.includes(`/v1/kaigi/calls/${encodeURIComponent(callId)}/signals`));
   assert.ok(requested?.includes("after_timestamp_ms=1700000000000"));
   assert.ok(requested?.includes("limit=10"));
-  assert.ok(requested?.includes("offset=2"));
+  assert.ok(requested?.includes("cursor=Prev_123"));
   assert.equal(requestInit?.redirect, "error");
   assert.equal(
     requestInit?.headers?.["X-Iroha-Account"],
@@ -18248,7 +18250,8 @@ test("listKaigiCallSignals encodes filters and normalizes payloads", async () =>
     Buffer.from(requestInit?.headers?.["X-Iroha-Signature"], "base64"),
     signEd25519(signatureMessage, APPLICATION_CANONICAL_AUTH.privateKey),
   );
-  assert.equal(signals.total, 1);
+  assert.equal(signals.has_more, true);
+  assert.equal(signals.next_cursor, "Abcd_123");
   assert.equal(signals.items[0].signal_kind, "answer");
   assert.equal(signals.items[0].authority, undefined);
   assert.equal(signals.items[0].participant_account_id, undefined);
@@ -18259,10 +18262,10 @@ test("listKaigiCallSignals encodes filters and normalizes payloads", async () =>
 test("listKaigiCallSignals rejects malformed required wire fields", async () => {
   const callId = "kaigi:demo-room";
   for (const payload of [
-    { total: 0, items: false },
+    { has_more: false, items: false },
     { items: [] },
     {
-      total: 1,
+      has_more: false,
       items: [
         {
           entrypoint_hash: "deadbeef",
@@ -18283,9 +18286,31 @@ test("listKaigiCallSignals rejects malformed required wire fields", async () => 
     });
     await assert.rejects(
       () => client.listKaigiCallSignals(callId),
-      /(?:items must be an array|total must be a canonical unsigned integer|fields are not canonical)/u,
+      /(?:items must be an array|fields are not canonical)/u,
     );
   }
+});
+
+test("listKaigiCallSignals rejects offset and noncanonical cursors before fetch", async () => {
+  let fetches = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetches += 1;
+      throw new Error("invalid cursor options must fail before fetch");
+    },
+  });
+  await assert.rejects(
+    () => client.listKaigiCallSignals("kaigi:demo-room", { offset: 1 }),
+    /unsupported fields: offset/u,
+  );
+  for (const cursor of ["", " padded", "not+padded=", "A"]) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      () => client.listKaigiCallSignals("kaigi:demo-room", { cursor }),
+      /(?:must not be empty|surrounding whitespace|base64url)/u,
+    );
+  }
+  assert.equal(fetches, 0);
 });
 
 test("listKaigiCallSignals prefers per-call canonical auth and rejects missing auth", async () => {
@@ -18302,7 +18327,7 @@ test("listKaigiCallSignals prefers per-call canonical auth and rejects missing a
       captured = { url, init };
       return createResponse({
         status: 200,
-        jsonData: { total: 0, items: [] },
+        jsonData: { has_more: false, items: [] },
         headers: { "content-type": "application/json" },
       });
     },
@@ -18758,6 +18783,9 @@ test("streamKaigiRelayEvents encodes filters and normalizes payloads", async () 
       `data: {"kind":"registration","domain":"kaigi","relay_id":"${relayId}","bandwidth_class":1,"hpke_fingerprint_hex":"${KAIGI_HPKE_FINGERPRINT_HEX}"}\n`,
       "\n",
       'event: kaigi\n',
+      `data: {"kind":"unregistration","domain":"kaigi","relay_id":"${relayId}"}\n`,
+      "\n",
+      'event: kaigi\n',
       `data: {"kind":"health","domain":"kaigi","relay_id":"${relayId}","status":"degraded","reported_at_ms":5000,"call":{"domain":"kaigi","name":"demo"}}\n`,
       "\n",
     ]);
@@ -18766,17 +18794,31 @@ test("streamKaigiRelayEvents encodes filters and normalizes payloads", async () 
   const iterator = client.streamKaigiRelayEvents({
     domain: "Kaigi",
     relay: relayId,
-    kind: ["registration", "health"],
+    kind: ["registration", "unregistration", "health"],
     lastEventId: "cursor",
   });
   const first = await iterator.next();
   assert.equal(first.value?.data?.kind, "registration");
   const second = await iterator.next();
-  assert.equal(second.value?.data?.status, "degraded");
-  assert.equal(second.value?.data?.call.name, "demo");
+  assert.equal(second.value?.data?.kind, "unregistration");
+  const third = await iterator.next();
+  assert.equal(third.value?.data?.status, "degraded");
+  assert.equal(third.value?.data?.call.name, "demo");
   assert.ok(requested?.includes("domain=kaigi"));
   assert.ok(requested?.includes(`relay=${encodeURIComponent(relayId)}`));
-  assert.ok(requested?.includes("kind=registration%2Chealth"));
+  assert.ok(requested?.includes("kind=registration%2Cunregistration%2Chealth"));
+});
+
+test("streamKaigiRelayEvents rejects extra unregistration fields", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createSseResponse([
+      "event: kaigi\n",
+      `data: {"kind":"unregistration","domain":"kaigi","relay_id":"${FIXTURE_ALICE_ID}","status":"healthy"}\n`,
+      "\n",
+    ]),
+  });
+  const iterator = client.streamKaigiRelayEvents();
+  await assert.rejects(() => iterator.next(), /fields are not canonical/u);
 });
 
 test("streamKaigiRelayEvents rejects invalid registration bandwidth classes", async () => {
@@ -18841,7 +18883,7 @@ test("Kaigi JSON endpoints preserve literal u64 max values", async () => {
     }),
     createResponse({
       status: 200,
-      textBody: `{"total":${u64Max},"items":[{"entrypoint_hash":"${KAIGI_HPKE_FINGERPRINT_HEX}","timestamp_ms":${u64Max},"call_id":"${callId}","signal_kind":"answer","created_at_ms":${u64Max},"metadata":{"schema":"${KAIGI_SIGNAL_SCHEMA_V1}"}}]}`,
+      textBody: `{"has_more":false,"items":[{"entrypoint_hash":"${KAIGI_HPKE_FINGERPRINT_HEX}","timestamp_ms":${u64Max},"call_id":"${callId}","signal_kind":"answer","created_at_ms":${u64Max},"metadata":{"schema":"${KAIGI_SIGNAL_SCHEMA_V1}"}}]}`,
       headers: { "content-type": "application/json" },
     }),
     createResponse({
@@ -18869,7 +18911,7 @@ test("Kaigi JSON endpoints preserve literal u64 max values", async () => {
   assert.equal(call.gas_rate_per_minute, expected);
   assert.equal(call.relay_manifest.expiry_ms, expected);
   const signals = await client.listKaigiCallSignals(callId);
-  assert.equal(signals.total, expected);
+  assert.equal(signals.has_more, false);
   assert.equal(signals.items[0].created_at_ms, expected);
   const relays = await client.listKaigiRelays();
   assert.equal(relays.items[0].reported_at_ms, expected);
@@ -18968,7 +19010,7 @@ test("Kaigi call views enforce exact variants, privacy fields, and requested ide
   }
 });
 
-test("Kaigi call signals enforce exact pagination and carrier-time invariants", async () => {
+test("Kaigi call signals enforce exact cursor pages and carrier-time invariants", async () => {
   const callId = "kaigi:strict";
   const signal = {
     entrypoint_hash: KAIGI_HPKE_FINGERPRINT_HEX,
@@ -18981,44 +19023,46 @@ test("Kaigi call signals enforce exact pagination and carrier-time invariants", 
   const withoutTimestamp = { ...signal };
   delete withoutTimestamp.timestamp_ms;
   const cases = [
-    [{ total: 1, items: [{ ...signal, extra: true }] }, /fields are not canonical/u],
-    [{ total: 1, items: [withoutTimestamp] }, /fields are not canonical/u],
-    [{ total: 1, items: [{ ...signal, created_at_ms: 11 }] }, /must not exceed timestamp_ms/u],
-    [{ total: 1, items: [{ ...signal, call_id: "kaigi:other" }] }, /requested call id/u],
-    [{ total: 1, items: [{ ...signal, signal_kind: "" }] }, /must not be empty/u],
-    [{ total: 1, items: [{ ...signal, signal_kind: "\u0085answer" }] }, /Unicode whitespace/u],
-    [{ total: 1, items: [{ ...signal, signal_kind: "Answer" }] }, /uppercase ASCII/u],
+    [{ has_more: false, items: [{ ...signal, extra: true }] }, /fields are not canonical/u],
+    [{ has_more: false, items: [withoutTimestamp] }, /fields are not canonical/u],
+    [{ has_more: false, items: [{ ...signal, created_at_ms: 11 }] }, /must not exceed timestamp_ms/u],
+    [{ has_more: false, items: [{ ...signal, call_id: "kaigi:other" }] }, /requested call id/u],
+    [{ has_more: false, items: [{ ...signal, signal_kind: "" }] }, /must not be empty/u],
+    [{ has_more: false, items: [{ ...signal, signal_kind: "\u0085answer" }] }, /Unicode whitespace/u],
+    [{ has_more: false, items: [{ ...signal, signal_kind: "Answer" }] }, /uppercase ASCII/u],
     [{
-      total: 1,
+      has_more: false,
       items: [{
         ...signal,
         entrypoint_hash: KAIGI_HPKE_FINGERPRINT_HEX.toUpperCase(),
       }],
     }, /exact lowercase 32-byte hex string/u],
     [{
-      total: 1,
+      has_more: false,
       items: [{ ...signal, entrypoint_hash: `0x${KAIGI_HPKE_FINGERPRINT_HEX}` }],
     }, /exact lowercase 32-byte hex string/u],
     [{
-      total: 1,
+      has_more: false,
       items: [{
         ...signal,
         entrypoint_hash: [...Buffer.from(KAIGI_HPKE_FINGERPRINT_HEX, "hex")],
       }],
     }, /must be a string/u],
     [{
-      total: 1,
+      has_more: false,
       items: [{ ...signal, entrypoint_hash: "aa".repeat(32) }],
     }, /Iroha Hash marker bit/u],
-    [{ total: 1, items: [{ ...signal, metadata: {} }] }, /metadata\.schema must be/u],
+    [{ has_more: false, items: [{ ...signal, metadata: {} }] }, /metadata\.schema must be/u],
     [{
-      total: 1,
+      has_more: false,
       items: [{ ...signal, metadata: { schema: "kaigi-signal/v0" } }],
     }, /metadata\.schema must be/u],
-    [{ total: 0, items: [signal] }, /total must not be smaller/u],
-    [{ total: 2, items: [signal, { ...signal }] }, /unique entrypoint_hash/u],
+    [{ has_more: true, items: [signal] }, /next_cursor must be present/u],
+    [{ has_more: false, next_cursor: "Abcd_123", items: [signal] }, /next_cursor must be present/u],
+    [{ has_more: true, next_cursor: "not+padded=", items: [signal] }, /base64url/u],
+    [{ has_more: false, items: [signal, { ...signal }] }, /unique entrypoint_hash/u],
     [{
-      total: 2,
+      has_more: false,
       items: [
         signal,
         {
@@ -19028,7 +19072,7 @@ test("Kaigi call signals enforce exact pagination and carrier-time invariants", 
           created_at_ms: 7,
         },
       ],
-    }, /ordered by timestamp_ms/u],
+    }, null],
   ];
   for (const [payload, pattern] of cases) {
     const client = new ToriiClient(BASE_URL, {
@@ -19038,8 +19082,15 @@ test("Kaigi call signals enforce exact pagination and carrier-time invariants", 
         headers: { "content-type": "application/json" },
       }),
     });
-    // eslint-disable-next-line no-await-in-loop
-    await assert.rejects(() => client.listKaigiCallSignals(callId), pattern);
+    if (pattern === null) {
+      // Structural cursor order does not depend on carrier timestamps.
+      // eslint-disable-next-line no-await-in-loop
+      const page = await client.listKaigiCallSignals(callId);
+      assert.equal(page.items.length, 2);
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(() => client.listKaigiCallSignals(callId), pattern);
+    }
   }
 });
 
@@ -19059,7 +19110,7 @@ test("Kaigi call signal kinds retain the open normalized vocabulary", async () =
       fetchImpl: async () => createResponse({
         status: 200,
         jsonData: {
-          total: 1,
+          has_more: false,
           items: [{
             entrypoint_hash: KAIGI_HPKE_FINGERPRINT_HEX,
             timestamp_ms: 10,
@@ -21658,6 +21709,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     creationTimeMs: 123456,
     validationFeePolicyVersion: 7,
     validationFeePolicyHash: "AB".repeat(32),
+    validationFeeHijiriFeeQuoteHash: "CD".repeat(32),
     validationFeeInstructionIndex: 1,
     validationFeeTransferEntryIndex: 2,
   });
@@ -21681,6 +21733,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       feePayment: authorityFeePayment(),
       validationFeePolicyVersion: 7,
       validationFeePolicyHash: "AB".repeat(32),
+      validationFeeHijiriFeeQuoteHash: "CD".repeat(32),
       validationFeeInstructionIndex: 1,
       validationFeeTransferEntryIndex: 2,
     }),
@@ -21691,6 +21744,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       fee_payment: authorityFeePayment(),
       validation_fee_policy_version: "7",
       validation_fee_policy_hash: "ab".repeat(32),
+      validation_fee_hijiri_fee_quote_hash: "cd".repeat(32),
       validation_fee_instruction_index: "1",
       validation_fee_transfer_entry_index: "2",
     },
@@ -21777,6 +21831,7 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
   for (const [fieldName, value] of Object.entries({
     validation_fee_policy_version: 7,
     validation_fee_policy_hash: "ab".repeat(32),
+    validation_fee_hijiri_fee_quote_hash: "cd".repeat(32),
     validation_fee_instruction_index: 1,
     validation_fee_transfer_entry_index: 2,
   })) {
@@ -21789,6 +21844,24 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
       /unsupported snake_case validation fee field/,
     );
   }
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeeHijiriFeeQuoteHash: "cd".repeat(32),
+      }),
+    /requires policy metadata/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeHijiriFeeQuoteHash: "not-a-hash",
+      }),
+    /32-byte hex string/,
+  );
   await assert.rejects(
     () =>
       client.proposeMultisig({
@@ -21855,6 +21928,24 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
   assert.throws(
     () => buildMultisigProposeRequest({ ...request, instructions: [null] }),
     /multisigPropose\.instructions\[0\]/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeeHijiriFeeQuoteHash: "cd".repeat(32),
+      }),
+    /requires policy metadata/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeHijiriFeeQuoteHash: "not-a-hash",
+      }),
+    /32-byte hex string/,
   );
   assert.throws(
     () => buildMultisigProposeRequest({ ...request, validationFeeInstructionIndex: 1 }),

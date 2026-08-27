@@ -49,13 +49,16 @@ public interface KeystoreBackend {
    * recorded certificates. The Android implementation populates this with the StrongBox/TEE
    * attestation chain when the platform returns certificates for the generated key.
    */
-  default Optional<KeyAttestation> attestation(final String alias) {
+  default Optional<KeyAttestation> attestation(final String alias)
+      throws KeyManagementException {
     return Optional.empty();
   }
 
   /**
-   * Generates fresh attestation material for {@code alias} using the provided challenge. Providers
-   * that do not support attestation should return {@link Optional#empty()}.
+   * Requests backend-generated attestation material for {@code alias} using the provided challenge.
+   * Providers that do not support challenge-bound generation should fail explicitly for a non-empty
+   * challenge. In particular, Android Keystore can only bind a challenge while creating a key; it
+   * cannot re-attest an existing alias.
    */
   default Optional<KeyAttestation> generateAttestation(
       final String alias, final byte[] challenge) throws KeyManagementException {

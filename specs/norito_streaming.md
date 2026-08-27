@@ -375,16 +375,22 @@ gas deterministically:
 - `RecordKaigiUsage` appends metered segments so billing totals (duration and
   gas) accumulate inside the call record. Counter overflow rejects the segment
   instead of silently clamping an accepted usage record.
+- `RegisterKaigiRelay` creates or rotates one validated relay descriptor under
+  a global 500-entry bound. Exact duplicate registrations are event-free
+  no-ops. `UnregisterKaigiRelay` removes the descriptor and retained health
+  feedback for that active account-ID lineage; existing manifests keep their
+  pinned hop keys, while future manifest admission rejects the retired relay.
 - `ReportKaigiRelayHealth` retains only monotonically newer observations per
   relay. Reports beyond the current block time and older observations reject;
   every non-identical equal-timestamp report rejects, including reports from a
   different call. Exact duplicates succeed without rewriting state or emitting
   events. Feedback is diagnostic and does not override relay governance or
   manifest admission.
-- The ledger emits `KaigiRosterSummary`, `KaigiRelayManifestUpdated`, and
-  `KaigiUsageSummary` domain events whenever rosters, relay manifests, or
-  aggregate usage change, letting subscribers monitor sessions without
-  scraping metadata blobs.
+- The ledger emits compact `KaigiRosterSummary`, `KaigiRelayManifestUpdated`,
+  `KaigiUsageSummary`, `KaigiRelayUnregistered`, and `KaigiStatusChanged`
+  domain events for successful changes. Reserved metadata mutation events stay
+  internal to trigger processing, so public subscribers can monitor sessions
+  without receiving the full stored payloads.
 
 ### CLI Helpers
 

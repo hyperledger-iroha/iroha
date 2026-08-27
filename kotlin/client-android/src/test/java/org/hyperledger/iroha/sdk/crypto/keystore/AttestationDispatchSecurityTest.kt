@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test
 
 class AttestationDispatchSecurityTest {
     @Test
-    fun `manager dispatches to keystore provider and isolates the challenge`() {
+    fun `manager verifies recorded challenge-bound attestation`() {
         val backend = AttestationBackend()
         val provider = KeystoreKeyProvider(backend, KeyGenParameters.builder().build())
         val manager = IrohaKeyManager.fromProviders(listOf(provider))
@@ -32,8 +32,8 @@ class AttestationDispatchSecurityTest {
         assertTrue(result.isStrongBoxAttestation)
         assertContentEquals(FIXTURE_CHALLENGE, result.attestationChallenge())
         assertContentEquals(FIXTURE_CHALLENGE, challenge)
-        assertContentEquals(FIXTURE_CHALLENGE, backend.observedChallenge)
-        assertEquals(1, backend.generationCalls)
+        assertEquals(0, backend.generationCalls)
+        assertEquals(1, backend.readCalls)
     }
 
     @Test
@@ -45,19 +45,39 @@ class AttestationDispatchSecurityTest {
         assertNotNull(provider.verifyAttestation("wallet", verifier, FIXTURE_CHALLENGE))
         assertNotNull(provider.verifyAttestation("wallet", verifier, FIXTURE_CHALLENGE))
 
-        assertEquals(2, backend.generationCalls)
+        assertEquals(0, backend.generationCalls)
+        assertEquals(2, backend.readCalls)
     }
 
     @Test
-    fun `challenge verification never falls back to stored attestation material`() {
-        val backend = AttestationBackend(generationAvailable = false)
+    fun `challenge verification propagates recorded attestation read failures`() {
+        val backend = AttestationBackend(attestationReadFails = true)
         val provider = KeystoreKeyProvider(backend, KeyGenParameters.builder().build())
 
-        val result = provider.verifyAttestation("wallet", verifier(), FIXTURE_CHALLENGE)
+        assertFailsWith<AttestationVerificationException> {
+            provider.verifyAttestation("wallet", verifier(), FIXTURE_CHALLENGE)
+        }
 
-        assertEquals(null, result)
-        assertEquals(1, backend.generationCalls)
-        assertEquals(0, backend.readCalls)
+        assertEquals(0, backend.generationCalls)
+        assertEquals(1, backend.readCalls)
+    }
+
+    @Test
+    fun `manager rejects one alias resolving to different provider keys`() {
+        val matching = KeystoreKeyProvider(
+            AttestationBackend(AliasLoadMode.MATCHING),
+            KeyGenParameters.builder().build(),
+        )
+        val conflicting = KeystoreKeyProvider(
+            AttestationBackend(AliasLoadMode.MISMATCHED),
+            KeyGenParameters.builder().build(),
+        )
+        val manager = IrohaKeyManager.fromProviders(listOf(matching, conflicting))
+
+        val error = assertFailsWith<AttestationVerificationException> {
+            manager.verifyAttestation("wallet", verifier(), FIXTURE_CHALLENGE)
+        }
+        assertTrue(error.message.orEmpty().contains("different public keys"))
     }
 
     @Test
@@ -138,7 +158,7 @@ class AttestationDispatchSecurityTest {
 
     private class AttestationBackend(
         private val aliasLoadMode: AliasLoadMode = AliasLoadMode.MATCHING,
-        private val generationAvailable: Boolean = true,
+        private val attestationReadFails: Boolean = false,
     ) : KeystoreBackend {
         var generationCalls = 0
         var readCalls = 0
@@ -166,6 +186,9 @@ class AttestationDispatchSecurityTest {
 
         override fun attestation(alias: String): KeyAttestation? {
             readCalls++
+            if (attestationReadFails) {
+                throw KeyManagementException("fixture attestation read failure")
+            }
             return fixtureAttestation(alias)
         }
 
@@ -173,7 +196,6 @@ class AttestationDispatchSecurityTest {
             generationCalls++
             observedChallenge = challenge.copyOf()
             challenge.fill(0)
-            if (!generationAvailable) return null
             return fixtureAttestation(alias)
         }
 

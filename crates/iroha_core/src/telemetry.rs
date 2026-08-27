@@ -5039,13 +5039,19 @@ impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
             DaPinIntentValidationError::BundleTooLarge { .. } => {
                 PinIntentSpoolReason::BundleTooLarge
             }
-            DaPinIntentValidationError::UnknownLane { .. } => PinIntentSpoolReason::UnknownLane,
+            DaPinIntentValidationError::UnknownLane { .. }
+            | DaPinIntentValidationError::InactiveAdmissionLane { .. } => {
+                PinIntentSpoolReason::UnknownLane
+            }
             DaPinIntentValidationError::UnknownOwner { .. } => PinIntentSpoolReason::UnknownOwner,
             DaPinIntentValidationError::AuthorizationMismatch { .. }
             | DaPinIntentValidationError::WrongNetwork { .. }
             | DaPinIntentValidationError::ZeroPayloadBytes { .. }
             | DaPinIntentValidationError::InvalidAuthorizationSignatures { .. }
-            | DaPinIntentValidationError::UnauthorizedOwner { .. } => {
+            | DaPinIntentValidationError::UnauthorizedOwner { .. }
+            | DaPinIntentValidationError::MissingAdmissionPolicy
+            | DaPinIntentValidationError::InvalidAdmissionPolicy { .. }
+            | DaPinIntentValidationError::AdmissionDenied { .. } => {
                 PinIntentSpoolReason::InvalidAuthorization
             }
             DaPinIntentValidationError::QuotaExceeded { .. }
@@ -8997,6 +9003,18 @@ mod tests {
         let oversized = DaPinIntentValidationError::BundleTooLarge { len: 2, max: 1 };
         let oversized_reason = PinIntentSpoolReason::from(&oversized);
         assert_eq!(oversized_reason, PinIntentSpoolReason::BundleTooLarge);
+        assert_eq!(
+            PinIntentSpoolReason::from(&DaPinIntentValidationError::MissingAdmissionPolicy),
+            PinIntentSpoolReason::InvalidAuthorization
+        );
+        assert_eq!(
+            PinIntentSpoolReason::from(&DaPinIntentValidationError::InactiveAdmissionLane {
+                lane: LaneId::SINGLE,
+                epoch: 1,
+                sequence: 1,
+            }),
+            PinIntentSpoolReason::UnknownLane
+        );
         telemetry.note_da_pin_intent_spool(PinIntentSpoolResult::Dropped, oversized_reason);
         telemetry.note_da_pin_intent_spool(PinIntentSpoolResult::Kept, PinIntentSpoolReason::Kept);
         assert_eq!(

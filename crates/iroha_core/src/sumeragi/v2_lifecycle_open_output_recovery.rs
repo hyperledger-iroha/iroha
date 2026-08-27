@@ -747,7 +747,7 @@ mod output_recovery_tests {
             request_hash: HashOf::from_untyped_unchecked(Hash::new(b"cold invalid request")),
             manifest: manifest.clone(),
             body: vec![0x51],
-            responder: 0,
+            responder: verified.context().roster[0].validator.clone(),
             signature: vec![0x52],
         };
         let fetch_replay = CertifiedFetchReplayEvidenceV1::from_signed_response_for_test(

@@ -966,69 +966,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn optional_consensus_signer_binding_is_all_or_nothing_and_network_bound() {
+    fn optional_consensus_signer_binding_is_all_or_nothing_and_preserves_inventory_digest() {
         let slot = IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner;
-        let network_id = runtime_provider_test_network_id();
         let mut bindings = Vec::new();
 
-        append_optional_consensus_signer_binding(
-            &mut bindings,
-            &network_id,
-            slot,
-            None,
-            None,
-            None,
-        )
-        .expect("an absent optional signer must remain absent");
+        append_optional_consensus_signer_binding(&mut bindings, slot, None, None, None)
+            .expect("an absent optional signer must remain absent");
         assert!(bindings.is_empty());
 
         let handle = "hsm://consensus/global-beacon-primary";
-        let provider_profile_digest = [0xA5; 32];
+        let inventory_digest = [0xA5; 32];
         append_optional_consensus_signer_binding(
             &mut bindings,
-            &network_id,
             slot,
             Some(handle),
             Some(7),
-            Some(provider_profile_digest),
+            Some(inventory_digest),
         )
         .expect("a complete production signer binding must be admitted");
         let binding = bindings.first().expect("one projected signer binding");
         assert_eq!(binding.slot(), slot);
         assert_eq!(binding.handle(), handle);
         assert_eq!(binding.revision(), Some(7));
-        assert_ne!(binding.policy_digest(), Some(provider_profile_digest));
-        let other_network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-            iroha_data_model::block::BlockHeader,
-        >::from_untyped_unchecked(
-            iroha_crypto::Hash::prehashed([0x16; iroha_crypto::Hash::LENGTH]),
-        ));
-        let mut other_network_bindings = Vec::new();
-        append_optional_consensus_signer_binding(
-            &mut other_network_bindings,
-            &other_network_id,
-            slot,
-            Some(handle),
-            Some(7),
-            Some(provider_profile_digest),
-        )
-        .expect("the same provider may be projected for another network");
-        assert_ne!(
-            binding.policy_digest(),
-            other_network_bindings[0].policy_digest(),
-            "the public signer policy must bind the exact network identity"
-        );
+        assert_eq!(binding.policy_digest(), Some(inventory_digest));
 
         for incomplete in [
-            (None, Some(7), Some(provider_profile_digest)),
-            (Some(handle), None, Some(provider_profile_digest)),
-            (Some(handle), Some(0), Some(provider_profile_digest)),
+            (None, Some(7), Some(inventory_digest)),
+            (Some(handle), None, Some(inventory_digest)),
+            (Some(handle), Some(0), Some(inventory_digest)),
             (Some(handle), Some(7), Some([0; 32])),
         ] {
             assert!(matches!(
                 append_optional_consensus_signer_binding(
                     &mut Vec::new(),
-                    &network_id,
                     slot,
                     incomplete.0,
                     incomplete.1,

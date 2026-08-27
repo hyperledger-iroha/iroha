@@ -229,7 +229,9 @@ enum Ed25519CompressedPointAdmission {
         guard compressed.count == compressedPointLength else {
             return nil
         }
-        var yBytes = compressed
+        // `Data.SubSequence` is also `Data` and can retain a non-zero start index.
+        // Rebase before the field decoder performs zero-based indexing.
+        var yBytes = Data(compressed)
         let lastIndex = yBytes.index(before: yBytes.endIndex)
         let xIsOdd = (yBytes[lastIndex] & 0x80) != 0
         yBytes[lastIndex] &= 0x7f
@@ -311,6 +313,13 @@ enum Ed25519PublicKeyAdmission {
 
 enum Ed25519SignatureAdmission {
     static let signatureLength = 64
+    private static let scalarLength = 32
+    private static let subgroupOrderLittleEndian: [UInt8] = [
+        0xED, 0xD3, 0xF5, 0x5C, 0x1A, 0x63, 0x12, 0x58,
+        0xD6, 0x9C, 0xF7, 0xA2, 0xDE, 0xF9, 0xDE, 0x14,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+    ]
 
     static func isValidSignature(_ signature: Data) -> Bool {
         guard signature.count == signatureLength else {
@@ -321,7 +330,26 @@ enum Ed25519SignatureAdmission {
             return false
         }
         let r = Data(bytes.prefix(Ed25519CompressedPointAdmission.compressedPointLength))
+        let s = bytes.suffix(scalarLength)
         return Ed25519CompressedPointAdmission.isValidCompressedPoint(r)
+            && isCanonicalScalar(s)
+    }
+
+    private static func isCanonicalScalar(_ scalar: ArraySlice<UInt8>) -> Bool {
+        guard scalar.count == scalarLength else {
+            return false
+        }
+        let bytes = Array(scalar)
+        for index in stride(from: scalarLength - 1, through: 0, by: -1) {
+            if bytes[index] < subgroupOrderLittleEndian[index] {
+                return true
+            }
+            if bytes[index] > subgroupOrderLittleEndian[index] {
+                return false
+            }
+        }
+        // Equality is non-canonical: RFC 8032 requires 0 <= S < l.
+        return false
     }
 }
 

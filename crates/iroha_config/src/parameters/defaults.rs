@@ -897,7 +897,7 @@ pub mod network {
     /// Maximum encrypted frame size for peer messages in bytes.
     ///
     /// The recommended maximal Sumeragi v2 `CertifiedBodyResponse` occupies
-    /// 16,811,581 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
+    /// 16,828,108 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
     /// Rounding the cap up to 17 MiB leaves just under 1 MiB for those bounded
     /// layers while keeping every retained frame allocation finite.
     /// The encrypted ceiling includes AEAD expansion in addition to the full
@@ -2815,6 +2815,8 @@ pub mod torii {
     }
     /// Default poll interval (seconds) for Taikai anchor uploads.
     pub const DA_TAIKAI_ANCHOR_POLL_INTERVAL_SECS: u64 = 30;
+    /// Absolute deadline for one Taikai anchor upload and signed receipt.
+    pub const DA_TAIKAI_ANCHOR_REQUEST_TIMEOUT_SECS: u64 = 15;
     /// ISO 20022 bridge disabled by default.
     pub const ISO_BRIDGE_ENABLED: bool = false;
     /// Maximum request body accepted by an ISO 20022 submission endpoint.
@@ -3630,10 +3632,29 @@ pub mod zk {
         pub const MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION: NonZeroU32 = nonzero!(131_713_u32);
         /// Maximum BLS public-key contributions committed in one block.
         pub const MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK: NonZeroU32 = nonzero!(526_852_u32);
+        /// Maximum Ed25519 signature checks in one transaction.
+        ///
+        /// A TON V1 native proof carries at most 64 masterchain continuations with at most
+        /// 1,024 signatures apiece.
+        pub const MAX_ED25519_SIGNATURE_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(65_536_u32);
+        /// Maximum Ed25519 signature checks committed in one block.
+        pub const MAX_ED25519_SIGNATURE_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(262_144_u32);
+        /// Maximum TON Ed25519 validator-key checks in one transaction.
+        ///
+        /// This is the native verifier's exact V1 upper bound: two 1,024-key anchor rosters plus
+        /// three possible 1,024-key roster passes for each of 64 continuation blocks.
+        pub const MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION: NonZeroU32 =
+            nonzero!(198_656_u32);
+        /// Maximum TON Ed25519 validator-key checks committed in one block.
+        pub const MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(794_624_u32);
         /// Maximum BN254 Groth16 pairing-product checks in one transaction.
         pub const MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
         /// Maximum BN254 Groth16 pairing-product checks committed in one block.
         pub const MAX_BN254_PAIRING_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
+        /// Maximum BLS12-381 Groth16 pairing-product checks in one transaction.
+        pub const MAX_BLS12_381_PAIRING_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
+        /// Maximum BLS12-381 Groth16 pairing-product checks committed in one block.
+        pub const MAX_BLS12_381_PAIRING_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
     }
     /// FASTPQ prover defaults.
     pub mod fastpq {

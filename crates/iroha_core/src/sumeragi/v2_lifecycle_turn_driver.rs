@@ -1272,7 +1272,7 @@ impl LaunchedProductionLifecycleV1 {
             )) => {
                 iroha_logger::error!(
                     %error,
-                    "ordinary certified-Fetch durable ingress terminal requires cold restart"
+                    "ordinary certified-Fetch post-commit terminal requires cold restart"
                 );
                 services
                     .lifecycle_output_guard()

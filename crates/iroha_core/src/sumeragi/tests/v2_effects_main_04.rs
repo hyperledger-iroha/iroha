@@ -1240,17 +1240,17 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
         .expect("fixture roster fits the recovered selector ingress");
     ingress.state.lock().leader_wire_context = Some((fixture.context.id(), fixture.context.height));
     ingress.open().expect("open recovered selector ingress");
-    let recovered_response = |responder: wire::ValidatorIndex| {
+    let recovered_response = |responder_index: wire::ValidatorIndex| {
+        let responder_index = usize::try_from(responder_index).expect("small responder index");
         let mut response = wire::CertifiedBodyResponse {
             request_hash,
             manifest: fixture.manifest.clone(),
             body: fixture.body.clone(),
-            responder,
+            responder: fixture.context.roster[responder_index].validator.clone(),
             signature: Vec::new(),
         };
         response.signature = Signature::new(
-            fixture.validator_keys[usize::try_from(responder).expect("small responder index")]
-                .private_key(),
+            fixture.validator_keys[responder_index].private_key(),
             &response.signature_preimage(),
         )
         .payload()
@@ -1563,7 +1563,8 @@ fn selected_certified_response_priority_routes_only_physical_family_winners_read
         .consume_effects(effects, &mut services)
         .expect("hybrid fetch establishes one exact ordinary response family");
     let task = services.fetch_tasks[0].clone();
-    let response = |responder: wire::ValidatorIndex| {
+    let response = |responder_index: wire::ValidatorIndex| {
+        let responder_index = usize::try_from(responder_index).expect("small responder index");
         let mut response = wire::CertifiedBodyResponse {
             request_hash: HashOf::new(
                 task.certified_request()
@@ -1571,12 +1572,11 @@ fn selected_certified_response_priority_routes_only_physical_family_winners_read
             ),
             manifest: fixture.manifest.clone(),
             body: fixture.body.clone(),
-            responder,
+            responder: fixture.context.roster[responder_index].validator.clone(),
             signature: Vec::new(),
         };
         response.signature = Signature::new(
-            fixture.validator_keys[usize::try_from(responder).expect("small responder index")]
-                .private_key(),
+            fixture.validator_keys[responder_index].private_key(),
             &response.signature_preimage(),
         )
         .payload()
@@ -1688,7 +1688,7 @@ fn certified_fetch_capacity_release_after_timeout_cleanup_retries_without_restar
         ),
         manifest: fixture.manifest.clone(),
         body: fixture.body.clone(),
-        responder: 0,
+        responder: fixture.context.roster[0].validator.clone(),
         signature: Vec::new(),
     };
     response.signature = Signature::new(
@@ -1899,7 +1899,8 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         .consume_effects(effects, &mut services)
         .expect("hybrid fetch establishes one exact response family");
     let task = services.fetch_tasks[0].clone();
-    let response = |responder: wire::ValidatorIndex| {
+    let response = |responder_index: wire::ValidatorIndex| {
+        let responder_index = usize::try_from(responder_index).expect("small responder index");
         let mut response = wire::CertifiedBodyResponse {
             request_hash: HashOf::new(
                 task.certified_request()
@@ -1907,12 +1908,11 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
             ),
             manifest: fixture.manifest.clone(),
             body: fixture.body.clone(),
-            responder,
+            responder: fixture.context.roster[responder_index].validator.clone(),
             signature: Vec::new(),
         };
         response.signature = Signature::new(
-            fixture.validator_keys[usize::try_from(responder).expect("small responder index")]
-                .private_key(),
+            fixture.validator_keys[responder_index].private_key(),
             &response.signature_preimage(),
         )
         .payload()

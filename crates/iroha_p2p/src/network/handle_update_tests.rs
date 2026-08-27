@@ -845,7 +845,7 @@ mod handle_update_tests {
         peer_capabilities: ControlUpdateReceiver<message::UpdatePeerCapabilities>,
         trusted_peers: ControlUpdateReceiver<message::UpdateTrustedPeers>,
         acl: ControlUpdateReceiver<message::UpdateAcl>,
-        handshake: ControlUpdateReceiver<message::UpdateHandshake>,
+        handshake: mpsc::Receiver<message::UpdateHandshake>,
         consensus_caps: ControlUpdateReceiver<ConsensusCapsSnapshot>,
     }
     fn handle_with_control_update_receivers() -> (
@@ -860,7 +860,8 @@ mod handle_update_tests {
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
         let (update_trusted_tx, update_trusted_rx) = control_update_channel();
         let (update_acl_tx, update_acl_rx) = control_update_channel();
-        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
+        let (update_handshake_tx, update_handshake_rx) =
+            mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
@@ -958,7 +959,8 @@ mod handle_update_tests {
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
         let (update_trusted_tx, update_trusted_rx) = control_update_channel();
         let (update_acl_tx, update_acl_rx) = control_update_channel();
-        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
+        let (update_handshake_tx, update_handshake_rx) =
+            mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (network_message_high_sender, network_message_high_rx) =
             net_channel::channel_with_capacity(1);
@@ -1042,7 +1044,8 @@ mod handle_update_tests {
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
         let (update_trusted_tx, update_trusted_rx) = control_update_channel();
         let (update_acl_tx, update_acl_rx) = control_update_channel();
-        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
+        let (update_handshake_tx, update_handshake_rx) =
+            mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
@@ -1330,7 +1333,7 @@ mod handle_update_tests {
         );
     }
     #[tokio::test(flavor = "current_thread")]
-    async fn all_control_update_methods_keep_newest_category_snapshot() {
+    async fn snapshot_control_updates_keep_newest_category_value() {
         let (handle, mut receivers) = handle_with_control_update_receivers();
         let newest_handle = handle.clone();
         let stale_peer = random_node_peer_id();
@@ -1358,9 +1361,6 @@ mod handle_update_tests {
             allow_cidrs: vec!["10.0.0.0/8".to_owned()],
             deny_cidrs: Vec::new(),
         });
-        let mut stale_handshake = ActualSoranetHandshake::default();
-        stale_handshake.kem_id = 1;
-        handle.update_soranet_handshake(stale_handshake);
         handle.update_consensus_caps(test_consensus_caps(1), true);
         newest_handle.update_topology(message::UpdateTopology(HashSet::from(
             [newest_peer.clone()],
@@ -1388,9 +1388,6 @@ mod handle_update_tests {
             allow_cidrs: vec!["192.0.2.0/24".to_owned()],
             deny_cidrs: vec!["198.51.100.0/24".to_owned()],
         });
-        let mut newest_handshake = ActualSoranetHandshake::default();
-        newest_handshake.kem_id = 2;
-        newest_handle.update_soranet_handshake(newest_handshake);
         let newest_caps = test_consensus_caps(2);
         newest_handle.update_consensus_caps(newest_caps.clone(), false);
         assert!(receivers.topology.has_changed().expect("topology open"));
@@ -1414,7 +1411,6 @@ mod handle_update_tests {
                 .expect("trusted peers open")
         );
         assert!(receivers.acl.has_changed().expect("ACL open"));
-        assert!(receivers.handshake.has_changed().expect("handshake open"));
         assert!(
             receivers
                 .consensus_caps
@@ -1463,10 +1459,6 @@ mod handle_update_tests {
         assert_eq!(acl.allow_keys, vec![newest_peer.public_key().clone()]);
         assert_eq!(acl.allow_cidrs, vec!["192.0.2.0/24"]);
         assert_eq!(acl.deny_cidrs, vec!["198.51.100.0/24"]);
-        let handshake = receive_control_update(&mut receivers.handshake)
-            .await
-            .expect("handshake update");
-        assert_eq!(handshake.handshake.kem_id, 2);
         let consensus = receive_control_update(&mut receivers.consensus_caps)
             .await
             .expect("consensus-capabilities update");
@@ -1474,6 +1466,52 @@ mod handle_update_tests {
         let mut applied_generation = ReconnectGeneration::default();
         assert!(consensus.take_reconnect_request(&mut applied_generation));
         assert!(!consensus.take_reconnect_request(&mut applied_generation));
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_update_returns_the_exact_actor_result() {
+        let (handle, mut receivers) = handle_with_control_update_receivers();
+        let mut accepted = ActualSoranetHandshake::default();
+        accepted.kem_id = 11;
+        let accepted_task = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.update_soranet_handshake(accepted).await }
+        });
+        let accepted_request = receivers
+            .handshake
+            .recv()
+            .await
+            .expect("accepted handshake request");
+        assert_eq!(accepted_request.handshake.kem_id, 11);
+        accepted_request
+            .respond_to
+            .send(Ok(()))
+            .expect("accepted requester should remain active");
+        accepted_task
+            .await
+            .expect("accepted update task")
+            .expect("accepted actor result");
+
+        let mut rejected = ActualSoranetHandshake::default();
+        rejected.kem_id = 12;
+        let rejected_task = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.update_soranet_handshake(rejected).await }
+        });
+        let rejected_request = receivers
+            .handshake
+            .recv()
+            .await
+            .expect("rejected handshake request");
+        assert_eq!(rejected_request.handshake.kem_id, 12);
+        rejected_request
+            .respond_to
+            .send(Err(Error::HandshakeSoranet("restart required".to_owned())))
+            .expect("rejected requester should remain active");
+        let error = rejected_task
+            .await
+            .expect("rejected update task")
+            .expect_err("actor rejection must reach the caller");
+        assert!(matches!(error, Error::HandshakeSoranet(message) if message == "restart required"));
     }
     #[tokio::test(flavor = "current_thread")]
     async fn consensus_reconnect_request_survives_newer_caps_only_snapshot() {
@@ -2463,15 +2501,18 @@ mod handle_update_tests {
             "low-priority overflow should remain lossy"
         );
     }
-    #[test]
-    fn update_methods_ignore_closed_channels() {
+    #[tokio::test]
+    async fn update_methods_ignore_closed_channels() {
         let handle = closed_handle();
         handle.update_topology(message::UpdateTopology(HashSet::new()));
         handle.update_peers_addresses(message::UpdatePeers(Vec::new()));
         handle.update_peer_capabilities(message::UpdatePeerCapabilities(Vec::new()));
         handle.update_trusted_peers(message::UpdateTrustedPeers::default());
         handle.update_acl(message::UpdateAcl::default());
-        handle.update_soranet_handshake(ActualSoranetHandshake::default());
+        handle
+            .update_soranet_handshake(ActualSoranetHandshake::default())
+            .await
+            .expect_err("closed actor must reject an acknowledged handshake update");
         handle.update_consensus_caps(test_consensus_caps(0), false);
     }
     #[test]

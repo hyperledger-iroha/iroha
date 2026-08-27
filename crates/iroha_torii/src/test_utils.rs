@@ -1205,7 +1205,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 min_update_spacing_ms: defaults::oracle::twitter_binding_min_update_spacing_ms(),
             },
         },
-        hijiri: A::Hijiri::new(None),
         fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring::new(
             defaults::fraud_monitoring::ENABLED,
             Vec::new(),

@@ -9358,6 +9358,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::kaigi::RecordKaigiUsage,
         iroha_data_model::isi::kaigi::SetKaigiRelayManifest,
         iroha_data_model::isi::kaigi::RegisterKaigiRelay,
+        iroha_data_model::isi::kaigi::UnregisterKaigiRelay,
         iroha_data_model::isi::kaigi::ReportKaigiRelayHealth,
     ) {
         return true;
@@ -9497,6 +9498,22 @@ fn validate_initial_native_instruction_authority(
         return deny("authority cannot mutate another account's multisig controller");
     }
     if let Some(set_parameter) = any.downcast_ref::<iroha_data_model::isi::SetParameter>() {
+        if matches!(
+            set_parameter.inner(),
+            iroha_data_model::parameter::Parameter::Custom(parameter)
+                if iroha_data_model::hijiri::is_hijiri_parameter_id(parameter.id())
+        ) {
+            if is_genesis
+                || initial_authority_has_exact_permission(
+                    state_transaction,
+                    authority,
+                    executor_permission::parameter::CanSetHijiriParameters.into(),
+                )?
+            {
+                return Ok(());
+            }
+            return deny("Can't set Hijiri parameters without CanSetHijiriParameters");
+        }
         if matches!(
             set_parameter.inner(),
             iroha_data_model::parameter::Parameter::Custom(parameter)
@@ -10400,6 +10417,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanExecuteTrigger",
     "CanModifyTriggerMetadata",
     "CanSetParameters",
+    "CanSetHijiriParameters",
     "CanManageVerifyingKeys",
     "CanManageRuntimeUpgrades",
     "CanManageConsensusKeys",
@@ -11416,7 +11434,7 @@ mod tests {
         use iroha_data_model::{
             isi::kaigi::{
                 CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
-                ReportKaigiRelayHealth, SetKaigiRelayManifest,
+                ReportKaigiRelayHealth, SetKaigiRelayManifest, UnregisterKaigiRelay,
             },
             kaigi::{KaigiId, KaigiRelayHealthStatus, KaigiRelayRegistration, NewKaigi},
         };
@@ -11484,6 +11502,10 @@ mod tests {
                     hpke_public_key: vec![1],
                     bandwidth_class: 1,
                 },
+            }
+            .into(),
+            UnregisterKaigiRelay {
+                relay_id: relay.clone(),
             }
             .into(),
             ReportKaigiRelayHealth {
@@ -12045,6 +12067,73 @@ mod tests {
             super::Executor::Initial
         ));
         assert!(state_transaction.world.account(&victim).is_ok());
+    }
+    #[test]
+    fn initial_executor_reserves_hijiri_parameters_for_dedicated_permission() {
+        use iroha_data_model::hijiri::{
+            FeeMultiplierBand, HijiriFeePolicy, HijiriParametersV1, Q16,
+        };
+        let generic_parameter_admin = checked_account_id();
+        let hijiri_admin = checked_account_id();
+        let mut world = World::with(
+            [],
+            [
+                Account::new(generic_parameter_admin.clone()).build(&generic_parameter_admin),
+                Account::new(hijiri_admin.clone()).build(&hijiri_admin),
+            ],
+            [],
+        );
+        world.account_permissions.insert(
+            generic_parameter_admin.clone(),
+            BTreeSet::from([executor_permission::parameter::CanSetParameters.into()]),
+        );
+        world.account_permissions.insert(
+            hijiri_admin.clone(),
+            BTreeSet::from([executor_permission::parameter::CanSetHijiriParameters.into()]),
+        );
+        let state = state_for_testing(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let parameters = HijiriParametersV1::try_new(
+            1,
+            None,
+            HijiriFeePolicy::new(
+                vec![FeeMultiplierBand::new(Q16::ONE, Q16::ONE).unwrap()],
+                Q16::ONE,
+            )
+            .unwrap(),
+            Q16::ONE,
+        )
+        .unwrap();
+        let instruction = || {
+            InstructionBox::from(iroha_data_model::isi::SetParameter::new(
+                iroha_data_model::parameter::Parameter::Custom(
+                    parameters.clone().into_custom_parameter(),
+                ),
+            ))
+        };
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &generic_parameter_admin,
+                instruction(),
+            )
+            .expect_err("generic parameter permission must not control Hijiri fees");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("CanSetHijiriParameters")),
+            "unexpected generic-admin rejection: {error:?}"
+        );
+        super::Executor::Initial
+            .execute_instruction(&mut state_transaction, &hijiri_admin, instruction())
+            .expect("dedicated Hijiri permission must install the initial parameter");
+        assert!(
+            state_transaction
+                .world
+                .parameters()
+                .custom()
+                .contains_key(&HijiriParametersV1::parameter_id())
+        );
     }
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -17313,6 +17402,7 @@ mod tests {
     }
     #[test]
     fn initial_executor_trigger_registration_requires_exact_canonical_authority() {
+        use crate::smartcontracts::triggers::set::SetReadOnly as _;
         use iroha_data_model::{
             account::{
                 AccountAddress,

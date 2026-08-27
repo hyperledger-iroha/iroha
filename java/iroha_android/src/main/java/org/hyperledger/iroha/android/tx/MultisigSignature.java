@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.Objects;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
 
 /** Signature produced by a multisig member. */
 public final class MultisigSignature {
@@ -26,12 +27,16 @@ public final class MultisigSignature {
         Arrays.copyOf(Objects.requireNonNull(publicKey, "publicKey"), publicKey.length);
     this.signature =
         Arrays.copyOf(Objects.requireNonNull(signature, "signature"), signature.length);
-    if (this.publicKey.length == 0) {
-      throw new IllegalArgumentException("publicKey must not be empty");
-    }
     if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(this.publicKey)) {
       throw new IllegalArgumentException(
           "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup");
+    }
+    if (curveId == 0x02 && !MlDsaPublicKeyAdmission.isValid(this.publicKey)) {
+      throw new IllegalArgumentException(
+          "invalid ML-DSA-65 public key: expected 1952 bytes with nonzero material");
+    }
+    if (this.publicKey.length == 0) {
+      throw new IllegalArgumentException("publicKey must not be empty");
     }
     if (this.signature.length == 0) {
       throw new IllegalArgumentException("signature must not be empty");

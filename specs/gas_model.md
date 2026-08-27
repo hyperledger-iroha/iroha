@@ -176,9 +176,11 @@ gas = opcode_base
 The VM validates the three public TLV ranges and debits the complete byte
 surcharge before checksum hashing or cryptographic verification. Operand roles
 are charged independently even when two or more registers alias the same TLV,
-because each role is validated independently. Malformed public pointers retain
-the historical boolean-failure behavior and consume only the fixed base; a
-private range always traps instead of being converted into a public result.
+because each role is validated independently. Malformed public pointers and
+unsupported versions found in the fixed TLV header retain the historical
+boolean-failure behavior and consume only the fixed base. A version-1 envelope
+with a malformed checksum is still charged by its declared payload length, and
+a private range always traps instead of being converted into a public result.
 
 The schedule descriptor commits formula version 1 and the per-payload-byte
 rate, so peers with different direct-signature metering derive different

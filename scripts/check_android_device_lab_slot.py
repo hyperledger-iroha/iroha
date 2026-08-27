@@ -4960,6 +4960,20 @@ def _validate_android_attestation_certificate_chain(
         errors.append("digest-pinned Android attestation authority inputs are required")
         return None
     try:
+        evaluation_time_ms = time.time_ns() // 1_000_000
+        status_receipt = authority["attestation_status_capture_receipt"]
+        status_snapshot = status_receipt["snapshot"]
+        fresh_until_ms = status_receipt["payload"]["fresh_until_ms"]
+        response_date_ms = status_snapshot["response_date_ms"]
+        if (
+            not isinstance(response_date_ms, int)
+            or not isinstance(fresh_until_ms, int)
+            or evaluation_time_ms < response_date_ms
+            or evaluation_time_ms >= fresh_until_ms
+        ):
+            raise ValueError(
+                "Android attestation status capture is stale during chain validation"
+            )
         certificates = _decode_attestation_certificate_chain(relative, payload)
         roots = [
             _decode_single_trust_root(record["path"], record["bytes"])
@@ -5015,7 +5029,7 @@ def _validate_android_attestation_certificate_chain(
 
         _validate_android_attestation_certificate_time_profile(
             certificates,
-            evaluation_time_ms=time.time_ns() // 1_000_000,
+            evaluation_time_ms=evaluation_time_ms,
         )
 
         with tempfile.TemporaryDirectory(prefix="iroha-android-attestation-") as temp:

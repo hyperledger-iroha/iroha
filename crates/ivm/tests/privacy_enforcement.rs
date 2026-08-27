@@ -1203,6 +1203,45 @@ fn disabling_zk_mode_scrubs_private_stack_spills() {
     assert!(!vm.registers.tag(7));
 }
 #[test]
+fn disabling_zk_mode_discards_private_trace_and_write_history() {
+    const PRIVATE_VALUE: u64 = 0xCAFE_BABE_DEAD_BEEF;
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_zk_trace_enabled(true);
+    vm.set_trace_mode(ivm::TraceMode::DeltaRegisters);
+    vm.load_program(&private_store_then(encoding::wide::encode_halt()))
+        .expect("load private trace fixture");
+    vm.set_register(1, Memory::STACK_START);
+    vm.set_register(2, PRIVATE_VALUE);
+    vm.registers.set_tag(2, true);
+    vm.run().expect("record private trace fixture");
+
+    assert!(
+        vm.register_trace()
+            .iter()
+            .any(|state| state.gpr[2] == PRIVATE_VALUE)
+    );
+    assert!(vm.register_log().iter().any(|event| match event {
+        ivm::zk::RegEvent::Read { value, .. } | ivm::zk::RegEvent::Write { value, .. } => {
+            *value == PRIVATE_VALUE
+        }
+    }));
+    assert!(vm.memory.write_log().iter().any(|entry| {
+        entry
+            .bytes
+            .windows(8)
+            .any(|bytes| bytes == PRIVATE_VALUE.to_le_bytes().as_slice())
+    }));
+
+    vm.set_zk_mode(false);
+
+    assert!(vm.register_trace().is_empty());
+    assert!(vm.register_log().is_empty());
+    assert!(vm.memory_log().is_empty());
+    assert!(vm.delta_register_trace().is_empty());
+    assert!(vm.step_log().is_empty());
+    assert!(vm.memory.write_log().is_empty());
+}
+#[test]
 fn raw_code_load_scrubs_private_registers_and_preserves_public_arguments() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_zk_mode(true);
@@ -1250,10 +1289,16 @@ fn non_zk_run_rejects_injected_private_register_state() {
 fn runtime_template_restores_private_stack_tags_with_their_bytes() {
     let mut vm = vm_with_private_stack_word();
     let template = vm.runtime_template();
-    vm.store_u64(Memory::STACK_START, 0).unwrap();
+    vm.set_zk_mode(false);
+    assert!(!vm.zk_mode_enabled());
     vm.reset_from_runtime_template(&template)
         .expect("private-memory template geometry must match");
+    assert!(
+        vm.zk_mode_enabled(),
+        "a private template must restore its ZK execution mode"
+    );
     vm.run().unwrap();
     assert_eq!(vm.register(3), 0xCAFE_BABE_DEAD_BEEF);
     assert!(vm.registers.tag(3));
+    assert_eq!(vm.ensure_public_register(3), Err(VMError::PrivacyViolation));
 }

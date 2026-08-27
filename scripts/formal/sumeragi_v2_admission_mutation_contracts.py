@@ -205,7 +205,7 @@ CERTIFIED_RESPONSE_REGISTRATION_RUNNER = (
 )
 CERTIFIED_RESPONSE_REGISTRATION_SHA256 = {
     "SumeragiV2CertifiedResponseRegistrationMutation.tla": (
-        "748ba311a119e3c925f22474a16f04df554c4d5d91be57fa4fb6dbe1e01e923e"
+        "a7b8de81fad0d7351f2596eb18b8c0ccdaa793082dcf3de85bd9420814803021"
     ),
     "certified_response_registration_duplicate_fixed.cfg": (
         "a8fb966b97bc7c4398a8ed49f23417a82369252802fe6b8ce1c4b28b886d3d71"

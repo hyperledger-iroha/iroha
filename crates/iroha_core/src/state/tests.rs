@@ -172,6 +172,32 @@ fn blank_state() -> State {
         LiveQueryStore::start_test(),
     )
 }
+state_test! { sync internal_event_publication_preserves_internal_order_without_external_retention
+    let state = blank_test_state();
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    let public_domain = DomainId::try_new("public_event", "universal").expect("domain id");
+    let internal_domain = DomainId::try_new("internal_event", "universal").expect("domain id");
+
+    transaction
+        .world
+        .emit_events(Some(data_pre::DomainEvent::Deleted(public_domain.clone())));
+    transaction
+        .world
+        .emit_internal_events(Some(data_pre::DomainEvent::Deleted(internal_domain.clone())));
+
+    assert_eq!(transaction.world.external_event_buf.len(), 1);
+    assert_eq!(transaction.world.internal_event_buf.len(), 2);
+    assert!(matches!(
+        transaction.world.internal_event_buf[0].as_ref(),
+        DataEvent::Domain(data_pre::DomainEvent::Deleted(domain)) if domain == &public_domain
+    ));
+    assert!(matches!(
+        transaction.world.internal_event_buf[1].as_ref(),
+        DataEvent::Domain(data_pre::DomainEvent::Deleted(domain)) if domain == &internal_domain
+    ));
+}
 macro_rules! autoscale_state_with_add_plan {
     ($state:ident, $add_plan:ident) => {
         let mut $state = blank_test_state();
@@ -1455,6 +1481,9 @@ fn set_sccp_route_revision_for_testing(
             unreachable!("state helper constructs EVM routes")
         }
         iroha_data_model::bridge::SccpSourceEmitterV1::Solana(_) => {
+            unreachable!("state helper constructs EVM routes")
+        }
+        iroha_data_model::bridge::SccpSourceEmitterV1::Ton(_) => {
             unreachable!("state helper constructs EVM routes")
         }
     }
@@ -18763,10 +18792,8 @@ state_test! { sync set_nexus_prunes_removed_dataspace_permissions_from_accounts_
     state
         .set_nexus(dataspace_retirement_nexus!(retained retained))
         .expect("retire dataspace");
-    let direct = state
-        .world
-        .account_permissions
-        .view()
+    let account_permissions = state.world.account_permissions.view();
+    let direct = account_permissions
         .get(&ALICE_ID)
         .expect("retained direct permission");
     assert!(direct.contains(&retained_read));
@@ -32129,11 +32156,35 @@ state_test! { sync zk_policy_hash_tracks_every_sccp_resource_limit
         core::num::NonZeroU32::new(526_853).expect("526,853 is nonzero")
     );
     assert_field_bound!(
+        max_ed25519_signature_checks_per_transaction,
+        core::num::NonZeroU32::new(65_535).expect("65,535 is nonzero")
+    );
+    assert_field_bound!(
+        max_ed25519_signature_checks_per_block,
+        core::num::NonZeroU32::new(262_145).expect("262,145 is nonzero")
+    );
+    assert_field_bound!(
+        max_ed25519_validator_key_checks_per_transaction,
+        core::num::NonZeroU32::new(198_655).expect("198,655 is nonzero")
+    );
+    assert_field_bound!(
+        max_ed25519_validator_key_checks_per_block,
+        core::num::NonZeroU32::new(794_625).expect("794,625 is nonzero")
+    );
+    assert_field_bound!(
         max_bn254_pairing_checks_per_transaction,
         core::num::NonZeroU32::new(2).expect("two is nonzero")
     );
     assert_field_bound!(
         max_bn254_pairing_checks_per_block,
+        core::num::NonZeroU32::new(5).expect("five is nonzero")
+    );
+    assert_field_bound!(
+        max_bls12_381_pairing_checks_per_transaction,
+        core::num::NonZeroU32::new(2).expect("two is nonzero")
+    );
+    assert_field_bound!(
+        max_bls12_381_pairing_checks_per_block,
         core::num::NonZeroU32::new(5).expect("five is nonzero")
     );
 }
@@ -32163,14 +32214,20 @@ fn set_uniform_sccp_test_limits(
     limits.max_bls_aggregate_checks_per_block = block_count;
     limits.max_bls_signer_contributions_per_transaction = transaction_count;
     limits.max_bls_signer_contributions_per_block = block_count;
+    limits.max_ed25519_signature_checks_per_transaction = transaction_count;
+    limits.max_ed25519_signature_checks_per_block = block_count;
+    limits.max_ed25519_validator_key_checks_per_transaction = transaction_count;
+    limits.max_ed25519_validator_key_checks_per_block = block_count;
     limits.max_bn254_pairing_checks_per_transaction = transaction_count;
     limits.max_bn254_pairing_checks_per_block = block_count;
+    limits.max_bls12_381_pairing_checks_per_transaction = transaction_count;
+    limits.max_bls12_381_pairing_checks_per_block = block_count;
 }
 state_test! { sync sccp_verifier_work_accepts_every_exact_boundary_and_commits_atomically
     let state = blank_state();
     let block = new_dummy_block();
     let mut state_block = state.block(block.as_ref().header());
-    let_row! { expected = SccpVerifierWorkV1 { proofs: 1, proof_bytes: 1, native_headers: 1, ethereum_light_client_updates: 1, native_header_bytes: 1, secp256k1_recoveries: 1, bls_aggregate_checks: 1, bls_signer_contributions: 1, bn254_pairing_checks: 1, } };
+    let_row! { expected = SccpVerifierWorkV1 { proofs: 1, proof_bytes: 1, native_headers: 1, ethereum_light_client_updates: 1, native_header_bytes: 1, secp256k1_recoveries: 1, bls_aggregate_checks: 1, bls_signer_contributions: 1, ed25519_signature_checks: 1, ed25519_validator_key_checks: 1, bn254_pairing_checks: 1, bls12_381_pairing_checks: 1, } };
     {
         let mut transaction = state_block.transaction();
         set_uniform_sccp_test_limits(&mut transaction.zk.sccp, 1, 1);
@@ -32287,9 +32344,27 @@ state_test! { sync sccp_verifier_work_rejects_every_transaction_limit_without_pa
         NonZeroU32
     );
     assert_work_limit!(
+        ed25519_signature_checks,
+        max_ed25519_signature_checks_per_transaction,
+        "Ed25519 signature checks",
+        NonZeroU32
+    );
+    assert_work_limit!(
+        ed25519_validator_key_checks,
+        max_ed25519_validator_key_checks_per_transaction,
+        "Ed25519 validator-key checks",
+        NonZeroU32
+    );
+    assert_work_limit!(
         bn254_pairing_checks,
         max_bn254_pairing_checks_per_transaction,
         "BN254 pairing checks",
+        NonZeroU32
+    );
+    assert_work_limit!(
+        bls12_381_pairing_checks,
+        max_bls12_381_pairing_checks_per_transaction,
+        "BLS12-381 pairing checks",
         NonZeroU32
     );
 }
@@ -32370,9 +32445,27 @@ fn sccp_verifier_work_rejects_every_block_limit_and_abandoned_transactions_do_no
         NonZeroU32
     );
     assert_block_work_limit!(
+        ed25519_signature_checks,
+        max_ed25519_signature_checks_per_block,
+        "Ed25519 signature checks",
+        NonZeroU32
+    );
+    assert_block_work_limit!(
+        ed25519_validator_key_checks,
+        max_ed25519_validator_key_checks_per_block,
+        "Ed25519 validator-key checks",
+        NonZeroU32
+    );
+    assert_block_work_limit!(
         bn254_pairing_checks,
         max_bn254_pairing_checks_per_block,
         "BN254 pairing checks",
+        NonZeroU32
+    );
+    assert_block_work_limit!(
+        bls12_381_pairing_checks,
+        max_bls12_381_pairing_checks_per_block,
+        "BLS12-381 pairing checks",
         NonZeroU32
     );
 }

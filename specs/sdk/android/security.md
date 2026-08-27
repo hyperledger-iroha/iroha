@@ -40,15 +40,14 @@ the weekly AND2/AND6 governance sync.
 ## 3. Attestation Report Pipeline
 
 1. **Capture**
-   - Run `scripts/android_keystore_attestation.sh --bundle-dir artifacts/android/attestation/<fleet_tag>/<date> --alias <alias> --challenge-hex <challenge> --revocation-snapshot <capture>/android-sdk-revocation-snapshot-v1.txt --revocation-snapshot-sha256 <separately-trusted-governance-commitment> --evaluation-time-ms <ms>` on each device. Generate the canonical snapshot with `scripts/capture_android_attestation_status.py`, adding reviewed TBS digests there; do not reconstruct its fields at the harness boundary or obtain the commitment from the same untrusted snapshot path.
-   - Follow the bundle layout defined in
-     `readiness/android_strongbox_attestation_bundle.md` (`chain.pem`,
-     `challenge.hex`, `alias.txt`, `result.json`, optional `trust_root_*.pem`).
+   - Run `scripts/android_keystore_attestation.sh --bundle-dir artifacts/android/attestation/<fleet_tag>/<date> --trust-root <governed-root.pem> --alias <trusted-alias> --challenge-hex <trusted-challenge> --expected-leaf-spki-sha256 <trusted-digest> --revocation-snapshot <capture>/android-sdk-revocation-snapshot-v1.txt --revocation-snapshot-sha256 <separately-trusted-governance-commitment> --evaluation-time-ms <ms>` on each device. Generate the canonical snapshot with `scripts/capture_android_attestation_status.py`, adding reviewed TBS digests there; do not reconstruct its fields at the harness boundary or obtain any expectation from the untrusted bundle.
+   - Keep the submitted evidence (`chain.pem`, `result.json`, and optional notes)
+     separate from the authenticated expectations inventory (alias, challenge,
+     leaf-SPKI digest, trust roots, and snapshot commitment).
    - Note the `fleet_tag` from `android_strongbox_device_matrix.md`; this value
      is referenced by CI and partner playbooks.
 2. **Verification**
-   - `scripts/android_strongbox_attestation_ci.sh --bundle-dir ...` is the
-     offline-friendly guard used in Buildkite. It validates:
+   - `scripts/android_strongbox_attestation_ci.sh --bundles-root ... --expectations-root ... --trust-root ...` is the offline-friendly guard used in Buildkite. The expectations tree mirrors bundle paths and is authenticated independently. It validates:
      - Certificate chain rooted in the vendor trust anchor.
      - Mandatory challenge binding plus certificate validity at the explicit evaluation time.
      - Freshness of the governed offline status snapshot and serial/TBS-hash revocation for the full chain and configured anchors.
@@ -60,7 +59,7 @@ the weekly AND2/AND6 governance sync.
    - Archive bundles beneath `artifacts/android/attestation/` and attach the
      directory SHA256 to the weekly AND2 update in `status.md`.
    - Include the most recent digest + link in
-     `readiness/android_strongbox_attestation_bundle.md`.
+     `strongbox_attestation_harness_plan.md`.
    - During releases, copy the relevant bundles into the compliance evidence set
      tracked by `specs/compliance/android/and6_compliance_checklist.md`
      and record the digest inside `specs/compliance/android/evidence_log.csv`.
@@ -137,7 +136,7 @@ the weekly AND2/AND6 governance sync.
 
 ## 8. Related References
 
-- `readiness/android_strongbox_attestation_bundle.md` — bundle layout and naming.
+- `strongbox_attestation_harness_plan.md` — bundle layout and naming.
 - `readiness/android_strongbox_device_matrix.md` — hardware coverage + owners.
 - `readiness/android_strongbox_attestation_run_log.md` — tamper-proof logbook.
 - `readiness/android_strongbox_capture_status.md` — progress checklist + TODOs.

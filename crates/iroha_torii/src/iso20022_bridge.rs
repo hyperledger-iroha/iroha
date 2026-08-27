@@ -695,6 +695,10 @@ impl IsoMessageRecord {
             && self.transaction_hash.is_some()
             && !self.ledger_tx_queued
     }
+    fn retention_protected(&self) -> bool {
+        self.state == IsoMessageState::Pending
+            || (self.ledger_tx_queued && self.settled_at.is_none())
+    }
     fn try_transition(
         &mut self,
         update: impl FnOnce(&mut Self),
@@ -1628,11 +1632,14 @@ impl Iso20022BridgeRuntime {
         let now = Instant::now();
         self.prune_expired(now);
         if let Some(mut existing) = self.records.get_mut(message_id) {
-            if existing.queue_outcome_unknown() {
+            if existing.retention_protected() {
                 return false;
             }
             let expired = now.saturating_duration_since(existing.last_seen) > self.dedupe_ttl;
-            if expired || existing.state == IsoMessageState::Rejected {
+            let retryable_rejection = existing.state == IsoMessageState::Rejected
+                && !existing.ledger_tx_queued
+                && existing.transaction_hash.is_none();
+            if expired || retryable_rejection {
                 if existing.metadata != metadata || self.metadata_conflicts(message_id, &metadata) {
                     return false;
                 }
@@ -1654,7 +1661,7 @@ impl Iso20022BridgeRuntime {
                 && self
                     .records
                     .iter()
-                    .all(|record| record.queue_outcome_unknown())
+                    .all(|record| record.retention_protected())
             {
                 return false;
             }
@@ -1674,8 +1681,12 @@ impl Iso20022BridgeRuntime {
         }
         self.remove_persisted_message(message_id);
     }
-    /// Record supplementary ledger/account context attached to the message.
-    pub fn update_message_context(&self, message_id: &str, context: IsoMessageContext) {
+    /// Record supplementary ledger/account context attached to an admitted message.
+    ///
+    /// Returns `false` if the reservation no longer exists or the updated record
+    /// cannot be persisted. Missing reservations are never recreated because
+    /// doing so would detach the message from its semantic idempotency indexes.
+    pub fn update_message_context(&self, message_id: &str, context: IsoMessageContext) -> bool {
         let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         if let Some(mut existing) = self.records.get_mut(message_id) {
@@ -1683,11 +1694,9 @@ impl Iso20022BridgeRuntime {
             existing.updated_at = SystemTime::now();
             existing.context = context;
         } else {
-            let mut record = IsoMessageRecord::pending(now);
-            record.context = context;
-            self.records.insert(message_id.to_owned(), record);
+            return false;
         }
-        self.persist_message(message_id);
+        self.persist_message(message_id)
     }
     /// Mark the provided message as queued for ledger execution.
     ///
@@ -1724,6 +1733,9 @@ impl Iso20022BridgeRuntime {
     /// without reopening the ISO message identifier for a replacement transfer.
     pub fn bind_transaction_hash(&self, message_id: &str, transaction_hash: &str) -> bool {
         let _state_guard = self.state_lock.lock();
+        if self.store_dir.is_none() {
+            return false;
+        }
         if self
             .tx_hash_index
             .get(transaction_hash)
@@ -1941,7 +1953,9 @@ impl Iso20022BridgeRuntime {
         let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
-            if existing.is_rejected() {
+            if existing.is_rejected()
+                && (!existing.ledger_tx_queued || existing.transaction_hash.is_none())
+            {
                 return false;
             }
             if existing.is_settled() {
@@ -2218,7 +2232,10 @@ impl Iso20022BridgeRuntime {
             if existing.is_settled() {
                 return false;
             }
-            if existing.is_rejected() {
+            if existing.is_rejected()
+                && !existing.ledger_tx_queued
+                && existing.transaction_hash.is_none()
+            {
                 return true;
             }
             let old_hash = existing.transaction_hash.clone();
@@ -2382,7 +2399,9 @@ impl Iso20022BridgeRuntime {
                 })?;
         }
         if let Some(context) = lifecycle_context(message_type, parsed) {
-            self.update_message_context(message_id, context);
+            if !self.update_message_context(message_id, context) {
+                return Err(MsgError::ValidationFailed);
+            }
         }
         self.mark_lifecycle_accepted(
             message_id,
@@ -2771,26 +2790,26 @@ impl Iso20022BridgeRuntime {
         if !lifecycle_update_matches_original(message_type, original_message_type.as_deref()) {
             return Ok("ignored_message_family_mismatch");
         }
-        if original_state == IsoMessageState::Rejected || settled {
+        if original_state == IsoMessageState::Rejected || (settled && message_type != "pacs.004") {
             return Ok("ignored_stale_transition");
         }
         if original_state == IsoMessageState::Pending && !original_queued {
             return Ok("ignored_in_flight");
         }
         if message_type == "pacs.004" {
+            if !settled {
+                return Ok("ignored_unsettled_return");
+            }
             let detail =
                 Some(detail.unwrap_or_else(|| "payment returned by inbound pacs.004".to_owned()));
             let reason_code = reason_code
                 .or(Some("PRTRY:PAYMENT_RETURN"))
                 .map(ToOwned::to_owned);
             self.try_transition_existing(original_id, |record| {
-                record.transaction_hash = None;
                 record.last_seen = Instant::now();
                 record.updated_at = SystemTime::now();
                 record.state = IsoMessageState::Rejected;
                 record.detail = detail;
-                record.ledger_tx_queued = false;
-                record.settled_at = None;
                 record.hold_reason_code = None;
                 record.change_reason_codes.clear();
                 record.rejection_reason_code = reason_code;
@@ -2839,12 +2858,10 @@ impl Iso20022BridgeRuntime {
                     Some(detail.unwrap_or_else(|| "ISO 20022 lifecycle rejection".to_owned()));
                 let reason_code = reason_code.or(Some("RJCT")).map(ToOwned::to_owned);
                 self.try_transition_existing(original_id, |record| {
-                    record.transaction_hash = None;
                     record.last_seen = Instant::now();
                     record.updated_at = SystemTime::now();
                     record.state = IsoMessageState::Rejected;
                     record.detail = detail;
-                    record.ledger_tx_queued = false;
                     record.settled_at = None;
                     record.hold_reason_code = None;
                     record.change_reason_codes.clear();
@@ -2857,6 +2874,8 @@ impl Iso20022BridgeRuntime {
                 self.try_transition_existing(original_id, |record| {
                     record.last_seen = Instant::now();
                     record.updated_at = SystemTime::now();
+                    record.state = IsoMessageState::Pending;
+                    record.settled_at = None;
                     record.rejection_reason_code = None;
                     record.set_hold_reason(reason_code);
                 })?;
@@ -2929,7 +2948,7 @@ impl Iso20022BridgeRuntime {
             .records
             .iter()
             .filter_map(|entry| {
-                (!entry.queue_outcome_unknown()
+                (!entry.retention_protected()
                     && now.saturating_duration_since(entry.last_seen) > ttl)
                     .then(|| entry.key().clone())
             })
@@ -3035,7 +3054,7 @@ impl Iso20022BridgeRuntime {
                     {
                         continue;
                     }
-                    if !record.queue_outcome_unknown()
+                    if !record.retention_protected()
                         && !self.store_retention.is_zero()
                         && now
                             .duration_since(record.updated_at)
@@ -3047,11 +3066,11 @@ impl Iso20022BridgeRuntime {
                     // This is the same stable order used by live compaction: retain the
                     // greatest N `(updated_at_ms, message_id)` keys without ever holding N + 1.
                     let retention_key = (system_time_to_ms(record.updated_at), message_id);
-                    if record.queue_outcome_unknown() {
+                    if record.retention_protected() {
                         retained.insert(retention_key, (path, record));
                         while retained.len() > self.store_max_records {
                             let evictable = retained.iter().find_map(|(key, (_, candidate))| {
-                                (!candidate.queue_outcome_unknown()).then(|| key.clone())
+                                (!candidate.retention_protected()).then(|| key.clone())
                             });
                             let Some(evictable) = evictable else {
                                 break;
@@ -3066,7 +3085,7 @@ impl Iso20022BridgeRuntime {
                         retained.insert(retention_key, (path, record));
                     } else if let Some(oldest) =
                         retained.iter().find_map(|(key, (_, candidate))| {
-                            (!candidate.queue_outcome_unknown()).then(|| key.clone())
+                            (!candidate.retention_protected()).then(|| key.clone())
                         })
                         && retention_key > oldest
                     {
@@ -3213,7 +3232,7 @@ impl Iso20022BridgeRuntime {
         self.records
             .iter()
             .filter(|entry| {
-                !entry.value().queue_outcome_unknown()
+                !entry.value().retention_protected()
                     && now
                         .duration_since(entry.value().updated_at)
                         .is_ok_and(|age| age > self.store_retention)
@@ -3228,7 +3247,7 @@ impl Iso20022BridgeRuntime {
     fn oldest_record_message_id(&self) -> Option<String> {
         self.records
             .iter()
-            .filter(|entry| !entry.value().queue_outcome_unknown())
+            .filter(|entry| !entry.value().retention_protected())
             .min_by(|left, right| {
                 system_time_to_ms(left.value().updated_at)
                     .cmp(&system_time_to_ms(right.value().updated_at))

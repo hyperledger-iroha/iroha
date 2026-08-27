@@ -999,6 +999,7 @@ fn durable_validate_reattach_rejects_an_inflight_authority_upgrade() {
         &fixture.manifest,
         &validate.durable_receipt,
         &upgraded_validate,
+        &fixture.verified.context().roster[0].validator,
     )
     .expect("rebind certified Validate replay to upgraded in-flight authority");
     validate.pending = upgraded_validate;

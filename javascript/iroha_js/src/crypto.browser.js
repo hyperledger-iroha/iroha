@@ -156,11 +156,10 @@ function unsupported(operation) {
 
 function cryptoAlgorithmAliasKey(value) {
   const raw = String(value);
-  const trimmed = raw.trim();
-  if (!/^[\x20-\x7e]+$/.test(trimmed)) {
+  if (!/^[A-Za-z0-9_-]+$/.test(raw)) {
     throw new Error(`unsupported crypto algorithm: ${raw}`);
   }
-  return trimmed.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return raw.toLowerCase().replace(/[-_]/g, "");
 }
 
 export function supportedCryptoAlgorithms() {
@@ -168,7 +167,7 @@ export function supportedCryptoAlgorithms() {
 }
 
 export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) {
-  if (algorithm === undefined || algorithm === null || algorithm === "") {
+  if (algorithm === undefined || algorithm === null) {
     return CRYPTO_ALGORITHMS.ED25519;
   }
   const normalized = CRYPTO_ALGORITHM_ALIASES.get(cryptoAlgorithmAliasKey(algorithm));

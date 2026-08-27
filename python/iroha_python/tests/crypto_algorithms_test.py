@@ -401,6 +401,26 @@ def test_algorithm_labels_reject_control_and_confusable_native_inputs(label: str
         normalize_crypto_algorithm(label)
 
 
+@pytest.mark.parametrize(
+    "label",
+    [
+        "ml dsa",
+        "ml.dsa",
+        "ml/dsa",
+        "ml@dsa",
+        "ml#dsa",
+        "\u212ad25519",
+        "ML-DSA-44",
+        "ML_DSA_87",
+    ],
+)
+def test_algorithm_labels_reject_punctuation_confusables_and_other_mldsa_suites(
+    label: str,
+) -> None:
+    with pytest.raises(ValueError, match="unsupported crypto algorithm"):
+        normalize_crypto_algorithm(label)
+
+
 def test_asset_definition_id_derivation_is_one_way() -> None:
     asset = crypto_module.AssetDefinitionId.from_domain_and_name("boi.is", "ds")
 

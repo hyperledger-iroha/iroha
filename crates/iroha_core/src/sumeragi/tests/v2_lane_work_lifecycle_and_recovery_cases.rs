@@ -848,11 +848,46 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
         "a lane must not emit NewView before its independent deadline"
     );
     assert!(adapter.drain_effects(usize::MAX).is_empty());
+    let effect_capacity = adapter.limits.effect_capacity;
+    adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+    let blocked_peer = payload
+        .origin_proposal
+        .descriptor
+        .validator_set
+        .iter()
+        .find(|peer| *peer != &adapter.local_peer)
+        .expect("autonomous committee has a remote validator")
+        .clone();
+    assert!(adapter.push_effect(V2LaneWorkEffect::PostLaneBlock {
+        peer: blocked_peer,
+        message: BlockMessage::LaneBlockProposal(payload.origin_proposal.clone()),
+    }));
     adapter
         .schedule_autonomous_new_view_timeouts(started_at + timeout, 0, timeout)
         .expect("deadline NewView tick");
-    let first_fanout = adapter
-        .drain_effects(usize::MAX)
+    let retained_blocker = adapter
+        .drain_effects(1)
+        .pop()
+        .expect("the ordinary saturated-queue owner remains first");
+    assert!(matches!(
+        &retained_blocker,
+        V2LaneWorkEffect::PostLaneBlock {
+            message: BlockMessage::LaneBlockProposal(_),
+            ..
+        }
+    ));
+    assert!(
+        adapter.requeue_effect(retained_blocker),
+        "source backpressure must restore the ordinary owner beside the NewView reserve"
+    );
+    let deadline_effects = adapter.drain_effects(usize::MAX);
+    assert_eq!(
+        deadline_effects.len(),
+        2,
+        "one autonomous pacemaker occurrence must escape a full ordinary effect queue"
+    );
+    adapter.limits.effect_capacity = effect_capacity;
+    let first_fanout = deadline_effects
         .into_iter()
         .filter_map(|effect| match effect {
             V2LaneWorkEffect::PostLaneBlock {

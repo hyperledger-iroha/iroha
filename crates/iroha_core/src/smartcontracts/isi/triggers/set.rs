@@ -4,7 +4,7 @@
 //! The point of the idea is to create an ordering (or hash function) which maps the event filter
 //! and the event that triggers it to the same approximate location in the hierarchy, thus using
 //! Binary search trees (common lisp) or hash tables (racket) to quickly trigger hooks.
-use super::trigger_is_enabled;
+use super::{trigger_is_enabled, trigger_was_registered_before_block};
 use crate::smartcontracts::isi::triggers::specialized::{
     LoadedAction, LoadedActionTrait, SpecializedAction, SpecializedTrigger, TimeTriggerRetryState,
 };
@@ -43,6 +43,44 @@ pub enum Error {
 }
 /// Result type for [`Set`] operations.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
+/// Revalidate a time-trigger action immediately before invocation.
+pub(crate) fn time_trigger_action_is_due(
+    action: &LoadedAction<TimeEventFilter>,
+    event: &TimeEvent,
+    current_block_height: u64,
+    current_block_time_ms: u64,
+) -> bool {
+    if !trigger_is_enabled(action.metadata())
+        || action.repeats.is_depleted()
+        || !trigger_was_registered_before_block(action.metadata(), current_block_height)
+    {
+        return false;
+    }
+    action.retry_state.map_or_else(
+        || action.filter.count_matches(event) > 0,
+        |retry_state| current_block_time_ms >= retry_state.next_retry_at_ms,
+    )
+}
+/// Revalidate a pipeline-trigger action immediately before invocation.
+pub(crate) fn pipeline_trigger_action_matches(
+    action: &LoadedAction<PipelineEventFilterBox>,
+    event: &PipelineEventBox,
+    current_block_height: u64,
+) -> bool {
+    trigger_is_enabled(action.metadata())
+        && !action.repeats.is_depleted()
+        && trigger_was_registered_before_block(action.metadata(), current_block_height)
+        && action.filter.matches(event)
+}
+/// Revalidate a data-trigger action against its captured event.
+pub(crate) fn data_trigger_action_matches(
+    action: &LoadedAction<DataEventFilter>,
+    event: &iroha_data_model::events::data::DataEvent,
+) -> bool {
+    trigger_is_enabled(action.metadata())
+        && !action.repeats.is_depleted()
+        && action.filter.matches(event)
+}
 struct BorrowedEnumVariant<'a, T> {
     discriminant: u32,
     value: &'a dyn norito::core::NoritoSerialize,
@@ -439,6 +477,12 @@ mod merge_write_set_tests {
 }
 /// Trigger set for transaction's aggregated changes
 pub struct SetTransaction<'block, 'set> {
+    /// Per-ID registration generation within this transaction overlay.
+    ///
+    /// This is intentionally ephemeral: it distinguishes an ID that was
+    /// removed and re-registered after a match was materialized without
+    /// changing the persisted trigger wire format.
+    registration_generations: BTreeMap<TriggerId, u64>,
     /// Triggers using [`DataEventFilter`]
     data_triggers: StorageTransaction<'block, 'set, TriggerId, LoadedAction<DataEventFilter>>,
     /// Triggers using [`PipelineEventFilterBox`]
@@ -930,17 +974,6 @@ pub trait SetReadOnly {
         current_block_time_ms: u64,
         max_invocations: usize,
     ) -> impl Iterator<Item = TriggerId> + '_ {
-        let key_height = "__registered_block_height".parse::<Name>().ok();
-        let is_eligible = |action: &LoadedAction<TimeEventFilter>| {
-            if !trigger_is_enabled(action.metadata()) || action.repeats.is_depleted() {
-                return false;
-            }
-            let registered_height = key_height
-                .as_ref()
-                .and_then(|key| action.metadata().get(key))
-                .and_then(|json| json.try_into_any_norito::<u64>().ok());
-            registered_height.is_some_and(|height| height != current_block_height)
-        };
         // Retry invocations retain their existing priority over ordinary
         // schedule matches, but both categories share one consensus resource
         // cap so an elapsed interval can never allocate an unbounded clone list.
@@ -949,13 +982,15 @@ pub trait SetReadOnly {
             if due_retries.len() == max_invocations {
                 break;
             }
-            if !is_eligible(action) {
+            if !time_trigger_action_is_due(
+                action,
+                &event,
+                current_block_height,
+                current_block_time_ms,
+            ) {
                 continue;
             }
-            if action
-                .retry_state
-                .is_some_and(|retry_state| current_block_time_ms >= retry_state.next_retry_at_ms)
-            {
+            if action.retry_state.is_some() {
                 due_retries.push(id.clone());
             }
         }
@@ -965,7 +1000,13 @@ pub trait SetReadOnly {
             if scheduled.len() == scheduled_capacity {
                 break;
             }
-            if !is_eligible(action) || action.retry_state.is_some() {
+            if !time_trigger_action_is_due(
+                action,
+                &event,
+                current_block_height,
+                current_block_time_ms,
+            ) || action.retry_state.is_some()
+            {
                 continue;
             }
             let mut count = action.filter.count_matches(&event);
@@ -990,18 +1031,11 @@ pub trait SetReadOnly {
         event: &'a PipelineEventBox,
         current_block_height: u64,
     ) -> impl Iterator<Item = TriggerId> + 'a {
-        let key_height = "__registered_block_height".parse::<Name>().ok();
         self.pipeline_triggers()
             .iter()
-            .filter(|(_, action)| Set::action_is_active(action))
             .filter(move |(_, action)| {
-                let registered_height = key_height
-                    .as_ref()
-                    .and_then(|key| action.metadata().get(key))
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                registered_height.is_some_and(|height| height < current_block_height)
+                pipeline_trigger_action_matches(action, event, current_block_height)
             })
-            .filter(move |(_, action)| action.filter.matches(event))
             .map(|(id, _)| id.clone())
     }
     /// Get [`ExecutableRef`] for given [`TriggerId`]. Returns `None` if `id` is not in the set.
@@ -1215,6 +1249,7 @@ impl<'set> SetBlock<'set> {
     /// Create struct to apply transaction's changes
     pub fn transaction(&mut self) -> SetTransaction<'_, 'set> {
         SetTransaction {
+            registration_generations: BTreeMap::new(),
             data_triggers: self.data_triggers.transaction(),
             pipeline_triggers: self.pipeline_triggers.transaction(),
             time_triggers: self.time_triggers.transaction(),
@@ -1272,6 +1307,13 @@ impl TriggeringEventFilter for PipelineEventFilterBox {}
 impl TriggeringEventFilter for TimeEventFilter {}
 impl TriggeringEventFilter for ExecuteTriggerEventFilter {}
 impl<'block, 'set> SetTransaction<'block, 'set> {
+    /// Current transaction-local registration generation for `id`.
+    ///
+    /// IDs inherited from the parent block have generation zero. Every
+    /// successful registration in this overlay advances the generation.
+    pub(crate) fn registration_generation(&self, id: &TriggerId) -> u64 {
+        self.registration_generations.get(id).copied().unwrap_or(0)
+    }
     fn set_active_id(
         active_ids: &mut ActiveTriggerIdStoreTransaction<'block, 'set>,
         id: &TriggerId,
@@ -1512,6 +1554,10 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         );
         self.ids.insert(trigger_id.clone(), event_type);
         self.set_active_id_by_event_type(event_type, &trigger_id, active);
+        let generation = self.registration_generations.entry(trigger_id).or_insert(0);
+        *generation = generation
+            .checked_add(1)
+            .expect("trigger registration generation must not overflow within one transaction");
         true
     }
     /// Apply `f` to the trigger identified by `id`.

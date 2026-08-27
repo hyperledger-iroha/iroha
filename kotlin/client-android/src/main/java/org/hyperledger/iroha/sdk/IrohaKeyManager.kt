@@ -234,9 +234,9 @@ class IrohaKeyManager private constructor(
      * Verifies attestation material produced by hardware-backed providers for `alias`.
      *
      * The first provider that returns a non-empty attestation result supplies the certificate
-     * material, which this manager independently re-verifies and binds to the provider's currently
-     * loaded alias key before returning it. Providers that do not expose attestation simply return
-     * null.
+     * material, which this manager independently re-verifies and binds to every configured
+     * provider's currently loaded key for that alias before returning it. Conflicting alias keys
+     * fail closed. Providers that do not expose attestation simply return null.
      *
      * @param alias alias whose attestation should be verified
      * @param verifier verifier configured with trusted roots and policy expectations
@@ -308,6 +308,7 @@ class IrohaKeyManager private constructor(
                             "Attested leaf public key does not match the alias key"
                         )
                     }
+                    ensureAliasBindingAcrossProviders(alias, attestedPublicKey)
                     keystoreTelemetry.recordResult(
                         alias,
                         provider.metadata(),
@@ -325,7 +326,9 @@ class IrohaKeyManager private constructor(
     }
 
     /**
-     * Requests fresh attestation material for `alias` from the selected provider.
+     * Requests backend-generated attestation material for `alias` from the selected provider.
+     * Android Keystore cannot re-attest an existing alias; provision a new alias with a challenge
+     * in [KeyGenParameters] when fresh evidence is required.
      *
      * @param alias alias to attest
      * @param challenge attestation challenge (may be null if provider does not require it)
@@ -350,6 +353,41 @@ class IrohaKeyManager private constructor(
     /** Returns a copy of this manager that emits keystore telemetry through `telemetry`. */
     fun withTelemetry(telemetry: KeystoreTelemetryEmitter): IrohaKeyManager =
         IrohaKeyManager(providers, telemetry, signingAlgorithm)
+
+    private fun ensureAliasBindingAcrossProviders(
+        alias: String,
+        attestedPublicKey: ByteArray,
+    ) {
+        var aliasFound = false
+        for (candidate in providers) {
+            val loaded = try {
+                candidate.load(alias)
+            } catch (ex: KeyManagementException) {
+                throw AttestationVerificationException(
+                    "Failed to resolve the attested alias across configured providers",
+                    ex,
+                )
+            } catch (ex: RuntimeException) {
+                throw AttestationVerificationException(
+                    "Failed to resolve the attested alias across configured providers",
+                    ex,
+                )
+            }
+            if (loaded == null) continue
+            aliasFound = true
+            val candidatePublicKey = loaded.public?.encoded
+            if (candidatePublicKey == null ||
+                !MessageDigest.isEqual(candidatePublicKey, attestedPublicKey)
+            ) {
+                throw AttestationVerificationException(
+                    "Alias resolves to different public keys across configured providers"
+                )
+            }
+        }
+        if (!aliasFound) {
+            throw AttestationVerificationException("Attested alias key is unavailable")
+        }
+    }
 
     private fun orderedProviders(preference: KeySecurityPreference): List<KeyProvider> {
         val ordered = providers.toMutableList()

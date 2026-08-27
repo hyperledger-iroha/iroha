@@ -34,6 +34,8 @@ pub enum Command {
     Quickstart(QuickstartArgs),
     /// Register or update a Kaigi relay descriptor.
     RegisterRelay(RegisterRelayArgs),
+    /// Retire a Kaigi relay descriptor and its retained health feedback.
+    UnregisterRelay(UnregisterRelayArgs),
     /// Replace or clear the relay manifest for an existing Kaigi session.
     SetRelayManifest(SetRelayManifestArgs),
     /// Join a Kaigi session.
@@ -53,6 +55,7 @@ impl Run for Command {
             Command::Create(args) => args.run(context),
             Command::Quickstart(args) => args.run(context),
             Command::RegisterRelay(args) => args.run(context),
+            Command::UnregisterRelay(args) => args.run(context),
             Command::SetRelayManifest(args) => args.run(context),
             Command::Join(args) => args.run(context),
             Command::Leave(args) => args.run(context),
@@ -375,6 +378,21 @@ impl Run for RegisterRelayArgs {
         };
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::RegisterKaigiRelay { relay }),
+        )])
+    }
+}
+#[derive(Args, Debug)]
+pub struct UnregisterRelayArgs {
+    /// Relay account identifier whose descriptor should be retired.
+    #[arg(long, value_name = "ACCOUNT-ID")]
+    pub relay: String,
+}
+impl Run for UnregisterRelayArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let relay_id = crate::resolve_account_id(context, &self.relay)
+            .wrap_err("failed to resolve relay account")?;
+        context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
+            Box::new(iroha::data_model::isi::kaigi::UnregisterKaigiRelay { relay_id }),
         )])
     }
 }
@@ -1017,6 +1035,15 @@ mod tests {
                 assert_eq!(args.bandwidth_class, 7);
             }
             other => panic!("expected register-relay command, got {other:?}"),
+        }
+    }
+    #[test]
+    fn clap_parses_unregister_relay() {
+        match parse_command(&["unregister-relay", "--relay", PARTICIPANT_ACCOUNT]) {
+            Command::UnregisterRelay(args) => {
+                assert_eq!(args.relay, PARTICIPANT_ACCOUNT);
+            }
+            other => panic!("expected unregister-relay command, got {other:?}"),
         }
     }
     #[test]

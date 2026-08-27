@@ -173,6 +173,28 @@ impl Registers {
             });
         }
     }
+    /// Record a proof-bearing write for the current value of `idx` without
+    /// mutating the register file.
+    ///
+    /// Host callbacks execute with register logging masked so unrelated VMs
+    /// cannot inject events. The caller uses this after the callback to publish
+    /// only net changes to the VM that actually resumed execution.
+    pub(crate) fn record_write_proof(&self, idx: usize) {
+        debug_assert!(idx < 256);
+        if idx == 0 {
+            return;
+        }
+        with_reg_logger(|log| {
+            let (root, path) = self.merkle_root_and_path(idx);
+            log.record(RegEvent::Write {
+                index: idx,
+                value: self.gpr[idx],
+                tag: self.tags[idx],
+                path,
+                root,
+            });
+        });
+    }
     /// Zero every private register before clearing its privacy tag.
     ///
     /// Public registers are preserved so hosts may preload ordinary arguments
@@ -463,11 +485,9 @@ mod tests {
     #[test]
     fn logged_writes_update_only_the_changed_merkle_leaf() {
         let mut regs = Registers::new();
-        let mut log = crate::zk::RegLog::default();
+        let log = std::sync::Arc::new(parking_lot::Mutex::new(crate::zk::RegLog::default()));
         reset_register_leaf_digest_count();
-        // SAFETY: `log` remains in this stack frame and is not moved until the guard is dropped.
-        let guard =
-            unsafe { crate::zk::RegLoggerGuard::install(std::ptr::NonNull::from(&mut log)) };
+        let guard = crate::zk::RegLoggerGuard::install(Some(std::sync::Arc::clone(&log)));
 
         regs.set(7, 42);
         assert_eq!(register_leaf_digest_count(), 1);
@@ -479,6 +499,7 @@ mod tests {
         let after_tag = canonical_root_and_path(&regs, 7);
         drop(guard);
 
+        let log = log.lock();
         assert_eq!(log.events.len(), 2);
         assert_logged_event_matches(&log.events[0], &after_set);
         assert_logged_event_matches(&log.events[1], &after_tag);

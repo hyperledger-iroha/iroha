@@ -351,6 +351,9 @@ pub mod uri {
     /// URI used to fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH;
+    /// URI used to evaluate one bounded same-snapshot Hijiri validation-fee quote.
+    pub const VALIDATION_FEE_HIJIRI_QUOTE: &str =
+        crate::route_catalog::runtime_governance::VALIDATION_FEE_HIJIRI_QUOTE_PATH;
     /// URI used to read the strict public governance capability contract.
     pub const GOV_CAPABILITIES: &str =
         crate::route_catalog::runtime_governance::GOV_CAPABILITIES.path();

@@ -3852,6 +3852,7 @@ public final class HttpClientTransportTests {
                     .setMemo("QR invoice 42")
                     .setValidationFeePolicyVersion(7L)
                     .setValidationFeePolicyHash("AB".repeat(32))
+                    .setValidationFeeHijiriFeeQuoteHash(repeatText("CD", 32))
                     .setValidationFeeInstructionIndex(1L)
                     .setValidationFeeTransferEntryIndex(2L)
                     .build())
@@ -3892,6 +3893,8 @@ public final class HttpClientTransportTests {
         : "validation_fee_policy_version mismatch";
     assert "ab".repeat(32).equals(payload.get("validation_fee_policy_hash"))
         : "validation_fee_policy_hash mismatch";
+    assert repeatText("cd", 32).equals(payload.get("validation_fee_hijiri_fee_quote_hash"))
+        : "validation_fee_hijiri_fee_quote_hash mismatch";
     assert "1".equals(payload.get("validation_fee_instruction_index"))
         : "validation_fee_instruction_index mismatch";
     assert "2".equals(payload.get("validation_fee_transfer_entry_index"))
@@ -4005,6 +4008,31 @@ public final class HttpClientTransportTests {
                     .setValidationFeePolicyHash("ab".repeat(32))
                     .build()),
         "validation fee policy hash without version must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setValidationFeeHijiriFeeQuoteHash(repeatText("cd", 32))
+                    .build()),
+        "Hijiri quote hash without validation fee policy metadata must be rejected");
+    for (final String invalidHijiriQuoteHash :
+        Arrays.asList(repeatText("cd", 31), repeatText("gg", 32))) {
+      expectIllegalArgument(
+          () ->
+              HttpClientTransport.buildMultisigProposePayload(
+                  MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                      .setMultisigAccountAlias("cbdc@banka")
+                      .setSignerAccountId("alice")
+                      .addInstructionBytes(instruction)
+                      .setValidationFeePolicyVersion(1L)
+                      .setValidationFeePolicyHash(repeatText("ab", 32))
+                      .setValidationFeeHijiriFeeQuoteHash(invalidHijiriQuoteHash)
+                      .build()),
+          "Hijiri quote hash must be exact 32-byte hex");
+    }
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
@@ -6779,6 +6807,14 @@ public final class HttpClientTransportTests {
     final StringBuilder builder = new StringBuilder(bytes.length * 2);
     for (final byte b : bytes) {
       builder.append(String.format("%02X", b & 0xFF));
+    }
+    return builder.toString();
+  }
+
+  private static String repeatText(final String value, final int count) {
+    final StringBuilder builder = new StringBuilder(value.length() * count);
+    for (int index = 0; index < count; index++) {
+      builder.append(value);
     }
     return builder.toString();
   }

@@ -377,14 +377,38 @@ test("crypto algorithm labels reject unsupported and Unicode-confusable aliases"
     ["src", normalizeCryptoAlgorithm],
     ["dist", normalizeDistCryptoAlgorithm],
   ]) {
-    assert.equal(normalize("ed-25519"), "ed25519", `${label} keeps ASCII aliases`);
+    for (const [algorithm, expected] of [
+      ["ed-25519", "ed25519"],
+      ["mldsa65", "ml-dsa"],
+      ["ML-DSA-65", "ml-dsa"],
+      ["ML_DSA_65", "ml-dsa"],
+      ["ML_DSA-65", "ml-dsa"],
+      ["GOST3410-2012-512-PARAMSET-B", "gost3410-2012-512-paramset-b"],
+    ]) {
+      assert.equal(normalize(algorithm), expected, `${label} keeps ${algorithm}`);
+    }
     for (const algorithm of [
+      "",
       "unknown",
+      " ed25519",
+      "ed25519 ",
+      "\u00A0ed25519",
+      "ed25519\u00A0",
+      "\u2003ed25519",
+      "ed25519\u2003",
+      "ed 25519",
       "ed\t25519",
+      "ed.25519",
+      "ed/25519",
+      "ed@25519",
+      "ed#25519",
       "ed\u200B25519",
       "\u0435d25519",
+      "secp256\u212A1",
       "ml\uFF0Ddsa",
       "mldsa44",
+      "MLDSA44",
+      "MLDSA87",
       "ML-DSA-44",
       "ML_DSA_87",
       "Ml.DsA/44",

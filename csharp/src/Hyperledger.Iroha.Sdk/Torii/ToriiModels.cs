@@ -7219,6 +7219,24 @@ public sealed record class ToriiMultisigProposeRequest
     [JsonPropertyName("fee_payment")]
     public FeePaymentIntent FeePayment { get; init; } = null!;
 
+    [JsonPropertyName("validation_fee_policy_version")]
+    [JsonNumberHandling(JsonNumberHandling.WriteAsString)]
+    public ulong? ValidationFeePolicyVersion { get; init; }
+
+    [JsonPropertyName("validation_fee_policy_hash")]
+    public string? ValidationFeePolicyHash { get; init; }
+
+    [JsonPropertyName("validation_fee_hijiri_fee_quote_hash")]
+    public string? ValidationFeeHijiriFeeQuoteHash { get; init; }
+
+    [JsonPropertyName("validation_fee_instruction_index")]
+    [JsonNumberHandling(JsonNumberHandling.WriteAsString)]
+    public ulong? ValidationFeeInstructionIndex { get; init; }
+
+    [JsonPropertyName("validation_fee_transfer_entry_index")]
+    [JsonNumberHandling(JsonNumberHandling.WriteAsString)]
+    public ulong? ValidationFeeTransferEntryIndex { get; init; }
+
     [JsonPropertyName("instructions")]
     public IReadOnlyList<string>? Instructions
     {

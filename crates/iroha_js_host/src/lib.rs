@@ -88,7 +88,7 @@ use iroha_data_model::{
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
-        Unregister, UnregisterBox,
+        Unregister, UnregisterBox, UnregisterKaigiRelay,
         asset_transfer_control::SetAssetTransferAvailability,
         escrow::CancelAssetLock,
         governance::{
@@ -1158,23 +1158,27 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
         distid: None,
     })
 }
-fn algorithm_alias_key(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
+fn algorithm_alias_key(value: &str) -> Option<String> {
+    (!value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+    .then(|| {
+        value
+            .bytes()
+            .filter(|byte| !matches!(*byte, b'-' | b'_'))
+            .map(|byte| char::from(byte.to_ascii_lowercase()))
+            .collect()
+    })
 }
 fn parse_crypto_algorithm(value: Option<&str>) -> napi::Result<Algorithm> {
     let value = value.unwrap_or("ed25519");
-    if !value.bytes().all(|byte| (0x20..=0x7e).contains(&byte)) {
-        return Err(napi::Error::new(
+    let key = algorithm_alias_key(value).ok_or_else(|| {
+        napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported crypto algorithm: {value}"),
-        ));
-    }
-    let value = value.trim();
-    let key = algorithm_alias_key(value);
+        )
+    })?;
     let algorithm = match key.as_str() {
         "ed25519" | "ed" | "eddsa" => Algorithm::Ed25519,
         "secp256k1" | "secp" | "secpk1" => Algorithm::Secp256k1,
@@ -8834,6 +8838,19 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     let registration = RegisterKaigiRelay { relay };
                     return Ok(Box::new(registration).into_instruction_box());
                 }
+                if let Some(json::Value::Object(mut unregister_fields)) =
+                    kaigi_map.remove("UnregisterKaigiRelay")
+                {
+                    let relay_id_value = unregister_fields.remove("relay_id").ok_or_else(|| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            "UnregisterKaigiRelay.relay_id field missing",
+                        )
+                    })?;
+                    let relay_id =
+                        parse_account_id_value(relay_id_value, "UnregisterKaigiRelay.relay_id")?;
+                    return Ok(Box::new(UnregisterKaigiRelay { relay_id }).into_instruction_box());
+                }
                 if let Some(json::Value::Object(mut health_fields)) =
                     kaigi_map.remove("ReportKaigiRelayHealth")
                 {
@@ -10669,6 +10686,20 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::Value::Object(payload),
         ));
     }
+    if let Some(unregistration) = instruction_ref
+        .as_any()
+        .downcast_ref::<UnregisterKaigiRelay>()
+    {
+        let mut payload = json::Map::new();
+        payload.insert(
+            "relay_id".to_owned(),
+            json::to_value(unregistration.relay_id()).map_err(norito_to_napi)?,
+        );
+        return Ok(kaigi_json_value(
+            "UnregisterKaigiRelay",
+            json::Value::Object(payload),
+        ));
+    }
     Err(napi::Error::new(
         napi::Status::GenericFailure,
         "unsupported instruction variant; JSON conversion is not yet implemented for this instruction",
@@ -12244,19 +12275,57 @@ mod tests {
         Uint8Array::from(test_network_id(label).as_bytes().to_vec())
     }
     #[test]
-    fn generic_ml_dsa_parser_accepts_only_the_protocol_suite() {
-        for label in ["mldsa", "ML-DSA-65", "ML_DSA_65"] {
+    fn crypto_algorithm_parser_accepts_supported_aliases() {
+        assert_eq!(
+            parse_crypto_algorithm(None).expect("default crypto algorithm"),
+            Algorithm::Ed25519
+        );
+        for (label, expected) in [
+            ("ed25519", Algorithm::Ed25519),
+            ("ed-25519", Algorithm::Ed25519),
+            ("SECP_256K1", Algorithm::Secp256k1),
+            ("mldsa", Algorithm::MlDsa),
+            ("ML-DSA-65", Algorithm::MlDsa),
+            ("ML_DSA_65", Algorithm::MlDsa),
+            ("ML_DSA-65", Algorithm::MlDsa),
+            ("BLS-NORMAL", Algorithm::BlsNormal),
+            ("BLS_SMALL", Algorithm::BlsSmall),
+            (
+                "GOST-3410-2012-256-PARAMSETA",
+                Algorithm::Gost3410_2012_256ParamSetA,
+            ),
+            (
+                "GOST_3410_2012_512_PARAMSETB",
+                Algorithm::Gost3410_2012_512ParamSetB,
+            ),
+            ("sm2", Algorithm::Sm2),
+        ] {
             assert_eq!(
-                parse_crypto_algorithm(Some(label)).expect("protocol ML-DSA alias"),
-                Algorithm::MlDsa,
+                parse_crypto_algorithm(Some(label)).expect("supported crypto algorithm alias"),
+                expected,
                 "{label}"
             );
         }
+    }
+    #[test]
+    fn crypto_algorithm_parser_rejects_invalid_alias_characters_and_suites() {
         for label in [
-            "mldsa44",
+            "",
+            " mldsa",
+            "mldsa ",
+            "ML DSA 65",
+            "\tML-DSA-65",
+            "ML-DSA-65\n",
+            "ML.DSA.65",
+            "ML/DSA/65",
+            "ML@DSA@65",
+            "ML#DSA#65",
+            "MLKDSA65",
+            "ed－25519",
+            "MLDSA44",
+            "MLDSA87",
             "ML-DSA-44",
             "ML_DSA_87",
-            "Ml.DsA/44",
             "ML-DSA-4-4",
             "ML-DSA-４４",
             "ML-DSA-８７",
@@ -12264,7 +12333,7 @@ mod tests {
         ] {
             assert!(
                 parse_crypto_algorithm(Some(label)).is_err(),
-                "non-protocol ML-DSA suite alias {label} must fail"
+                "invalid crypto algorithm alias {label:?} must fail"
             );
         }
     }
@@ -12877,6 +12946,7 @@ mod tests {
             Burn, BurnBox, CreateKaigi, CustomInstruction, InstructionBox, JoinKaigi, LeaveKaigi,
             Mint, MintBox, RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
+            UnregisterKaigiRelay,
             governance::{
                 CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
                 ProposeValidationFeePolicy, RegisterCitizen,
@@ -15941,6 +16011,21 @@ seiyaku Privacy {
         assert!(outer.contains_key("Kaigi"));
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize Kaigi relay instruction");
+        assert_eq!(reconstructed, instruction);
+    }
+    #[test]
+    fn unregister_kaigi_relay_instruction_json_roundtrip() {
+        let relay_id = sample_account("wonderland");
+        let instruction: InstructionBox =
+            Box::new(UnregisterKaigiRelay { relay_id }).into_instruction_box();
+        let json_value = instruction_to_json_value(&instruction)
+            .expect("serialize Kaigi relay unregistration instruction");
+        let outer = json_value
+            .as_object()
+            .expect("instruction JSON should be an object");
+        assert!(outer.contains_key("Kaigi"));
+        let reconstructed = value_to_instruction(json_value)
+            .expect("deserialize Kaigi relay unregistration instruction");
         assert_eq!(reconstructed, instruction);
     }
     #[test]

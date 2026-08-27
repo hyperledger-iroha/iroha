@@ -37,6 +37,7 @@ import {
   buildRecordKaigiUsageInstruction,
   buildSetKaigiRelayManifestInstruction,
   buildRegisterKaigiRelayInstruction,
+  buildUnregisterKaigiRelayInstruction,
   buildReportKaigiRelayHealthInstruction,
   KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
   KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
@@ -1902,6 +1903,25 @@ test("buildRegisterKaigiRelayInstruction encodes hpke key", () => {
   );
 });
 
+test("buildUnregisterKaigiRelayInstruction encodes the canonical relay id", () => {
+  const instruction = buildUnregisterKaigiRelayInstruction({
+    relayId: RELAY_ACCOUNT_ID,
+  });
+  const expected = {
+    Kaigi: {
+      UnregisterKaigiRelay: {
+        relay_id: RELAY_ACCOUNT_ID,
+      },
+    },
+  };
+  assert.deepEqual(instruction, expected);
+  assert.deepEqual(encodeAndDecode(instruction), expected);
+  assertNativeAndPureInstructionParity(
+    instruction,
+    "Kaigi.UnregisterKaigiRelay",
+  );
+});
+
 baseTest("RegisterKaigiRelay requires a non-zero bandwidth class", () => {
   const baseRelay = {
     relayId: RELAY_ACCOUNT_ID,
@@ -2026,7 +2046,7 @@ baseTest("ReportKaigiRelayHealth validates status, timestamp, and notes", () => 
     ],
     [
       { reportedAtMs: -1 },
-      ValidationErrorCode.INVALID_NUMERIC,
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
       "reportKaigiRelayHealth.reportedAtMs",
     ],
     [

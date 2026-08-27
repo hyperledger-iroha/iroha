@@ -2346,7 +2346,7 @@ where
                 if !trace.is_empty() {
                     let constraints = vm.constraints().to_vec();
                     let mem_log = vm.memory_log().to_vec();
-                    let reg_log = vm.register_log().to_vec();
+                    let reg_log = vm.register_log();
                     let step_log = vm.step_log().to_vec();
                     let code_hash = vm.code_hash();
                     let tx_hash = iroha_crypto::Hash::prehashed(*tx.hash().as_ref());
@@ -2517,7 +2517,7 @@ where
                 if !trace.is_empty() {
                     let constraints = vm.constraints().to_vec();
                     let mem_log = vm.memory_log().to_vec();
-                    let reg_log = vm.register_log().to_vec();
+                    let reg_log = vm.register_log();
                     let step_log = vm.step_log().to_vec();
                     let code_hash = vm.code_hash();
                     let tx_hash = iroha_crypto::Hash::prehashed(*tx.hash().as_ref());
@@ -2891,7 +2891,7 @@ where
                 if !trace.is_empty() {
                     let constraints = vm.constraints().to_vec();
                     let mem_log = vm.memory_log().to_vec();
-                    let reg_log = vm.register_log().to_vec();
+                    let reg_log = vm.register_log();
                     let step_log = vm.step_log().to_vec();
                     let code_hash = vm.code_hash();
                     let tx_hash = iroha_crypto::Hash::prehashed(*tx.hash().as_ref());
@@ -3086,7 +3086,7 @@ where
                 if !trace.is_empty() {
                     let constraints = vm.constraints().to_vec();
                     let mem_log = vm.memory_log().to_vec();
-                    let reg_log = vm.register_log().to_vec();
+                    let reg_log = vm.register_log();
                     let step_log = vm.step_log().to_vec();
                     let code_hash = vm.code_hash();
                     let tx_hash = iroha_crypto::Hash::prehashed(*tx.hash().as_ref());

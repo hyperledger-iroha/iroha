@@ -310,6 +310,43 @@ account existence, and the committed single-key or weighted-multisig controller
 before any quota accounting. Rust, JavaScript, and Swift builders share a
 golden digest vector.
 
+### Governed producer and epoch admission
+
+The consensus-visible custom parameter
+`iroha:da_ingest_admission_policy_v1` is the only authority for DA producers
+and replay epochs. Each canonical lane entry binds an exact active lane
+incarnation, a sorted producer-account set, one current epoch, and at most the
+immediately preceding grace epoch. The V1 payload is bounded to 1,024 lane
+records, 4,096 producer identities, and 1,024 admitted `(lane, epoch)` windows.
+An absent or malformed policy disables non-empty DA ingest; it is never
+interpreted as an open policy.
+
+Policy revision one has no predecessor. Every later revision increments by
+exactly one and commits the exact predecessor policy hash. Existing lane
+records may not be dropped. Changing a producer set, disabling a lane, or
+changing its incarnation must advance the current epoch; grace may carry only
+the predecessor's current epoch and may not cross an incarnation change. An
+empty producer set is a durable lane tombstone: it admits and retains no
+window, while preserving the epoch floor. A later reactivation remains in the
+same permanent lane record and must advance that floor, so a retired lane
+identifier cannot make an old signed request valid after reuse.
+
+Torii captures the committed policy and active incarnation from one state view
+at the next proposal height before compute, then repeats that check under the
+replay-lifecycle fence before reservation and durable receipt commit. A policy
+transition during queued spool work cancels or retires the stale receipt.
+Validators independently apply the same owner/lane/incarnation/epoch decision
+to every header-committed `DaPinIntent`, so node-local configuration cannot
+create a second admission path.
+
+When a policy revision retires a window, Torii first hard-links every excluded
+receipt into the durable retired-receipt archive and syncs that directory. It
+then removes the active receipt names, syncs the spool root, checkpoints and
+truncates the replay cursor journal, removes receipt-index heads, and finally
+clears matching replay-cache state. The ordering is retryable after any crash:
+old receipt evidence cannot repopulate a cursor on restart, and a cursor is not
+forgotten while its active receipt name can still be rediscovered.
+
 ### Chunking & Replication Flow
 
 1. Chunk payload into `chunk_size`, compute BLAKE3 per chunk + Merkle root.

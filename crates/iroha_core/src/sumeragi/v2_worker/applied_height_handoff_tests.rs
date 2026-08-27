@@ -744,7 +744,8 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
         panic!("history fixture must contain a certified body response")
     };
     assert_eq!(
-        archive_body_response.responder, 3,
+        archive_body_response.responder,
+        PeerId::new(history.validators[3].public_key().clone()),
         "durable rollover must retain a frozen-roster archive that did not sign the old QC"
     );
     assert!(
@@ -752,7 +753,7 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
             .artifact
             .commit_qc
             .signers
-            .contains(&archive_body_response.responder),
+            .contains(&3),
         "the regression must exercise archive authority independently of QC signing"
     );
     drop(pending);
@@ -839,7 +840,7 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
     else {
         panic!("history fixture must contain a certified body response")
     };
-    wrong_responder.responder = 1;
+    wrong_responder.responder = PeerId::new(history.validators[1].public_key().clone());
     wrong_responder.signature = Signature::new(
         history.validators[1].private_key(),
         &wrong_responder.signature_preimage(),

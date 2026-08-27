@@ -48,6 +48,9 @@ SET_KAIGI_RELAY_MANIFEST_WIRE_ID_V1: Final[str] = (
     "iroha.instruction.v1::kaigi::SetKaigiRelayManifest"
 )
 REGISTER_KAIGI_RELAY_WIRE_ID_V1: Final[str] = "iroha.instruction.v1::kaigi::RegisterKaigiRelay"
+UNREGISTER_KAIGI_RELAY_WIRE_ID_V1: Final[str] = (
+    "iroha.instruction.v1::kaigi::UnregisterKaigiRelay"
+)
 REPORT_KAIGI_RELAY_HEALTH_WIRE_ID_V1: Final[str] = (
     "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth"
 )
@@ -62,6 +65,7 @@ KAIGI_INSTRUCTION_WIRE_IDS_V1: Final[tuple[str, ...]] = (
     RECORD_KAIGI_USAGE_WIRE_ID_V1,
     SET_KAIGI_RELAY_MANIFEST_WIRE_ID_V1,
     REGISTER_KAIGI_RELAY_WIRE_ID_V1,
+    UNREGISTER_KAIGI_RELAY_WIRE_ID_V1,
     REPORT_KAIGI_RELAY_HEALTH_WIRE_ID_V1,
 )
 
@@ -76,6 +80,9 @@ _INNER_TYPE_NAME_BY_WIRE_ID: Final[Mapping[str, str]] = MappingProxyType(
             "iroha_data_model::isi::kaigi::SetKaigiRelayManifest"
         ),
         REGISTER_KAIGI_RELAY_WIRE_ID_V1: ("iroha_data_model::isi::kaigi::RegisterKaigiRelay"),
+        UNREGISTER_KAIGI_RELAY_WIRE_ID_V1: (
+            "iroha_data_model::isi::kaigi::UnregisterKaigiRelay"
+        ),
         REPORT_KAIGI_RELAY_HEALTH_WIRE_ID_V1: (
             "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth"
         ),
@@ -976,6 +983,13 @@ def encode_register_kaigi_relay_instruction_v1(
     return _instruction_wire(REGISTER_KAIGI_RELAY_WIRE_ID_V1, _struct(relay))
 
 
+def encode_unregister_kaigi_relay_instruction_v1(*, relay_id: str) -> KaigiInstructionWireV1:
+    """Encode one typed Kaigi relay retirement instruction."""
+
+    _, relay_payload = _account_id(relay_id, "UnregisterKaigiRelay.relay_id")
+    return _instruction_wire(UNREGISTER_KAIGI_RELAY_WIRE_ID_V1, _struct(relay_payload))
+
+
 def encode_report_kaigi_relay_health_instruction_v1(
     *,
     call_id: KaigiIdV1,
@@ -1139,6 +1153,12 @@ def build_register_kaigi_relay_instruction(
     ).to_instruction()
 
 
+def build_unregister_kaigi_relay_instruction(*, relay_id: str) -> "Instruction":
+    """Build a native ``UnregisterKaigiRelay`` instruction."""
+
+    return encode_unregister_kaigi_relay_instruction_v1(relay_id=relay_id).to_instruction()
+
+
 def build_report_kaigi_relay_health_instruction(
     *,
     call_id: KaigiIdV1,
@@ -1168,6 +1188,7 @@ __all__ = [
     "LEAVE_KAIGI_WIRE_ID_V1",
     "RECORD_KAIGI_USAGE_WIRE_ID_V1",
     "REGISTER_KAIGI_RELAY_WIRE_ID_V1",
+    "UNREGISTER_KAIGI_RELAY_WIRE_ID_V1",
     "REPORT_KAIGI_RELAY_HEALTH_WIRE_ID_V1",
     "SET_KAIGI_RELAY_MANIFEST_WIRE_ID_V1",
     "KaigiIdV1",
@@ -1182,6 +1203,7 @@ __all__ = [
     "build_leave_kaigi_instruction",
     "build_record_kaigi_usage_instruction",
     "build_register_kaigi_relay_instruction",
+    "build_unregister_kaigi_relay_instruction",
     "build_report_kaigi_relay_health_instruction",
     "build_set_kaigi_relay_manifest_instruction",
     "encode_create_kaigi_instruction_v1",
@@ -1190,6 +1212,7 @@ __all__ = [
     "encode_leave_kaigi_instruction_v1",
     "encode_record_kaigi_usage_instruction_v1",
     "encode_register_kaigi_relay_instruction_v1",
+    "encode_unregister_kaigi_relay_instruction_v1",
     "encode_report_kaigi_relay_health_instruction_v1",
     "encode_set_kaigi_relay_manifest_instruction_v1",
 ]

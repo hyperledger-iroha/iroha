@@ -635,7 +635,7 @@ fn fixed_cut_retires_obsolete_predecessor_before_exact_blocked_target() {
 fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     let validator = PeerId::new(KeyPair::random().public_key().clone());
-    let message = v2_certified_body_response(1, 0, 8);
+    let message = v2_certified_body_response(1, validator.clone(), 8);
     let BlockMessage::V2(envelope) = &message else {
         unreachable!("certified response fixture is a v2 envelope");
     };

@@ -110,9 +110,11 @@ pub use iroha_torii_shared::parliament_api::{
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
+    VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1, VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1,
     ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
+    ValidationFeeHijiriQuoteRequestV1, ValidationFeeHijiriQuoteResponseV1,
     ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
     ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
     ValidationFeeProposalListV1, ValidationFeeProposalRecordV1,
@@ -2487,12 +2489,30 @@ pub struct SccpResourceLimits {
     /// Maximum BLS key-validation and signer-contribution work committed in one block.
     #[norito(rename = "max_bls_signer_contributions_per_block")]
     pub bls_signer_contributions_per_block: u32,
+    /// Maximum Ed25519 signature checks in one transaction.
+    #[norito(rename = "max_ed25519_signature_checks_per_transaction")]
+    pub ed25519_signature_checks_per_transaction: u32,
+    /// Maximum Ed25519 signature checks committed in one block.
+    #[norito(rename = "max_ed25519_signature_checks_per_block")]
+    pub ed25519_signature_checks_per_block: u32,
+    /// Maximum TON Ed25519 validator-key checks in one transaction.
+    #[norito(rename = "max_ed25519_validator_key_checks_per_transaction")]
+    pub ed25519_validator_key_checks_per_transaction: u32,
+    /// Maximum TON Ed25519 validator-key checks committed in one block.
+    #[norito(rename = "max_ed25519_validator_key_checks_per_block")]
+    pub ed25519_validator_key_checks_per_block: u32,
     /// Maximum BN254 pairing-product checks in one transaction.
     #[norito(rename = "max_bn254_pairing_checks_per_transaction")]
     pub bn254_pairing_checks_per_transaction: u32,
     /// Maximum BN254 pairing-product checks committed in one block.
     #[norito(rename = "max_bn254_pairing_checks_per_block")]
     pub bn254_pairing_checks_per_block: u32,
+    /// Maximum BLS12-381 pairing-product checks in one transaction.
+    #[norito(rename = "max_bls12_381_pairing_checks_per_transaction")]
+    pub bls12_381_pairing_checks_per_transaction: u32,
+    /// Maximum BLS12-381 pairing-product checks committed in one block.
+    #[norito(rename = "max_bls12_381_pairing_checks_per_block")]
+    pub bls12_381_pairing_checks_per_block: u32,
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
@@ -2582,8 +2602,14 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         bls_aggregate_checks_per_block,
         bls_signer_contributions_per_transaction,
         bls_signer_contributions_per_block,
+        ed25519_signature_checks_per_transaction,
+        ed25519_signature_checks_per_block,
+        ed25519_validator_key_checks_per_transaction,
+        ed25519_validator_key_checks_per_block,
         bn254_pairing_checks_per_transaction,
         bn254_pairing_checks_per_block,
+        bls12_381_pairing_checks_per_transaction,
+        bls12_381_pairing_checks_per_block,
     );
     macro_rules! require_json_safe {
         ($($field:ident),+ $(,)?) => {
@@ -2667,9 +2693,24 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         "BLS signer contributions"
     );
     require_transaction_within_block!(
+        ed25519_signature_checks_per_transaction,
+        ed25519_signature_checks_per_block,
+        "Ed25519 signature checks"
+    );
+    require_transaction_within_block!(
+        ed25519_validator_key_checks_per_transaction,
+        ed25519_validator_key_checks_per_block,
+        "Ed25519 validator-key checks"
+    );
+    require_transaction_within_block!(
         bn254_pairing_checks_per_transaction,
         bn254_pairing_checks_per_block,
         "BN254 pairing checks"
+    );
+    require_transaction_within_block!(
+        bls12_381_pairing_checks_per_transaction,
+        bls12_381_pairing_checks_per_block,
+        "BLS12-381 pairing checks"
     );
     Ok(())
 }
@@ -2851,6 +2892,22 @@ fn sccp_recent_projection_value_is_canonical(
         iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes } => {
             (iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32, bytes)
         }
+        iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { workchain, account } => {
+            let Some(bytes) = iroha_sccp::canonical_sccp_ton_account36_bytes_v1(
+                iroha_data_model::bridge::SccpTonAddressV1 {
+                    workchain: *workchain,
+                    account: *account,
+                },
+            ) else {
+                return false;
+            };
+            return iroha_sccp::decode_sccp_normalized_codec_value(
+                iroha_sccp::SCCP_CODEC_TON_ACCOUNT36,
+                &bytes,
+            )
+            .as_ref()
+                == Some(value);
+        }
     };
     iroha_sccp::decode_sccp_normalized_codec_value(codec, bytes).as_ref() == Some(value)
 }
@@ -2877,6 +2934,10 @@ fn validate_sccp_recent_projection(
         ) | (
             iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
             iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { .. },
+        ) | (
+            iroha_data_model::bridge::SccpNetworkV1::TonMainnet
+                | iroha_data_model::bridge::SccpNetworkV1::TonTestnet,
+            iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { .. },
         )
     );
     if transfer.version != 1
@@ -4680,8 +4741,23 @@ pub struct MultisigProposeRequest {
     /// Optional user-facing transfer memo forwarded to transaction metadata.
     #[norito(default)]
     pub memo: Option<String>,
+    /// Optional validation-fee policy version forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_policy_version: Option<String>,
+    /// Optional validation-fee policy hash forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_policy_hash: Option<String>,
+    /// Optional composite Hijiri fee-quote hash forwarded to metadata and the signed marker.
+    #[norito(default)]
+    pub validation_fee_hijiri_fee_quote_hash: Option<String>,
     /// Instruction batch to wrap inside the multisig proposal.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    /// Optional validation-fee instruction index forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_instruction_index: Option<String>,
+    /// Optional validation-fee transfer entry index forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_transfer_entry_index: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 /// Response payload returned by multisig participation endpoints.
@@ -10427,7 +10503,12 @@ mod evidence_http_tests {
             creation_time_ms: Some(123),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             memo: Some("invoice 42".to_owned()),
+            validation_fee_policy_version: Some("7".to_owned()),
+            validation_fee_policy_hash: Some("ab".repeat(32)),
+            validation_fee_hijiri_fee_quote_hash: Some("cd".repeat(32)),
             instructions: vec![instruction.clone()],
+            validation_fee_instruction_index: Some("1".to_owned()),
+            validation_fee_transfer_entry_index: Some("2".to_owned()),
         };
         let response_payload =
             prepared_multisig_response(&client, multisig_account_id.clone(), &request, proposal_id);
@@ -10455,7 +10536,23 @@ mod evidence_http_tests {
             "http://mock.local/v1/multisig/propose"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let expected_policy_hash = "ab".repeat(32);
+        let expected_hijiri_fee_quote_hash = "cd".repeat(32);
         assert_eq!(body["memo"].as_str(), Some("invoice 42"));
+        assert_eq!(body["validation_fee_policy_version"].as_str(), Some("7"));
+        assert_eq!(
+            body["validation_fee_policy_hash"].as_str(),
+            Some(expected_policy_hash.as_str())
+        );
+        assert_eq!(
+            body["validation_fee_hijiri_fee_quote_hash"].as_str(),
+            Some(expected_hijiri_fee_quote_hash.as_str())
+        );
+        assert_eq!(body["validation_fee_instruction_index"].as_str(), Some("1"));
+        assert_eq!(
+            body["validation_fee_transfer_entry_index"].as_str(),
+            Some("2")
+        );
         let encoded_instruction = body["instructions"][0]
             .as_str()
             .expect("native instruction base64");
@@ -10496,7 +10593,12 @@ mod evidence_http_tests {
             creation_time_ms: Some(123),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             memo: None,
+            validation_fee_policy_version: None,
+            validation_fee_policy_hash: None,
+            validation_fee_hijiri_fee_quote_hash: None,
             instructions: vec![dm::Log::new(dm::Level::INFO, message.to_owned()).into()],
+            validation_fee_instruction_index: None,
+            validation_fee_transfer_entry_index: None,
         };
         (multisig_account_id, request)
     }
@@ -18900,6 +19002,62 @@ impl Client {
             .map_err(|error| eyre!("validation-fee policy proof verification failed: {error}"))?;
         Ok(proof)
     }
+    /// Request one bounded current-state Hijiri validation-fee quote.
+    ///
+    /// The request and response use canonical Norito. The response is accepted only when its
+    /// account, transfer count, arithmetic, policy/Hijiri bindings, and live next-height semantics
+    /// are coherent with the exact request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid request, transport or HTTP failure, non-Norito response,
+    /// malformed quote, or a quote that is not coherent with the request.
+    pub fn post_validation_fee_hijiri_quote(
+        &self,
+        request: &ValidationFeeHijiriQuoteRequestV1,
+    ) -> Result<ValidationFeeHijiriQuoteResponseV1> {
+        request
+            .validate()
+            .map_err(|error| eyre!("invalid Hijiri validation-fee quote request: {error}"))?;
+        if request.account_id != self.account {
+            return Err(eyre!(
+                "Hijiri validation-fee quote account must match the authenticated client account"
+            ));
+        }
+        let body = to_bytes(request)
+            .wrap_err("failed to encode Hijiri validation-fee quote request as Norito")?;
+        let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_HIJIRI_QUOTE);
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to fetch Hijiri validation-fee quote",
+            " ",
+        )?;
+        if response.headers().contains_key("x-iroha-reject-code") {
+            return Err(eyre!(
+                "successful Hijiri validation-fee quote carried a rejection code"
+            ));
+        }
+        let content_type = exact_single_response_header(&response, "content-type")
+            .wrap_err("Hijiri validation-fee quote response content type is invalid")?;
+        if !Self::is_norito_content_type(content_type) {
+            return Err(eyre!(
+                "Hijiri validation-fee quote response has invalid content type {content_type}"
+            ));
+        }
+        let quote: ValidationFeeHijiriQuoteResponseV1 = decode_from_bytes(response.body())
+            .wrap_err("failed to decode Hijiri validation-fee quote response")?;
+        quote.validate_for_request(request).map_err(|error| {
+            eyre!("Hijiri validation-fee quote response validation failed: {error}")
+        })?;
+        Ok(quote)
+    }
     /// Repeatedly verify bounded validation-fee proof pages until Torii's observed tip.
     ///
     /// Applications that persist checkpoints should call the page method
@@ -23003,6 +23161,216 @@ mod tests {
             !numeric_order.windows(2).any(|pair| pair[0] > pair[1]),
             "proposal height ordering must be numeric rather than lexicographic",
         );
+    }
+    fn validation_fee_hijiri_quote_fixture(
+        request: &ValidationFeeHijiriQuoteRequestV1,
+    ) -> ValidationFeeHijiriQuoteResponseV1 {
+        use iroha_data_model::{
+            hijiri::{FeeMultiplierBand, HijiriFeePolicy, HijiriParametersV1, Q16},
+            validation_fee::VALIDATION_FEE_DS_SCALE,
+        };
+        use iroha_torii_shared::validation_fee_api::{
+            VALIDATION_FEE_BASE_MINOR_UNITS_V1, ValidationFeeHijiriQuoteBaseV1,
+            evaluate_hijiri_quote_v1,
+        };
+
+        let fee_policy = HijiriFeePolicy::new(
+            vec![
+                FeeMultiplierBand::new(Q16::ONE, Q16::ONE)
+                    .expect("valid one-band Hijiri test policy"),
+            ],
+            Q16::ONE,
+        )
+        .expect("valid Hijiri test policy");
+        let parameters = HijiriParametersV1::try_new(1, None, fee_policy, Q16::ZERO)
+            .expect("valid Hijiri test parameters");
+        let fee_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("valid validation-fee test asset");
+        let base = ValidationFeeHijiriQuoteBaseV1::try_new(
+            42,
+            43,
+            1,
+            [0x03; 32],
+            fee_asset_definition_id.to_string(),
+            request.account_id.to_string(),
+            VALIDATION_FEE_DS_SCALE,
+            VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+        )
+        .expect("valid Hijiri quote base");
+        evaluate_hijiri_quote_v1(
+            base,
+            &request.account_id,
+            &parameters,
+            None,
+            request.qualifying_transfer_count,
+        )
+        .expect("valid Hijiri quote fixture")
+    }
+    #[test]
+    fn validation_fee_hijiri_quote_posts_signed_norito_and_roundtrips() {
+        let client = client_with_base_url(base_url());
+        let request = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: client.account.clone(),
+            qualifying_transfer_count: 2,
+        };
+        let expected = validation_fee_hijiri_quote_fixture(&request);
+        let response = mk_response(
+            StatusCode::OK,
+            to_bytes(&expected).expect("encode Hijiri quote fixture"),
+            Some(APPLICATION_NORITO),
+        );
+        let (actual, snapshot) = capture_request(response, || {
+            client.post_validation_fee_hijiri_quote(&request)
+        });
+        assert_eq!(actual.expect("valid Hijiri quote response"), expected);
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), torii_uri::VALIDATION_FEE_HIJIRI_QUOTE);
+        assert_eq!(snapshot.url.query(), None);
+        assert_eq!(
+            snapshot.max_response_bytes,
+            VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
+        );
+        assert_single_accept_header(&snapshot, APPLICATION_NORITO);
+        assert_eq!(
+            snapshot
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+            vec![APPLICATION_NORITO]
+        );
+        let decoded_request: ValidationFeeHijiriQuoteRequestV1 =
+            decode_from_bytes(&snapshot.body).expect("decode exact Hijiri quote request");
+        assert_eq!(decoded_request, request);
+        assert_canonical_account_signed_request(&client, &snapshot);
+    }
+    #[test]
+    fn validation_fee_hijiri_quote_rejects_invalid_request_before_http() {
+        let client = client_with_base_url(base_url());
+        let zero_count = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: client.account.clone(),
+            qualifying_transfer_count: 0,
+        };
+        let error = with_mock_http(
+            |_| panic!("invalid Hijiri quote request reached HTTP transport"),
+            || client.post_validation_fee_hijiri_quote(&zero_count),
+        )
+        .expect_err("zero-count Hijiri quote request must fail locally");
+        assert!(
+            error.to_string().contains("qualifying_transfer_count"),
+            "unexpected invalid-request error: {error:#}"
+        );
+
+        let (other_account, _) = gen_account_in("other");
+        let other_account_request = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: other_account,
+            qualifying_transfer_count: 1,
+        };
+        let error = with_mock_http(
+            |_| panic!("cross-account Hijiri quote request reached HTTP transport"),
+            || client.post_validation_fee_hijiri_quote(&other_account_request),
+        )
+        .expect_err("cross-account Hijiri quote request must fail locally");
+        assert!(
+            error.to_string().contains("authenticated client account"),
+            "unexpected cross-account error: {error:#}"
+        );
+    }
+    #[test]
+    fn validation_fee_hijiri_quote_rejects_malformed_or_unbound_responses() {
+        let client = client_with_base_url(base_url());
+        let request = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: client.account.clone(),
+            qualifying_transfer_count: 2,
+        };
+        let valid = validation_fee_hijiri_quote_fixture(&request);
+        let valid_body = to_bytes(&valid).expect("encode Hijiri quote fixture");
+        let mut other_request = request.clone();
+        other_request.qualifying_transfer_count = 1;
+        let unbound_body = to_bytes(&validation_fee_hijiri_quote_fixture(&other_request))
+            .expect("encode unbound Hijiri quote fixture");
+        let mut duplicate_content_type =
+            mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_NORITO));
+        duplicate_content_type
+            .headers_mut()
+            .append("content-type", HeaderValue::from_static(APPLICATION_JSON));
+        let mut success_with_reject_code =
+            mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_NORITO));
+        success_with_reject_code.headers_mut().insert(
+            "x-iroha-reject-code",
+            HeaderValue::from_static("validation_fee_state_inconsistent"),
+        );
+        let cases = [
+            (
+                "status",
+                mk_response(
+                    StatusCode::CONFLICT,
+                    valid_body.clone(),
+                    Some(APPLICATION_NORITO),
+                ),
+                "Failed to fetch Hijiri validation-fee quote",
+            ),
+            (
+                "content type",
+                mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_JSON)),
+                "invalid content type",
+            ),
+            (
+                "content type prefix confusion",
+                mk_response(
+                    StatusCode::OK,
+                    valid_body.clone(),
+                    Some("application/x-norito-evil"),
+                ),
+                "invalid content type",
+            ),
+            (
+                "duplicate content type",
+                duplicate_content_type,
+                "duplicated `content-type`",
+            ),
+            (
+                "success rejection code",
+                success_with_reject_code,
+                "carried a rejection code",
+            ),
+            (
+                "Norito",
+                mk_response(
+                    StatusCode::OK,
+                    b"not-norito".to_vec(),
+                    Some(APPLICATION_NORITO),
+                ),
+                "failed to decode",
+            ),
+            (
+                "request binding",
+                mk_response(StatusCode::OK, unbound_body, Some(APPLICATION_NORITO)),
+                "does not echo",
+            ),
+        ];
+        for (case, response, expected_error) in cases {
+            let (result, snapshot) = capture_request(response, || {
+                client.post_validation_fee_hijiri_quote(&request)
+            });
+            let error = result.expect_err("hostile Hijiri quote response must fail");
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected {case} error: {error:#}"
+            );
+            assert_eq!(
+                snapshot.max_response_bytes,
+                VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
+            );
+        }
     }
     #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
     #[norito(deny_unknown_fields)]
@@ -31380,8 +31748,14 @@ mod tests {
                 bls_aggregate_checks_per_block: 4_016,
                 bls_signer_contributions_per_transaction: 131_713,
                 bls_signer_contributions_per_block: 526_852,
+                ed25519_signature_checks_per_transaction: 65_536,
+                ed25519_signature_checks_per_block: 262_144,
+                ed25519_validator_key_checks_per_transaction: 198_656,
+                ed25519_validator_key_checks_per_block: 794_624,
                 bn254_pairing_checks_per_transaction: 1,
                 bn254_pairing_checks_per_block: 4,
+                bls12_381_pairing_checks_per_transaction: 1,
+                bls12_381_pairing_checks_per_block: 4,
             },
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             native_message_submit_path: Some("/v1/bridge/messages".to_owned()),
@@ -31761,8 +32135,14 @@ mod tests {
             "max_bls_aggregate_checks_per_block",
             "max_bls_signer_contributions_per_transaction",
             "max_bls_signer_contributions_per_block",
+            "max_ed25519_signature_checks_per_transaction",
+            "max_ed25519_signature_checks_per_block",
+            "max_ed25519_validator_key_checks_per_transaction",
+            "max_ed25519_validator_key_checks_per_block",
             "max_bn254_pairing_checks_per_transaction",
             "max_bn254_pairing_checks_per_block",
+            "max_bls12_381_pairing_checks_per_transaction",
+            "max_bls12_381_pairing_checks_per_block",
         ];
         assert_eq!(resource_limits.len(), expected_resource_fields.len());
         for field in expected_resource_fields {
@@ -31916,8 +32296,14 @@ mod tests {
             bls_aggregate_checks_per_block,
             bls_signer_contributions_per_transaction,
             bls_signer_contributions_per_block,
+            ed25519_signature_checks_per_transaction,
+            ed25519_signature_checks_per_block,
+            ed25519_validator_key_checks_per_transaction,
+            ed25519_validator_key_checks_per_block,
             bn254_pairing_checks_per_transaction,
             bn254_pairing_checks_per_block,
+            bls12_381_pairing_checks_per_transaction,
+            bls12_381_pairing_checks_per_block,
         );
         macro_rules! assert_unsafe_json_resource_limit_rejects {
             ($($field:ident),+ $(,)?) => {
@@ -32000,8 +32386,20 @@ mod tests {
                 bls_signer_contributions_per_block
             ),
             (
+                ed25519_signature_checks_per_transaction,
+                ed25519_signature_checks_per_block
+            ),
+            (
+                ed25519_validator_key_checks_per_transaction,
+                ed25519_validator_key_checks_per_block
+            ),
+            (
                 bn254_pairing_checks_per_transaction,
                 bn254_pairing_checks_per_block
+            ),
+            (
+                bls12_381_pairing_checks_per_transaction,
+                bls12_381_pairing_checks_per_block
             ),
         );
     }
@@ -32520,6 +32918,33 @@ mod tests {
             value: iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.to_owned(),
         };
         validate_sccp_recent_messages(&solana).expect("valid Solana recent response");
+
+        let mut ton = valid.clone();
+        ton.items[0].target_profile = iroha_data_model::bridge::SccpNetworkV1::TonMainnet
+            .profile_key()
+            .to_owned();
+        ton.items[0].target_domain = iroha_sccp::SCCP_DOMAIN_TON;
+        ton.items[0].route_id = Some(iroha_sccp::SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned());
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut ton.items[0].payload_projection;
+        transfer.dest_domain = iroha_sccp::SCCP_DOMAIN_TON;
+        transfer.recipient = iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 {
+            workchain: 0,
+            account: [0x94; 32],
+        };
+        transfer.route_id = iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+            value: iroha_sccp::SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned(),
+        };
+        validate_sccp_recent_messages(&ton).expect("valid TON recent response");
+        let mut wrong_ton_workchain = ton.clone();
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut wrong_ton_workchain.items[0].payload_projection;
+        transfer.recipient = iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 {
+            workchain: -1,
+            account: [0x94; 32],
+        };
+        assert!(validate_sccp_recent_messages(&wrong_ton_workchain).is_err());
+
         let mut zero_solana_recipient = solana.clone();
         let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
             &mut zero_solana_recipient.items[0].payload_projection;

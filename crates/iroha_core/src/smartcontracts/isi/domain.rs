@@ -6223,9 +6223,9 @@ mod tests {
     }
     #[test]
     fn unregister_account_removes_all_account_scoped_permissions() {
-        let mut state = test_state();
+        let state = test_state();
         let authority = (*ALICE_ID).clone();
-        let target = AccountId::new(checked_keypair().public_key().clone());
+        let contract_deployer = AccountId::new(checked_keypair().public_key().clone());
         let holder = AccountId::new(checked_keypair().public_key().clone());
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("account-cleanup", "universal").expect("asset domain"),
@@ -6235,11 +6235,12 @@ mod tests {
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
                 .expect("network id"),
-            &target,
+            &contract_deployer,
             1,
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
+        let target = contract.subject_id();
         let permissions = [
             Permission::from(
                 iroha_executor_data_model::permission::account::CanReplaceAccountController {

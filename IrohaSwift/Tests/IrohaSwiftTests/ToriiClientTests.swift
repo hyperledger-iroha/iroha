@@ -2605,12 +2605,6 @@ final class ToriiClientTests: XCTestCase {
             algorithm: .mlDsa,
             payload: publicKey
         )
-        let resolverPublicKey = "ml-dsa:\(publicKeyMultihash)"
-        let policy = identifierPolicy(
-            owner: accountId,
-            resolverPublicKey: resolverPublicKey
-        )
-
         let shortSignature = Data(repeating: 0x11, count: params.signatureLength - 1)
         let overlongSignature = Data(repeating: 0x22, count: params.signatureLength + 1)
         let shortReceipt = try identifierReceipt(
@@ -2622,8 +2616,73 @@ final class ToriiClientTests: XCTestCase {
             signatureHex: overlongSignature.hexUppercased()
         )
 
-        XCTAssertEqual(try shortReceipt.verifyAttestation(using: policy), false)
-        XCTAssertEqual(try overlongReceipt.verifyAttestation(using: policy), false)
+        for prefix in ["ml-dsa", "mldsa", "mldsa65", "ML-DSA-65", "ML_DSA_65", "ML_DSA-65"] {
+            let policy = identifierPolicy(
+                owner: accountId,
+                resolverPublicKey: "\(prefix):\(publicKeyMultihash)"
+            )
+            XCTAssertEqual(try shortReceipt.verifyAttestation(using: policy), false, prefix)
+            XCTAssertEqual(try overlongReceipt.verifyAttestation(using: policy), false, prefix)
+
+            for suite in [MlDsaSuite.mlDsa44, .mlDsa87] {
+                let signature = Data(
+                    repeating: 0x33,
+                    count: suite.parameters().signatureLength
+                )
+                let receipt = try identifierReceipt(
+                    payload: payload,
+                    signatureHex: signature.hexUppercased()
+                )
+                XCTAssertEqual(
+                    try receipt.verifyAttestation(using: policy),
+                    false,
+                    "protocol ML-DSA verification must reject the \(suite) signature width for \(prefix)"
+                )
+            }
+        }
+    }
+
+    func testIdentifierReceiptVerifierPinsMlDsa65ProtocolSuite() throws {
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.mldsaSupported,
+            "ML-DSA bridge is unavailable in this environment."
+        )
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let payloadBytes = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
+        var message = Blake2b.hash256(payloadBytes)
+        message[message.count - 1] |= 0x01
+
+        for suite in MlDsaSuite.allCases {
+            let keypair = try MlDsaKeypair.generate(suite: suite)
+            let signature = try keypair.sign(message: message)
+            let multihash = CanonicalNorito.publicKeyMultihash(
+                algorithm: .mlDsa,
+                payload: keypair.publicKey
+            )
+            let receipt = try identifierReceipt(
+                payload: payload,
+                signatureHex: signature.hexUppercased()
+            )
+
+            for resolverPublicKey in ["ml-dsa:\(multihash)", multihash] {
+                let policy = identifierPolicy(
+                    owner: accountId,
+                    resolverPublicKey: resolverPublicKey
+                )
+                XCTAssertEqual(
+                    try receipt.verifyAttestation(using: policy),
+                    suite == .mlDsa65,
+                    "protocol verification must accept only ML-DSA-65 for \(resolverPublicKey)"
+                )
+            }
+        }
     }
 
     func testIdentifierReceiptRejectsMalformedEd25519AttestationRBeforeCryptoKit() throws {
@@ -2787,6 +2846,41 @@ final class ToriiClientTests: XCTestCase {
                 return
             }
             XCTAssertTrue(reason.contains("resolverPublicKey"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsConfusableResolverPublicKeyPrefixes() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let multihash = try XCTUnwrap(signed.resolverPublicKey.split(separator: ":").last)
+        let receipt = try identifierReceipt(payload: payload, signatureHex: signed.signatureHex)
+
+        for prefix in [
+            "ed 25519",
+            "ed.25519",
+            "ed/25519",
+            "ed@25519",
+            "ed#25519",
+            "secp256\u{212A}1",
+            "ml\u{FF0D}dsa",
+        ] {
+            let policy = identifierPolicy(
+                owner: accountId,
+                resolverPublicKey: "\(prefix):\(multihash)"
+            )
+            XCTAssertThrowsError(try receipt.verifyAttestation(using: policy), prefix) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("unexpected error for \(prefix): \(error)")
+                }
+                XCTAssertTrue(reason.contains("Unsupported resolver public-key prefix"), prefix)
+            }
         }
     }
 
@@ -20446,6 +20540,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertNil(json["fee_sponsor"])
             XCTAssertNil(json["validation_fee_policy_version"])
             XCTAssertNil(json["validation_fee_policy_hash"])
+            XCTAssertNil(json["validation_fee_hijiri_fee_quote_hash"])
             XCTAssertNil(json["validation_fee_instruction_index"])
             XCTAssertNil(json["validation_fee_transfer_entry_index"])
             let instructions = json["instructions"] as? [[String: Any]]
@@ -20494,6 +20589,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             signerAccountId: signer,
             validationFeePolicyVersion: 7,
             validationFeePolicyHash: "0X" + String(repeating: "AB", count: 32),
+            validationFeeHijiriFeeQuoteHash: "0X" + String(repeating: "CD", count: 32),
             validationFeeInstructionIndex: 1,
             validationFeeTransferEntryIndex: 2,
             instructions: [try ToriiMultisigProposeInstruction(base64: "AQID")],
@@ -20505,6 +20601,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         )
         XCTAssertEqual(payload["validation_fee_policy_version"] as? String, "7")
         XCTAssertEqual(payload["validation_fee_policy_hash"] as? String, String(repeating: "ab", count: 32))
+        XCTAssertEqual(
+            payload["validation_fee_hijiri_fee_quote_hash"] as? String,
+            String(repeating: "cd", count: 32)
+        )
         XCTAssertEqual(payload["validation_fee_instruction_index"] as? String, "1")
         XCTAssertEqual(payload["validation_fee_transfer_entry_index"] as? String, "2")
     }
@@ -20532,6 +20632,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             ToriiMultisigProposeRequest(
                 selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
                 signerAccountId: signer,
+                validationFeeHijiriFeeQuoteHash: hash,
+                instructions: [instruction],
+                feePayment: feePayment
+            ),
+            ToriiMultisigProposeRequest(
+                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
+                signerAccountId: signer,
                 validationFeeInstructionIndex: 1,
                 instructions: [instruction],
                 feePayment: feePayment
@@ -20550,6 +20657,16 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 signerAccountId: signer,
                 validationFeePolicyVersion: 7,
                 validationFeePolicyHash: "not-a-policy-hash",
+                validationFeeInstructionIndex: 0,
+                instructions: [instruction],
+                feePayment: feePayment
+            ),
+            ToriiMultisigProposeRequest(
+                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
+                signerAccountId: signer,
+                validationFeePolicyVersion: 7,
+                validationFeePolicyHash: hash,
+                validationFeeHijiriFeeQuoteHash: "not-a-hijiri-quote-hash",
                 validationFeeInstructionIndex: 0,
                 instructions: [instruction],
                 feePayment: feePayment

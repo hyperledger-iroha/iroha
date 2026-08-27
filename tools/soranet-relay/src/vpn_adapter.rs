@@ -477,7 +477,11 @@ impl VpnBridge {
         vpn_reader: &mut R,
         tun_writer: &mut W,
     ) -> Result<(), VpnFrameIoError> {
-        match self.adapter.read_ingress_frame(vpn_reader).await {
+        match self
+            .adapter
+            .read_bound_ingress_frame(vpn_reader, self.circuit_id, self.flow_label)
+            .await
+        {
             Ok(cell) => match cell.header.class {
                 VpnCellClassV1::Data => tun_writer
                     .write_all(&cell.payload)

@@ -527,8 +527,13 @@ const EVIDENCE_BASE_FIELDS = Object.freeze([
 ]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
-const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
+const KAIGI_EVENT_KIND_VALUES = new Set([
+  "registration",
+  "unregistration",
+  "health",
+]);
 const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
+const KAIGI_CALL_SIGNALS_CURSOR_MAX_BYTES = 1024;
 const KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS = new Set([
   "relay_id",
   "domain",
@@ -19729,6 +19734,7 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
   for (const [snakeName, camelName] of [
     ["validation_fee_policy_version", "validationFeePolicyVersion"],
     ["validation_fee_policy_hash", "validationFeePolicyHash"],
+    ["validation_fee_hijiri_fee_quote_hash", "validationFeeHijiriFeeQuoteHash"],
     ["validation_fee_instruction_index", "validationFeeInstructionIndex"],
     ["validation_fee_transfer_entry_index", "validationFeeTransferEntryIndex"],
   ]) {
@@ -22879,12 +22885,16 @@ function normalizeMultisigProposeRequest(input) {
   );
   const validationFeePolicyVersion = record.validationFeePolicyVersion;
   const validationFeePolicyHash = record.validationFeePolicyHash;
+  const validationFeeHijiriFeeQuoteHash = record.validationFeeHijiriFeeQuoteHash;
   const validationFeeInstructionIndex = record.validationFeeInstructionIndex;
   const validationFeeTransferEntryIndex = record.validationFeeTransferEntryIndex;
   const hasPolicyVersion =
     validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
   const hasPolicyHash =
     validationFeePolicyHash !== undefined && validationFeePolicyHash !== null;
+  const hasHijiriFeeQuoteHash =
+    validationFeeHijiriFeeQuoteHash !== undefined &&
+    validationFeeHijiriFeeQuoteHash !== null;
   const hasInstructionIndex =
     validationFeeInstructionIndex !== undefined && validationFeeInstructionIndex !== null;
   const hasTransferEntryIndex =
@@ -22894,6 +22904,13 @@ function normalizeMultisigProposeRequest(input) {
       ValidationErrorCode.INVALID_OBJECT,
       "proposeMultisig request validation fee policy version and hash must be provided together",
       "proposeMultisig.request.validation_fee_policy",
+    );
+  }
+  if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "proposeMultisig request Hijiri fee quote hash requires policy metadata",
+      "proposeMultisig.request.validation_fee_hijiri_fee_quote_hash",
     );
   }
   if (!hasPolicyVersion && hasInstructionIndex) {
@@ -22929,6 +22946,12 @@ function normalizeMultisigProposeRequest(input) {
       validationFeePolicyHash,
       "proposeMultisig request.validation_fee_policy_hash",
     );
+    if (hasHijiriFeeQuoteHash) {
+      payload.validation_fee_hijiri_fee_quote_hash = normalizeHex32String(
+        validationFeeHijiriFeeQuoteHash,
+        "proposeMultisig request.validation_fee_hijiri_fee_quote_hash",
+      );
+    }
     if (hasInstructionIndex) {
       payload.validation_fee_instruction_index = String(
         ToriiClient._normalizeUnsignedInteger(
@@ -30700,8 +30723,14 @@ function normalizeKaigiCallSignal(payload, context, expectedCallId) {
 
 function normalizeKaigiCallSignalsList(payload, expectedCallId) {
   const context = "kaigi call signals";
-  const fields = new Set(["total", "items"]);
-  const record = requireKaigiResponseObject(payload, fields, fields, context);
+  const requiredFields = new Set(["has_more", "items"]);
+  const allowedFields = new Set([...requiredFields, "next_cursor"]);
+  const record = requireKaigiResponseObject(
+    payload,
+    requiredFields,
+    allowedFields,
+    context,
+  );
   const rawItems = requireDenseArray(record.items, `${context}.items`);
   if (rawItems.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
     throw new RangeError(
@@ -30714,19 +30743,38 @@ function normalizeKaigiCallSignalsList(payload, expectedCallId) {
   if (new Set(items.map((item) => item.entrypoint_hash)).size !== items.length) {
     throw new TypeError(`${context}.items must contain unique entrypoint_hash values`);
   }
-  for (let index = 1; index < items.length; index += 1) {
-    if (BigInt(items[index - 1].timestamp_ms) > BigInt(items[index].timestamp_ms)) {
-      throw new RangeError(`${context}.items must be ordered by timestamp_ms`);
-    }
+  if (typeof record.has_more !== "boolean") {
+    throw new TypeError(`${context}.has_more must be a boolean`);
   }
-  const total = normalizeKaigiU64(record.total, `${context}.total`);
-  if (BigInt(total) < BigInt(items.length)) {
-    throw new RangeError(`${context}.total must not be smaller than items.length`);
+  const hasCursor = Object.prototype.hasOwnProperty.call(record, "next_cursor");
+  if (record.has_more !== hasCursor) {
+    throw new TypeError(
+      `${context}.next_cursor must be present exactly when has_more is true`,
+    );
   }
+  const nextCursor = hasCursor
+    ? normalizeKaigiCallSignalsCursor(
+        record.next_cursor,
+        `${context}.next_cursor`,
+      )
+    : undefined;
   return {
-    total,
+    has_more: record.has_more,
+    next_cursor: nextCursor,
     items,
   };
+}
+
+function normalizeKaigiCallSignalsCursor(value, context) {
+  const cursor = requireExactNonEmptyString(value, context);
+  if (
+    cursor.length > KAIGI_CALL_SIGNALS_CURSOR_MAX_BYTES
+    || cursor.length % 4 === 1
+    || !/^[A-Za-z0-9_-]+$/u.test(cursor)
+  ) {
+    throw new TypeError(`${context} must be a canonical bounded base64url value`);
+  }
+  return cursor;
 }
 
 function normalizeKaigiCallEventData(payload, expectedCallId) {
@@ -30815,11 +30863,15 @@ function normalizeKaigiRelayEventData(payload) {
   const baseRecord = ensureRecord(payload, context);
   const kind = requireExactNonEmptyString(baseRecord.kind, `${context}.kind`);
   if (!KAIGI_EVENT_KIND_VALUES.has(kind)) {
-    throw new TypeError("kaigi relay event.kind must be exact lowercase registration or health");
+    throw new TypeError(
+      "kaigi relay event.kind must be exact lowercase registration, unregistration, or health",
+    );
   }
   const fields = kind === "registration"
     ? new Set(["kind", "domain", "relay_id", "bandwidth_class", "hpke_fingerprint_hex"])
-    : new Set(["kind", "domain", "relay_id", "status", "reported_at_ms", "call"]);
+    : kind === "unregistration"
+      ? new Set(["kind", "domain", "relay_id"])
+      : new Set(["kind", "domain", "relay_id", "status", "reported_at_ms", "call"]);
   const record = requireKaigiResponseObject(baseRecord, fields, fields, context);
   const domain = requireExactNonEmptyString(
     record.domain,
@@ -30842,6 +30894,13 @@ function normalizeKaigiRelayEventData(payload) {
         record.hpke_fingerprint_hex,
         "kaigi relay event.hpke_fingerprint_hex",
       ),
+    };
+  }
+  if (kind === "unregistration") {
+    return {
+      kind,
+      domain,
+      relay_id: relayId,
     };
   }
   const statusValue = requireExactNonEmptyString(
@@ -30914,7 +30973,9 @@ function buildKaigiRelayEventParams(options = {}) {
     for (const entry of values) {
       const token = requireNonEmptyString(entry, "kaigiRelayEvents.kind").toLowerCase();
       if (!KAIGI_EVENT_KIND_VALUES.has(token)) {
-        throw new TypeError("kaigiRelayEvents.kind must be registration or health");
+        throw new TypeError(
+          "kaigiRelayEvents.kind must be registration, unregistration, or health",
+        );
       }
       normalized.push(token);
     }
@@ -30939,7 +31000,7 @@ function buildKaigiCallSignalsQuery(options = {}) {
         "afterTimestampMs",
         "after_timestamp_ms",
         "limit",
-        "offset",
+        "cursor",
         "signal",
         "canonicalAuth",
       ]),
@@ -30967,11 +31028,10 @@ function buildKaigiCallSignalsQuery(options = {}) {
       { allowZero: false },
     );
   }
-  if (source.offset !== undefined && source.offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      source.offset,
-      "kaigiCallSignals.offset",
-      { allowZero: true },
+  if (source.cursor !== undefined && source.cursor !== null) {
+    params.cursor = normalizeKaigiCallSignalsCursor(
+      source.cursor,
+      "kaigiCallSignals.cursor",
     );
   }
   return {

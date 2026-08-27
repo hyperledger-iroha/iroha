@@ -1022,6 +1022,88 @@ async fn bridge_forwards_vpn_to_tun() {
     assert_eq!(1, snapshot.vpn_data_ingress_frames);
     assert_eq!(payload.len() as u64, snapshot.vpn_data_ingress_bytes);
 }
+
+#[tokio::test]
+async fn bridge_rejects_foreign_session_before_tun_write_or_accounting() {
+    let metrics = Arc::new(Metrics::new());
+    metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
+    let overlay = VpnOverlay::from_config(VpnConfig {
+        enabled: true,
+        ..Default::default()
+    });
+    let circuit_id = [0x65; 16];
+    let flow_label = VpnFlowLabelV1::from_u32(6).unwrap();
+    let bridge = overlay
+        .start_bridge(Arc::clone(&metrics), circuit_id, flow_label)
+        .expect("cover scheduler seed");
+    let payload = vec![0xCA; 12];
+    let make_frame = |frame_circuit_id| {
+        overlay
+            .pad_cell(VpnCellV1 {
+                header: VpnCellHeaderV1 {
+                    version: 1,
+                    class: VpnCellClassV1::Data,
+                    flags: VpnCellFlagsV1::new(false, false, false, false),
+                    circuit_id: frame_circuit_id,
+                    flow_label,
+                    sequence: 0,
+                    ack: 0,
+                    padding_budget_ms: overlay.config().padding_budget_ms,
+                    payload_len: 0,
+                },
+                payload: payload.clone(),
+            })
+            .expect("padded frame")
+    };
+
+    let foreign = make_frame([0x66; 16]);
+    let (mut vpn_writer, mut vpn_reader) = duplex(VPN_CELL_LEN * 2);
+    vpn_writer
+        .write_all(foreign.frame.as_ref())
+        .await
+        .expect("write foreign frame");
+    drop(vpn_writer);
+    let (mut tun_writer, mut tun_reader) = duplex(2048);
+    let error = bridge
+        .forward_vpn_to_tun(&mut vpn_reader, &mut tun_writer)
+        .await
+        .expect_err("foreign session frame must fail closed");
+    assert!(matches!(error, VpnFrameIoError::SessionBindingMismatch));
+    drop(tun_writer);
+    let mut received = Vec::new();
+    tun_reader
+        .read_to_end(&mut received)
+        .await
+        .expect("read rejected TUN output");
+    assert!(received.is_empty());
+    let snapshot = metrics.snapshot();
+    assert_eq!(0, snapshot.vpn_ingress_frames);
+    assert_eq!(0, snapshot.vpn_ingress_bytes);
+
+    let valid = make_frame(circuit_id);
+    let (mut vpn_writer, mut vpn_reader) = duplex(VPN_CELL_LEN * 2);
+    vpn_writer
+        .write_all(valid.frame.as_ref())
+        .await
+        .expect("write valid frame");
+    drop(vpn_writer);
+    let (mut tun_writer, mut tun_reader) = duplex(2048);
+    bridge
+        .forward_vpn_to_tun(&mut vpn_reader, &mut tun_writer)
+        .await
+        .expect("rejected foreign sequence must remain available");
+    drop(tun_writer);
+    let mut received = Vec::new();
+    tun_reader
+        .read_to_end(&mut received)
+        .await
+        .expect("read valid TUN output");
+    assert_eq!(payload, received);
+    let snapshot = metrics.snapshot();
+    assert_eq!(1, snapshot.vpn_ingress_frames);
+    assert_eq!(payload.len() as u64, snapshot.vpn_ingress_bytes);
+}
+
 #[tokio::test]
 async fn bridge_drops_cover_frames_on_tun_forward() {
     let metrics = Arc::new(Metrics::new());

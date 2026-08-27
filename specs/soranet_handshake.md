@@ -684,6 +684,14 @@ only defined first-release flag; parsers reject every reserved flag bit. The
 suite-list first-byte MSB uses its separate required-bit encoding described
 above.
 
+The current relay parses the strict constant-rate flag for wire compatibility but does not accept
+strict circuits. Configuration with `constant_rate_capability.enabled=true` and `strict=true`
+fails validation, and live handshake preflight independently rejects any negotiated strict result
+before sending the relay response or registering a circuit. Best-effort mode currently schedules
+dummy QUIC DATAGRAM cover only; application payload remains on QUIC streams. This fail-closed rule
+prevents DATAGRAM unavailability or send failure from silently weakening a circuit that claimed
+strict protection.
+
 #### Handshake suites (SNNet-16)
 
 SNNet-16 adds an explicit suite negotiation surface so the relay and client

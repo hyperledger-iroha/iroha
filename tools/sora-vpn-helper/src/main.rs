@@ -110,11 +110,16 @@ const TUNNEL_LAUNCH_FRAME_BYTES: usize = 64;
 const NETWORK_WORKER_IPC_MAGIC: &[u8; 8] = b"SVPNIPC1";
 const NETWORK_WORKER_IPC_VERSION: u8 = 1;
 const NETWORK_WORKER_IPC_FRAME_BYTES: usize = 64;
+#[cfg(any(target_os = "linux", test))]
+const TRAFFIC_ACCOUNTING_PERSIST_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(any(target_os = "linux", test))]
+const MAX_TRAFFIC_FRAMES_PER_INTERVAL: u32 = 64;
 const NETWORK_WORKER_PLAN_FRAME_BYTES: usize = 8 * 1024;
 const NETWORK_WORKER_PLAN_MAGIC: &[u8; 8] = b"SVPNPLN1";
 const NETWORK_WORKER_PLAN_VERSION: u8 = 1;
 const NETWORK_WORKER_IPC_FD: i32 = 3;
-const STATE_FILE_FRAME_MAGIC: &[u8; 8] = b"SVPNST1\0";
+const STATE_FILE_FRAME_MAGIC_V1: &[u8; 8] = b"SVPNST1\0";
+const STATE_FILE_FRAME_MAGIC: &[u8; 8] = b"SVPNST2\0";
 const STATE_FILE_NAME: &str = "state.norito";
 const CONTROLLER_LOCK_FILE_NAME: &str = "controller.lock";
 const HELPER_TICKET_ISSUER_PUBLIC_KEY_PATH: &str =
@@ -217,7 +222,89 @@ struct State {
     relay_endpoint: Option<String>,
     relay_id: Option<[u8; 32]>,
     network_policy_hash: Option<[u8; 32]>,
+    ticket_expires_at_ms: Option<u64>,
     applied_network: Option<AppliedNetworkState>,
+}
+
+// Decode the original local state layout so an upgrade can still quiesce exact workers and
+// restore a privileged network journal. A legacy active state has no authenticated expiry and is
+// therefore normalized to repair-required before it can be reported or persisted again.
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
+struct StateV1 {
+    installed: bool,
+    active: bool,
+    controller_kind: String,
+    interface_name: Option<String>,
+    network_service: Option<String>,
+    version: String,
+    controller_path: Option<String>,
+    repair_required: bool,
+    bytes_in: u64,
+    bytes_out: u64,
+    message: String,
+    worker_identity: Option<WorkerProcessIdentity>,
+    network_worker_identity: Option<WorkerProcessIdentity>,
+    owner_uid: Option<u32>,
+    session_id: Option<String>,
+    relay_endpoint: Option<String>,
+    relay_id: Option<[u8; 32]>,
+    network_policy_hash: Option<[u8; 32]>,
+    applied_network: Option<AppliedNetworkState>,
+}
+
+impl From<StateV1> for State {
+    fn from(state: StateV1) -> Self {
+        Self {
+            installed: state.installed,
+            active: state.active,
+            controller_kind: state.controller_kind,
+            interface_name: state.interface_name,
+            network_service: state.network_service,
+            version: state.version,
+            controller_path: state.controller_path,
+            repair_required: state.repair_required,
+            bytes_in: state.bytes_in,
+            bytes_out: state.bytes_out,
+            message: state.message,
+            worker_identity: state.worker_identity,
+            network_worker_identity: state.network_worker_identity,
+            owner_uid: state.owner_uid,
+            session_id: state.session_id,
+            relay_endpoint: state.relay_endpoint,
+            relay_id: state.relay_id,
+            network_policy_hash: state.network_policy_hash,
+            ticket_expires_at_ms: None,
+            applied_network: state.applied_network,
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<&State> for StateV1 {
+    fn from(state: &State) -> Self {
+        Self {
+            installed: state.installed,
+            active: state.active,
+            controller_kind: state.controller_kind.clone(),
+            interface_name: state.interface_name.clone(),
+            network_service: state.network_service.clone(),
+            version: state.version.clone(),
+            controller_path: state.controller_path.clone(),
+            repair_required: state.repair_required,
+            bytes_in: state.bytes_in,
+            bytes_out: state.bytes_out,
+            message: state.message.clone(),
+            worker_identity: state.worker_identity.clone(),
+            network_worker_identity: state.network_worker_identity.clone(),
+            owner_uid: state.owner_uid,
+            session_id: state.session_id.clone(),
+            relay_endpoint: state.relay_endpoint.clone(),
+            relay_id: state.relay_id,
+            network_policy_hash: state.network_policy_hash,
+            applied_network: state.applied_network.clone(),
+        }
+    }
 }
 impl Default for State {
     fn default() -> Self {
@@ -240,6 +327,7 @@ impl Default for State {
             relay_endpoint: None,
             relay_id: None,
             network_policy_hash: None,
+            ticket_expires_at_ms: None,
             applied_network: None,
         }
     }
@@ -897,6 +985,187 @@ enum SupervisorIpcPhase {
     StopSent,
     Exited,
 }
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug)]
+struct WorkerTrafficAccounting {
+    previous_ingress: u64,
+    previous_egress: u64,
+    dirty: bool,
+    frames_in_interval: u32,
+    frame_interval_ends_at: tokio::time::Instant,
+    next_persist_at: tokio::time::Instant,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl WorkerTrafficAccounting {
+    fn new(
+        previous_ingress: u64,
+        previous_egress: u64,
+        now: tokio::time::Instant,
+    ) -> Result<Self, ControllerError> {
+        let interval_end = now
+            .checked_add(TRAFFIC_ACCOUNTING_PERSIST_INTERVAL)
+            .ok_or_else(|| {
+                ControllerError::State(
+                    "traffic-accounting interval exceeds the monotonic clock range".to_owned(),
+                )
+            })?;
+        Ok(Self {
+            previous_ingress,
+            previous_egress,
+            dirty: false,
+            frames_in_interval: 0,
+            frame_interval_ends_at: interval_end,
+            next_persist_at: interval_end,
+        })
+    }
+
+    fn observe_at(
+        &mut self,
+        state: &mut State,
+        ingress: u64,
+        egress: u64,
+        now: tokio::time::Instant,
+        wall_now_ms: u64,
+    ) -> Result<(), ControllerError> {
+        if now >= self.frame_interval_ends_at {
+            self.frames_in_interval = 0;
+            self.frame_interval_ends_at = now
+                .checked_add(TRAFFIC_ACCOUNTING_PERSIST_INTERVAL)
+                .ok_or_else(|| {
+                    ControllerError::State(
+                        "traffic-accounting interval exceeds the monotonic clock range".to_owned(),
+                    )
+                })?;
+        }
+        if self.frames_in_interval >= MAX_TRAFFIC_FRAMES_PER_INTERVAL {
+            return Err(ControllerError::State(format!(
+                "network worker exceeded the authenticated TRAFFIC frame ceiling of {MAX_TRAFFIC_FRAMES_PER_INTERVAL} per accounting interval"
+            )));
+        }
+        self.frames_in_interval += 1;
+        if ingress < self.previous_ingress || egress < self.previous_egress {
+            return Err(ControllerError::State(
+                "network-worker traffic counters moved backwards".to_owned(),
+            ));
+        }
+        self.previous_ingress = ingress;
+        self.previous_egress = egress;
+        let counters_changed = state.bytes_out != ingress || state.bytes_in != egress;
+        // Preserve the public state convention: bytes_out is client-to-relay ingress and bytes_in
+        // is relay-to-client egress. The root supervisor alone owns this in-memory accumulator.
+        state.bytes_out = ingress;
+        state.bytes_in = egress;
+        self.dirty |= counters_changed;
+        self.apply_expiry_at(state, wall_now_ms);
+        Ok(())
+    }
+
+    fn apply_expiry_at(&mut self, state: &mut State, wall_now_ms: u64) {
+        let was_active = state.active;
+        let required_repair = state.repair_required;
+        demote_expired_active_state_at(state, wall_now_ms);
+        self.dirty |= was_active != state.active || required_repair != state.repair_required;
+    }
+
+    fn flush_if_due_with<F>(
+        &mut self,
+        state: &State,
+        now: tokio::time::Instant,
+        mut persist: F,
+    ) -> Result<bool, ControllerError>
+    where
+        F: FnMut(&State) -> Result<(), ControllerError>,
+    {
+        if now < self.next_persist_at {
+            return Ok(false);
+        }
+        let next_persist_at = now
+            .checked_add(TRAFFIC_ACCOUNTING_PERSIST_INTERVAL)
+            .ok_or_else(|| {
+                ControllerError::State(
+                    "traffic-accounting persistence interval exceeds the monotonic clock range"
+                        .to_owned(),
+                )
+            })?;
+        if !self.dirty {
+            self.next_persist_at = next_persist_at;
+            return Ok(false);
+        }
+        persist(state)?;
+        self.dirty = false;
+        self.next_persist_at = next_persist_at;
+        Ok(true)
+    }
+
+    fn force_flush_with<F>(
+        &mut self,
+        state: &State,
+        mut persist: F,
+    ) -> Result<bool, ControllerError>
+    where
+        F: FnMut(&State) -> Result<(), ControllerError>,
+    {
+        if !self.dirty {
+            return Ok(false);
+        }
+        persist(state)?;
+        self.dirty = false;
+        Ok(true)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn flush_if_due(
+        &mut self,
+        state: &State,
+        now: tokio::time::Instant,
+    ) -> Result<bool, ControllerError> {
+        self.flush_if_due_with(state, now, persist_state)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn force_flush(&mut self, state: &State) -> Result<bool, ControllerError> {
+        self.force_flush_with(state, persist_state)
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn finish_worker_traffic_accounting(
+    outcome: Result<u64, ControllerError>,
+    flush: Result<bool, ControllerError>,
+) -> Result<u64, ControllerError> {
+    match (outcome, flush) {
+        (Ok(code), Ok(_)) => Ok(code),
+        (Err(error), Ok(_)) => Err(error),
+        (Ok(_), Err(flush_error)) => Err(ControllerError::State(format!(
+            "failed to flush final network-worker traffic counters: {flush_error}"
+        ))),
+        (Err(error), Err(flush_error)) => Err(ControllerError::State(format!(
+            "{error}; failed to flush final network-worker traffic counters: {flush_error}"
+        ))),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn force_flush_worker_traffic_accounting(
+    accounting: &mut WorkerTrafficAccounting,
+    state: &mut State,
+) -> Result<bool, ControllerError> {
+    let clock_result = unix_now_ms();
+    if let Ok(now_ms) = clock_result.as_ref() {
+        accounting.apply_expiry_at(state, *now_ms);
+    }
+    let flush_result = accounting.force_flush(state);
+    match (clock_result, flush_result) {
+        (Ok(_), result) => result,
+        (Err(clock_error), Ok(_)) => Err(clock_error),
+        (Err(clock_error), Err(flush_error)) => Err(ControllerError::State(format!(
+            "{clock_error}; final traffic-counter persistence also failed: {flush_error}"
+        ))),
+    }
+}
+
 fn validate_supervisor_received_frame(
     phase: SupervisorIpcPhase,
     frame: NetworkIpcFrame,
@@ -1351,6 +1620,13 @@ impl NetworkWorkerProcess {
         Ok(status)
     }
 
+    fn exact_identity_alive(&mut self) -> Result<bool, ControllerError> {
+        if self.poll_exit()?.is_some() {
+            return Ok(false);
+        }
+        worker_identity_alive(&self.identity)
+    }
+
     async fn stop_and_reap(
         &mut self,
         timeout_limit: Duration,
@@ -1421,7 +1697,6 @@ struct TunnelTrafficConfig {
     flow_label: VpnFlowLabelV1,
     padding_budget_ms: u16,
     packet_read_mtu: usize,
-    ticket_expires_at_ms: u64,
 }
 struct LinuxTunDevice {
     file: AsyncFd<fs::File>,
@@ -2470,6 +2745,7 @@ fn state_has_session_binding(state: &State) -> bool {
         || state.relay_endpoint.is_some()
         || state.relay_id.is_some()
         || state.network_policy_hash.is_some()
+        || state.ticket_expires_at_ms.is_some()
 }
 fn authorize_connect_replacement(
     state: &State,
@@ -2517,6 +2793,7 @@ fn clear_session_binding(state: &mut State) {
     state.relay_endpoint = None;
     state.relay_id = None;
     state.network_policy_hash = None;
+    state.ticket_expires_at_ms = None;
     state.interface_name = None;
     state.network_service = None;
     state.applied_network = None;
@@ -2874,10 +3151,25 @@ fn connect_command(
                 ));
             }
         };
-        if observed_state.worker_identity.as_ref() == Some(&child_identity)
-            && observed_state.active
-            && worker_alive
-        {
+        let ready = match connect_state_ready(&observed_state, &child_identity, worker_alive) {
+            Ok(ready) => ready,
+            Err(error) => {
+                let reaped = terminate_and_reap_controller_child(
+                    &mut child,
+                    &child_identity,
+                    Duration::from_secs(2),
+                )?;
+                let failure =
+                    format!("failed to authenticate VPN network-worker readiness: {error}");
+                return Err(failed_connect_error_after_reap(
+                    &reaped,
+                    caller,
+                    &child_identity,
+                    &failure,
+                ));
+            }
+        };
+        if ready {
             print_state(&observed_state)?;
             return Ok(());
         }
@@ -2906,6 +3198,45 @@ fn connect_command(
         failure,
     ))
 }
+
+fn connect_state_ready_with<F>(
+    state: &State,
+    expected_supervisor: &WorkerProcessIdentity,
+    supervisor_alive: bool,
+    now_ms: u64,
+    mut network_worker_alive: F,
+) -> Result<bool, ControllerError>
+where
+    F: FnMut(&WorkerProcessIdentity) -> Result<bool, ControllerError>,
+{
+    if !state.active
+        || !active_runtime_state_complete_at(state, now_ms)
+        || !supervisor_alive
+        || state.worker_identity.as_ref() != Some(expected_supervisor)
+    {
+        return Ok(false);
+    }
+    let Some(network_worker) = state.network_worker_identity.as_ref() else {
+        return Ok(false);
+    };
+    network_worker_alive(network_worker)
+}
+
+fn connect_state_ready(
+    state: &State,
+    expected_supervisor: &WorkerProcessIdentity,
+    supervisor_alive: bool,
+) -> Result<bool, ControllerError> {
+    let now_ms = unix_now_ms()?;
+    connect_state_ready_with(
+        state,
+        expected_supervisor,
+        supervisor_alive,
+        now_ms,
+        worker_identity_alive,
+    )
+}
+
 fn disconnect_command(
     message: &str,
     caller: PrivilegedCaller,
@@ -3263,6 +3594,7 @@ async fn await_network_worker_started(
     expected_worker: NetworkPeerCredentials,
     phase: &mut SupervisorIpcPhase,
     signals: &mut TunnelShutdownSignals,
+    ticket_expires_at_ms: u64,
 ) -> Result<NetworkWorkerReady, ControllerError> {
     let deadline = tokio::time::sleep(NETWORK_WORKER_READY_TIMEOUT);
     let mut poll = tokio::time::interval(NETWORK_WORKER_POLL_INTERVAL);
@@ -3278,7 +3610,17 @@ async fn await_network_worker_started(
                     message.descriptors.len(),
                 )?;
                 match message.frame.kind {
-                    NetworkIpcKind::Started => return Ok(NetworkWorkerReady::Ready),
+                    NetworkIpcKind::Started => {
+                        ensure_authenticated_ticket_unexpired_for_connected_state(
+                            ticket_expires_at_ms,
+                        )?;
+                        if let Some(status) = process.poll_exit()? {
+                            return Err(ControllerError::State(format!(
+                                "unprivileged network worker exited at the STARTED publication barrier: {status}"
+                            )));
+                        }
+                        return Ok(NetworkWorkerReady::Ready);
+                    }
                     NetworkIpcKind::WorkerExit => {
                         return Ok(NetworkWorkerReady::Exited(message.frame.value_a));
                     }
@@ -3301,27 +3643,6 @@ async fn await_network_worker_started(
             }
         }
     }
-}
-#[cfg(target_os = "linux")]
-fn persist_cumulative_worker_traffic(
-    state: &mut State,
-    previous_ingress: &mut u64,
-    previous_egress: &mut u64,
-    ingress: u64,
-    egress: u64,
-) -> Result<(), ControllerError> {
-    if ingress < *previous_ingress || egress < *previous_egress {
-        return Err(ControllerError::State(
-            "network-worker traffic counters moved backwards".to_owned(),
-        ));
-    }
-    *previous_ingress = ingress;
-    *previous_egress = egress;
-    // Preserve the public state convention: bytes_out is client-to-relay ingress and bytes_in is
-    // relay-to-client egress. Only the root supervisor writes this durable state.
-    state.bytes_out = ingress;
-    state.bytes_in = egress;
-    persist_state(state)
 }
 #[cfg(target_os = "linux")]
 fn network_worker_exit_message(code: u64) -> &'static str {
@@ -3357,8 +3678,7 @@ async fn drain_stopping_network_worker(
     expected_worker: NetworkPeerCredentials,
     phase: &mut SupervisorIpcPhase,
     state: &mut State,
-    previous_ingress: &mut u64,
-    previous_egress: &mut u64,
+    accounting: &mut WorkerTrafficAccounting,
 ) -> Result<u64, ControllerError> {
     let deadline = tokio::time::sleep(NETWORK_WORKER_STOP_TIMEOUT);
     let mut poll = tokio::time::interval(NETWORK_WORKER_POLL_INTERVAL);
@@ -3374,12 +3694,12 @@ async fn drain_stopping_network_worker(
                     message.descriptors.len(),
                 )?;
                 match message.frame.kind {
-                    NetworkIpcKind::Traffic => persist_cumulative_worker_traffic(
+                    NetworkIpcKind::Traffic => accounting.observe_at(
                         state,
-                        previous_ingress,
-                        previous_egress,
                         message.frame.value_a,
                         message.frame.value_b,
+                        tokio::time::Instant::now(),
+                        unix_now_ms()?,
                     )?,
                     NetworkIpcKind::WorkerExit => return Ok(message.frame.value_a),
                     NetworkIpcKind::WorkerReady
@@ -3414,33 +3734,54 @@ async fn supervise_active_network_worker(
     state: &mut State,
     signals: &mut TunnelShutdownSignals,
 ) -> Result<u64, ControllerError> {
-    let mut previous_ingress = state.bytes_out;
-    let mut previous_egress = state.bytes_in;
+    let accounting_started_at = tokio::time::Instant::now();
+    let mut accounting =
+        WorkerTrafficAccounting::new(state.bytes_out, state.bytes_in, accounting_started_at)?;
     let mut poll = tokio::time::interval(NETWORK_WORKER_POLL_INTERVAL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
+    let mut persist_tick = tokio::time::interval_at(
+        accounting.next_persist_at,
+        TRAFFIC_ACCOUNTING_PERSIST_INTERVAL,
+    );
+    persist_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let outcome = loop {
         tokio::select! {
             message = ipc.receive(&token, expected_worker) => {
-                let message = message?;
-                *phase = validate_supervisor_received_frame(
+                let message = match message {
+                    Ok(message) => message,
+                    Err(error) => break Err(error),
+                };
+                let next_phase = match validate_supervisor_received_frame(
                     *phase,
                     message.frame,
                     message.descriptors.len(),
-                )?;
+                ) {
+                    Ok(next_phase) => next_phase,
+                    Err(error) => break Err(error),
+                };
+                *phase = next_phase;
                 match message.frame.kind {
-                    NetworkIpcKind::Traffic => persist_cumulative_worker_traffic(
-                        state,
-                        &mut previous_ingress,
-                        &mut previous_egress,
-                        message.frame.value_a,
-                        message.frame.value_b,
-                    )?,
-                    NetworkIpcKind::WorkerExit => return Ok(message.frame.value_a),
+                    NetworkIpcKind::Traffic => {
+                        let wall_now_ms = match unix_now_ms() {
+                            Ok(now_ms) => now_ms,
+                            Err(error) => break Err(error),
+                        };
+                        if let Err(error) = accounting.observe_at(
+                            state,
+                            message.frame.value_a,
+                            message.frame.value_b,
+                            tokio::time::Instant::now(),
+                            wall_now_ms,
+                        ) {
+                            break Err(error);
+                        }
+                    }
+                    NetworkIpcKind::WorkerExit => break Ok(message.frame.value_a),
                     _ => unreachable!("state-machine validation restricts active messages"),
                 }
             }
             _ = signals.sigterm.recv() => {
-                supervisor_send_ipc(
+                if let Err(error) = supervisor_send_ipc(
                     ipc,
                     token,
                     phase,
@@ -3448,20 +3789,21 @@ async fn supervise_active_network_worker(
                     0,
                     0,
                     None,
-                ).await?;
-                return drain_stopping_network_worker(
+                ).await {
+                    break Err(error);
+                }
+                break drain_stopping_network_worker(
                     process,
                     ipc,
                     &token,
                     expected_worker,
                     phase,
                     state,
-                    &mut previous_ingress,
-                    &mut previous_egress,
+                    &mut accounting,
                 ).await;
             }
             _ = signals.sigint.recv() => {
-                supervisor_send_ipc(
+                if let Err(error) = supervisor_send_ipc(
                     ipc,
                     token,
                     phase,
@@ -3469,27 +3811,47 @@ async fn supervise_active_network_worker(
                     0,
                     0,
                     None,
-                ).await?;
-                return drain_stopping_network_worker(
+                ).await {
+                    break Err(error);
+                }
+                break drain_stopping_network_worker(
                     process,
                     ipc,
                     &token,
                     expected_worker,
                     phase,
                     state,
-                    &mut previous_ingress,
-                    &mut previous_egress,
+                    &mut accounting,
                 ).await;
             }
+            _ = persist_tick.tick() => {
+                let wall_now_ms = match unix_now_ms() {
+                    Ok(now_ms) => now_ms,
+                    Err(error) => break Err(error),
+                };
+                accounting.apply_expiry_at(state, wall_now_ms);
+                if let Err(error) = accounting.flush_if_due(
+                    state,
+                    tokio::time::Instant::now(),
+                ) {
+                    break Err(error);
+                }
+            }
             _ = poll.tick() => {
-                if let Some(status) = process.poll_exit()? {
-                    return Err(ControllerError::State(format!(
-                        "unprivileged network worker exited without its final IPC frame: {status}"
-                    )));
+                match process.poll_exit() {
+                    Ok(Some(status)) => {
+                        break Err(ControllerError::State(format!(
+                            "unprivileged network worker exited without its final IPC frame: {status}"
+                        )));
+                    }
+                    Ok(None) => {}
+                    Err(error) => break Err(error),
                 }
             }
         }
-    }
+    };
+    let flush = force_flush_worker_traffic_accounting(&mut accounting, state);
+    finish_worker_traffic_accounting(outcome, flush)
 }
 #[cfg(target_os = "linux")]
 async fn stop_network_worker_before_tun(
@@ -3500,27 +3862,30 @@ async fn stop_network_worker_before_tun(
     phase: &mut SupervisorIpcPhase,
     state: &mut State,
 ) -> Result<u64, ControllerError> {
-    let protocol_result = async {
+    let accounting_started_at = tokio::time::Instant::now();
+    let mut accounting =
+        WorkerTrafficAccounting::new(state.bytes_out, state.bytes_in, accounting_started_at)?;
+    let protocol_outcome = async {
         supervisor_send_ipc(ipc, token, phase, NetworkIpcKind::Stop, 0, 0, None).await?;
-        let mut ingress = state.bytes_out;
-        let mut egress = state.bytes_in;
-        let exit_code = drain_stopping_network_worker(
+        drain_stopping_network_worker(
             process,
             ipc,
             &token,
             expected_worker,
             phase,
             state,
-            &mut ingress,
-            &mut egress,
+            &mut accounting,
         )
-        .await?;
-        let _ = process.reap_after_protocol_exit().await?;
-        Ok(exit_code)
+        .await
     }
     .await;
+    let flush = force_flush_worker_traffic_accounting(&mut accounting, state);
+    let protocol_result = finish_worker_traffic_accounting(protocol_outcome, flush);
     match protocol_result {
-        Ok(exit_code) => Ok(exit_code),
+        Ok(exit_code) => {
+            let _ = process.reap_after_protocol_exit().await?;
+            Ok(exit_code)
+        }
         Err(protocol_error) => {
             // A broken/malformed IPC channel must not let a child retain the transferred TUN fd.
             // Exact pidfd-backed termination and reaping completes before the caller is allowed
@@ -3689,6 +4054,7 @@ async fn run_tunnel_command(
     state.relay_endpoint = Some(payload.relay_endpoint.clone());
     state.relay_id = Some(payload.relay_id);
     state.network_policy_hash = Some(payload.network_policy_hash);
+    state.ticket_expires_at_ms = Some(payload.ticket_expires_at_ms);
     state.bytes_in = 0;
     state.bytes_out = 0;
     state.message = "starting isolated network worker".to_owned();
@@ -3926,6 +4292,7 @@ async fn run_tunnel_command(
         expected_worker,
         &mut phase,
         &mut shutdown_signals,
+        payload.ticket_expires_at_ms,
     )
     .await;
     match started {
@@ -3975,14 +4342,44 @@ async fn run_tunnel_command(
         }
     }
 
-    // The worker has validated the TUN fd and acknowledged that its packet loop is armed. Only
-    // now may the controller publish connected state to the waiting caller.
-    state.active = true;
     state.repair_required = false;
     state.interface_name = Some(prepared.get().interface_name.clone());
     state.network_service = prepared.get().network_service.clone();
     state.applied_network = Some(prepared.get().applied_network.clone());
     state.message = "connected".to_owned();
+
+    // This is the final authorization and process-custody barrier. It deliberately has no await
+    // or fallible preparation between the exact child/ticket checks and the connected-state write
+    // below. Persistence independently rechecks the durable expiry invariant before encoding.
+    let publication_check = network_worker
+        .exact_identity_alive()
+        .and_then(|child_alive| {
+            ensure_connected_publication_ready_at(
+                payload.ticket_expires_at_ms,
+                unix_now_ms()?,
+                child_alive,
+            )
+        });
+    if let Err(error) = publication_check {
+        let reap_error = network_worker
+            .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
+            .await
+            .err();
+        let mut message = error.to_string();
+        if let Some(reap_error) = reap_error {
+            message = format!("{message}; exact child reaping failed: {reap_error}");
+        }
+        return match finish_prepared_tunnel(prepared, &mut state, &network_worker, message) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(ControllerError::State(format!(
+                "{error}; safe tunnel cleanup failed: {cleanup_error}"
+            ))),
+        };
+    }
+
+    // The worker has validated the TUN fd and acknowledged that its packet loop is armed. Only
+    // now may the controller publish connected state to the waiting caller.
+    state.active = true;
     if let Err(persist_error) = persist_state(&state) {
         let stop_error = stop_network_worker_before_tun(
             &mut network_worker,
@@ -4221,6 +4618,9 @@ async fn run_network_worker_session(
         return Ok(());
     }
     debug_assert_eq!(start.frame.kind, NetworkIpcKind::Start);
+    // Arm the monotonic authorization boundary before acknowledging STARTED. The packet loop
+    // receives this exact deadline, so scheduling or a later wall-clock rollback cannot extend it.
+    let ticket_expiry_deadline = authenticated_ticket_expiry_deadline(ticket.expires_at_ms)?;
     worker_send_ipc(&ipc, token, phase, NetworkIpcKind::Started, 0, 0).await?;
 
     let circuit_id = ticket.session_id;
@@ -4244,8 +4644,8 @@ async fn run_network_worker_session(
             flow_label,
             padding_budget_ms: payload.padding_budget_ms,
             packet_read_mtu: usize::from(expected_mtu),
-            ticket_expires_at_ms: ticket.expires_at_ms,
         },
+        ticket_expiry_deadline,
         voucher_signer,
         voucher_counters.clone(),
         control,
@@ -5082,6 +5482,7 @@ async fn tunnel_packet_loop<W, R, C>(
     send: &mut W,
     recv: &mut R,
     traffic: TunnelTrafficConfig,
+    expiry_deadline: tokio::time::Instant,
     voucher_signer: UsageVoucherSigner,
     voucher_counters: UsageVoucherCounters,
     control: C,
@@ -5091,18 +5492,6 @@ where
     R: AsyncRead + Unpin,
     C: Future<Output = Result<TunnelShutdown, ControllerError>>,
 {
-    // Convert the signed wall-clock expiry to one monotonic deadline exactly once. Recreating a
-    // relative timeout inside either packet loop would let activity or a wall-clock rollback
-    // extend the issuer-authorized lifetime.
-    let expiry_remaining =
-        authenticated_ticket_expiry_remaining_at(traffic.ticket_expires_at_ms, unix_now_ms()?)?;
-    let expiry_deadline = tokio::time::Instant::now()
-        .checked_add(expiry_remaining)
-        .ok_or_else(|| {
-            ControllerError::State(
-                "authenticated helper ticket expiry exceeds the monotonic clock range".to_owned(),
-            )
-        })?;
     let expiry = tokio::time::sleep_until(expiry_deadline);
     let upstream = tun_to_vpn_loop(
         Arc::clone(&device),
@@ -5209,7 +5598,7 @@ where
                         payload: chunk.to_vec(),
                     };
                     let padded = cell.into_padded_frame()?;
-                    send.write_all(padded.as_ref()).await?;
+                    write_vpn_frame(send, &padded).await?;
                     sequence = sequence.saturating_add(1);
                 }
                 voucher_counters.record_client_to_relay(packet_len_u64);
@@ -5436,8 +5825,19 @@ where
         payload,
     };
     let padded = cell.into_padded_frame()?;
-    send.write_all(padded.as_ref()).await?;
+    write_vpn_frame(send, &padded).await?;
     *sequence = (*sequence).saturating_add(1);
+    Ok(())
+}
+async fn write_vpn_frame<W>(send: &mut W, frame: &VpnPaddedCellV1) -> Result<(), ControllerError>
+where
+    W: AsyncWrite + Unpin,
+{
+    send.write_all(frame.as_ref()).await?;
+    // `RecordWriter` buffers the last accepted authenticated record. Flush at
+    // every cell boundary so the initial voucher and a packet's final cell are
+    // visible without waiting for another write or tunnel shutdown.
+    send.flush().await?;
     Ok(())
 }
 fn unix_now_ms() -> Result<u64, ControllerError> {
@@ -7395,6 +7795,7 @@ fn current_state() -> Result<State, ControllerError> {
     let mut state = load_state()?;
     hydrate_runtime_fields(&mut state);
     scrub_stale_process(&mut state)?;
+    validate_state_for_persistence(&state)?;
     Ok(state)
 }
 fn read_bounded<R: io::Read>(
@@ -7613,7 +8014,7 @@ fn persist_state(state: &State) -> Result<(), ControllerError> {
     persist_state_at(&path, state)
 }
 fn persist_state_at(path: &Path, state: &State) -> Result<(), ControllerError> {
-    validate_state_invariants(state)?;
+    validate_state_for_persistence(state)?;
     let parent = path.parent().ok_or_else(|| {
         ControllerError::State(format!("state path {} has no parent", path.display()))
     })?;
@@ -7655,7 +8056,8 @@ fn validate_state_invariants(state: &State) -> Result<(), ControllerError> {
         && state.session_id.is_none()
         && state.relay_endpoint.is_none()
         && state.relay_id.is_none()
-        && state.network_policy_hash.is_none();
+        && state.network_policy_hash.is_none()
+        && state.ticket_expires_at_ms.is_none();
     if state_has_session_binding(state)
         && !binding_is_complete
         && !binding_is_pending_authentication
@@ -7674,6 +8076,75 @@ fn validate_state_invariants(state: &State) -> Result<(), ControllerError> {
     {
         return Err(ControllerError::State(
             "privileged VPN state is missing its caller/session ownership binding".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn active_runtime_state_complete_at(state: &State, now_ms: u64) -> bool {
+    !state.repair_required
+        && state
+            .ticket_expires_at_ms
+            .is_some_and(|expires_at_ms| expires_at_ms > now_ms)
+        && state.network_worker_identity.is_some()
+        && state
+            .applied_network
+            .as_ref()
+            .is_some_and(|applied| applied.journal_phase == NetworkJournalPhase::Prepared)
+}
+
+fn demote_expired_active_state_at(state: &mut State, now_ms: u64) {
+    if state.active
+        && state
+            .ticket_expires_at_ms
+            .is_some_and(|expires_at_ms| expires_at_ms <= now_ms)
+    {
+        state.active = false;
+        state.repair_required = true;
+        state.message =
+            "authenticated helper ticket expired; awaiting exact network-worker shutdown"
+                .to_owned();
+    }
+}
+
+fn validate_state_for_persistence(state: &State) -> Result<(), ControllerError> {
+    validate_state_for_persistence_at(state, unix_now_ms()?)
+}
+
+fn validate_state_for_persistence_at(state: &State, now_ms: u64) -> Result<(), ControllerError> {
+    validate_state_invariants(state)?;
+    if state.active
+        && !state
+            .ticket_expires_at_ms
+            .is_some_and(|expires_at_ms| expires_at_ms > now_ms)
+    {
+        return Err(ControllerError::State(
+            "active state must retain an unexpired authenticated ticket deadline".to_owned(),
+        ));
+    }
+    if state.active && state.network_worker_identity.is_none() {
+        return Err(ControllerError::State(
+            "active state must have a valid network-child identity".to_owned(),
+        ));
+    }
+    if state.active && state.applied_network.is_none() {
+        return Err(ControllerError::State(
+            "active state must retain its privileged network repair journal".to_owned(),
+        ));
+    }
+    if state.active
+        && state
+            .applied_network
+            .as_ref()
+            .is_some_and(|applied| applied.journal_phase != NetworkJournalPhase::Prepared)
+    {
+        return Err(ControllerError::State(
+            "active state must retain a completely prepared network journal".to_owned(),
+        ));
+    }
+    if state.active && state.repair_required {
+        return Err(ControllerError::State(
+            "active state cannot simultaneously require repair".to_owned(),
         ));
     }
     Ok(())
@@ -7710,23 +8181,35 @@ fn decode_state_frame(bytes: &[u8]) -> Result<State, ControllerError> {
             "state frame exceeds the v1 limit of {MAX_STATE_FRAME_BYTES_V1} bytes"
         )));
     }
-    if !bytes.starts_with(STATE_FILE_FRAME_MAGIC) {
-        return Err(ControllerError::State(
-            "state file is not a v1 Norito state frame".to_owned(),
-        ));
+    let decode_limits = || {
+        norito::DecodeLimits::new(
+            MAX_STATE_SEQUENCE_ELEMENTS_V1,
+            MAX_STATE_FIELD_BYTES_V1,
+            MAX_STATE_TOTAL_ELEMENTS_V1,
+            MAX_STATE_DECODE_ALLOCATION_BYTES_V1,
+            MAX_STATE_DECODE_DEPTH_V1,
+        )
+    };
+    if bytes.starts_with(STATE_FILE_FRAME_MAGIC) {
+        return norito::codec::decode_exact_from_slice_with_limits::<State>(
+            &bytes[STATE_FILE_FRAME_MAGIC.len()..],
+            decode_limits(),
+        )
+        .map_err(|error| ControllerError::State(format!("failed to decode state: {error}")));
     }
-    let limits = norito::DecodeLimits::new(
-        MAX_STATE_SEQUENCE_ELEMENTS_V1,
-        MAX_STATE_FIELD_BYTES_V1,
-        MAX_STATE_TOTAL_ELEMENTS_V1,
-        MAX_STATE_DECODE_ALLOCATION_BYTES_V1,
-        MAX_STATE_DECODE_DEPTH_V1,
-    );
-    norito::codec::decode_exact_from_slice_with_limits(
-        &bytes[STATE_FILE_FRAME_MAGIC.len()..],
-        limits,
-    )
-    .map_err(|error| ControllerError::State(format!("failed to decode state: {error}")))
+    if bytes.starts_with(STATE_FILE_FRAME_MAGIC_V1) {
+        return norito::codec::decode_exact_from_slice_with_limits::<StateV1>(
+            &bytes[STATE_FILE_FRAME_MAGIC_V1.len()..],
+            decode_limits(),
+        )
+        .map(State::from)
+        .map_err(|error| {
+            ControllerError::State(format!("failed to decode legacy state: {error}"))
+        });
+    }
+    Err(ControllerError::State(
+        "state file is not a supported Norito state frame".to_owned(),
+    ))
 }
 fn state_json_value(state: &State) -> JsonValue {
     let mut map = JsonMap::new();
@@ -7757,6 +8240,7 @@ fn state_json_value(state: &State) -> JsonValue {
     }
     insert_string_option(&mut map, "session_id", state.session_id.as_deref());
     insert_string_option(&mut map, "relay_endpoint", state.relay_endpoint.as_deref());
+    insert_u64_option(&mut map, "ticket_expires_at_ms", state.ticket_expires_at_ms);
     map.insert(
         "applied_network".to_owned(),
         state
@@ -7847,6 +8331,14 @@ fn insert_bool(map: &mut JsonMap, key: &str, value: bool) {
 }
 fn insert_u64(map: &mut JsonMap, key: &str, value: u64) {
     map.insert(key.to_owned(), JsonValue::Number(JsonNumber::from(value)));
+}
+fn insert_u64_option(map: &mut JsonMap, key: &str, value: Option<u64>) {
+    map.insert(
+        key.to_owned(),
+        value
+            .map(|value| JsonValue::Number(JsonNumber::from(value)))
+            .unwrap_or(JsonValue::Null),
+    );
 }
 #[cfg(unix)]
 struct ControllerActionLock {
@@ -8939,16 +9431,29 @@ fn current_controller_path() -> Option<String> {
         .ok()
         .and_then(|path| path.to_str().map(ToOwned::to_owned))
 }
-fn scrub_stale_process(state: &mut State) -> Result<(), ControllerError> {
+fn scrub_stale_process_with<F>(
+    state: &mut State,
+    now_ms: u64,
+    mut identity_alive: F,
+) -> Result<(), ControllerError>
+where
+    F: FnMut(&WorkerProcessIdentity) -> Result<bool, ControllerError>,
+{
     if let Some(identity) = state.worker_identity.as_ref()
-        && !worker_identity_alive(identity)?
+        && !identity_alive(identity)?
     {
         state.worker_identity = None;
     }
     if let Some(identity) = state.network_worker_identity.as_ref()
-        && !worker_identity_alive(identity)?
+        && !identity_alive(identity)?
     {
         state.network_worker_identity = None;
+    }
+    demote_expired_active_state_at(state, now_ms);
+    if state.active && !active_runtime_state_complete_at(state, now_ms) {
+        state.active = false;
+        state.repair_required = true;
+        state.message = "repair required".to_owned();
     }
     if state.worker_identity.is_none() {
         state.active = false;
@@ -8961,6 +9466,10 @@ fn scrub_stale_process(state: &mut State) -> Result<(), ControllerError> {
         }
     }
     Ok(())
+}
+
+fn scrub_stale_process(state: &mut State) -> Result<(), ControllerError> {
+    scrub_stale_process_with(state, unix_now_ms()?, worker_identity_alive)
 }
 #[cfg(target_os = "linux")]
 fn capture_worker_identity(
@@ -9790,6 +10299,40 @@ fn ensure_authenticated_ticket_unexpired_at(expires_at_ms: u64) -> Result<(), Co
     }
     Ok(())
 }
+
+fn ensure_authenticated_ticket_unexpired_for_connected_state_at(
+    expires_at_ms: u64,
+    now_ms: u64,
+) -> Result<(), ControllerError> {
+    if expires_at_ms <= now_ms {
+        return Err(ControllerError::InvalidPayload(format!(
+            "authenticated helper ticket expired at {expires_at_ms} before connected state publication (current time {now_ms})"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_authenticated_ticket_unexpired_for_connected_state(
+    expires_at_ms: u64,
+) -> Result<(), ControllerError> {
+    ensure_authenticated_ticket_unexpired_for_connected_state_at(expires_at_ms, unix_now_ms()?)
+}
+
+fn ensure_connected_publication_ready_at(
+    expires_at_ms: u64,
+    now_ms: u64,
+    exact_child_alive: bool,
+) -> Result<(), ControllerError> {
+    ensure_authenticated_ticket_unexpired_for_connected_state_at(expires_at_ms, now_ms)?;
+    if !exact_child_alive {
+        return Err(ControllerError::State(
+            "exact network worker is not alive at the connected-state publication barrier"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn authenticated_ticket_expiry_remaining_at(
     expires_at_ms: u64,
     now_ms: u64,
@@ -9802,6 +10345,32 @@ fn authenticated_ticket_expiry_remaining_at(
         },
     )?;
     Ok(Duration::from_millis(remaining_ms))
+}
+
+fn authenticated_ticket_expiry_deadline(
+    expires_at_ms: u64,
+) -> Result<tokio::time::Instant, ControllerError> {
+    // Convert the signed wall-clock expiry to one monotonic deadline exactly once. Recreating a
+    // relative timeout after STARTED or inside either packet loop would let scheduling, activity,
+    // or a wall-clock rollback extend the issuer-authorized lifetime.
+    let monotonic_anchor = tokio::time::Instant::now();
+    let wall_now_ms = unix_now_ms()?;
+    authenticated_ticket_expiry_deadline_at(expires_at_ms, wall_now_ms, monotonic_anchor)
+}
+
+fn authenticated_ticket_expiry_deadline_at(
+    expires_at_ms: u64,
+    wall_now_ms: u64,
+    monotonic_anchor: tokio::time::Instant,
+) -> Result<tokio::time::Instant, ControllerError> {
+    let expiry_remaining = authenticated_ticket_expiry_remaining_at(expires_at_ms, wall_now_ms)?;
+    monotonic_anchor
+        .checked_add(expiry_remaining)
+        .ok_or_else(|| {
+            ControllerError::State(
+                "authenticated helper ticket expiry exceeds the monotonic clock range".to_owned(),
+            )
+        })
 }
 fn parse_authenticated_helper_ticket(
     hex_ticket: &str,
@@ -10551,6 +11120,136 @@ mod tests {
         );
     }
 
+    #[test]
+    fn traffic_accounting_coalesces_each_interval_and_force_flushes_latest() {
+        let now = tokio::time::Instant::now();
+        let mut state = State::default();
+        let mut accounting = WorkerTrafficAccounting::new(0, 0, now).expect("accounting window");
+        accounting
+            .observe_at(&mut state, 10, 20, now, 1_000)
+            .expect("first cumulative frame");
+        accounting
+            .observe_at(&mut state, 30, 40, now + Duration::from_millis(500), 1_500)
+            .expect("coalesced cumulative frame");
+
+        let mut persisted = Vec::new();
+        assert!(
+            !accounting
+                .flush_if_due_with(&state, now + Duration::from_millis(999), |_| panic!(
+                    "sub-interval traffic must not be persisted"
+                ),)
+                .expect("not yet due")
+        );
+        assert!(
+            accounting
+                .flush_if_due_with(
+                    &state,
+                    now + TRAFFIC_ACCOUNTING_PERSIST_INTERVAL,
+                    |snapshot| {
+                        persisted.push((snapshot.bytes_out, snapshot.bytes_in));
+                        Ok(())
+                    },
+                )
+                .expect("one batched persistence")
+        );
+        assert_eq!(persisted, [(30, 40)]);
+        assert!(
+            !accounting
+                .force_flush_with(&state, |_| panic!("clean batch must not be rewritten"))
+                .expect("already flushed")
+        );
+
+        accounting
+            .observe_at(
+                &mut state,
+                50,
+                60,
+                now + Duration::from_millis(1_100),
+                2_100,
+            )
+            .expect("next interval frame");
+        assert!(
+            accounting
+                .force_flush_with(&state, |snapshot| {
+                    persisted.push((snapshot.bytes_out, snapshot.bytes_in));
+                    Ok(())
+                })
+                .expect("orderly exit flushes the partial batch")
+        );
+        assert_eq!(persisted, [(30, 40), (50, 60)]);
+    }
+
+    #[test]
+    fn traffic_accounting_rejects_counter_rollback_and_frame_floods() {
+        let now = tokio::time::Instant::now();
+        let mut state = State::default();
+        let mut accounting = WorkerTrafficAccounting::new(0, 0, now).expect("accounting window");
+        accounting
+            .observe_at(&mut state, 5, 7, now, 1_000)
+            .expect("initial counters");
+        let rollback = accounting
+            .observe_at(&mut state, 4, 8, now, 1_000)
+            .expect_err("cumulative counters never move backwards");
+        assert!(rollback.to_string().contains("moved backwards"));
+        assert_eq!((state.bytes_out, state.bytes_in), (5, 7));
+
+        let mut flood_state = State::default();
+        let mut flood = WorkerTrafficAccounting::new(0, 0, now).expect("flood window");
+        for counter in 1..=u64::from(MAX_TRAFFIC_FRAMES_PER_INTERVAL) {
+            flood
+                .observe_at(&mut flood_state, counter, counter, now, 1_000)
+                .expect("frames through the conservative ceiling are accepted");
+        }
+        let error = flood
+            .observe_at(
+                &mut flood_state,
+                u64::from(MAX_TRAFFIC_FRAMES_PER_INTERVAL) + 1,
+                u64::from(MAX_TRAFFIC_FRAMES_PER_INTERVAL) + 1,
+                now,
+                1_000,
+            )
+            .expect_err("one interval cannot drive unbounded root work");
+        assert!(error.to_string().contains("TRAFFIC frame ceiling"));
+        flood
+            .observe_at(
+                &mut flood_state,
+                u64::from(MAX_TRAFFIC_FRAMES_PER_INTERVAL) + 1,
+                u64::from(MAX_TRAFFIC_FRAMES_PER_INTERVAL) + 1,
+                now + TRAFFIC_ACCOUNTING_PERSIST_INTERVAL,
+                2_000,
+            )
+            .expect("the next monotonic interval starts a new bounded budget");
+    }
+
+    #[test]
+    fn traffic_accounting_flushes_latest_counters_on_error_exit() {
+        let now = tokio::time::Instant::now();
+        let mut state = State::default();
+        let mut accounting = WorkerTrafficAccounting::new(0, 0, now).expect("accounting window");
+        accounting
+            .observe_at(&mut state, 90, 120, now, 1_000)
+            .expect("dirty cumulative counters");
+
+        let first_flush = accounting.force_flush_with(&state, |_| {
+            Err(ControllerError::State(
+                "injected persistence failure".to_owned(),
+            ))
+        });
+        assert!(first_flush.is_err());
+        let mut persisted = None;
+        let flush = accounting.force_flush_with(&state, |snapshot| {
+            persisted = Some((snapshot.bytes_out, snapshot.bytes_in));
+            Ok(())
+        });
+        let outcome = finish_worker_traffic_accounting(
+            Err(ControllerError::State("injected IPC failure".to_owned())),
+            flush,
+        )
+        .expect_err("the IPC failure remains fatal after the forced flush");
+        assert!(outcome.to_string().contains("injected IPC failure"));
+        assert_eq!(persisted, Some((90, 120)));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn permanent_privilege_drop_uses_fail_closed_order_and_verifies_every_identity() {
@@ -11187,6 +11886,7 @@ mod tests {
             relay_endpoint: Some(payload.relay_endpoint.clone()),
             relay_id: Some([0x22; 32]),
             network_policy_hash: Some([0x11; 32]),
+            ticket_expires_at_ms: Some(payload.ticket_expires_at_ms),
             message: "starting isolated network worker".to_owned(),
             ..State::default()
         }
@@ -11795,6 +12495,7 @@ mod tests {
             relay_endpoint: Some("/ip4/93.184.216.34/udp/7777/quic".to_owned()),
             relay_id: Some([0x22; 32]),
             network_policy_hash: Some([0x33; 32]),
+            ticket_expires_at_ms: Some(42_000),
             bytes_in: 7,
             bytes_out: 9,
             ..State::default()
@@ -11802,6 +12503,27 @@ mod tests {
         let frame = encode_state_frame(&state).expect("encode state");
         assert!(frame.starts_with(STATE_FILE_FRAME_MAGIC));
         assert_eq!(decode_state_frame(&frame).expect("decode state"), state);
+    }
+    #[test]
+    fn legacy_state_frame_preserves_recovery_but_cannot_report_active() {
+        let state = active_runtime_test_state();
+        let legacy = StateV1::from(&state);
+        let mut frame = Vec::with_capacity(STATE_FILE_FRAME_MAGIC_V1.len() + legacy.encoded_len());
+        frame.extend_from_slice(STATE_FILE_FRAME_MAGIC_V1);
+        legacy.encode_to(&mut frame);
+
+        let mut decoded = decode_state_frame(&frame).expect("decode legacy recovery state");
+        assert!(decoded.active);
+        assert!(decoded.ticket_expires_at_ms.is_none());
+        scrub_stale_process_with(&mut decoded, 1_000, |_| Ok(true))
+            .expect("normalize legacy active state without losing process custody");
+        assert!(!decoded.active);
+        assert!(decoded.repair_required);
+        assert!(decoded.worker_identity.is_some());
+        assert!(decoded.network_worker_identity.is_some());
+        assert!(decoded.applied_network.is_some());
+        validate_state_for_persistence_at(&decoded, 1_000)
+            .expect("legacy state remains persistable as repair custody");
     }
     #[test]
     fn bounded_reader_accepts_exact_connect_frame_limit() {
@@ -12454,6 +13176,64 @@ mod tests {
                 .expect("bounded fixture fee")
         );
     }
+    #[tokio::test]
+    async fn usage_voucher_control_cell_flushes_single_protected_record() {
+        let session_id = TEST_SESSION_ID;
+        let ticket = test_helper_ticket(session_id);
+        let metering_seed = "66".repeat(32);
+        let raw_payload =
+            test_connect_payload_json(session_id, &ticket, Some(metering_seed.as_str()));
+        let payload = parse_connect_payload(Some(&raw_payload)).expect("payload");
+        let mut signer = UsageVoucherSigner::from_payload(&payload, ticket).expect("signer");
+        let counters = UsageVoucherCounters::default();
+        let context =
+            RecordStreamContext::new(RecordEndpoint::Client, RecordStreamKind::Bidirectional, 7);
+        let client_record = RecordLayer::new(
+            iroha_crypto::SessionKey::new(vec![0xA5; 32]),
+            RecordEndpoint::Client,
+        )
+        .expect("client record layer")
+        .stream(context)
+        .expect("client record stream");
+        let relay_record = RecordLayer::new(
+            iroha_crypto::SessionKey::new(vec![0xA5; 32]),
+            RecordEndpoint::Relay,
+        )
+        .expect("relay record layer")
+        .stream(context)
+        .expect("relay record stream");
+        let (transport_writer, transport_reader) = tokio::io::duplex(4_096);
+        let mut writer =
+            soranet_record_io::RecordWriter::new(transport_writer, client_record.sealer);
+        let mut reader =
+            soranet_record_io::RecordReader::new(transport_reader, relay_record.opener);
+        let mut sequence = 0;
+
+        send_usage_voucher_control_cell(
+            &mut writer,
+            session_id,
+            vpn_flow_label_from_session_id(session_id).expect("flow label"),
+            payload.padding_budget_ms,
+            &counters,
+            &mut signer,
+            &mut sequence,
+        )
+        .await
+        .expect("send initial voucher");
+
+        let mut frame = VpnPaddedCellV1::zeroed();
+        timeout(Duration::from_secs(1), reader.read_exact(frame.as_mut()))
+            .await
+            .expect("the initial voucher must not wait for another write")
+            .expect("read protected voucher cell");
+        let cell = frame
+            .parse_with_flow_label_bits(VpnFlowLabelV1::MAX_BITS)
+            .expect("parse voucher cell");
+        assert_eq!(cell.header.class, VpnCellClassV1::Control);
+        assert_eq!(cell.header.sequence, 0);
+        assert!(cell.payload.starts_with(VPN_USAGE_VOUCHER_CONTROL_MAGIC));
+        assert_eq!(sequence, 1);
+    }
     #[test]
     fn usage_voucher_counters_follow_relay_direction_semantics() {
         let counters = UsageVoucherCounters::default();
@@ -12857,6 +13637,51 @@ mod tests {
         }
     }
     #[test]
+    fn expired_ticket_cannot_cross_the_started_publication_barrier() {
+        ensure_authenticated_ticket_unexpired_for_connected_state_at(1_001, 1_000)
+            .expect("unexpired ticket may cross STARTED");
+        for now_ms in [1_001, 1_002] {
+            let error = ensure_authenticated_ticket_unexpired_for_connected_state_at(1_001, now_ms)
+                .expect_err("expired ticket must not publish connected state");
+            assert!(error.to_string().contains("connected state publication"));
+        }
+    }
+    #[test]
+    fn connected_publication_rechecks_expiry_and_exact_child_liveness() {
+        ensure_connected_publication_ready_at(1_001, 1_000, true)
+            .expect("live exact child with an unexpired ticket may publish");
+
+        let expired_but_live = ensure_connected_publication_ready_at(1_001, 1_001, true)
+            .expect_err("an expiry-triggered child may still be live while shutting down");
+        assert!(
+            expired_but_live
+                .to_string()
+                .contains("connected state publication")
+        );
+
+        let dead = ensure_connected_publication_ready_at(1_001, 1_000, false)
+            .expect_err("dead exact child must not publish connected state");
+        assert!(
+            dead.to_string()
+                .contains("exact network worker is not alive")
+        );
+    }
+    #[test]
+    fn monotonic_ticket_deadline_never_adds_wall_sample_delay() {
+        let monotonic_before_wall = tokio::time::Instant::now();
+        let simulated_wall_sample_delay = Duration::from_millis(250);
+        let monotonic_after_wall = monotonic_before_wall + simulated_wall_sample_delay;
+        let remaining = Duration::from_millis(1_000);
+
+        let deadline = authenticated_ticket_expiry_deadline_at(2_000, 1_000, monotonic_before_wall)
+            .expect("convert signed expiry from the conservative anchor");
+        assert_eq!(deadline, monotonic_before_wall + remaining);
+        assert!(
+            deadline < monotonic_after_wall + remaining,
+            "descheduling between monotonic and wall samples must shorten, never extend, lifetime"
+        );
+    }
+    #[test]
     fn privileged_preparation_has_one_deadline_inside_the_worker_tun_wait() {
         assert!(
             PRIVILEGED_PREPARATION_TIMEOUT < NETWORK_WORKER_TUN_TIMEOUT,
@@ -13156,7 +13981,11 @@ mod tests {
         write_file_atomic(&path, b"not a state frame", 0o600, true, "state file")
             .expect("write malformed fixture");
         let error = load_state_at(&path).expect_err("malformed state must not become defaults");
-        assert!(error.to_string().contains("not a v1 Norito state frame"));
+        assert!(
+            error
+                .to_string()
+                .contains("not a supported Norito state frame")
+        );
         fs::remove_file(path).expect("remove state");
         fs::remove_dir(root).expect("remove test root");
     }
@@ -13259,6 +14088,7 @@ mod tests {
             relay_endpoint: Some("/ip4/93.184.216.34/udp/7777/quic".to_owned()),
             relay_id: Some([0x22; 32]),
             network_policy_hash: Some([0x11; 32]),
+            ticket_expires_at_ms: Some(u64::MAX),
             interface_name: Some("srvpn0000000000".to_owned()),
             network_service: Some("resolvectl".to_owned()),
             bytes_in: 123,
@@ -13285,6 +14115,134 @@ mod tests {
         )
         .expect("sanitized terminal state is safe for any local caller");
     }
+
+    fn test_worker_identity(pid: u32, role: WorkerRole) -> WorkerProcessIdentity {
+        WorkerProcessIdentity {
+            pid,
+            start_time_ticks: u64::from(pid) + 10,
+            executable_device: 11,
+            executable_inode: u64::from(pid) + 12,
+            role,
+        }
+    }
+
+    fn active_runtime_test_state() -> State {
+        State {
+            active: true,
+            worker_identity: Some(test_worker_identity(42, WorkerRole::Tunnel)),
+            network_worker_identity: Some(test_worker_identity(43, WorkerRole::Network)),
+            owner_uid: Some(1_000),
+            session_id: Some("session-1".to_owned()),
+            relay_endpoint: Some("/ip4/93.184.216.34/udp/7777/quic".to_owned()),
+            relay_id: Some([0x22; 32]),
+            network_policy_hash: Some([0x11; 32]),
+            ticket_expires_at_ms: Some(u64::MAX),
+            interface_name: Some("srvpn0000000000".to_owned()),
+            applied_network: Some(AppliedNetworkState {
+                interface_name: "srvpn0000000000".to_owned(),
+                journal_phase: NetworkJournalPhase::Prepared,
+                dns_backend: None,
+                excluded_route_snapshots: Vec::new(),
+            }),
+            message: "connected".to_owned(),
+            ..State::default()
+        }
+    }
+
+    #[test]
+    fn connect_readiness_requires_a_live_exact_network_child() {
+        let state = active_runtime_test_state();
+        let supervisor = state
+            .worker_identity
+            .as_ref()
+            .expect("active supervisor")
+            .clone();
+        let expected_network = state
+            .network_worker_identity
+            .as_ref()
+            .expect("active network child")
+            .clone();
+        assert!(
+            connect_state_ready_with(&state, &supervisor, true, 1_000, |identity| {
+                assert_eq!(identity, &expected_network);
+                Ok(true)
+            })
+            .expect("exact live identities are ready")
+        );
+        assert!(
+            !connect_state_ready_with(&state, &supervisor, true, 1_000, |_| Ok(false))
+                .expect("dead network child is not ready")
+        );
+
+        let mut expiring = state.clone();
+        expiring.ticket_expires_at_ms = Some(1_001);
+        validate_state_for_persistence_at(&expiring, 1_000)
+            .expect("unexpired active state remains persistable");
+        assert!(
+            validate_state_for_persistence_at(&expiring, 1_001).is_err(),
+            "an active frame cannot start persistence at the signed deadline"
+        );
+        assert!(
+            !connect_state_ready_with(&expiring, &supervisor, true, 1_001, |_| {
+                panic!("expired state must fail before a still-live child can imply readiness")
+            })
+            .expect("expiry-triggered child shutdown is not connected")
+        );
+
+        let mut repairing = state.clone();
+        repairing.repair_required = true;
+        assert!(
+            !connect_state_ready_with(&repairing, &supervisor, true, 1_000, |_| Ok(true))
+                .expect("repair state is not connected")
+        );
+
+        let mut missing = state.clone();
+        missing.network_worker_identity = None;
+        assert!(
+            !connect_state_ready_with(&missing, &supervisor, true, 1_000, |_| {
+                panic!("missing network child must not reach liveness inspection")
+            })
+            .expect("missing network child is not ready")
+        );
+    }
+
+    #[test]
+    fn current_state_scrub_never_reports_active_without_a_live_network_child() {
+        let mut dead = active_runtime_test_state();
+        scrub_stale_process_with(&mut dead, 1_000, |identity| {
+            Ok(identity.role == WorkerRole::Tunnel)
+        })
+        .expect("scrub dead network child");
+        assert!(!dead.active);
+        assert!(dead.repair_required);
+        assert!(dead.worker_identity.is_some());
+        assert!(dead.network_worker_identity.is_none());
+        assert!(dead.applied_network.is_some());
+        validate_state_for_persistence(&dead).expect("dead child normalizes to repair state");
+
+        let mut missing = active_runtime_test_state();
+        missing.network_worker_identity = None;
+        scrub_stale_process_with(&mut missing, 1_000, |_| Ok(true))
+            .expect("scrub missing network child");
+        assert!(!missing.active);
+        assert!(missing.repair_required);
+        assert!(missing.applied_network.is_some());
+        validate_state_for_persistence(&missing).expect("missing child normalizes to repair state");
+
+        let mut expired = active_runtime_test_state();
+        expired.ticket_expires_at_ms = Some(1_001);
+        scrub_stale_process_with(&mut expired, 1_001, |_| Ok(true))
+            .expect("scrub expired state with both exact children still alive");
+        assert!(!expired.active);
+        assert!(expired.repair_required);
+        assert!(expired.worker_identity.is_some());
+        assert!(expired.network_worker_identity.is_some());
+        assert!(expired.applied_network.is_some());
+        assert!(expired.message.contains("ticket expired"));
+        validate_state_for_persistence_at(&expired, 1_001)
+            .expect("expired active state normalizes to owner-repairable custody");
+    }
+
     #[test]
     fn state_rejects_active_or_invalid_unbound_worker_identity() {
         let mut state = State {
@@ -13306,7 +14264,39 @@ mod tests {
         state.relay_endpoint = Some("/ip4/93.184.216.34/udp/7777/quic".to_owned());
         state.relay_id = Some([0x22; 32]);
         state.network_policy_hash = Some([0x11; 32]);
-        assert!(validate_state_invariants(&state).is_ok());
+        state.ticket_expires_at_ms = Some(u64::MAX);
+        validate_state_invariants(&state)
+            .expect("unsafe legacy active state remains readable for owner-authorized repair");
+        assert!(
+            validate_state_for_persistence(&state).is_err(),
+            "active state cannot omit its network child"
+        );
+        state.network_worker_identity = Some(test_worker_identity(43, WorkerRole::Network));
+        assert!(
+            validate_state_for_persistence(&state).is_err(),
+            "active state cannot omit its repair journal"
+        );
+        state.applied_network = active_runtime_test_state().applied_network;
+        assert!(validate_state_for_persistence(&state).is_ok());
+        state
+            .applied_network
+            .as_mut()
+            .expect("active journal")
+            .journal_phase = NetworkJournalPhase::CleaningRoutes;
+        assert!(
+            validate_state_for_persistence(&state).is_err(),
+            "active state cannot publish an incomplete or cleaning journal"
+        );
+        state
+            .applied_network
+            .as_mut()
+            .expect("active journal")
+            .journal_phase = NetworkJournalPhase::Prepared;
+        state.repair_required = true;
+        assert!(
+            validate_state_for_persistence(&state).is_err(),
+            "repair state cannot also publish active"
+        );
     }
     #[test]
     fn worker_start_requires_the_exact_pending_controller_identity_and_owner() {

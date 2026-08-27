@@ -102,7 +102,7 @@ use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 use iroha_data_model::{
-    AccountId, NetworkId,
+    AccountId, DomainId, NetworkId,
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
@@ -122,6 +122,7 @@ use iroha_data_model::{
         decode_framed_signed_block,
     },
     isi::offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
+    kaigi::KaigiId,
     merge::{
         LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
         MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
@@ -140,6 +141,7 @@ use iroha_data_model::{
     },
     parliament_types::BallotAttemptId,
     peer::PeerId,
+    prelude::Name,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
     validation_fee::ValidationFeePolicyWitnessProofV1,
 };
@@ -1570,11 +1572,14 @@ impl Kura {
             complete: false,
             indexed_heights: BTreeSet::new(),
             incomplete_merge_heights: BTreeSet::new(),
+            incomplete_kaigi_signal_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
             heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
+            kaigi_signal_candidates: BTreeMap::new(),
+            inventories_by_height: BTreeMap::new(),
         };
         let Some(entries) = block_data.dense_entries() else {
             return index;
@@ -1592,6 +1597,7 @@ impl Kura {
             }
         }
         index.complete = index.incomplete_merge_heights.is_empty()
+            && index.incomplete_kaigi_signal_heights.is_empty()
             && index.indexed_heights.len() == block_data.len();
         index
     }
@@ -1601,22 +1607,46 @@ impl Kura {
         block: &SignedBlock,
     ) {
         index.indexed_heights.insert(height);
+        index.inventories_by_height.entry(height).or_default();
+        let entrypoints = block.entrypoints_cloned().collect::<Vec<_>>();
+        if u64::try_from(entrypoints.len()).is_err() {
+            index.incomplete_kaigi_signal_heights.insert(height);
+            return;
+        }
         if !block.has_results() {
+            if !entrypoints.is_empty()
+                || block.entrypoint_hashes().next().is_some()
+                || block.results().next().is_some()
+                || block.result_hashes().next().is_some()
+            {
+                index.incomplete_kaigi_signal_heights.insert(height);
+            }
             return;
         }
         for hash in block.entrypoint_hashes() {
+            index
+                .inventories_by_height
+                .entry(height)
+                .or_default()
+                .entrypoint_hashes
+                .insert(hash);
             index
                 .heights_by_entrypoint
                 .entry(hash)
                 .or_default()
                 .insert(height);
         }
-        let entrypoints = block.entrypoints_cloned().collect::<Vec<_>>();
         for entrypoint in &entrypoints {
             Self::insert_offline_operation_id_heights(index, height, entrypoint);
         }
-        for entrypoint in entrypoints {
+        for entrypoint in &entrypoints {
             if let Some(authority) = entrypoint.authority_opt() {
+                index
+                    .inventories_by_height
+                    .entry(height)
+                    .or_default()
+                    .authorities
+                    .insert(authority.clone());
                 index
                     .heights_by_authority
                     .entry(authority.clone())
@@ -1625,18 +1655,151 @@ impl Kura {
             }
             if let Some(timestamp_ms) = entrypoint.creation_time_ms() {
                 index
+                    .inventories_by_height
+                    .entry(height)
+                    .or_default()
+                    .timestamps_ms
+                    .insert(timestamp_ms);
+                index
                     .heights_by_timestamp_ms
                     .entry(timestamp_ms)
                     .or_default()
                     .insert(height);
             }
         }
-        for result in block.results() {
+        let results = block.results().cloned().collect::<Vec<_>>();
+        for result in &results {
+            index
+                .inventories_by_height
+                .entry(height)
+                .or_default()
+                .result_statuses
+                .insert(result.as_ref().is_ok());
             index
                 .heights_by_result_status
                 .entry(result.as_ref().is_ok())
                 .or_default()
                 .insert(height);
+        }
+        if entrypoints.len() != results.len() {
+            index.incomplete_kaigi_signal_heights.insert(height);
+            return;
+        }
+        let block_hash = block.hash();
+        for (canonical_index, (entrypoint, result)) in entrypoints.iter().zip(&results).enumerate()
+        {
+            let Ok(transaction_index) = u64::try_from(canonical_index) else {
+                index.incomplete_kaigi_signal_heights.insert(height);
+                return;
+            };
+            if !Self::insert_kaigi_signal_candidate(
+                index,
+                height,
+                block_hash,
+                1,
+                transaction_index,
+                entrypoint,
+                result,
+            ) {
+                index.incomplete_kaigi_signal_heights.insert(height);
+                return;
+            }
+        }
+    }
+
+    pub(crate) fn kaigi_signal_candidate_identity(
+        entrypoint: &TransactionEntrypoint,
+        result: &TransactionResult,
+    ) -> Option<(KaigiId, AccountId)> {
+        if result.as_ref().is_err() {
+            return None;
+        }
+        let transaction = match entrypoint {
+            TransactionEntrypoint::External(transaction) => transaction,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                return None;
+            }
+        };
+        let key = "kaigi_signal".parse::<Name>().ok()?;
+        let signal = transaction
+            .metadata()
+            .get(&key)?
+            .try_into_any_norito::<JsonValue>()
+            .ok()?;
+        let object = signal.as_object()?;
+        if object.get("schema")?.as_str()? != "iroha-demo-kaigi-chain-signal/v1" {
+            return None;
+        }
+        let mut call_literal = None;
+        for key in ["callId", "call_id"] {
+            let Some(value) = object.get(key) else {
+                continue;
+            };
+            let candidate = value.as_str()?;
+            if call_literal.is_some_and(|existing| existing != candidate) {
+                return None;
+            }
+            call_literal = Some(candidate);
+        }
+        let call_literal = call_literal?;
+        let (domain_literal, call_name_literal) = call_literal.split_once(':')?;
+        if call_name_literal.contains(':') {
+            return None;
+        }
+        let call_id = KaigiId::new(
+            DomainId::parse_fully_qualified(domain_literal).ok()?,
+            call_name_literal.parse::<Name>().ok()?,
+        );
+        if call_id.to_string() != call_literal {
+            return None;
+        }
+        Some((call_id, transaction.authority().clone()))
+    }
+
+    fn insert_kaigi_signal_candidate(
+        index: &mut TransactionEntrypointIndex,
+        height: NonZeroUsize,
+        block_hash: HashOf<BlockHeader>,
+        execution_phase: u8,
+        transaction_index: u64,
+        entrypoint: &TransactionEntrypoint,
+        result: &TransactionResult,
+    ) -> bool {
+        let Some((call_id, authority)) = Self::kaigi_signal_candidate_identity(entrypoint, result)
+        else {
+            return true;
+        };
+        let Ok(block_height) = u64::try_from(height.get()) else {
+            return false;
+        };
+        let position = KaigiSignalCandidatePosition {
+            block_height,
+            execution_phase,
+            transaction_index,
+            block_hash,
+            entrypoint_hash: entrypoint.hash(),
+        };
+        let locator = KaigiSignalCandidateLocator {
+            position,
+            authority,
+        };
+        index
+            .inventories_by_height
+            .entry(height)
+            .or_default()
+            .kaigi_calls
+            .insert(call_id.clone());
+        match index
+            .kaigi_signal_candidates
+            .entry(call_id)
+            .or_default()
+            .entry(height)
+            .or_default()
+            .insert((execution_phase, transaction_index), locator.clone())
+        {
+            None => true,
+            Some(existing) => existing == locator,
         }
     }
     fn insert_offline_operation_id_heights(
@@ -1663,9 +1826,16 @@ impl Kura {
             if operation_id == [0; 32] {
                 continue;
             }
+            let key = (transaction_authority.clone(), operation_id);
+            index
+                .inventories_by_height
+                .entry(height)
+                .or_default()
+                .offline_operation_ids
+                .insert(key.clone());
             index
                 .heights_by_offline_operation_id
-                .entry((transaction_authority.clone(), operation_id))
+                .entry(key)
                 .or_default()
                 .insert(height);
         }
@@ -1707,17 +1877,45 @@ impl Kura {
     fn insert_merge_execution_index_heights(
         index: &mut TransactionEntrypointIndex,
         height: NonZeroUsize,
+        block_hash: HashOf<BlockHeader>,
         batch: &MergeExecutionBatch,
     ) {
+        index.inventories_by_height.entry(height).or_default();
+        let observed_merge_count = batch.lanes.iter().try_fold(0_usize, |count, execution| {
+            count.checked_add(execution.entrypoints.len())
+        });
+        let merge_projection_is_complete = observed_merge_count.is_some_and(|observed| {
+            usize::try_from(batch.entrypoint_count).is_ok_and(|declared| declared == observed)
+                && batch
+                    .lanes
+                    .iter()
+                    .all(|execution| execution.entrypoints.len() == execution.results.len())
+        });
+        if !merge_projection_is_complete {
+            index.incomplete_kaigi_signal_heights.insert(height);
+        }
+        let mut canonical_merge_index = 0_usize;
         for execution in &batch.lanes {
-            for entrypoint in &execution.entrypoints {
+            for (entrypoint, result) in execution.entrypoints.iter().zip(&execution.results) {
                 Self::insert_offline_operation_id_heights(index, height, entrypoint);
                 index
                     .heights_by_entrypoint
                     .entry(entrypoint.hash())
                     .or_default()
                     .insert(height);
+                index
+                    .inventories_by_height
+                    .entry(height)
+                    .or_default()
+                    .entrypoint_hashes
+                    .insert(entrypoint.hash());
                 if let Some(authority) = entrypoint.authority_opt() {
+                    index
+                        .inventories_by_height
+                        .entry(height)
+                        .or_default()
+                        .authorities
+                        .insert(authority.clone());
                     index
                         .heights_by_authority
                         .entry(authority.clone())
@@ -1726,13 +1924,41 @@ impl Kura {
                 }
                 if let Some(timestamp_ms) = entrypoint.creation_time_ms() {
                     index
+                        .inventories_by_height
+                        .entry(height)
+                        .or_default()
+                        .timestamps_ms
+                        .insert(timestamp_ms);
+                    index
                         .heights_by_timestamp_ms
                         .entry(timestamp_ms)
                         .or_default()
                         .insert(height);
                 }
+                if merge_projection_is_complete {
+                    let transaction_index =
+                        u64::try_from(canonical_merge_index).unwrap_or(u64::MAX);
+                    if !Self::insert_kaigi_signal_candidate(
+                        index,
+                        height,
+                        block_hash,
+                        0,
+                        transaction_index,
+                        entrypoint,
+                        result,
+                    ) {
+                        index.incomplete_kaigi_signal_heights.insert(height);
+                    }
+                }
+                canonical_merge_index = canonical_merge_index.saturating_add(1);
             }
             for result in &execution.results {
+                index
+                    .inventories_by_height
+                    .entry(height)
+                    .or_default()
+                    .result_statuses
+                    .insert(result.as_ref().is_ok());
                 index
                     .heights_by_result_status
                     .entry(result.as_ref().is_ok())
@@ -1745,28 +1971,67 @@ impl Kura {
         index: &mut TransactionEntrypointIndex,
         height: NonZeroUsize,
     ) {
-        index.heights_by_entrypoint.retain(|_, heights| {
-            heights.remove(&height);
-            !heights.is_empty()
-        });
-        index.heights_by_offline_operation_id.retain(|_, heights| {
-            heights.remove(&height);
-            !heights.is_empty()
-        });
-        index.heights_by_authority.retain(|_, heights| {
-            heights.remove(&height);
-            !heights.is_empty()
-        });
-        index.heights_by_timestamp_ms.retain(|_, heights| {
-            heights.remove(&height);
-            !heights.is_empty()
-        });
-        index.heights_by_result_status.retain(|_, heights| {
-            heights.remove(&height);
-            !heights.is_empty()
-        });
+        let inventory = index
+            .inventories_by_height
+            .remove(&height)
+            .unwrap_or_default();
+        Self::remove_transaction_height_for_keys(
+            &mut index.heights_by_entrypoint,
+            inventory.entrypoint_hashes,
+            height,
+        );
+        Self::remove_transaction_height_for_keys(
+            &mut index.heights_by_offline_operation_id,
+            inventory.offline_operation_ids,
+            height,
+        );
+        Self::remove_transaction_height_for_keys(
+            &mut index.heights_by_authority,
+            inventory.authorities,
+            height,
+        );
+        Self::remove_transaction_height_for_keys(
+            &mut index.heights_by_timestamp_ms,
+            inventory.timestamps_ms,
+            height,
+        );
+        Self::remove_transaction_height_for_keys(
+            &mut index.heights_by_result_status,
+            inventory.result_statuses,
+            height,
+        );
+        for call_id in inventory.kaigi_calls {
+            let remove_call =
+                index
+                    .kaigi_signal_candidates
+                    .get_mut(&call_id)
+                    .is_some_and(|heights| {
+                        heights.remove(&height);
+                        heights.is_empty()
+                    });
+            if remove_call {
+                index.kaigi_signal_candidates.remove(&call_id);
+            }
+        }
         index.indexed_heights.remove(&height);
         index.incomplete_merge_heights.remove(&height);
+        index.incomplete_kaigi_signal_heights.remove(&height);
+    }
+
+    fn remove_transaction_height_for_keys<K: Ord>(
+        indexed: &mut BTreeMap<K, BTreeSet<NonZeroUsize>>,
+        keys: impl IntoIterator<Item = K>,
+        height: NonZeroUsize,
+    ) {
+        for key in keys {
+            let remove_key = indexed.get_mut(&key).is_some_and(|heights| {
+                heights.remove(&height);
+                heights.is_empty()
+            });
+            if remove_key {
+                indexed.remove(&key);
+            }
+        }
     }
     fn set_transaction_entrypoint_index_entry(
         &self,
@@ -1800,13 +2065,14 @@ impl Kura {
         Self::remove_transaction_entrypoint_height(&mut index, height);
         Self::insert_transaction_entrypoint_heights(&mut index, height, block);
         if let Some(batch) = merge_entry.and_then(|entry| entry.execution_batch.as_ref()) {
-            Self::insert_merge_execution_index_heights(&mut index, height, batch);
+            Self::insert_merge_execution_index_heights(&mut index, height, block.hash(), batch);
         }
         if Self::block_merge_reference(block).is_some() && !merge_association_complete {
             index.incomplete_merge_heights.insert(height);
         }
-        index.complete =
-            index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == chain_len;
+        index.complete = index.incomplete_merge_heights.is_empty()
+            && index.incomplete_kaigi_signal_heights.is_empty()
+            && index.indexed_heights.len() == chain_len;
     }
     fn set_transaction_entrypoint_index_entry_from_finalized_bodyless_merge(
         &self,
@@ -1837,39 +2103,43 @@ impl Kura {
             // this height even though the canonical body has been pruned.
             Self::remove_transaction_entrypoint_height(&mut index, height);
             index.indexed_heights.insert(height);
+            index.inventories_by_height.entry(height).or_default();
         }
         if let Some(batch) = merge_entry.execution_batch.as_ref() {
-            Self::insert_merge_execution_index_heights(&mut index, height, batch);
+            Self::insert_merge_execution_index_heights(
+                &mut index,
+                height,
+                canonical_header.hash(),
+                batch,
+            );
         }
         index.incomplete_merge_heights.remove(&height);
-        index.complete =
-            index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == chain_len;
+        index.complete = index.incomplete_merge_heights.is_empty()
+            && index.incomplete_kaigi_signal_heights.is_empty()
+            && index.indexed_heights.len() == chain_len;
         Ok(())
-    }
-    fn truncate_transaction_heights<K: Ord>(
-        index: &mut BTreeMap<K, BTreeSet<NonZeroUsize>>,
-        keep: usize,
-    ) {
-        index.retain(|_, indexed_heights| {
-            indexed_heights.retain(|height| height.get() <= keep);
-            !indexed_heights.is_empty()
-        });
     }
     fn truncate_transaction_entrypoint_index(&self, keep: usize) {
         let mut index = self.transaction_entrypoint_index.lock();
-        index
-            .indexed_heights
-            .retain(|indexed_height| indexed_height.get() <= keep);
-        index
-            .incomplete_merge_heights
-            .retain(|indexed_height| indexed_height.get() <= keep);
-        Self::truncate_transaction_heights(&mut index.heights_by_entrypoint, keep);
-        Self::truncate_transaction_heights(&mut index.heights_by_offline_operation_id, keep);
-        Self::truncate_transaction_heights(&mut index.heights_by_authority, keep);
-        Self::truncate_transaction_heights(&mut index.heights_by_timestamp_ms, keep);
-        Self::truncate_transaction_heights(&mut index.heights_by_result_status, keep);
-        index.complete =
-            index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == keep;
+        Self::truncate_transaction_entrypoint_index_to(&mut index, keep);
+    }
+
+    fn truncate_transaction_entrypoint_index_to(
+        index: &mut TransactionEntrypointIndex,
+        keep: usize,
+    ) {
+        let removed_heights = index
+            .inventories_by_height
+            .keys()
+            .copied()
+            .filter(|height| height.get() > keep)
+            .collect::<Vec<_>>();
+        for height in removed_heights {
+            Self::remove_transaction_entrypoint_height(index, height);
+        }
+        index.complete = index.incomplete_merge_heights.is_empty()
+            && index.incomplete_kaigi_signal_heights.is_empty()
+            && index.indexed_heights.len() == keep;
     }
     fn set_block_height_index_entry(&self, height: usize, hash: HashOf<BlockHeader>) {
         let Some(height) = NonZeroUsize::new(height) else {
@@ -9391,6 +9661,17 @@ impl Kura {
                     continue;
                 };
                 let Some(reference) = Self::block_merge_reference(&block) else {
+                    // Strict startup begins with canonical hashes whose bodies are not yet
+                    // cached. Rebuild the ordinary projection while this authenticated scan
+                    // already has the exact retained body so the Kaigi signal index is complete
+                    // before Kura is published to callers.
+                    self.set_transaction_entrypoint_index_entry_with_merge(
+                        height.get(),
+                        &block,
+                        None,
+                        block_count,
+                        true,
+                    );
                     continue;
                 };
                 let entry = self.merge_entry_by_hash(reference.entry_hash)?.ok_or(
@@ -12865,6 +13146,127 @@ impl Kura {
             return None;
         }
         heights
+    }
+
+    /// Return a bounded chronological page of exact-schema Kaigi signal locators.
+    ///
+    /// The index stores only structural locations and transaction authorities.
+    /// An exclusive `after` position must name an exact candidate for the same
+    /// call. `anchor_height` excludes later appends. A partial index, pruning,
+    /// or poisoned canonical storage returns `Unavailable`; callers must not
+    /// fall back to a ledger scan.
+    pub(crate) fn get_kaigi_signal_candidate_locators(
+        &self,
+        call_id: &KaigiId,
+        anchor_height: usize,
+        after: Option<KaigiSignalCandidatePosition>,
+        limit: NonZeroUsize,
+    ) -> core::result::Result<KaigiSignalCandidateLocatorPage, KaigiSignalCandidateIndexError> {
+        if self.prune_recovery_is_required()
+            || self.canonical_storage_poisoned.load(Ordering::Acquire)
+        {
+            return Err(KaigiSignalCandidateIndexError::Unavailable);
+        }
+        let index = self.transaction_entrypoint_index.lock();
+        if self.prune_recovery_is_required()
+            || self.canonical_storage_poisoned.load(Ordering::Acquire)
+            || !index.complete
+            || (anchor_height > 0
+                && index
+                    .indexed_heights
+                    .last()
+                    .is_none_or(|height| height.get() < anchor_height))
+        {
+            return Err(KaigiSignalCandidateIndexError::Unavailable);
+        }
+        let page = Self::collect_kaigi_signal_candidate_locators(
+            &index,
+            call_id,
+            anchor_height,
+            after,
+            limit,
+        )?;
+        if self.prune_recovery_is_required()
+            || self.canonical_storage_poisoned.load(Ordering::Acquire)
+        {
+            return Err(KaigiSignalCandidateIndexError::Unavailable);
+        }
+        Ok(page)
+    }
+
+    fn collect_kaigi_signal_candidate_locators(
+        index: &TransactionEntrypointIndex,
+        call_id: &KaigiId,
+        anchor_height: usize,
+        after: Option<KaigiSignalCandidatePosition>,
+        limit: NonZeroUsize,
+    ) -> core::result::Result<KaigiSignalCandidateLocatorPage, KaigiSignalCandidateIndexError> {
+        let Some(by_height) = index.kaigi_signal_candidates.get(call_id) else {
+            return if after.is_some() {
+                Err(KaigiSignalCandidateIndexError::CursorMismatch)
+            } else {
+                Ok(KaigiSignalCandidateLocatorPage {
+                    candidates: Vec::new(),
+                    has_more: false,
+                })
+            };
+        };
+        let after_key =
+            after.map(|position| (position.execution_phase, position.transaction_index));
+        let after_height = after
+            .and_then(|position| usize::try_from(position.block_height).ok())
+            .and_then(NonZeroUsize::new);
+        if let Some(position) = after {
+            let Some(height) = after_height else {
+                return Err(KaigiSignalCandidateIndexError::CursorMismatch);
+            };
+            if height.get() > anchor_height || position.execution_phase > 1 {
+                return Err(KaigiSignalCandidateIndexError::CursorMismatch);
+            }
+            let Some(locator) = by_height
+                .get(&height)
+                .and_then(|by_offset| by_offset.get(&after_key.expect("cursor key exists")))
+            else {
+                return Err(KaigiSignalCandidateIndexError::CursorMismatch);
+            };
+            if locator.position != position {
+                return Err(KaigiSignalCandidateIndexError::CursorMismatch);
+            }
+        }
+        let Some(anchor_height) = NonZeroUsize::new(anchor_height) else {
+            return Ok(KaigiSignalCandidateLocatorPage {
+                candidates: Vec::new(),
+                has_more: false,
+            });
+        };
+        let lower_height = after_height.map_or(Bound::Unbounded, Bound::Included);
+        let mut candidates = Vec::new();
+        candidates
+            .try_reserve(limit.get())
+            .map_err(|_| KaigiSignalCandidateIndexError::Unavailable)?;
+        for (height, by_offset) in by_height.range((lower_height, Bound::Included(anchor_height))) {
+            let lower_offset = if Some(*height) == after_height {
+                Bound::Excluded(after_key.expect("cursor key exists"))
+            } else {
+                Bound::Unbounded
+            };
+            for locator in by_offset
+                .range((lower_offset, Bound::Unbounded))
+                .map(|(_, locator)| locator)
+            {
+                if candidates.len() == limit.get() {
+                    return Ok(KaigiSignalCandidateLocatorPage {
+                        candidates,
+                        has_more: true,
+                    });
+                }
+                candidates.push(locator.clone());
+            }
+        }
+        Ok(KaigiSignalCandidateLocatorPage {
+            candidates,
+            has_more: false,
+        })
     }
     /// Return the exact durable height and bounded encoded payload length for a
     /// known canonical block hash.
@@ -20869,8 +21271,14 @@ impl Kura {
                 heights.last().is_some_and(|height| height.get() > target)
             };
             if contains_pruned_height(&index.indexed_heights)
+                || contains_pruned_height(&index.incomplete_merge_heights)
+                || contains_pruned_height(&index.incomplete_kaigi_signal_heights)
                 || index
                     .heights_by_entrypoint
+                    .values()
+                    .any(contains_pruned_height)
+                || index
+                    .heights_by_offline_operation_id
                     .values()
                     .any(contains_pruned_height)
                 || index
@@ -20885,6 +21293,15 @@ impl Kura {
                     .heights_by_result_status
                     .values()
                     .any(contains_pruned_height)
+                || index.kaigi_signal_candidates.values().any(|heights| {
+                    heights
+                        .last_key_value()
+                        .is_some_and(|(height, _)| height.get() > target)
+                })
+                || index
+                    .inventories_by_height
+                    .last_key_value()
+                    .is_some_and(|(height, _)| height.get() > target)
             {
                 return Err(Error::PruneIntentConflict(
                     "recovered transaction index still contains a pruned height".to_owned(),
@@ -43193,6 +43610,231 @@ include!("kura/test_fault_injection_controls.rs");
 include!("kura/file_error_support.rs");
 #[cfg(test)]
 pub(crate) mod tests {
+    fn kaigi_signal_test_call(name: &str) -> iroha_data_model::kaigi::KaigiId {
+        iroha_data_model::kaigi::KaigiId::new(
+            iroha_data_model::DomainId::try_new("kaigi", "universal").expect("test domain"),
+            name.parse().expect("test call name"),
+        )
+    }
+
+    fn kaigi_signal_test_locator(
+        height: usize,
+        execution_phase: u8,
+        transaction_index: u64,
+    ) -> super::KaigiSignalCandidateLocator {
+        use iroha_crypto::{Hash, HashOf};
+        use iroha_data_model::{block::BlockHeader, transaction::signed::TransactionEntrypoint};
+
+        let marker = u64::try_from(height)
+            .expect("test height fits u64")
+            .wrapping_mul(4)
+            .wrapping_add(u64::from(execution_phase));
+        super::KaigiSignalCandidateLocator {
+            position: super::KaigiSignalCandidatePosition {
+                block_height: u64::try_from(height).expect("test height fits u64"),
+                execution_phase,
+                transaction_index,
+                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    marker.to_le_bytes(),
+                )),
+                entrypoint_hash: HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                    Hash::new((marker ^ transaction_index).to_le_bytes()),
+                ),
+            },
+            authority: iroha_data_model::AccountId::new(
+                super::checked_keypair().public_key().clone(),
+            ),
+        }
+    }
+
+    fn insert_kaigi_signal_test_locator(
+        index: &mut super::TransactionEntrypointIndex,
+        call_id: &iroha_data_model::kaigi::KaigiId,
+        locator: super::KaigiSignalCandidateLocator,
+    ) {
+        let height = usize::try_from(locator.position.block_height)
+            .ok()
+            .and_then(std::num::NonZeroUsize::new)
+            .expect("test locator height is nonzero");
+        index
+            .inventories_by_height
+            .entry(height)
+            .or_default()
+            .kaigi_calls
+            .insert(call_id.clone());
+        index
+            .kaigi_signal_candidates
+            .entry(call_id.clone())
+            .or_default()
+            .entry(height)
+            .or_default()
+            .insert(
+                (
+                    locator.position.execution_phase,
+                    locator.position.transaction_index,
+                ),
+                locator,
+            );
+    }
+
+    #[test]
+    fn kaigi_signal_locator_pages_are_chronological_exclusive_and_call_bound() {
+        let call_id = kaigi_signal_test_call("page-order");
+        let other_call = kaigi_signal_test_call("other-call");
+        let mut index = super::TransactionEntrypointIndex::complete_empty();
+        for locator in [
+            kaigi_signal_test_locator(1, 1, 0),
+            kaigi_signal_test_locator(2, 1, 0),
+            kaigi_signal_test_locator(1, 0, 0),
+        ] {
+            insert_kaigi_signal_test_locator(&mut index, &call_id, locator);
+        }
+        let first = super::Kura::collect_kaigi_signal_candidate_locators(
+            &index,
+            &call_id,
+            2,
+            None,
+            std::num::NonZeroUsize::new(2).expect("nonzero page"),
+        )
+        .expect("first locator page");
+        assert!(first.has_more);
+        assert_eq!(first.candidates[0].position.execution_phase, 0);
+        assert_eq!(first.candidates[1].position.execution_phase, 1);
+        let after = first.candidates[1].position;
+        let second = super::Kura::collect_kaigi_signal_candidate_locators(
+            &index,
+            &call_id,
+            2,
+            Some(after),
+            std::num::NonZeroUsize::new(2).expect("nonzero page"),
+        )
+        .expect("second locator page");
+        assert!(!second.has_more);
+        assert_eq!(second.candidates.len(), 1);
+        assert_eq!(second.candidates[0].position.block_height, 2);
+        assert_eq!(
+            super::Kura::collect_kaigi_signal_candidate_locators(
+                &index,
+                &other_call,
+                2,
+                Some(after),
+                std::num::NonZeroUsize::new(1).expect("nonzero page"),
+            ),
+            Err(super::KaigiSignalCandidateIndexError::CursorMismatch),
+        );
+        let position = first.candidates[0].position;
+        assert!(
+            super::KaigiSignalCandidatePosition::new(
+                0,
+                position.execution_phase,
+                position.transaction_index,
+                position.block_hash,
+                position.entrypoint_hash,
+            )
+            .is_none()
+        );
+        assert!(
+            super::KaigiSignalCandidatePosition::new(
+                1,
+                2,
+                position.transaction_index,
+                position.block_hash,
+                position.entrypoint_hash,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn kaigi_signal_locator_pages_advance_beyond_five_hundred_carriers() {
+        let call_id = kaigi_signal_test_call("long-history");
+        let mut index = super::TransactionEntrypointIndex::complete_empty();
+        for height in 1..=501 {
+            insert_kaigi_signal_test_locator(
+                &mut index,
+                &call_id,
+                kaigi_signal_test_locator(height, 1, 0),
+            );
+        }
+        let first = super::Kura::collect_kaigi_signal_candidate_locators(
+            &index,
+            &call_id,
+            501,
+            None,
+            std::num::NonZeroUsize::new(500).expect("nonzero page"),
+        )
+        .expect("bounded first page");
+        assert_eq!(first.candidates.len(), 500);
+        assert!(first.has_more);
+        let second = super::Kura::collect_kaigi_signal_candidate_locators(
+            &index,
+            &call_id,
+            501,
+            first.candidates.last().map(|locator| locator.position),
+            std::num::NonZeroUsize::new(500).expect("nonzero page"),
+        )
+        .expect("bounded continuation");
+        assert_eq!(second.candidates.len(), 1);
+        assert_eq!(second.candidates[0].position.block_height, 501);
+        assert!(!second.has_more);
+    }
+
+    #[test]
+    fn kaigi_signal_reverse_inventories_follow_replacement_and_truncation() {
+        let call_id = kaigi_signal_test_call("lifecycle");
+        let replacement_call = kaigi_signal_test_call("replacement");
+        let mut index = super::TransactionEntrypointIndex::complete_empty();
+        for height in 1..=3 {
+            let height_key = std::num::NonZeroUsize::new(height).expect("nonzero height");
+            index.indexed_heights.insert(height_key);
+            insert_kaigi_signal_test_locator(
+                &mut index,
+                &call_id,
+                kaigi_signal_test_locator(height, 1, 0),
+            );
+        }
+        let height_two = std::num::NonZeroUsize::new(2).expect("nonzero height");
+        index.incomplete_kaigi_signal_heights.insert(height_two);
+        super::Kura::remove_transaction_entrypoint_height(&mut index, height_two);
+        assert!(!index.indexed_heights.contains(&height_two));
+        assert!(!index.incomplete_kaigi_signal_heights.contains(&height_two));
+        assert!(
+            index.kaigi_signal_candidates[&call_id]
+                .get(&height_two)
+                .is_none()
+        );
+        index.indexed_heights.insert(height_two);
+        insert_kaigi_signal_test_locator(
+            &mut index,
+            &replacement_call,
+            kaigi_signal_test_locator(2, 0, 7),
+        );
+        assert!(
+            index
+                .kaigi_signal_candidates
+                .contains_key(&replacement_call)
+        );
+        super::Kura::truncate_transaction_entrypoint_index_to(&mut index, 1);
+        assert_eq!(index.kaigi_signal_candidates[&call_id].len(), 1);
+        assert_eq!(
+            index.kaigi_signal_candidates[&call_id]
+                .first_key_value()
+                .map(|(height, _)| height.get()),
+            Some(1),
+        );
+        assert!(
+            !index
+                .kaigi_signal_candidates
+                .contains_key(&replacement_call)
+        );
+        assert_eq!(index.inventories_by_height.len(), 1);
+        assert!(
+            index
+                .inventories_by_height
+                .contains_key(&std::num::NonZeroUsize::new(1).expect("nonzero height"))
+        );
+    }
+
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/00_bounded_sidecar_read_tests.rs");
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");

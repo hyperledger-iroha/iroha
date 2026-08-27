@@ -160,8 +160,9 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
   }
 
   /**
-   * Requests fresh attestation for {@code alias}. Providers that do not support attestation return
-   * {@link Optional#empty()}.
+   * Requests backend-generated attestation for {@code alias}. Android Keystore cannot re-attest an
+   * existing alias with a new challenge; callers must provision a new alias with the challenge in
+   * {@link KeyGenParameters} when fresh evidence is required.
    */
   public Optional<KeyAttestation> generateAttestation(
       final String alias, final byte[] challenge) throws KeyManagementException {
@@ -207,9 +208,10 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
     final byte[] challenge = expectedChallenge.clone();
     final Optional<KeyAttestation> attestation;
     try {
-      attestation = fetchFreshAttestation(alias, challenge);
-    } catch (final KeyManagementException ex) {
-      return Optional.empty();
+      attestation = fetchRecordedAttestation(alias);
+    } catch (final KeyManagementException | RuntimeException ex) {
+      throw new AttestationVerificationException(
+          "Failed to obtain challenge-bound attestation material", ex);
     }
     if (!attestation.isPresent()) {
       return Optional.empty();
@@ -318,9 +320,6 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
   private Optional<KeyAttestation> fetchAttestation(
       final String alias, final byte[] challenge) throws KeyManagementException {
     final byte[] normalized = challenge == null ? NO_CHALLENGE : challenge.clone();
-    if (normalized.length > 0) {
-      return backend.generateAttestation(alias, normalized);
-    }
     final Optional<KeyAttestation> cached = lookupCachedAttestation(alias, normalized);
     if (cached.isPresent()) {
       return cached;
@@ -328,10 +327,11 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
     return backend.attestation(alias).map(att -> cacheAttestation(alias, normalized, att));
   }
 
-  private Optional<KeyAttestation> fetchFreshAttestation(
-      final String alias, final byte[] challenge) throws KeyManagementException {
-    evictAttestationEntry(alias, fingerprintChallenge(challenge));
-    return backend.generateAttestation(alias, challenge.clone());
+  private Optional<KeyAttestation> fetchRecordedAttestation(final String alias)
+      throws KeyManagementException {
+    // Challenge-bound Android certificates are minted at key provisioning time. Always reread the
+    // recorded chain here so verification cannot consume stale in-memory evidence.
+    return backend.attestation(alias);
   }
 
   private static byte[] fingerprintChallenge(final byte[] challenge) {

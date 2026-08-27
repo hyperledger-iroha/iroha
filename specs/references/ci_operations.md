@@ -62,10 +62,12 @@ every Monday (or after returning from PTO) and record the outcome in the on-call
 Run this workflow whenever new attestation bundles land (at minimum, prior to AND2/AND6 reviews and
 before partner pilots).
 
-1. **Ensure bundles and trust roots exist.**
+1. **Ensure evidence and governed expectations exist.**
    - Sync the latest device captures under `artifacts/android/attestation/<fleet-tag>/<date>/`.
-   - Confirm each bundle contains `chain.pem`, `challenge.hex`, `alias.txt`, `result.json`, and one
-     or more `trust_root_*.pem` files (usually copied from the vendor secrets store).
+   - Confirm each bundle contains `chain.pem`; keep its alias, challenge, and
+     `leaf_spki_sha256.hex` in a separately authenticated mirrored expectations
+     tree. Trust roots remain in the vendor authority store and must never be
+     discovered from the evidence bundle.
 2. **Trigger the Buildkite pipeline.**
    - From a checkout on the Buildkite agent, run
      `buildkite-agent pipeline upload --pipeline .buildkite/android-strongbox-attestation.yml`.

@@ -1532,7 +1532,7 @@ pub struct KaigiRelayFormatParams {
 /// The hard bound prevents relay metadata from being materialized into an unbounded
 /// response-sized allocation. A deployment must keep its active relay registry within this cap.
 pub const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS: usize =
-    defaults::torii::APP_API_MAX_LIST_LIMIT as usize;
+    iroha_data_model::kaigi::KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1;
 /// Maximum retained JSON bytes for one Kaigi call-signal result page.
 pub const KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES: u64 = 4 * 1024 * 1024;
 const KAIGI_SIGNAL_SCHEMA_V1: &str = "iroha-demo-kaigi-chain-signal/v1";
@@ -1655,8 +1655,11 @@ pub struct KaigiCallSignalDto {
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Paginated list of call-level Kaigi signaling records.
 pub struct KaigiCallSignalListDto {
-    /// Total number of matching signals before pagination.
-    pub total: u64,
+    /// Whether another anchored candidate page follows this response.
+    pub has_more: bool,
+    /// Opaque exclusive cursor for the next anchored candidate page.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
     /// Current result page.
     pub items: Vec<KaigiCallSignalDto>,
 }
@@ -1672,6 +1675,7 @@ pub struct KaigiCallEventCallRefDto {
 }
 ( Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Optional query parameters for Kaigi call-signal listing.
+#[norito(deny_unknown_fields)]
 pub struct KaigiCallSignalsParams {
     /// Only include signals whose carrier-block timestamp is at or after this value.
     #[norito(default)]
@@ -1679,10 +1683,11 @@ pub struct KaigiCallSignalsParams {
     /// Maximum number of signals to return.
     #[norito(default)]
     pub limit: Option<u64>,
-    /// Number of matching signals to skip.
+    /// Opaque exclusive cursor returned by the preceding page.
     #[norito(default)]
-    pub offset: Option<u64>,
+    pub cursor: Option<String>,
 }
+
 ( Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Optional query parameters for Kaigi call SSE streams.
 pub struct KaigiCallEventsParams {
@@ -1699,7 +1704,8 @@ pub struct KaigiRelayEventsParams {
     /// Restrict events to a specific relay id.
     #[norito(default)]
     pub relay: Option<String>,
-    /// Restrict events to a comma-separated list of kinds (`registration`, `health`).
+    /// Restrict events to a comma-separated list of kinds
+    /// (`registration`, `unregistration`, `health`).
     #[norito(default)]
     pub kind: Option<String>,
 }
@@ -1719,13 +1725,93 @@ struct KaigiDomainCounters {
 (Clone, Copy, Debug, PartialEq, Eq)
 enum KaigiRelayEventKind {
     Registration,
+    Unregistration,
     Health,
 }
+}
+const KAIGI_CALL_SIGNALS_CURSOR_VERSION: u8 = 1;
+const KAIGI_CALL_SIGNALS_CURSOR_MAX_BYTES: usize = 1_024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+struct KaigiCallSignalsCursorV1 {
+    version: u8,
+    call_id: KaigiId,
+    after_timestamp_ms: Option<u64>,
+    anchor: iroha_core::smartcontracts::isi::tx::KaigiSignalHistoryAnchor,
+    after: iroha_core::kura::KaigiSignalCandidatePosition,
+}
+
+fn kaigi_call_signals_cursor_error(message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code: "invalid_cursor",
+        message: message.into(),
+    }
+}
+
+fn encode_kaigi_call_signals_cursor(
+    cursor: &KaigiCallSignalsCursorV1,
+) -> Result<String, Error> {
+    let bytes = norito::to_bytes(cursor).map_err(|error| {
+        conversion_error(format!("failed to encode Kaigi signal cursor: {error}"))
+    })?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn decode_kaigi_call_signals_cursor(
+    raw: &str,
+    call_id: &KaigiId,
+    after_timestamp_ms: Option<u64>,
+) -> Result<KaigiCallSignalsCursorV1, Error> {
+    if raw.is_empty()
+        || raw.len() > KAIGI_CALL_SIGNALS_CURSOR_MAX_BYTES
+        || raw.trim() != raw
+        || !raw.is_ascii()
+    {
+        return Err(kaigi_call_signals_cursor_error(
+            "cursor must be a non-empty canonical base64url value within the advertised bound",
+        ));
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(raw.as_bytes())
+        .map_err(|_| kaigi_call_signals_cursor_error("cursor is not canonical base64url"))?;
+    if decoded.len() > KAIGI_CALL_SIGNALS_CURSOR_MAX_BYTES
+        || base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != raw
+    {
+        return Err(kaigi_call_signals_cursor_error(
+            "cursor is not canonically encoded",
+        ));
+    }
+    let cursor = norito::decode_from_bytes::<KaigiCallSignalsCursorV1>(&decoded)
+        .map_err(|_| kaigi_call_signals_cursor_error("cursor payload is invalid"))?;
+    let canonical = norito::to_bytes(&cursor)
+        .map_err(|_| kaigi_call_signals_cursor_error("cursor payload is invalid"))?;
+    if canonical != decoded {
+        return Err(kaigi_call_signals_cursor_error(
+            "cursor payload is not canonical",
+        ));
+    }
+    if cursor.version != KAIGI_CALL_SIGNALS_CURSOR_VERSION {
+        return Err(kaigi_call_signals_cursor_error(
+            "cursor version is not supported",
+        ));
+    }
+    if &cursor.call_id != call_id {
+        return Err(kaigi_call_signals_cursor_error(
+            "cursor does not belong to the requested Kaigi call",
+        ));
+    }
+    if cursor.after_timestamp_ms != after_timestamp_ms {
+        return Err(kaigi_call_signals_cursor_error(
+            "cursor does not belong to the requested timestamp filter",
+        ));
+    }
+    Ok(cursor)
 }
 impl KaigiRelayEventKind {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Registration => "registration",
+            Self::Unregistration => "unregistration",
             Self::Health => "health",
         }
     }
@@ -1786,17 +1872,6 @@ fn decode_kaigi_relay_registration(
     }
     Ok(registration)
 }
-fn ensure_unique_kaigi_relay_registration(
-    seen: &mut BTreeSet<AccountId>,
-    relay_id: &AccountId,
-) -> Result<(), Error> {
-    if !seen.insert(relay_id.clone()) {
-        return Err(kaigi_relay_metadata_error(
-            "duplicate Kaigi relay registration found across domains",
-        ));
-    }
-    Ok(())
-}
 fn decode_kaigi_relay_feedback(
     expected_relay_id: &AccountId,
     value: &IrohaJson,
@@ -1824,31 +1899,31 @@ fn find_kaigi_relay(
     let feedback_key = iroha_data_model::kaigi::kaigi_relay_feedback_key(relay_id)
         .map_err(|err| conversion_error(format!("invalid Kaigi relay identifier: {err}")))?;
     let world = state.world_view();
-    let mut seen = BTreeSet::new();
-    let mut found = None;
-    for domain in world.domains_iter() {
-        let Some(value) = domain.metadata().get(&registration_key) else {
-            continue;
-        };
-        let registration = decode_kaigi_relay_registration(&registration_key, value)?;
-        if registration.relay_id != *relay_id {
-            return Err(kaigi_relay_metadata_error(
-                "Kaigi relay metadata key does not match its embedded relay identifier",
-            ));
-        }
-        ensure_unique_kaigi_relay_registration(&mut seen, &registration.relay_id)?;
-        let feedback = domain
-            .metadata()
-            .get(&feedback_key)
-            .map(|json| decode_kaigi_relay_feedback(relay_id, json))
-            .transpose()?;
-        found = Some(KaigiRelaySnapshot {
-            domain: domain.id().clone(),
-            registration,
-            feedback,
-        });
+    let Some(domain_id) = world.kaigi_relay_registry().get(relay_id) else {
+        return Ok(None);
+    };
+    let domain = world.domain(domain_id).map_err(|error| {
+        kaigi_relay_metadata_error(format!("indexed Kaigi relay domain is missing: {error}"))
+    })?;
+    let value = domain.metadata().get(&registration_key).ok_or_else(|| {
+        kaigi_relay_metadata_error("indexed Kaigi relay registration metadata is missing")
+    })?;
+    let registration = decode_kaigi_relay_registration(&registration_key, value)?;
+    if registration.relay_id != *relay_id {
+        return Err(kaigi_relay_metadata_error(
+            "Kaigi relay metadata key does not match its embedded relay identifier",
+        ));
     }
-    Ok(found)
+    let feedback = domain
+        .metadata()
+        .get(&feedback_key)
+        .map(|json| decode_kaigi_relay_feedback(relay_id, json))
+        .transpose()?;
+    Ok(Some(KaigiRelaySnapshot {
+        domain: domain_id.clone(),
+        registration,
+        feedback,
+    }))
 }
 fn visit_kaigi_relays_bounded(
     state: &CoreState,
@@ -1856,39 +1931,38 @@ fn visit_kaigi_relays_bounded(
 ) -> Result<usize, Error> {
     let world = state.world_view();
     let mut count = 0usize;
-    let mut seen = BTreeSet::new();
-    for domain in world.domains_iter() {
-        let domain_id = domain.id().clone();
-        for (key, value) in domain.metadata().iter() {
-            let key_str = key.as_ref();
-            if !key_str.starts_with("kaigi_relay__") {
-                continue;
-            }
-            increment_kaigi_relay_diagnostic_count(&mut count)?;
-            let registration = decode_kaigi_relay_registration(key, value)?;
-            ensure_unique_kaigi_relay_registration(&mut seen, &registration.relay_id)?;
-            let feedback =
-                match iroha_data_model::kaigi::kaigi_relay_feedback_key(&registration.relay_id) {
-                    Ok(feedback_key) => domain
-                        .metadata()
-                        .get(&feedback_key)
-                        .map(|json| {
-                            decode_kaigi_relay_feedback(&registration.relay_id, json)
-                        })
-                        .transpose()?,
-                    Err(err) => {
-                        return Err(kaigi_relay_metadata_error(err.to_string()));
-                    }
-                };
-            if visit(KaigiRelaySnapshot {
-                domain: domain_id.clone(),
-                registration,
-                feedback,
-            })
-            .is_break()
-            {
-                return Ok(count);
-            }
+    for (relay_id, domain_id) in world.kaigi_relay_registry().iter() {
+        increment_kaigi_relay_diagnostic_count(&mut count)?;
+        let domain = world.domain(domain_id).map_err(|error| {
+            kaigi_relay_metadata_error(format!("indexed Kaigi relay domain is missing: {error}"))
+        })?;
+        let key = iroha_data_model::kaigi::kaigi_relay_metadata_key(relay_id)
+            .map_err(|error| kaigi_relay_metadata_error(error.to_string()))?;
+        let value = domain.metadata().get(&key).ok_or_else(|| {
+            kaigi_relay_metadata_error("indexed Kaigi relay registration metadata is missing")
+        })?;
+        let registration = decode_kaigi_relay_registration(&key, value)?;
+        if &registration.relay_id != relay_id {
+            return Err(kaigi_relay_metadata_error(
+                "Kaigi relay registry key does not match its metadata registration",
+            ));
+        }
+        let feedback = match iroha_data_model::kaigi::kaigi_relay_feedback_key(relay_id) {
+            Ok(feedback_key) => domain
+                .metadata()
+                .get(&feedback_key)
+                .map(|json| decode_kaigi_relay_feedback(relay_id, json))
+                .transpose()?,
+            Err(err) => return Err(kaigi_relay_metadata_error(err.to_string())),
+        };
+        if visit(KaigiRelaySnapshot {
+            domain: domain_id.clone(),
+            registration,
+            feedback,
+        })
+        .is_break()
+        {
+            return Ok(count);
         }
     }
     Ok(count)
@@ -2072,6 +2146,7 @@ fn kaigi_metadata_u64(value: &Value, keys: &[&str]) -> Result<Option<u64>, ()> {
     }
     Ok(resolved)
 }
+#[cfg(test)]
 fn kaigi_signal_authority(
     tx: &iroha_data_model::query::CommittedTransaction,
 ) -> Option<&AccountId> {
@@ -2083,6 +2158,7 @@ fn kaigi_signal_authority(
         TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
+#[cfg(test)]
 fn kaigi_signal_authority_is_allowed(
     tx: &iroha_data_model::query::CommittedTransaction,
     record: &iroha_data_model::kaigi::KaigiRecord,
@@ -2121,6 +2197,7 @@ fn kaigi_signal_authority_is_allowed(
     };
     Ok(active_authority.is_some_and(|active| allowed_active_lineages.contains(&active)))
 }
+#[cfg(test)]
 fn resolve_kaigi_signal_active_lineage(
     world: &impl WorldReadOnly,
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -2139,6 +2216,7 @@ fn resolve_kaigi_signal_active_lineage(
         ))
     })
 }
+#[cfg(test)]
 fn kaigi_signal_allowed_active_lineages(
     world: &impl WorldReadOnly,
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -2161,6 +2239,134 @@ fn kaigi_signal_allowed_active_lineages(
         }
     }
     Ok(lineages)
+}
+
+fn kaigi_signal_lineage_error(
+    error: impl core::fmt::Display,
+) -> iroha_data_model::query::error::QueryExecutionFail {
+    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+        "failed to resolve Kaigi signal account-id rekey lineage: {error}"
+    ))
+}
+
+fn bind_kaigi_signal_active_lineage(
+    resolved: &mut BTreeMap<AccountId, Option<AccountId>>,
+    account: &AccountId,
+    active: &AccountId,
+) -> Result<(), iroha_data_model::query::error::QueryExecutionFail> {
+    let Some(existing) = resolved.get_mut(account) else {
+        return Ok(());
+    };
+    if existing
+        .as_ref()
+        .is_some_and(|existing| existing != active)
+    {
+        return Err(kaigi_signal_lineage_error(
+            "one account maps to conflicting active targets",
+        ));
+    }
+    *existing = Some(active.clone());
+    Ok(())
+}
+
+fn resolve_kaigi_signal_active_lineages_batch(
+    world: &impl WorldReadOnly,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    accounts: &BTreeSet<AccountId>,
+    observation_time_ms: u64,
+    max_lineage_work: u64,
+) -> Result<
+    BTreeMap<AccountId, Option<AccountId>>,
+    iroha_data_model::query::error::QueryExecutionFail,
+> {
+    let account_work = u64::try_from(accounts.len())
+        .map_err(|_| iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)?;
+    let mut remaining_lineage_work = max_lineage_work
+        .checked_sub(account_work)
+        .ok_or(iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)?;
+    let mut resolved = accounts
+        .iter()
+        .map(|account| {
+            (
+                account.clone(),
+                world.account(account).ok().map(|_| account.clone()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (alias, rekey_record) in world.account_rekey_records().iter() {
+        remaining_lineage_work = remaining_lineage_work
+            .checked_sub(1)
+            .ok_or(iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)?;
+        let history_work = u64::try_from(rekey_record.previous_account_ids.len())
+            .map_err(|_| iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)?;
+        remaining_lineage_work = remaining_lineage_work
+            .checked_sub(history_work)
+            .ok_or(iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)?;
+        let predecessors = rekey_record
+            .active_account_id_rekey_predecessors()
+            .map_err(kaigi_signal_lineage_error)?;
+        let Some(active) = resolve_active_account_alias(
+            world,
+            catalog,
+            alias,
+            observation_time_ms,
+        )
+        .map_err(kaigi_signal_lineage_error)?
+        else {
+            continue;
+        };
+        if &rekey_record.label != alias || rekey_record.active_account_id != active {
+            return Err(kaigi_signal_lineage_error(
+                "active alias rekey record does not match its canonical binding",
+            ));
+        }
+        let mut seen_predecessors = BTreeSet::new();
+        for predecessor in predecessors {
+            if predecessor == &active
+                || !seen_predecessors.insert(predecessor)
+                || world.account(predecessor).is_ok()
+            {
+                return Err(kaigi_signal_lineage_error(
+                    "account rekey lineage contains an active, duplicate, or cyclic predecessor",
+                ));
+            }
+        }
+        bind_kaigi_signal_active_lineage(&mut resolved, &active, &active)?;
+        for predecessor in predecessors {
+            bind_kaigi_signal_active_lineage(&mut resolved, predecessor, &active)?;
+        }
+    }
+    Ok(resolved)
+}
+
+fn kaigi_signal_allowed_active_lineages_from_batch(
+    record: &iroha_data_model::kaigi::KaigiRecord,
+    resolved: &BTreeMap<AccountId, Option<AccountId>>,
+) -> BTreeSet<AccountId> {
+    let include_participants =
+        record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent;
+    core::iter::once(&record.host)
+        .chain(record.participants.iter().filter(|_| include_participants))
+        .filter_map(|account| resolved.get(account).and_then(Clone::clone))
+        .collect()
+}
+
+fn kaigi_signal_authority_is_allowed_from_batch(
+    authority: &AccountId,
+    record: &iroha_data_model::kaigi::KaigiRecord,
+    resolved: &BTreeMap<AccountId, Option<AccountId>>,
+    allowed_active_lineages: &BTreeSet<AccountId>,
+) -> bool {
+    let is_direct_call_authority = authority == &record.host
+        || (record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent
+            && record.has_participant(authority));
+    if is_direct_call_authority {
+        return allowed_active_lineages.contains(authority);
+    }
+    resolved
+        .get(authority)
+        .and_then(Clone::clone)
+        .is_some_and(|active| allowed_active_lineages.contains(&active))
 }
 fn kaigi_signal_carrier_timestamp_ms(
     state: &CoreState,
@@ -5933,10 +6139,22 @@ pub struct SccpResourceLimitsDto {
     pub max_bls_signer_contributions_per_transaction: u32,
     /// Maximum BLS key-validation and signer-contribution work committed in one block.
     pub max_bls_signer_contributions_per_block: u32,
+    /// Maximum Ed25519 signature checks in one transaction.
+    pub max_ed25519_signature_checks_per_transaction: u32,
+    /// Maximum Ed25519 signature checks committed in one block.
+    pub max_ed25519_signature_checks_per_block: u32,
+    /// Maximum TON Ed25519 validator-key checks in one transaction.
+    pub max_ed25519_validator_key_checks_per_transaction: u32,
+    /// Maximum TON Ed25519 validator-key checks committed in one block.
+    pub max_ed25519_validator_key_checks_per_block: u32,
     /// Maximum BN254 pairing-product checks in one transaction.
     pub max_bn254_pairing_checks_per_transaction: u32,
     /// Maximum BN254 pairing-product checks committed in one block.
     pub max_bn254_pairing_checks_per_block: u32,
+    /// Maximum BLS12-381 pairing-product checks in one transaction.
+    pub max_bls12_381_pairing_checks_per_transaction: u32,
+    /// Maximum BLS12-381 pairing-product checks committed in one block.
+    pub max_bls12_381_pairing_checks_per_block: u32,
 }
 }
 impl SccpRegistryLimitsDto {
@@ -6005,10 +6223,28 @@ impl From<iroha_config::parameters::actual::Sccp> for SccpResourceLimitsDto {
             max_bls_signer_contributions_per_block: sccp
                 .max_bls_signer_contributions_per_block
                 .get(),
+            max_ed25519_signature_checks_per_transaction: sccp
+                .max_ed25519_signature_checks_per_transaction
+                .get(),
+            max_ed25519_signature_checks_per_block: sccp
+                .max_ed25519_signature_checks_per_block
+                .get(),
+            max_ed25519_validator_key_checks_per_transaction: sccp
+                .max_ed25519_validator_key_checks_per_transaction
+                .get(),
+            max_ed25519_validator_key_checks_per_block: sccp
+                .max_ed25519_validator_key_checks_per_block
+                .get(),
             max_bn254_pairing_checks_per_transaction: sccp
                 .max_bn254_pairing_checks_per_transaction
                 .get(),
             max_bn254_pairing_checks_per_block: sccp.max_bn254_pairing_checks_per_block.get(),
+            max_bls12_381_pairing_checks_per_transaction: sccp
+                .max_bls12_381_pairing_checks_per_transaction
+                .get(),
+            max_bls12_381_pairing_checks_per_block: sccp
+                .max_bls12_381_pairing_checks_per_block
+                .get(),
         }
     }
 }
@@ -7278,6 +7514,9 @@ mod sccp_first_release_api_tests {
         for required in [
             "max_pending_outbound_messages",
             "max_pending_outbound_payload_bytes",
+            "max_ed25519_signature_checks_per_transaction",
+            "max_ed25519_validator_key_checks_per_transaction",
+            "max_bls12_381_pairing_checks_per_transaction",
         ] {
             assert!(encoded.contains(required), "missing SCCP limit {required}");
         }
@@ -10309,25 +10548,18 @@ mod zk_roots_selector_tests {
     }
     routing_test! { sync multisig_propose_metadata_forwards_only_non_fee_metadata
         let policy_hash = "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000";
+        let hijiri_hash = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890ABCDEF";
         let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
             Some("7".to_owned()),
             Some(policy_hash.to_owned()),
+            Some(hijiri_hash.to_owned()),
             Some("1".to_owned()),
             Some("2".to_owned()),
         )
         .expect("valid policy metadata");
         let metadata = build_multisig_propose_metadata_with_validation_fee(
             Some("memo"),
-            validation_fee_policy_metadata.as_ref().map(
-                |(version, hash, instruction_index, transfer_entry_index)| {
-                    (
-                        *version,
-                        hash.as_str(),
-                        *instruction_index,
-                        *transfer_entry_index,
-                    )
-                },
-            ),
+            validation_fee_policy_metadata.as_ref(),
         );
         let gas_asset_id = metadata
             .get("gas_asset_id")
@@ -10339,6 +10571,12 @@ mod zk_roots_selector_tests {
             .and_then(|value| value.try_into_any_norito::<u64>().ok());
         let policy_hash = metadata
             .get(iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_HASH_METADATA_KEY)
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+        let hijiri_hash = metadata
+            .get(
+                iroha_data_model::validation_fee::VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
+            )
             .cloned()
             .and_then(|value| value.try_into_any_norito::<String>().ok());
         let instruction_index = metadata
@@ -10359,10 +10597,14 @@ mod zk_roots_selector_tests {
             policy_hash.as_deref(),
             Some("abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000")
         );
+        assert_eq!(
+            hijiri_hash.as_deref(),
+            Some("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+        );
     }
     routing_test! { sync normalize_validation_fee_policy_metadata_requires_complete_well_formed_pair
         assert!(
-            normalize_validation_fee_policy_metadata(None, None, None, None)
+            normalize_validation_fee_policy_metadata(None, None, None, None, None)
                 .expect("absent policy metadata is allowed")
                 .is_none()
         );
@@ -10373,42 +10615,62 @@ mod zk_roots_selector_tests {
                     "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000"
                         .to_owned(),
                 ),
+                Some("F".repeat(64)),
                 Some(" 1 ".to_owned()),
                 Some(" 2 ".to_owned()),
             )
             .expect("valid metadata")
             .as_ref()
-            .map(|(version, hash, instruction_index, transfer_entry_index)| {
-                (
-                    *version,
-                    hash.as_str(),
-                    *instruction_index,
-                    *transfer_entry_index,
-                )
-            }),
+            .map(|metadata| (
+                metadata.policy_version,
+                metadata.policy_hash.as_str(),
+                metadata.hijiri_fee_quote_hash.as_deref(),
+                metadata.instruction_index,
+                metadata.transfer_entry_index,
+            )),
             Some((
                 7,
                 "abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000",
+                Some("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
                 Some(1),
                 Some(2),
             )),
         );
         assert!(
-            normalize_validation_fee_policy_metadata(None, None, Some("1".to_owned()), None)
+            normalize_validation_fee_policy_metadata(
+                None,
+                None,
+                None,
+                Some("1".to_owned()),
+                None,
+            )
                 .is_err()
         );
         assert!(
-            normalize_validation_fee_policy_metadata(None, None, None, Some("2".to_owned()))
+            normalize_validation_fee_policy_metadata(
+                None,
+                None,
+                None,
+                None,
+                Some("2".to_owned()),
+            )
                 .is_err()
         );
         assert!(
-            normalize_validation_fee_policy_metadata(Some("7".to_owned()), None, None, None,)
+            normalize_validation_fee_policy_metadata(
+                Some("7".to_owned()),
+                None,
+                None,
+                None,
+                None,
+            )
                 .is_err()
         );
         assert!(
             normalize_validation_fee_policy_metadata(
                 Some("7".to_owned()),
                 Some("0".repeat(64)),
+                None,
                 None,
                 Some("2".to_owned()),
             )
@@ -10420,6 +10682,7 @@ mod zk_roots_selector_tests {
                 Some("0".repeat(64)),
                 None,
                 None,
+                None,
             )
             .is_err()
         );
@@ -10427,6 +10690,7 @@ mod zk_roots_selector_tests {
             normalize_validation_fee_policy_metadata(
                 Some("7".to_owned()),
                 Some("0".repeat(64)),
+                None,
                 Some("not-integer".to_owned()),
                 None,
             )
@@ -10436,6 +10700,7 @@ mod zk_roots_selector_tests {
             normalize_validation_fee_policy_metadata(
                 Some("7".to_owned()),
                 Some("0".repeat(64)),
+                None,
                 Some("1".to_owned()),
                 Some("not-integer".to_owned()),
             )
@@ -10445,6 +10710,7 @@ mod zk_roots_selector_tests {
             normalize_validation_fee_policy_metadata(
                 Some("7".to_owned()),
                 Some("0".repeat(63)),
+                None,
                 None,
                 None,
             )
@@ -19720,16 +19986,29 @@ fn normalize_transaction_memo(memo: Option<String>) -> Option<String> {
     memo.map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NormalizedValidationFeePolicyMetadata {
+    policy_version: u64,
+    policy_hash: String,
+    hijiri_fee_quote_hash: Option<String>,
+    instruction_index: Option<u64>,
+    transfer_entry_index: Option<u64>,
+}
+
 fn normalize_validation_fee_policy_metadata(
     version: Option<String>,
     hash: Option<String>,
+    hijiri_fee_quote_hash: Option<String>,
     instruction_index: Option<String>,
     transfer_entry_index: Option<String>,
-) -> Result<Option<(u64, String, Option<u64>, Option<u64>)>> {
+) -> Result<Option<NormalizedValidationFeePolicyMetadata>> {
     let version = version
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let hash = hash
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let hijiri_fee_quote_hash = hijiri_fee_quote_hash
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let instruction_index = instruction_index
@@ -19738,63 +20017,74 @@ fn normalize_validation_fee_policy_metadata(
     let transfer_entry_index = transfer_entry_index
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
-    match (version, hash, instruction_index, transfer_entry_index) {
-        (None, None, None, None) => Ok(None),
-        (None, None, Some(_), _) | (None, None, _, Some(_)) => Err(conversion_error(
-            "validation fee coordinate metadata requires validation fee policy metadata".to_owned(),
-        )),
-        (Some(_), None, _, _) | (None, Some(_), _, _) => Err(conversion_error(
-            "validation fee policy metadata requires both version and hash".to_owned(),
-        )),
-        (Some(version), Some(hash), instruction_index, transfer_entry_index) => {
-            let version = version.parse::<u64>().map_err(|_| {
-                conversion_error(
-                    "validation_fee_policy_version must be an unsigned integer".to_owned(),
-                )
-            })?;
-            if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if version.is_none()
+        && hash.is_none()
+        && hijiri_fee_quote_hash.is_none()
+        && instruction_index.is_none()
+        && transfer_entry_index.is_none()
+    {
+        return Ok(None);
+    }
+    let (Some(version), Some(hash)) = (version, hash) else {
+        return Err(conversion_error(
+            "validation fee policy metadata requires both version and hash; Hijiri and coordinate bindings also require that pair"
+                .to_owned(),
+        ));
+    };
+    let policy_version = version.parse::<u64>().map_err(|_| {
+        conversion_error("validation_fee_policy_version must be an unsigned integer".to_owned())
+    })?;
+    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(conversion_error(
+            "validation_fee_policy_hash must be a 64-character hex string".to_owned(),
+        ));
+    }
+    let hijiri_fee_quote_hash = hijiri_fee_quote_hash
+        .map(|value| {
+            if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 return Err(conversion_error(
-                    "validation_fee_policy_hash must be a 64-character hex string".to_owned(),
-                ));
-            }
-            let instruction_index = instruction_index
-                .map(|value| {
-                    value.parse::<u64>().map_err(|_| {
-                        conversion_error(
-                            "validation_fee_instruction_index must be an unsigned integer"
-                                .to_owned(),
-                        )
-                    })
-                })
-                .transpose()?;
-            let transfer_entry_index = transfer_entry_index
-                .map(|value| {
-                    value.parse::<u64>().map_err(|_| {
-                        conversion_error(
-                            "validation_fee_transfer_entry_index must be an unsigned integer"
-                                .to_owned(),
-                        )
-                    })
-                })
-                .transpose()?;
-            if transfer_entry_index.is_some() && instruction_index.is_none() {
-                return Err(conversion_error(
-                    "validation_fee_transfer_entry_index requires validation_fee_instruction_index"
+                    "validation_fee_hijiri_fee_quote_hash must be a 64-character hex string"
                         .to_owned(),
                 ));
             }
-            Ok(Some((
-                version,
-                hash.to_ascii_lowercase(),
-                instruction_index,
-                transfer_entry_index,
-            )))
-        }
+            Ok(value.to_ascii_lowercase())
+        })
+        .transpose()?;
+    let instruction_index = instruction_index
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                conversion_error(
+                    "validation_fee_instruction_index must be an unsigned integer".to_owned(),
+                )
+            })
+        })
+        .transpose()?;
+    let transfer_entry_index = transfer_entry_index
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                conversion_error(
+                    "validation_fee_transfer_entry_index must be an unsigned integer".to_owned(),
+                )
+            })
+        })
+        .transpose()?;
+    if transfer_entry_index.is_some() && instruction_index.is_none() {
+        return Err(conversion_error(
+            "validation_fee_transfer_entry_index requires validation_fee_instruction_index"
+                .to_owned(),
+        ));
     }
+    Ok(Some(NormalizedValidationFeePolicyMetadata {
+        policy_version,
+        policy_hash: hash.to_ascii_lowercase(),
+        hijiri_fee_quote_hash,
+        instruction_index,
+        transfer_entry_index,
+    }))
 }
 fn append_canonical_multisig_validation_fee_marker(
     instructions: &mut Vec<iroha_data_model::isi::InstructionBox>,
-    validation_fee_policy_metadata: Option<&(u64, String, Option<u64>, Option<u64>)>,
+    validation_fee_policy_metadata: Option<&NormalizedValidationFeePolicyMetadata>,
 ) -> Result<()> {
     use iroha_data_model::validation_fee::ValidationFeeMultisigMarkerV1;
     for instruction in instructions.iter() {
@@ -19808,23 +20098,43 @@ fn append_canonical_multisig_validation_fee_marker(
             }
         }
     }
-    let Some((policy_version, policy_hash_hex, Some(instruction_index), transfer_entry_index)) =
-        validation_fee_policy_metadata
-    else {
+    let Some(metadata) = validation_fee_policy_metadata else {
         return Ok(());
     };
-    let policy_hash: [u8; 32] = hex::decode(policy_hash_hex)
+    let Some(instruction_index) = metadata.instruction_index else {
+        return Ok(());
+    };
+    let policy_hash: [u8; 32] = hex::decode(&metadata.policy_hash)
         .map_err(|_| conversion_error("invalid normalized validation-fee policy hash".to_owned()))?
         .try_into()
         .map_err(|_| {
             conversion_error("invalid normalized validation-fee policy hash".to_owned())
         })?;
+    let hijiri_fee_quote_hash = metadata
+        .hijiri_fee_quote_hash
+        .as_deref()
+        .map(|hash| {
+            hex::decode(hash)
+                .map_err(|_| {
+                    conversion_error(
+                        "invalid normalized validation-fee Hijiri quote hash".to_owned(),
+                    )
+                })?
+                .try_into()
+                .map_err(|_| {
+                    conversion_error(
+                        "invalid normalized validation-fee Hijiri quote hash".to_owned(),
+                    )
+                })
+        })
+        .transpose()?;
     instructions.push(
         ValidationFeeMultisigMarkerV1::new(
-            *policy_version,
+            metadata.policy_version,
             policy_hash,
-            *instruction_index,
-            *transfer_entry_index,
+            hijiri_fee_quote_hash,
+            instruction_index,
+            metadata.transfer_entry_index,
         )
         .into_instruction(),
     );
@@ -19840,30 +20150,44 @@ fn build_multisig_propose_metadata(memo: Option<&str>) -> Metadata {
 }
 fn build_multisig_propose_metadata_with_validation_fee(
     memo: Option<&str>,
-    validation_fee_policy_metadata: Option<(u64, &str, Option<u64>, Option<u64>)>,
+    validation_fee_policy_metadata: Option<&NormalizedValidationFeePolicyMetadata>,
 ) -> Metadata {
     let mut metadata = build_multisig_propose_metadata(memo);
-    if let Some((policy_version, policy_hash, instruction_index, transfer_entry_index)) =
-        validation_fee_policy_metadata
-    {
+    if let Some(metadata_binding) = validation_fee_policy_metadata {
         let version_key = Name::from_str(
             iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
         )
         .expect("static metadata key `validation_fee_policy_version`");
-        metadata.insert(version_key, IrohaJson::new(policy_version));
+        metadata.insert(
+            version_key,
+            IrohaJson::new(metadata_binding.policy_version),
+        );
         let hash_key = Name::from_str(
             iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
         )
         .expect("static metadata key `validation_fee_policy_hash`");
-        metadata.insert(hash_key, IrohaJson::new(policy_hash.to_owned()));
-        if let Some(instruction_index) = instruction_index {
+        metadata.insert(
+            hash_key,
+            IrohaJson::new(metadata_binding.policy_hash.clone()),
+        );
+        if let Some(hijiri_fee_quote_hash) = &metadata_binding.hijiri_fee_quote_hash {
+            let hijiri_hash_key = Name::from_str(
+                iroha_data_model::validation_fee::VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
+            )
+            .expect("static metadata key `validation_fee_hijiri_fee_quote_hash`");
+            metadata.insert(
+                hijiri_hash_key,
+                IrohaJson::new(hijiri_fee_quote_hash.clone()),
+            );
+        }
+        if let Some(instruction_index) = metadata_binding.instruction_index {
             let instruction_index_key = Name::from_str(
                 iroha_data_model::validation_fee::VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
             )
             .expect("static metadata key `validation_fee_instruction_index`");
             metadata.insert(instruction_index_key, IrohaJson::new(instruction_index));
         }
-        if let Some(transfer_entry_index) = transfer_entry_index {
+        if let Some(transfer_entry_index) = metadata_binding.transfer_entry_index {
             let transfer_entry_index_key = Name::from_str(
                 iroha_data_model::validation_fee::VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
             )
@@ -22199,9 +22523,16 @@ mod multisig_contract_call_tests {
             InstructionBox::from(Log::new(Level::INFO, "fee".to_owned())),
         ];
         let unmarked_hash = HashOf::new(&instructions);
+        let binding = NormalizedValidationFeePolicyMetadata {
+            policy_version: 1,
+            policy_hash: "ab".repeat(32),
+            hijiri_fee_quote_hash: Some("cd".repeat(32)),
+            instruction_index: Some(1),
+            transfer_entry_index: None,
+        };
         append_canonical_multisig_validation_fee_marker(
             &mut instructions,
-            Some(&(1, "ab".repeat(32), Some(1), None)),
+            Some(&binding),
         )
         .expect("canonical marker injection");
         let marker = ValidationFeeMultisigMarkerV1::parse_instruction(
@@ -22211,13 +22542,21 @@ mod multisig_contract_call_tests {
         .expect("marker present");
         assert_eq!(marker.policy_version, 1);
         assert_eq!(marker.policy_hash, [0xabu8; 32]);
+        assert_eq!(marker.hijiri_fee_quote_hash, Some([0xcdu8; 32]));
         assert_eq!(marker.instruction_index, 1);
         assert_eq!(marker.transfer_entry_index, None);
         let marked_hash = HashOf::new(&instructions);
         assert_ne!(marked_hash, unmarked_hash);
         let mut tampered = instructions.clone();
         *tampered.last_mut().expect("marker instruction") =
-            ValidationFeeMultisigMarkerV1::new(1, [0xabu8; 32], 0, None).into_instruction();
+            ValidationFeeMultisigMarkerV1::new(
+                1,
+                [0xabu8; 32],
+                Some([0xcdu8; 32]),
+                0,
+                None,
+            )
+            .into_instruction();
         assert_ne!(
             HashOf::new(&tampered),
             marked_hash,
@@ -22225,7 +22564,7 @@ mod multisig_contract_call_tests {
         );
         let err = append_canonical_multisig_validation_fee_marker(
             &mut instructions,
-            Some(&(1, "ab".repeat(32), Some(1), None)),
+            Some(&binding),
         )
         .expect_err("caller-supplied top-level marker must not be duplicated");
         assert!(err.to_string().contains("must not supply a top-level"));
@@ -25355,6 +25694,7 @@ seiyaku BytesPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_hijiri_fee_quote_hash: None,
                 validation_fee_instruction_index: None,
                 validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
@@ -25398,6 +25738,7 @@ seiyaku BytesPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_hijiri_fee_quote_hash: None,
                 validation_fee_instruction_index: None,
                 validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
@@ -25420,6 +25761,7 @@ seiyaku BytesPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_hijiri_fee_quote_hash: None,
                 validation_fee_instruction_index: None,
                 validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
@@ -25442,6 +25784,7 @@ seiyaku BytesPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_hijiri_fee_quote_hash: None,
                 validation_fee_instruction_index: None,
                 validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
@@ -25480,6 +25823,7 @@ seiyaku BytesPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_hijiri_fee_quote_hash: None,
                 validation_fee_instruction_index: None,
                 validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
@@ -25507,6 +25851,7 @@ seiyaku BytesPayloadNormalizeTest {
                     memo: None,
                     validation_fee_policy_version: None,
                     validation_fee_policy_hash: None,
+                    validation_fee_hijiri_fee_quote_hash: None,
                     validation_fee_instruction_index: None,
                     validation_fee_transfer_entry_index: None,
                     instructions: vec![instruction.clone()],
@@ -25542,6 +25887,7 @@ seiyaku BytesPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_hijiri_fee_quote_hash: None,
                 validation_fee_instruction_index: None,
                 validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
@@ -25569,6 +25915,7 @@ seiyaku BytesPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_hijiri_fee_quote_hash: None,
                 validation_fee_instruction_index: None,
                 validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
@@ -25592,6 +25939,7 @@ seiyaku BytesPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_hijiri_fee_quote_hash: None,
                 validation_fee_instruction_index: None,
                 validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
@@ -25685,6 +26033,7 @@ seiyaku BytesPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_hijiri_fee_quote_hash: None,
                 validation_fee_instruction_index: None,
                 validation_fee_transfer_entry_index: None,
                 instructions: inner_instructions,
@@ -25791,6 +26140,7 @@ seiyaku BytesPayloadNormalizeTest {
                 memo: None,
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
+                validation_fee_hijiri_fee_quote_hash: None,
                 validation_fee_instruction_index: None,
                 validation_fee_transfer_entry_index: None,
                 instructions,
@@ -25874,6 +26224,7 @@ seiyaku BytesPayloadNormalizeTest {
             memo: None,
             validation_fee_policy_version: None,
             validation_fee_policy_hash: None,
+            validation_fee_hijiri_fee_quote_hash: None,
             validation_fee_instruction_index: None,
             validation_fee_transfer_entry_index: None,
             instructions: vec![instruction.clone()],
@@ -25999,6 +26350,7 @@ seiyaku BytesPayloadNormalizeTest {
             memo: None,
             validation_fee_policy_version: None,
             validation_fee_policy_hash: None,
+            validation_fee_hijiri_fee_quote_hash: None,
             validation_fee_instruction_index: None,
             validation_fee_transfer_entry_index: None,
             instructions: vec![instruction],
@@ -26569,6 +26921,7 @@ pub async fn handle_post_multisig_propose(
         memo,
         validation_fee_policy_version,
         validation_fee_policy_hash,
+        validation_fee_hijiri_fee_quote_hash,
         validation_fee_instruction_index,
         validation_fee_transfer_entry_index,
         instructions,
@@ -26578,6 +26931,7 @@ pub async fn handle_post_multisig_propose(
     let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
         validation_fee_policy_version,
         validation_fee_policy_hash,
+        validation_fee_hijiri_fee_quote_hash,
         validation_fee_instruction_index,
         validation_fee_transfer_entry_index,
     )?;
@@ -26618,16 +26972,7 @@ pub async fn handle_post_multisig_propose(
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let tx_metadata = build_multisig_propose_metadata_with_validation_fee(
         memo.as_deref(),
-        validation_fee_policy_metadata.as_ref().map(
-            |(version, hash, instruction_index, transfer_entry_index)| {
-                (
-                    *version,
-                    hash.as_str(),
-                    *instruction_index,
-                    *transfer_entry_index,
-                )
-            },
-        ),
+        validation_fee_policy_metadata.as_ref(),
     );
     let builder = builder
         .with_fee_payment_intent(fee_payment.clone())
@@ -29843,6 +30188,9 @@ pub struct MultisigProposeDto {
     /// Optional validation-fee policy hash forwarded to transaction metadata.
     #[norito(default)]
     pub validation_fee_policy_hash: Option<String>,
+    /// Optional composite Hijiri fee-quote hash forwarded to metadata and the signed marker.
+    #[norito(default)]
+    pub validation_fee_hijiri_fee_quote_hash: Option<String>,
     /// Instruction batch that will be wrapped inside `MultisigPropose`.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
     /// Optional validation-fee instruction index forwarded to transaction metadata.
@@ -39228,6 +39576,49 @@ mod tx_query_filter_tests {
         assert!(tx_matches_history_visibility_scope(&banka_tx, &scope));
         assert!(!tx_matches_history_visibility_scope(&bankb_tx, &scope));
     }
+    routing_test! { sync kaigi_call_signal_cursor_binds_call_filter_and_canonical_encoding
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "cursor-test".parse().expect("call name"),
+        );
+        let block_hash = GenericHashOf::<dm::BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x31; Hash::LENGTH]),
+        );
+        let entrypoint_hash = GenericHashOf::<dm::TransactionEntrypoint>::from_untyped_unchecked(
+            Hash::prehashed([0x41; Hash::LENGTH]),
+        );
+        let cursor = KaigiCallSignalsCursorV1 {
+            version: KAIGI_CALL_SIGNALS_CURSOR_VERSION,
+            call_id: call_id.clone(),
+            after_timestamp_ms: Some(42),
+            anchor: iroha_core::smartcontracts::isi::tx::KaigiSignalHistoryAnchor::new(
+                1,
+                Some(block_hash),
+            )
+            .expect("valid anchor"),
+            after: iroha_core::kura::KaigiSignalCandidatePosition::new(
+                1,
+                0,
+                0,
+                block_hash,
+                entrypoint_hash,
+            )
+            .expect("valid position"),
+        };
+        let encoded = encode_kaigi_call_signals_cursor(&cursor).expect("encode cursor");
+        assert_eq!(
+            decode_kaigi_call_signals_cursor(&encoded, &call_id, Some(42))
+                .expect("decode cursor"),
+            cursor,
+        );
+        let other_call = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "other-call".parse().expect("call name"),
+        );
+        assert!(decode_kaigi_call_signals_cursor(&encoded, &other_call, Some(42)).is_err());
+        assert!(decode_kaigi_call_signals_cursor(&encoded, &call_id, Some(43)).is_err());
+        assert!(decode_kaigi_call_signals_cursor(&format!("{encoded}="), &call_id, Some(42)).is_err());
+    }
     routing_test! { sync explorer_transaction_filters_match_asset_id
         let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
         let (other_account, _) = account_with_key();
@@ -40474,6 +40865,36 @@ mod tx_query_filter_tests {
         ));
         assert_eq!(lineage_cache.len(), 1);
     }
+    routing_test! { sync kaigi_signal_batch_lineage_scan_rejects_unrelated_global_work_over_budget
+        let (account, _) = account_with_key();
+        let mut world = iroha_core::state::World::with([], [], []);
+        for label in ["unrelated-a", "unrelated-b"] {
+            let alias = iroha_data_model::account::rekey::AccountAlias::domainless(
+                label.parse().expect("account alias label"),
+                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            );
+            world.account_rekey_records_mut_for_testing().insert(
+                alias.clone(),
+                iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                    alias,
+                    account.clone(),
+                ),
+            );
+        }
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+        let error = resolve_kaigi_signal_active_lineages_batch(
+            &world.view(),
+            &catalog,
+            &BTreeSet::new(),
+            0,
+            1,
+        )
+        .expect_err("the second unrelated record must exceed the hard work budget");
+        assert_eq!(
+            error,
+            iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+        );
+    }
     routing_test! { sync kaigi_signal_authority_is_bound_to_current_call_roster
         let (host, host_keypair) = account_with_key();
         let (participant, participant_keypair) = account_with_key();
@@ -41044,8 +41465,35 @@ mod tx_query_filter_tests {
             Some(call_domain_literal.as_str()),
         );
     }
+    routing_test! { sync kaigi_relay_unregistration_event_is_compact
+        use iroha_data_model::events::data::prelude::{
+            DomainEvent, KaigiRelayUnregistrationSummary,
+        };
+        let domain = DomainId::try_new("relays", "universal").expect("relay domain");
+        let (relay, _) = account_with_key();
+        let event = EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Domain(
+                DomainEvent::KaigiRelayUnregistered(KaigiRelayUnregistrationSummary::new(
+                    domain.clone(),
+                    relay.clone(),
+                )),
+            ),
+        ));
+        let (kind, projected_domain, projected_relay, payload) =
+            convert_kaigi_event(&event).expect("relay unregistration event");
+        assert_eq!(kind, KaigiRelayEventKind::Unregistration);
+        assert_eq!(projected_domain, domain.to_string());
+        assert_eq!(projected_relay, relay.to_string());
+        assert_eq!(payload.as_object().map(|object| object.len()), Some(3));
+        assert_eq!(
+            payload.get("kind").and_then(Value::as_str),
+            Some("unregistration"),
+        );
+    }
     routing_test! { sync convert_kaigi_call_event_maps_roster_and_end_updates
-        use iroha_data_model::events::data::prelude::{DomainEvent, KaigiRosterSummary};
+        use iroha_data_model::events::data::prelude::{
+            DomainEvent, KaigiRosterSummary, KaigiStatusSummary,
+        };
         let call_id = iroha_data_model::kaigi::KaigiId::new(
             DomainId::try_new("kaigi", "universal").expect("domain"),
             "weekly-sync".parse().expect("call name"),
@@ -41073,48 +41521,29 @@ mod tx_query_filter_tests {
             payload.get("privacy_mode").and_then(Value::as_str),
             Some("private"),
         );
-        let (host, _) = account_with_key();
-        let record = iroha_data_model::kaigi::KaigiRecord {
-            id: call_id.clone(),
-            host,
-            billing_account: None,
-            title: None,
-            description: None,
-            max_participants: None,
-            gas_rate_per_minute: 0,
-            metadata: dm::Metadata::default(),
-            scheduled_start_ms: None,
-            privacy_mode: iroha_data_model::kaigi::KaigiPrivacyMode::Transparent,
-            room_policy: iroha_data_model::kaigi::KaigiRoomPolicy::Authenticated,
-            relay_manifest: None,
-            host_commitment: None,
-            roster_root: Hash::prehashed([0x55; Hash::LENGTH]).into(),
-            roster_commitments: Vec::new(),
-            nullifier_log: Vec::new(),
-            usage_commitments: Vec::new(),
-            status: iroha_data_model::kaigi::KaigiStatus::Ended,
-            created_at_ms: 1,
-            ended_at_ms: Some(2),
-            total_duration_ms: 0,
-            total_billed_gas: 0,
-            segments_recorded: 0,
-            participants: Vec::new(),
-            participant_metadata: std::collections::BTreeMap::new(),
-        };
         let ended_event = EventBox::Data(SharedDataEvent::from(
-            iroha_data_model::events::data::DataEvent::Domain(DomainEvent::MetadataInserted(
-                iroha_data_model::events::data::prelude::MetadataChanged {
-                    target: call_id.domain_id.clone(),
-                    key: iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name)
-                        .expect("call key"),
-                    value: Json::new(record),
-                },
+            iroha_data_model::events::data::DataEvent::Domain(DomainEvent::KaigiStatusChanged(
+                KaigiStatusSummary::new(
+                    call_id.clone(),
+                    iroha_data_model::kaigi::KaigiStatus::Ended,
+                    Some(2),
+                ),
             )),
         ));
         let (kind, payload) =
             convert_kaigi_call_event(&ended_event, &call_id).expect("ended event");
         assert_eq!(kind, "ended");
         assert_eq!(payload.get("ended_at_ms").and_then(Value::as_u64), Some(2));
+        let active_event = EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Domain(DomainEvent::KaigiStatusChanged(
+                KaigiStatusSummary::new(
+                    call_id.clone(),
+                    iroha_data_model::kaigi::KaigiStatus::Active,
+                    None,
+                ),
+            )),
+        ));
+        assert!(convert_kaigi_call_event(&active_event, &call_id).is_none());
     }
     routing_test! { sync explorer_pagination_window_matches_paginate_semantics
         assert_eq!(explorer_pagination_window(0, 0), (1, 0, 1));
@@ -43555,147 +43984,169 @@ pub async fn handle_v1_kaigi_call_signals(
     })?;
     let reveal_authorities =
         record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent;
-    let allowed_active_lineages = kaigi_signal_allowed_active_lineages(
-        view.world(),
-        &view.nexus().dataspace_catalog,
-        &record,
-        observation_time_ms,
-    )
-    .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
     let after_timestamp_ms = params.after_timestamp_ms;
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(|raw| decode_kaigi_call_signals_cursor(raw, &call_id, after_timestamp_ms))
+        .transpose()?;
     let pagination = enforce_app_pagination(
         params.limit.or(Some(50)),
-        params.offset.unwrap_or(0),
+        0,
         app_query_page_cap(state.as_ref()),
         "/v1/kaigi/calls/{call_id}/signals",
     )?;
     let limit = usize::try_from(pagination.limit.unwrap_or(pagination.cap))
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
-    let offset = usize::try_from(pagination.offset)
-        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
-    let page_window = offset
-        .checked_add(limit)
-        .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    if limit == 0 {
+        return Err(Error::AppQueryValidation {
+            code: "invalid_pagination",
+            message: "limit must be greater than zero for cursor pagination".to_owned(),
+        });
+    }
     let canonical_max_fetch = iroha_data_model::query::parameters::MAX_FETCH_SIZE.get();
-    if u64::try_from(page_window).unwrap_or(u64::MAX) > canonical_max_fetch {
+    if u64::try_from(limit).unwrap_or(u64::MAX) > canonical_max_fetch {
         return Err(Error::AppQueryValidation {
             code: "invalid_pagination",
             message: format!(
-                "offset plus limit must not exceed the canonical fetch budget of \
+                "limit must not exceed the canonical fetch budget of \
                  {canonical_max_fetch} rows for /v1/kaigi/calls/{{call_id}}/signals"
             ),
         });
     }
-    let call_literal = call_id.to_string();
-    let mut heap: BinaryHeap<PageEntry<u64, (KaigiCallSignalDto, u64)>> = BinaryHeap::new();
-    heap.try_reserve(page_window)
-        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
-    let mut retained_bytes = 0u64;
-    let mut total = 0u64;
-    let mut sequence = 0usize;
-    let mut carrier_timestamp_cache = None;
-    let mut authority_lineage_cache = BTreeMap::new();
     let max_signal_scan_work = app_query_limits().max_fetch_size.min(canonical_max_fetch);
-    iroha_core::smartcontracts::isi::tx::visit_committed_transactions_with_work_budget(
-        &view,
-        iroha_data_model::query::dsl::CompoundPredicate::PASS,
-        max_signal_scan_work,
-        max_signal_scan_work,
-        |transaction, _matches| {
-            let Some(signal_json) =
-                kaigi_signal_metadata_for_call(&transaction, &call_literal)
-            else {
-                return Ok(ControlFlow::Continue(()));
-            };
-            let carrier_timestamp_ms = kaigi_signal_carrier_timestamp_ms(
-                state.as_ref(),
-                transaction.block_hash(),
-                &mut carrier_timestamp_cache,
-            )?;
-            if !kaigi_signal_carrier_is_within_call_lifecycle(&record, carrier_timestamp_ms) {
-                return Ok(ControlFlow::Continue(()));
-            }
-            let Some(signal) = kaigi_signal_from_metadata(
-                &transaction,
-                signal_json,
-                reveal_authorities,
-                carrier_timestamp_ms,
-            ) else {
-                return Ok(ControlFlow::Continue(()));
-            };
-            if !kaigi_signal_matches_call_query(&signal, &call_literal, after_timestamp_ms) {
-                return Ok(ControlFlow::Continue(()));
-            }
-            if !kaigi_signal_authority_is_allowed(
-                &transaction,
-                &record,
-                view.world(),
-                &view.nexus().dataspace_catalog,
-                observation_time_ms,
-                &allowed_active_lineages,
-                &mut authority_lineage_cache,
+    let anchor = cursor.as_ref().map(|cursor| cursor.anchor);
+    let after = cursor.as_ref().map(|cursor| cursor.after);
+    let candidate_page =
+        iroha_core::smartcontracts::isi::tx::indexed_kaigi_signal_candidates_page(
+            &view,
+            &call_id,
+            anchor,
+            after,
+            iroha_core::smartcontracts::isi::tx::KaigiSignalCandidateWorkLimits::from_work_cap(
                 max_signal_scan_work,
-            )? {
-                return Ok(ControlFlow::Continue(()));
-            }
-            total = total.saturating_add(1);
-            let entry = PageEntry {
-                key: carrier_timestamp_ms,
-                seq: sequence,
-                item: (signal, 0),
-            };
-            sequence = sequence.wrapping_add(1);
-            if heap.len() == page_window
-                && heap
-                    .peek()
-                    .is_some_and(|largest| entry.cmp(largest).is_ge())
-            {
-                return Ok(ControlFlow::Continue(()));
-            }
-            let encoded_len = u64::try_from(
-                norito::json::to_vec(&entry.item.0)
-                    .map_err(|_| {
-                        iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
-                    })?
-                    .len(),
             )
-            .unwrap_or(u64::MAX);
-            if heap.len() == page_window {
-                let removed = heap
-                    .pop()
-                    .expect("a full Kaigi call-signal page heap is non-empty");
-                retained_bytes = retained_bytes.saturating_sub(removed.item.1);
-            }
-            retained_bytes = retained_bytes
-                .checked_add(encoded_len)
-                .filter(|bytes| *bytes <= KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES)
-                .ok_or(iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)?;
-            let PageEntry {
-                key,
-                seq,
-                item: (signal, _),
-            } = entry;
-            heap.push(PageEntry {
-                key,
-                seq,
-                item: (signal, encoded_len),
-            });
-            Ok(ControlFlow::Continue(()))
-        },
+            .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?,
+        )
+        .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
+
+    let participant_work = if reveal_authorities {
+        u64::try_from(record.participants.len())
+            .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?
+    } else {
+        0
+    };
+    let candidate_work = u64::try_from(candidate_page.candidates().len())
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    1_u64
+        .checked_add(participant_work)
+        .and_then(|work| work.checked_add(candidate_work))
+        .filter(|work| *work <= max_signal_scan_work)
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+            ))
+        })?;
+    let mut lineage_accounts = BTreeSet::new();
+    lineage_accounts.insert(record.host.clone());
+    if reveal_authorities {
+        lineage_accounts.extend(record.participants.iter().cloned());
+    }
+    lineage_accounts.extend(
+        candidate_page
+            .candidates()
+            .iter()
+            .map(|candidate| candidate.authority().clone()),
+    );
+    let resolved_lineages = resolve_kaigi_signal_active_lineages_batch(
+        view.world(),
+        &view.nexus().dataspace_catalog,
+        &lineage_accounts,
+        observation_time_ms,
+        max_signal_scan_work,
     )
     .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
-    let mut entries = heap.into_vec();
-    entries.sort_by(|left, right| match left.key.cmp(&right.key) {
-        Ordering::Equal => left.seq.cmp(&right.seq),
-        ordering => ordering,
-    });
-    let items = entries
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .map(|entry| entry.item.0)
-        .collect();
-    Ok(JsonBody(KaigiCallSignalListDto { total, items }).into_response())
+    let allowed_active_lineages =
+        kaigi_signal_allowed_active_lineages_from_batch(&record, &resolved_lineages);
+
+    let call_literal = call_id.to_string();
+    let mut items = Vec::new();
+    items
+        .try_reserve(limit)
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let mut retained_bytes = 0u64;
+    let mut examined = 0usize;
+    let mut last_examined = None;
+    for candidate in candidate_page.candidates() {
+        examined = examined.saturating_add(1);
+        last_examined = Some(candidate.position());
+        let carrier_timestamp_ms = candidate.carrier_timestamp_ms();
+        if !kaigi_signal_carrier_is_within_call_lifecycle(&record, carrier_timestamp_ms) {
+            continue;
+        }
+        let Some(signal_json) =
+            kaigi_signal_metadata_for_call(candidate.transaction(), &call_literal)
+        else {
+            return Err(conversion_error(
+                "indexed Kaigi signal metadata no longer matches its exact call id".to_owned(),
+            ));
+        };
+        let Some(signal) = kaigi_signal_from_metadata(
+            candidate.transaction(),
+            signal_json,
+            reveal_authorities,
+            carrier_timestamp_ms,
+        ) else {
+            continue;
+        };
+        if !kaigi_signal_matches_call_query(&signal, &call_literal, after_timestamp_ms)
+            || !kaigi_signal_authority_is_allowed_from_batch(
+                candidate.authority(),
+                &record,
+                &resolved_lineages,
+                &allowed_active_lineages,
+            )
+        {
+            continue;
+        }
+        let encoded_len = u64::try_from(
+            norito::json::to_vec(&signal)
+                .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?
+                .len(),
+        )
+        .unwrap_or(u64::MAX);
+        retained_bytes = retained_bytes
+            .checked_add(encoded_len)
+            .filter(|bytes| *bytes <= KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES)
+            .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+        items.push(signal);
+        if items.len() == limit {
+            break;
+        }
+    }
+    let has_more = examined < candidate_page.candidates().len() || candidate_page.has_more();
+    let next_cursor = if has_more {
+        let after = last_examined.ok_or_else(|| {
+            conversion_error("Kaigi signal page has no resumable candidate".to_owned())
+        })?;
+        Some(encode_kaigi_call_signals_cursor(
+            &KaigiCallSignalsCursorV1 {
+                version: KAIGI_CALL_SIGNALS_CURSOR_VERSION,
+                call_id,
+                after_timestamp_ms,
+                anchor: candidate_page.anchor(),
+                after,
+            },
+        )?)
+    } else {
+        None
+    };
+    Ok(JsonBody(KaigiCallSignalListDto {
+        has_more,
+        next_cursor,
+        items,
+    })
+    .into_response())
 }
 fn parse_kaigi_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
     let raw = kind?.trim();
@@ -43743,6 +44194,21 @@ fn convert_kaigi_event(
                 ),
             ]);
             Some((KaigiRelayEventKind::Registration, domain, relay, payload))
+        }
+        DataEvent::Domain(DomainEvent::KaigiRelayUnregistered(summary)) => {
+            let domain = summary.domain.to_string();
+            let relay = summary.relay.to_string();
+            let payload = json_object(vec![
+                json_entry("kind", KaigiRelayEventKind::Unregistration.as_str()),
+                json_entry("domain", domain.clone()),
+                json_entry("relay_id", relay.clone()),
+            ]);
+            Some((
+                KaigiRelayEventKind::Unregistration,
+                domain,
+                relay,
+                payload,
+            ))
         }
         DataEvent::Domain(DomainEvent::KaigiRelayHealthUpdated(summary)) => {
             let domain = summary.domain.to_string();
@@ -43794,32 +44260,17 @@ fn convert_kaigi_call_event(event_box: &EventBox, call_id: &KaigiId) -> Option<(
             }
             Some(("roster_updated".to_owned(), json_object(entries)))
         }
-        DataEvent::Domain(DomainEvent::MetadataInserted(change))
-            if change.target() == &call_id.domain_id =>
+        DataEvent::Domain(DomainEvent::KaigiStatusChanged(summary))
+            if &summary.call == call_id
+                && summary.status == iroha_data_model::kaigi::KaigiStatus::Ended =>
         {
-            let expected_key =
-                iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name).ok()?;
-            if change.key() != &expected_key {
-                return None;
-            }
-            let record = change
-                .value()
-                .try_into_any_norito::<iroha_data_model::kaigi::KaigiRecord>()
-                .ok()?;
-            if record.id != *call_id || record.status != iroha_data_model::kaigi::KaigiStatus::Ended
-            {
-                return None;
-            }
             Some((
                 "ended".to_owned(),
                 json_object(vec![
                     json_entry("kind", "ended"),
                     json_entry("call", json_value(&kaigi_call_event_ref(call_id))),
-                    json_entry("status", kaigi_status_label(record.status)),
-                    json_entry(
-                        "ended_at_ms",
-                        record.ended_at_ms.unwrap_or(record.created_at_ms),
-                    ),
+                    json_entry("status", kaigi_status_label(summary.status)),
+                    json_entry("ended_at_ms", summary.ended_at_ms?),
                 ]),
             ))
         }
@@ -46799,6 +47250,7 @@ mod validation_fee_torii_ingress_tests {
                     ValidationFeeMultisigMarkerV1::new(
                         policy.policy_version,
                         policy.policy_hash().expect("policy hash"),
+                        None,
                         1,
                         None,
                     )

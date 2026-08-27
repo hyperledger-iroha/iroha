@@ -219,7 +219,7 @@ the first release does not decode superseded data-model layouts.
   - `QueryBox<T>` is a boxed, erased `Query<Item = T>` with Norito serde backed by a global registry.
   - `QueryWithFilter<T> { query, predicate, selector }` pairs a query with a DSL predicate/selector; converts into an erased iterable query via `From`.
 - Registry and codecs:
-  - The built-in query registry maps concrete query types to frozen wire IDs for encoding and maps only those wire IDs to constructors for dynamic decode. Custom registries may add new types with unique explicit IDs; type-name decode aliases and unregistered encoding fallbacks are rejected.
+  - The built-in query registry maps concrete query types to frozen `iroha.query.v1::iterable::<domain>::<item>` wire IDs for encoding and maps only those wire IDs to constructors for dynamic decode. Custom registries may add new types with unique explicit IDs; type-name decode aliases, retired Rust-path IDs, and unregistered encoding fallbacks are rejected.
   - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` and `QueryResponse = Singular(..) | Iterable(QueryOutput)`.
   - `QueryOutputBatchBox` is a sum-type over homogeneous vectors (e.g., `Vec<Account>`, `Vec<Name>`, `Vec<AssetDefinition>`, `Vec<BlockHeader>`), plus tuple and extension helpers for efficient pagination.
 - DSL: Implemented unconditionally in `query::dsl` with projection traits (`HasProjection<PredicateMarker>` / `SelectorMarker`) for compile-time-checked predicates and selectors. Iterable requests carry a canonical item discriminator plus encoded query, predicate, and selector components.

@@ -17361,6 +17361,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Assert.Equal("ops@universal", payload.RootElement.GetProperty("multisig_account_alias").GetString());
             Assert.Equal(accountId, payload.RootElement.GetProperty("signer_account_id").GetString());
             Assert.Equal((ulong)123, payload.RootElement.GetProperty("creation_time_ms").GetUInt64());
+            Assert.Equal("7", payload.RootElement.GetProperty("validation_fee_policy_version").GetString());
+            Assert.Equal(new string('a', 64), payload.RootElement.GetProperty("validation_fee_policy_hash").GetString());
+            Assert.Equal(new string('c', 64), payload.RootElement.GetProperty("validation_fee_hijiri_fee_quote_hash").GetString());
+            Assert.Equal("1", payload.RootElement.GetProperty("validation_fee_instruction_index").GetString());
+            Assert.Equal("2", payload.RootElement.GetProperty("validation_fee_transfer_entry_index").GetString());
 
             var encodedInstruction = payload.RootElement.GetProperty("instructions")[0].GetString()!;
             Assert.Equal(instructionBase64, encodedInstruction);
@@ -17392,6 +17397,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             SignerAccountId = accountId,
             CreationTimeMilliseconds = 123,
             FeePayment = EmptyAuthorityFeePayment,
+            ValidationFeePolicyVersion = 7,
+            ValidationFeePolicyHash = new string('A', 64),
+            ValidationFeeHijiriFeeQuoteHash = new string('C', 64),
+            ValidationFeeInstructionIndex = 1,
+            ValidationFeeTransferEntryIndex = 2,
             Instructions = [instructionBase64],
         }, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -17505,6 +17515,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { valid with { SignatureBase64 = "AQID" }, "PublicKeyHex", "Detached signing requires both" };
         yield return new object[] { valid with { PublicKeyHex = new string('a', 64), SignatureBase64 = "not-base64" }, "SignatureBase64", "base64 encoded" };
         yield return new object[] { valid with { CreationTimeMilliseconds = 0 }, "CreationTimeMilliseconds", "positive" };
+        yield return new object[] { valid with { ValidationFeePolicyVersion = 7 }, "ValidationFeePolicyHash", "provided together" };
+        yield return new object[] { valid with { ValidationFeePolicyHash = new string('a', 64) }, "ValidationFeePolicyVersion", "provided together" };
+        yield return new object[] { valid with { ValidationFeeHijiriFeeQuoteHash = new string('c', 64) }, "ValidationFeeHijiriFeeQuoteHash", "requires validation fee policy metadata" };
+        yield return new object[] { valid with { ValidationFeeInstructionIndex = 1 }, "ValidationFeeInstructionIndex", "requires policy metadata" };
+        yield return new object[] { valid with { ValidationFeeTransferEntryIndex = 2 }, "ValidationFeeTransferEntryIndex", "requires policy metadata" };
+        yield return new object[] { valid with { ValidationFeePolicyVersion = 7, ValidationFeePolicyHash = "bad" }, "ValidationFeePolicyHash", "32-byte hex string" };
+        yield return new object[] { valid with { ValidationFeePolicyVersion = 7, ValidationFeePolicyHash = new string('a', 64), ValidationFeeHijiriFeeQuoteHash = "bad" }, "ValidationFeeHijiriFeeQuoteHash", "32-byte hex string" };
+        yield return new object[] { valid with { ValidationFeePolicyVersion = 7, ValidationFeePolicyHash = new string('a', 64), ValidationFeeTransferEntryIndex = 2 }, "ValidationFeeTransferEntryIndex", "requires an instruction index" };
         yield return new object[] { valid with { FeePayment = null! }, "FeePayment", "required" };
         yield return new object[] { valid with { Instructions = null! }, "Instructions", "cannot be null" };
         yield return new object[] { valid with { Instructions = [] }, "Instructions", "must not be empty" };

@@ -46,6 +46,7 @@ import {
   buildRecordKaigiUsageInstruction,
   buildSetKaigiRelayManifestInstruction,
   buildRegisterKaigiRelayInstruction,
+  buildUnregisterKaigiRelayInstruction,
   buildReportKaigiRelayHealthInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
@@ -1448,6 +1449,7 @@ const IVM_PROVED_CONTRACT_METADATA_KEYS = new Set([
   "gas_limit",
   "validation_fee_policy_version",
   "validation_fee_policy_hash",
+  "validation_fee_hijiri_fee_quote_hash",
   "validation_fee_instruction_index",
   "validation_fee_transfer_entry_index",
 ]);
@@ -4185,6 +4187,38 @@ export function buildRegisterKaigiRelayTransaction(input) {
     privateKeyAlgorithm = null,
   } = input;
   const instruction = buildRegisterKaigiRelayInstruction(relay);
+  return buildTransaction({
+    networkId,
+    authority,
+    feePayment,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+    privateKeyAlgorithm,
+  });
+}
+
+/**
+ * Build a transaction containing a `Kaigi::UnregisterKaigiRelay` instruction.
+ */
+export function buildUnregisterKaigiRelayTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    relayId,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
+  const instruction = buildUnregisterKaigiRelayInstruction({ relayId });
   return buildTransaction({
     networkId,
     authority,

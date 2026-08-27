@@ -434,7 +434,10 @@ use crate::{
     settlement::SettlementEngine,
     smartcontracts::{
         isi::{
-            triggers::{TRIGGER_ENABLED_METADATA_KEY, trigger_is_enabled},
+            triggers::{
+                TRIGGER_ENABLED_METADATA_KEY, trigger_is_enabled,
+                trigger_was_registered_before_block,
+            },
             world::isi::apply_policy_if_due,
         },
         ivm::cache::{
@@ -444,7 +447,8 @@ use crate::{
             set::{
                 ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
                 SetReadOnly as TriggerSetReadOnly, SetTransaction as TriggerSetTransaction,
-                SetView as TriggerSetView,
+                SetView as TriggerSetView, data_trigger_action_matches,
+                pipeline_trigger_action_matches, time_trigger_action_is_due,
             },
             specialized::{LoadedAction, LoadedActionTrait, TimeTriggerRetryState},
         },
@@ -896,6 +900,7 @@ macro_rules! with_world_overlay_fields {
             domain_endorsements_by_domain,
             domains,
             domains_by_owner,
+            kaigi_relay_registry,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -3906,6 +3911,9 @@ pub struct World {
     /// Read-side index from domain owner account to owned domain ids.
     #[norito(skip)]
     pub(crate) domains_by_owner: Storage<AccountId, BTreeSet<DomainId>>,
+    /// Derived index from Kaigi relay account ids to authoritative metadata domains.
+    #[norito(skip)]
+    pub(crate) kaigi_relay_registry: Storage<AccountId, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: Storage<AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -4563,6 +4571,9 @@ pub struct WorldBlock<'world> {
     /// Read-side index from domain owner account to owned domain ids.
     #[norito(skip)]
     pub(crate) domains_by_owner: StorageBlock<'world, AccountId, BTreeSet<DomainId>>,
+    /// Derived index from Kaigi relay account ids to authoritative metadata domains.
+    #[norito(skip)]
+    pub(crate) kaigi_relay_registry: StorageBlock<'world, AccountId, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -5559,6 +5570,7 @@ impl WorldBlock<'_> {
             domain_endorsements_by_domain,
             domains,
             domains_by_owner,
+            kaigi_relay_registry,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -5800,6 +5812,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) domains: StorageTransaction<'block, 'world, DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
     pub(crate) domains_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<DomainId>>,
+    /// Derived index from Kaigi relay account ids to authoritative metadata domains.
+    pub(crate) kaigi_relay_registry: StorageTransaction<'block, 'world, AccountId, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -8010,6 +8024,8 @@ pub struct WorldView<'world> {
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
     pub(crate) domains_by_owner: StorageView<'world, AccountId, BTreeSet<DomainId>>,
+    /// Derived index from Kaigi relay account ids to authoritative metadata domains.
+    pub(crate) kaigi_relay_registry: StorageView<'world, AccountId, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -10796,7 +10812,7 @@ pub(crate) struct SccpVerifierWorkV1 {
     pub(crate) proofs: u64,
     /// Canonical closed SCCP proof bytes.
     pub(crate) proof_bytes: u64,
-    /// BSC/TRON native-finality continuation headers.
+    /// BSC/TRON native-finality continuation headers and TON masterchain blocks.
     pub(crate) native_headers: u64,
     /// Ethereum native light-client updates.
     pub(crate) ethereum_light_client_updates: u64,
@@ -10808,8 +10824,14 @@ pub(crate) struct SccpVerifierWorkV1 {
     pub(crate) bls_aggregate_checks: u64,
     /// BLS public-key validation or aggregate-contribution work items.
     pub(crate) bls_signer_contributions: u64,
+    /// TON Ed25519 signature verification calls.
+    pub(crate) ed25519_signature_checks: u64,
+    /// TON Ed25519 validator-key validation work items.
+    pub(crate) ed25519_validator_key_checks: u64,
     /// BN254 Groth16 pairing-product verification calls.
     pub(crate) bn254_pairing_checks: u64,
+    /// BLS12-381 Groth16 pairing-product verification calls.
+    pub(crate) bls12_381_pairing_checks: u64,
 }
 impl SccpVerifierWorkV1 {
     fn checked_add(self, other: Self) -> Option<Self> {
@@ -10832,9 +10854,18 @@ impl SccpVerifierWorkV1 {
             bls_signer_contributions: self
                 .bls_signer_contributions
                 .checked_add(other.bls_signer_contributions)?,
+            ed25519_signature_checks: self
+                .ed25519_signature_checks
+                .checked_add(other.ed25519_signature_checks)?,
+            ed25519_validator_key_checks: self
+                .ed25519_validator_key_checks
+                .checked_add(other.ed25519_validator_key_checks)?,
             bn254_pairing_checks: self
                 .bn254_pairing_checks
                 .checked_add(other.bn254_pairing_checks)?,
+            bls12_381_pairing_checks: self
+                .bls12_381_pairing_checks
+                .checked_add(other.bls12_381_pairing_checks)?,
         })
     }
     #[cfg(test)]
@@ -12805,25 +12836,19 @@ impl<'state> StateView<'state> {
         let interval = TimeInterval::new(since, length);
         let event = TimeEvent { interval };
         let current_block_height = block_header.height().get();
-        let key_height = "__registered_block_height".parse::<Name>().ok();
+        let current_block_time_ms =
+            u64::try_from(block_header.creation_time().as_millis()).unwrap_or(u64::MAX);
         self.world
             .triggers()
             .time_triggers()
             .iter()
-            .filter(|(_, action)| trigger_is_enabled(action.metadata()))
             .any(|(_, action)| {
-                let mut count = action.filter.count_matches(&event);
-                if let Repeats::Exactly(repeats) = action.repeats {
-                    count = std::cmp::min(repeats, count);
-                }
-                if count == 0 {
-                    return false;
-                }
-                let registered_height = key_height
-                    .as_ref()
-                    .and_then(|key| action.metadata().get(key))
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                registered_height.is_some_and(|height| height != current_block_height)
+                time_trigger_action_is_due(
+                    action,
+                    &event,
+                    current_block_height,
+                    current_block_time_ms,
+                )
             })
     }
     /// Previous committed block hash (if any) for this snapshot.
@@ -16903,6 +16928,7 @@ impl World {
         let mut world = Self {
             domains,
             domains_by_owner: Storage::default(),
+            kaigi_relay_registry: Storage::default(),
             accounts,
             uaid_accounts: Storage::default(),
             account_rekey_records,
@@ -16993,6 +17019,8 @@ impl World {
         world
             .rebuild_account_rekey_records()
             .expect("invalid account rekey state in world constructor");
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut world)
+            .expect("invalid Kaigi relay registry in world constructor");
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("duplicate asset definition alias in world constructor");
@@ -18202,6 +18230,8 @@ macro_rules! world_ro_accessors {
             storage domains: DomainId => Domain;
             /// Domain owner index (read-only).
             storage domains_by_owner: AccountId => BTreeSet<DomainId>;
+            /// Kaigi relay account to authoritative metadata domain index (read-only).
+            storage kaigi_relay_registry: AccountId => DomainId;
             /// Endorsement committees (read-only).
             storage domain_committees: String => DomainCommittee;
             /// Per-domain endorsement policies (read-only).
@@ -19994,6 +20024,7 @@ impl<'world> WorldBlock<'world> {
             domain_endorsements_by_domain,
             domains,
             domains_by_owner,
+            kaigi_relay_registry,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -20468,6 +20499,7 @@ impl<'world> WorldBlock<'world> {
         opaque_uaids.commit();
         domains.commit();
         domains_by_owner.commit();
+        kaigi_relay_registry.commit();
         peers.commit();
         parameters.commit();
     }
@@ -21964,6 +21996,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domain_endorsements_by_domain,
             domains,
             domains_by_owner,
+            kaigi_relay_registry,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -22485,6 +22518,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         opaque_uaids.apply();
         domains.apply();
         domains_by_owner.apply();
+        kaigi_relay_registry.apply();
         peers.apply();
         parameters.apply();
         #[cfg(feature = "telemetry")]
@@ -22958,6 +22992,21 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 .map(EventBox::Data),
         );
         self.internal_event_buf.extend(shared_events);
+    }
+    /// Publish data events to native trigger processing without exposing them
+    /// through the externally retained event buffer.
+    ///
+    /// This deliberately reuses [`Self::emit_events`] so directory indexes and
+    /// telemetry observe exactly the same event stream. The newly appended
+    /// external projection is then discarded while the shared internal events
+    /// remain available to trigger matching.
+    pub(crate) fn emit_internal_events<I: IntoIterator<Item = T>, T: Into<DataEvent>>(
+        &mut self,
+        world_events: I,
+    ) {
+        let external_len = self.external_event_buf.len();
+        self.emit_events(world_events);
+        self.external_event_buf.truncate(external_len);
     }
     /// Emit an asset event with authoritative persisted domain routing context.
     pub(crate) fn emit_asset_event(&mut self, event: AssetEvent) {
@@ -24781,6 +24830,13 @@ impl State {
         &self.telemetry
     }
     pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut self.world)
+            .map_err(|error| format!("failed to rebuild Kaigi relay registry: {error}"))?;
+        let nexus = self.nexus_snapshot();
+        let world = self.world_view_with_nexus(&nexus);
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
+            .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
+        drop(world);
         self.world
             .rebuild_asset_definition_alias_indexes()
             .map_err(|error| {
@@ -27514,27 +27570,12 @@ impl State {
         let interval = TimeInterval::new(since, length);
         let event = TimeEvent { interval };
         let current_block_height = block_header.height().get();
-        let key_height = "__registered_block_height".parse::<Name>().ok();
+        let current_block_time_ms =
+            u64::try_from(block_header.creation_time().as_millis()).unwrap_or(u64::MAX);
         let world = self.world_view();
-        world
-            .triggers()
-            .time_triggers()
-            .iter()
-            .filter(|(_, action)| trigger_is_enabled(action.metadata()))
-            .any(|(_, action)| {
-                let mut count = action.filter.count_matches(&event);
-                if let Repeats::Exactly(repeats) = action.repeats {
-                    count = std::cmp::min(repeats, count);
-                }
-                if count == 0 {
-                    return false;
-                }
-                let registered_height = key_height
-                    .as_ref()
-                    .and_then(|key| action.metadata().get(key))
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                registered_height.is_some_and(|height| height != current_block_height)
-            })
+        world.triggers().time_triggers().iter().any(|(_, action)| {
+            time_trigger_action_is_due(action, &event, current_block_height, current_block_time_ms)
+        })
     }
     /// Latest committed block hash derived from the block hash journal.
     ///
@@ -44510,18 +44551,29 @@ impl ValidatedSccpRegistryV1 {
         wire.validate()
             .map_err(|error| format!("invalid SCCP registry: {error}"))?;
         for route in wire.lanes.iter().flat_map(|lane| &lane.routes) {
-            let verifying_key = match route.destination {
+            let verifying_key_is_well_formed = match route.destination {
                 iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(deployment) => {
-                    deployment.verifying_key
+                    iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                        &deployment.verifying_key,
+                    )
                 }
                 iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(deployment) => {
-                    deployment.verifying_key
+                    iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                        &deployment.verifying_key,
+                    )
                 }
                 iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(deployment) => {
-                    deployment.verifying_key
+                    iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(
+                        &deployment.verifying_key,
+                    )
+                }
+                iroha_data_model::bridge::SccpDestinationDeploymentV1::Ton(deployment) => {
+                    iroha_sccp::sccp_groth16_bls12381_verifying_key_is_well_formed_v1(
+                        &deployment.verifying_key,
+                    )
                 }
             };
-            if !iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(&verifying_key) {
+            if !verifying_key_is_well_formed {
                 return Err(format!(
                     "invalid SCCP registry: route revision {} contains a non-curve, infinity, or non-subgroup Groth16 key point",
                     route.revision
@@ -45132,6 +45184,26 @@ pub fn compute_zk_consensus_policy_hash(
     );
     zk_policy_put_u32(
         &mut h,
+        "sccp.max_ed25519_signature_checks_per_transaction",
+        sccp.max_ed25519_signature_checks_per_transaction.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "sccp.max_ed25519_signature_checks_per_block",
+        sccp.max_ed25519_signature_checks_per_block.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "sccp.max_ed25519_validator_key_checks_per_transaction",
+        sccp.max_ed25519_validator_key_checks_per_transaction.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "sccp.max_ed25519_validator_key_checks_per_block",
+        sccp.max_ed25519_validator_key_checks_per_block.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
         "sccp.max_bn254_pairing_checks_per_transaction",
         sccp.max_bn254_pairing_checks_per_transaction.get(),
     );
@@ -45139,6 +45211,16 @@ pub fn compute_zk_consensus_policy_hash(
         &mut h,
         "sccp.max_bn254_pairing_checks_per_block",
         sccp.max_bn254_pairing_checks_per_block.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "sccp.max_bls12_381_pairing_checks_per_transaction",
+        sccp.max_bls12_381_pairing_checks_per_transaction.get(),
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "sccp.max_bls12_381_pairing_checks_per_block",
+        sccp.max_bls12_381_pairing_checks_per_block.get(),
     );
     zk_policy_put_usize(&mut h, "ballot_history_cap", zk_config.ballot_history_cap);
     zk_policy_put_usize(&mut h, "preverify_max_bytes", zk_config.preverify_max_bytes);
@@ -50252,8 +50334,21 @@ impl<'state> StateBlock<'state> {
                     return acc;
                 }
                 let Some(action) = self.world.triggers.time_triggers().get(trg_id).cloned() else {
+                    suppress_remaining.insert(trg_id.clone());
                     return acc;
                 };
+                // `matched` contains IDs, not stable action references. Revalidate
+                // after every preceding callback because one may disable, deplete,
+                // or replace a later ID before its turn.
+                if !time_trigger_action_is_due(
+                    &action,
+                    &time_event,
+                    current_block_height,
+                    current_block_time_ms,
+                ) {
+                    suppress_remaining.insert(trg_id.clone());
+                    return acc;
+                }
                 let (entrypoint, result) =
                     self.execute_time_trigger(trg_id, &action, &time_event, invocation_index);
                 let entrypoint_hash = entrypoint.hash_as_entrypoint();
@@ -50283,6 +50378,20 @@ impl<'state> StateBlock<'state> {
                             "Time trigger and its chained data triggers successfully executed"
                         );
                     }
+                }
+                if !self
+                    .world
+                    .triggers
+                    .time_triggers()
+                    .get(trg_id)
+                    .is_some_and(|current| {
+                        trigger_was_registered_before_block(
+                            current.metadata(),
+                            current_block_height,
+                        )
+                    })
+                {
+                    suppress_remaining.insert(trg_id.clone());
                 }
                 acc.0.push(entrypoint);
                 acc.1.push(entrypoint_hash);
@@ -50329,6 +50438,16 @@ impl<'state> StateBlock<'state> {
                 else {
                     continue;
                 };
+                // `matched` is an ID snapshot. A preceding callback can replace,
+                // disable, deplete, or remove a later ID; skip that stale match
+                // before opening any rollback side channel or state transaction.
+                if !pipeline_trigger_action_matches(
+                    &action,
+                    &pipeline_event,
+                    self._curr_block.height().get(),
+                ) {
+                    continue;
+                }
                 let authority = action.authority().clone();
                 #[cfg(feature = "zk-preverify")]
                 let zk_dedup_checkpoint = self.zk_dedup.clone();
@@ -50338,6 +50457,17 @@ impl<'state> StateBlock<'state> {
                     transaction.execute_pipeline_trigger(&trg_id, &pipeline_event, next_step_index);
                 let gas_used = transaction.last_tx_gas_used;
                 match result {
+                    Ok(steps) if steps.is_empty() => {
+                        // A use-time revalidation miss is a skip, not an executed
+                        // callback. Never publish an empty fragment or witness if
+                        // a future caller reaches this defensive inner guard.
+                        drop(transaction);
+                        drop(witness_overlay);
+                        #[cfg(feature = "zk-preverify")]
+                        {
+                            self.zk_dedup = zk_dedup_checkpoint;
+                        }
+                    }
                     Ok(steps) => {
                         let advance = u32::try_from(steps.len().max(1)).unwrap_or(u32::MAX);
                         next_step_index = next_step_index.saturating_add(advance);
@@ -50420,8 +50550,8 @@ impl<'state> StateBlock<'state> {
     ) -> (TimeTriggerEntrypoint, TransactionResultInner) {
         let nft_seq_base =
             Self::time_trigger_nft_seq_base(self._curr_block.height().get(), invocation_index);
-        let current_block_height = self._curr_block.height().get();
         let mut transaction = self.transaction();
+        let action_generation = transaction.world.triggers.registration_generation(trg_id);
         transaction.seed_time_trigger_invocation_call_hash(
             trg_id,
             action.authority(),
@@ -50459,23 +50589,10 @@ impl<'state> StateBlock<'state> {
             .world
             .triggers
             .set_time_trigger_retry_state(trg_id, None);
-        let registered_in_current_block = transaction
-            .world
-            .triggers
-            .time_triggers()
-            .get(trg_id)
-            .and_then(|action| {
-                let key = "__registered_block_height".parse::<Name>().ok()?;
-                action
-                    .metadata()
-                    .get(&key)
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok())
-            })
-            .is_some_and(|height| height == current_block_height);
         // A trigger body may unregister and re-register the same id, for example
         // subscription billing scheduling its next charge. The fresh action has
         // its own repeat budget and must not be consumed by this invocation.
-        if !registered_in_current_block {
+        if transaction.world.triggers.registration_generation(trg_id) == action_generation {
             transaction.decrease_trigger_repeats_and_cleanup(trg_id);
         }
         transaction.apply();
@@ -56176,10 +56293,28 @@ impl StateTransaction<'_, '_> {
             "BLS signer contributions"
         );
         enforce_limit!(
+            ed25519_signature_checks,
+            limits.max_ed25519_signature_checks_per_transaction,
+            limits.max_ed25519_signature_checks_per_block,
+            "Ed25519 signature checks"
+        );
+        enforce_limit!(
+            ed25519_validator_key_checks,
+            limits.max_ed25519_validator_key_checks_per_transaction,
+            limits.max_ed25519_validator_key_checks_per_block,
+            "Ed25519 validator-key checks"
+        );
+        enforce_limit!(
             bn254_pairing_checks,
             limits.max_bn254_pairing_checks_per_transaction,
             limits.max_bn254_pairing_checks_per_block,
             "BN254 pairing checks"
+        );
+        enforce_limit!(
+            bls12_381_pairing_checks,
+            limits.max_bls12_381_pairing_checks_per_transaction,
+            limits.max_bls12_381_pairing_checks_per_block,
+            "BLS12-381 pairing checks"
         );
         self.sccp_verifier_work_in_tx = transaction_after;
         self.sccp_verifier_work_after_block = block_after;
@@ -56996,15 +57131,24 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         event: &ExecuteTriggerEvent,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        if id != event.trigger_id() {
+            return Err(ValidationFail::NotPermitted(
+                "execute-trigger event ID does not match the requested trigger".to_owned(),
+            )
+            .into());
+        }
         if self.tx_call_hash.is_none() {
             self.seed_trigger_call_hash(event);
         }
+        let permission_granted =
+            self.can_execute_trigger_for(event.authority(), event.trigger_id());
+        let action_generation = self.world.triggers.registration_generation(id);
         let (executable, action_authority) = {
             let action = self
                 .world
                 .triggers
                 .by_call_triggers()
-                .get(event.trigger_id())
+                .get(id)
                 .ok_or_else(|| FindError::Trigger(id.clone()))
                 .map_err(Error::from)
                 .map_err(ValidationFail::from)?;
@@ -57027,6 +57171,22 @@ impl StateTransaction<'_, '_> {
                     ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
                 );
             }
+            let mut filter_event = event.clone();
+            if permission_granted {
+                filter_event.authority = action.authority().clone();
+            }
+            if !action.filter.matches(&filter_event) {
+                return Err(ValidationFail::NotPermitted(
+                    "trigger cannot be executed manually: filter mismatch".to_owned(),
+                )
+                .into());
+            }
+            if action.authority() != event.authority() && !permission_granted {
+                return Err(ValidationFail::NotPermitted(
+                    "trigger cannot be executed manually: not permitted".to_owned(),
+                )
+                .into());
+            }
             (action.executable().clone(), action.authority().clone())
         };
         // Execute the trigger entrypoint and collect its step.
@@ -57046,8 +57206,11 @@ impl StateTransaction<'_, '_> {
         // have succeeded. A denied callback must leave no observable event in a retained
         // transaction overlay.
         self.world.external_event_buf.push(event.clone().into());
-        // Decrease repeats and prune depleted triggers.
-        self.decrease_trigger_repeats_and_cleanup(id);
+        // Decrease only the incarnation that was invoked. Its body or a chained
+        // callback may have replaced the same ID with a fresh trigger.
+        if self.world.triggers.registration_generation(id) == action_generation {
+            self.decrease_trigger_repeats_and_cleanup(id);
+        }
         Ok(step)
     }
     /// Execute deterministic pipeline triggers, staging their state changes.
@@ -57080,25 +57243,18 @@ impl StateTransaction<'_, '_> {
         pipeline_event: &PipelineEventBox,
         step_index: u32,
     ) -> TransactionResultInner {
+        let action_generation = self.world.triggers.registration_generation(trg_id);
         let Some(action) = self.world.triggers.pipeline_triggers().get(trg_id).cloned() else {
             return Ok(Vec::new());
         };
-        if !trigger_is_enabled(action.metadata())
-            || action.repeats.is_depleted()
-            || !action.filter.matches(pipeline_event)
-        {
-            return Ok(Vec::new());
-        }
-        let registered_before_current_block = "__registered_block_height"
-            .parse::<Name>()
-            .ok()
-            .and_then(|key| action.metadata().get(&key))
-            .and_then(|json| json.try_into_any_norito::<u64>().ok())
-            .is_some_and(|height| height < self._curr_block.height().get());
         // Matching takes an ID snapshot before callbacks run. A preceding callback
         // may replace a later ID, so revalidate the freshly loaded action and never
         // execute an incarnation registered by this block.
-        if !registered_before_current_block {
+        if !pipeline_trigger_action_matches(
+            &action,
+            pipeline_event,
+            self._curr_block.height().get(),
+        ) {
             return Ok(Vec::new());
         }
         let step = self.execute_trigger(
@@ -57109,22 +57265,9 @@ impl StateTransaction<'_, '_> {
             step_index,
             None,
         )?;
-        let registered_in_current_block = self
-            .world
-            .triggers
-            .pipeline_triggers()
-            .get(trg_id)
-            .and_then(|current_action| {
-                let key = "__registered_block_height".parse::<Name>().ok()?;
-                current_action
-                    .metadata()
-                    .get(&key)
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok())
-            })
-            .is_some_and(|height| height == self._curr_block.height().get());
         // The body may replace its own id. Do not debit the freshly registered
         // incarnation for an invocation of the prior action.
-        if !registered_in_current_block {
+        if self.world.triggers.registration_generation(trg_id) == action_generation {
             self.decrease_trigger_repeats_and_cleanup(trg_id);
         }
         let chained =
@@ -57167,18 +57310,27 @@ impl StateTransaction<'_, '_> {
         // Keeping the counter wider than the on-chain limit makes the boundary
         // deterministic in debug and release builds instead of relying on
         // wrapping or saturating arithmetic.
-        let mut stack: Vec<(EventBox, TriggerId, u16)> = self
+        let mut stack: Vec<(EventBox, TriggerId, u64, u16)> = self
             .capture_data_events()
             .into_iter()
             // Preserve the order of the matched triggers
             .rev()
-            .map(|(e, t)| (e, t, 1))
+            .map(|(e, t, generation)| (e, t, generation, 1))
             .collect();
         let mut steps = Vec::new();
-        while let Some((event, trg_id, depth)) = stack.pop() {
+        while let Some((event, trg_id, matched_generation, depth)) = stack.pop() {
             let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());
             if max_depth < depth {
                 return Err(TriggerExecutionFail::MaxDepthExceeded.into());
+            }
+            let current_generation = self.world.triggers.registration_generation(&trg_id);
+            if current_generation != matched_generation {
+                // A prior callback replaced this ID after the event was matched.
+                // Do not resolve, remove, execute, or debit the replacement.
+                stack.retain(|(_, pending_id, pending_generation, _)| {
+                    pending_id != &trg_id || *pending_generation != matched_generation
+                });
+                continue;
             }
             let (executable, trigger_authority) = {
                 let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
@@ -57208,6 +57360,19 @@ impl StateTransaction<'_, '_> {
                 if !trigger_is_enabled(action.metadata()) {
                     continue;
                 }
+                let event_still_matches = match &event {
+                    EventBox::Data(data_event) => {
+                        data_trigger_action_matches(action, data_event.as_ref())
+                    }
+                    _ => false,
+                };
+                if !event_still_matches {
+                    // The current action no longer accepts the captured event.
+                    stack.retain(|(_, pending_id, pending_generation, _)| {
+                        pending_id != &trg_id || *pending_generation != matched_generation
+                    });
+                    continue;
+                }
                 (action.executable().clone(), action.authority().clone())
             };
             let step_index =
@@ -57220,9 +57385,13 @@ impl StateTransaction<'_, '_> {
                 step_index,
                 None,
             )?;
-            let depleted = self.decrease_trigger_repeats_and_cleanup(&trg_id);
-            if depleted {
-                stack.retain(|(_, pending_id, _)| pending_id != &trg_id);
+            let same_incarnation =
+                self.world.triggers.registration_generation(&trg_id) == matched_generation;
+            let depleted = same_incarnation && self.decrease_trigger_repeats_and_cleanup(&trg_id);
+            if depleted || !same_incarnation {
+                stack.retain(|(_, pending_id, pending_generation, _)| {
+                    pending_id != &trg_id || *pending_generation != matched_generation
+                });
             }
             let step = DataTriggerStep {
                 id: trg_id,
@@ -57236,7 +57405,7 @@ impl StateTransaction<'_, '_> {
                 .capture_data_events()
                 .into_iter()
                 .rev()
-                .map(|(e, t)| (e, t, next_depth));
+                .map(|(e, t, generation)| (e, t, generation, next_depth));
             stack.extend(next_items);
         }
         Ok(steps)
@@ -57245,19 +57414,17 @@ impl StateTransaction<'_, '_> {
     ///
     /// Events are returned as [`EventBox`] values so downstream consumers observe the full
     /// trigger union (not just data-event representatives).
-    fn capture_data_events(&mut self) -> Vec<(EventBox, TriggerId)> {
+    fn capture_data_events(&mut self) -> Vec<(EventBox, TriggerId, u64)> {
         let drained = core::mem::take(&mut self.world.internal_event_buf);
         let mut matches = Vec::new();
         for event in &drained {
             for (trg_id, action) in self.world.triggers.data_triggers().iter() {
-                if !trigger_is_enabled(action.metadata()) {
-                    continue;
-                }
-                if action.filter.matches(event) {
+                if data_trigger_action_matches(action, event.as_ref()) {
                     // Preserve emission order so every matching event in a batch
                     // produces its own trigger execution.
                     let shared = SharedDataEvent::from_arc(Arc::clone(event));
-                    matches.push((EventBox::Data(shared), trg_id.clone()));
+                    let generation = self.world.triggers.registration_generation(trg_id);
+                    matches.push((EventBox::Data(shared), trg_id.clone(), generation));
                 }
             }
         }

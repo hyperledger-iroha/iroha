@@ -293,12 +293,22 @@ successor roster, and reopens only after WAL replay. A Byzantine validator or a 
 non-roster identities therefore cannot indefinitely exclude an honest retransmission at the
 production ingress boundary.
 
-A proof-carrying `LaneHistoricalRecoveryResponse` is the only completion whose
-semantic origin may belong solely to a predecessor roster. It consumes that
-authenticated hop's bounded `H` TransportCompletion owner and bytes; the lane
-adapter accepts it only for an outstanding exact request and a responder named
-by the frozen historical CommitQC or READY certificate. Other DA completions
-still require a current-roster semantic origin.
+Two request-bound completion families may originate outside the active frozen
+roster. A proof-carrying `LaneHistoricalRecoveryResponse` may belong solely to
+a predecessor roster; the lane adapter accepts it only for an outstanding exact
+request and a responder named by the frozen historical CommitQC or READY
+certificate. A historical `CertifiedBodyResponse` instead names and signs with
+the archive responder's current `PeerId`; it is not interpreted as an index
+into the certified height's frozen roster. Both consume the authenticated hop's
+bounded `H` TransportCompletion owner and bytes. The exact request hash,
+historical QC, round, subject, manifest, and body hash remain frozen and
+independently verified. A non-roster certified response does not consume the
+roster-sized generic leader-wire lifecycle: production ingress seals it as a
+request-bound archive completion, and Phase B accepts that mode only after the
+exact outstanding-request, response-authentication, body-store, and durable
+LedgerV1 `Ready(Fetch)` checks succeed. Current-roster certified responses keep
+the ordinary leader-wire token and terminal path. Other DA completions,
+including `PayloadChunk`, still require an active-roster semantic origin.
 
 Removal from that fair ingress is conditional on the exact next queue. A reducer-directed head
 remains in its source lane unless the single runtime FIFO has room in that payload's Normal or
@@ -564,6 +574,19 @@ boundary before validation or voting. This avoids a durability barrier per shard
 the full-body voting gate. Chunk signatures bind epoch, height, view, context, parent, subject,
 payload root, encoding, chunk index, and total chunk count, preventing replay or mixed
 reconstruction.
+
+Historical CommitQC discovery and certified-body fetch choose bounded batches
+from the live, topology- and key-ACL-authenticated peer set. A service-owned
+cursor advances between batches and skips a local-only batch within one bounded
+topology cycle, so a rotated archive beyond the first batch remains reachable.
+An identical batch reuses its retained fanout and ranked actor tickets. While
+that fanout remains owned, a different rotated batch stays with the durable
+task/discovery source instead of consuming another exact-output unit; after the
+incumbent drains, a later source retry may install the next bounded batch.
+Request completion or cancellation removes the one retained request fanout.
+Only an empty live cycle falls back to the historical frozen-roster sources
+retained in the deterministic effect/WAL. Physical route discovery is therefore
+rotation-aware without making mutable topology part of replay authority.
 
 A checksummed validation-marker file is never restart authority by itself. Startup quarantines all
 recovered markers, reloads their exact signed bodies, and reproduces each execution commitment with
@@ -1169,6 +1192,11 @@ Ingress and Runtime owners are never pruned by this cut, admission rejects an
 identity below the durable view (or every identity after Decision), and both
 admission-ordinal high-watermarks survive retirement so the freed slot cannot
 resurrect an old identity or reuse an ordinal.
+The gate remains sized only for the frozen roster. An authenticated current
+archive outside that roster instead carries the sealed request-bound completion
+mode described above; its durable body frame plus LedgerV1 `Ready(Fetch)` row
+are the restart authority, so it neither fabricates a Runtime receipt nor marks
+a generic leader-wire terminal.
 At the transport boundary, a locally conflicting certified-body request is a
 nonfatal remote rejection, while a conflicting Commit-certificate response
 leaves discovery outstanding and retryable through another authenticated peer.

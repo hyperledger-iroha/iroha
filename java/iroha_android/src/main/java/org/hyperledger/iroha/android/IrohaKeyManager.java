@@ -591,9 +591,9 @@ public final class IrohaKeyManager {
    * Verifies attestation material produced by hardware-backed providers for {@code alias}.
    *
    * <p>The first provider that returns a non-empty attestation result supplies the certificate
-   * material, which this manager independently re-verifies and binds to the provider's currently
-   * loaded alias key before returning it. Providers that do not expose attestation simply return an
-   * empty optional.
+   * material, which this manager independently re-verifies and binds to every configured
+   * provider's currently loaded key for that alias before returning it. Conflicting alias keys fail
+   * closed. Providers that do not expose attestation simply return an empty optional.
    *
    * @param alias alias whose attestation should be verified
    * @param verifier verifier configured with trusted roots and policy expectations
@@ -658,6 +658,7 @@ public final class IrohaKeyManager {
             throw new AttestationVerificationException(
                 "Attested leaf public key does not match the alias key");
           }
+          ensureAliasBindingAcrossProviders(alias, attestedPublicKey);
           keystoreTelemetry.recordResult(alias, provider.metadata(), authoritativeResult);
           return Optional.of(authoritativeResult);
         }
@@ -685,7 +686,9 @@ public final class IrohaKeyManager {
   }
 
   /**
-   * Requests fresh attestation material for {@code alias} from the selected provider.
+   * Requests backend-generated attestation material for {@code alias} from the selected provider.
+   * Android Keystore cannot re-attest an existing alias; provision a new alias with a challenge in
+   * {@link KeyGenParameters} when fresh evidence is required.
    *
    * @param alias alias to attest
    * @param challenge attestation challenge (may be {@code null} if provider does not require it)
@@ -713,6 +716,39 @@ public final class IrohaKeyManager {
     } catch (final KeyManagementException e) {
       keystoreTelemetry.recordFailure(alias, provider.metadata(), e.getMessage());
       throw e;
+    }
+  }
+
+  private void ensureAliasBindingAcrossProviders(
+      final String alias, final byte[] attestedPublicKey)
+      throws AttestationVerificationException {
+    boolean aliasFound = false;
+    for (final KeyProvider candidate : providers) {
+      final Optional<KeyPair> loaded;
+      try {
+        loaded = candidate.load(alias);
+      } catch (final KeyManagementException | RuntimeException ex) {
+        throw new AttestationVerificationException(
+            "Failed to resolve the attested alias across configured providers", ex);
+      }
+      if (loaded == null) {
+        throw new AttestationVerificationException(
+            "Provider returned an invalid alias lookup result");
+      }
+      if (!loaded.isPresent()) {
+        continue;
+      }
+      aliasFound = true;
+      final java.security.PublicKey publicKey = loaded.get().getPublic();
+      final byte[] candidatePublicKey = publicKey == null ? null : publicKey.getEncoded();
+      if (candidatePublicKey == null
+          || !MessageDigest.isEqual(candidatePublicKey, attestedPublicKey)) {
+        throw new AttestationVerificationException(
+            "Alias resolves to different public keys across configured providers");
+      }
+    }
+    if (!aliasFound) {
+      throw new AttestationVerificationException("Attested alias key is unavailable");
     }
   }
 
@@ -847,7 +883,7 @@ public final class IrohaKeyManager {
     /** Indicates whether keys produced by this provider are hardware-backed. */
     boolean isHardwareBacked();
 
-    /** Generates fresh attestation material for {@code alias} when supported. */
+    /** Requests backend-generated attestation material for {@code alias} when supported. */
     default Optional<KeyAttestation> generateAttestation(
         final String alias, final byte[] challenge) throws KeyManagementException {
       return Optional.empty();

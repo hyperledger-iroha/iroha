@@ -3264,6 +3264,7 @@ public final class HttpClientTransport implements IrohaClient {
         payload,
         request.validationFeePolicyVersion(),
         request.validationFeePolicyHash(),
+        request.validationFeeHijiriFeeQuoteHash(),
         request.validationFeeInstructionIndex(),
         request.validationFeeTransferEntryIndex());
     final List<String> instructions = new ArrayList<>();
@@ -3298,15 +3299,21 @@ public final class HttpClientTransport implements IrohaClient {
       final Map<String, Object> payload,
       final Long validationFeePolicyVersion,
       final String validationFeePolicyHash,
+      final String validationFeeHijiriFeeQuoteHash,
       final Long validationFeeInstructionIndex,
       final Long validationFeeTransferEntryIndex) {
     final boolean hasPolicyVersion = validationFeePolicyVersion != null;
     final boolean hasPolicyHash = validationFeePolicyHash != null;
+    final boolean hasHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash != null;
     final boolean hasInstructionIndex = validationFeeInstructionIndex != null;
     final boolean hasTransferEntryIndex = validationFeeTransferEntryIndex != null;
     if (hasPolicyVersion != hasPolicyHash) {
       throw new IllegalArgumentException(
           "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
+    }
+    if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
+      throw new IllegalArgumentException(
+          "validationFeeHijiriFeeQuoteHash requires validationFeePolicyVersion and validationFeePolicyHash");
     }
     if (!hasPolicyVersion && hasInstructionIndex) {
       throw new IllegalArgumentException(
@@ -3336,6 +3343,12 @@ public final class HttpClientTransport implements IrohaClient {
     payload.put(
         "validation_fee_policy_hash",
         normalizeHex32(validationFeePolicyHash, "validationFeePolicyHash"));
+    if (hasHijiriFeeQuoteHash) {
+      payload.put(
+          "validation_fee_hijiri_fee_quote_hash",
+          normalizeHex32(
+              validationFeeHijiriFeeQuoteHash, "validationFeeHijiriFeeQuoteHash"));
+    }
     if (hasInstructionIndex) {
       payload.put("validation_fee_instruction_index", validationFeeInstructionIndex.toString());
     }

@@ -8,6 +8,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
@@ -66,6 +67,8 @@ public final class AndroidKeystoreAttestationHarnessTests {
     verifiesMockHuaweiFixtureBundle();
     verifiesMockOspBundleZipOnly();
     rejectsMissingChallenge();
+    rejectsBundleControlledTrustAndIdentity();
+    rejectsMismatchedLeafKeyCommitment();
     rejectsMissingRevocationSnapshot();
     rejectsStaleRevocationSnapshot();
     rejectsRevokedLeafCertificate();
@@ -270,6 +273,27 @@ public final class AndroidKeystoreAttestationHarnessTests {
                     new String[] {"--bundle-dir", bundleDir.toString()})));
   }
 
+  private static void rejectsBundleControlledTrustAndIdentity() throws Exception {
+    final Path bundleDir = createStrongBoxBundle(true);
+    assertHarnessFails(
+        () ->
+            AndroidKeystoreAttestationHarness.run(
+                withGovernedRevocationOnly(
+                    new String[] {"--bundle-dir", bundleDir.toString()})));
+  }
+
+  private static void rejectsMismatchedLeafKeyCommitment() throws Exception {
+    final Path bundleDir = createStrongBoxBundle(true);
+    assertHarnessFails(
+        () ->
+            AndroidKeystoreAttestationHarness.run(
+                withGovernedRevocation(
+                    new String[] {
+                      "--bundle-dir", bundleDir.toString(),
+                      "--expected-leaf-spki-sha256", "22".repeat(32)
+                    })));
+  }
+
   private static void rejectsMissingRevocationSnapshot() throws Exception {
     final Path bundleDir = createStrongBoxBundle(true);
     assertHarnessFails(
@@ -377,17 +401,120 @@ public final class AndroidKeystoreAttestationHarnessTests {
             Collections.emptyList());
     final Path snapshotPath = Files.createTempFile("android-revocation-snapshot", ".txt");
     Files.write(snapshotPath, snapshot);
+    final java.util.List<String> governed = new java.util.ArrayList<>(java.util.List.of(
+          "--revocation-snapshot", snapshotPath.toString(),
+          "--revocation-snapshot-sha256",
+              AndroidAttestationRevocationTestFixtures.hex(
+                  AndroidAttestationRevocationTestFixtures.sha256(snapshot)),
+          "--evaluation-time-ms", evaluationTimeMillis
+        ));
+    appendTrustedIdentityArguments(arguments, governed);
+    final String[] combined = Arrays.copyOf(arguments, arguments.length + governed.size());
+    System.arraycopy(governed.toArray(String[]::new), 0, combined, arguments.length, governed.size());
+    return combined;
+  }
+
+  private static String[] withGovernedRevocationOnly(final String[] arguments) throws Exception {
+    final byte[] snapshot =
+        AndroidAttestationRevocationTestFixtures.canonicalSnapshot(
+            Long.parseLong(EVALUATION_TIME_MILLIS),
+            null,
+            86400L,
+            Collections.emptyList(),
+            Collections.emptyList());
+    final Path snapshotPath = Files.createTempFile("android-revocation-snapshot", ".txt");
+    Files.write(snapshotPath, snapshot);
     final String[] governed =
         new String[] {
           "--revocation-snapshot", snapshotPath.toString(),
           "--revocation-snapshot-sha256",
               AndroidAttestationRevocationTestFixtures.hex(
                   AndroidAttestationRevocationTestFixtures.sha256(snapshot)),
-          "--evaluation-time-ms", evaluationTimeMillis
+          "--evaluation-time-ms", EVALUATION_TIME_MILLIS
         };
     final String[] combined = Arrays.copyOf(arguments, arguments.length + governed.length);
     System.arraycopy(governed, 0, combined, arguments.length, governed.length);
     return combined;
+  }
+
+  private static void appendTrustedIdentityArguments(
+      final String[] arguments, final java.util.List<String> governed) throws Exception {
+    final Path bundleDir = optionPath(arguments, "--bundle-dir");
+    final Path chainPath = optionPath(arguments, "--chain");
+    final Path effectiveChain =
+        chainPath != null ? chainPath : bundleDir == null ? null : bundleDir.resolve("chain.pem");
+    if (effectiveChain == null) {
+      return;
+    }
+    final java.util.List<X509Certificate> certificates = readTestCertificates(effectiveChain);
+    if (!hasOption(arguments, "--expected-leaf-spki-sha256")) {
+      governed.add("--expected-leaf-spki-sha256");
+      governed.add(hexLower(sha256(certificates.get(0).getPublicKey().getEncoded())));
+    }
+    if (!hasOption(arguments, "--trust-root")
+        && !hasOption(arguments, "--trust-root-dir")
+        && !hasOption(arguments, "--trust-root-bundle")) {
+      final Path externalRoot = Files.createTempFile("trusted-attestation-root", ".pem");
+      Files.writeString(
+          externalRoot,
+          toPem("CERTIFICATE", certificates.get(certificates.size() - 1).getEncoded()),
+          StandardCharsets.US_ASCII);
+      governed.add("--trust-root");
+      governed.add(externalRoot.toString());
+    }
+    if (!hasOption(arguments, "--alias")) {
+      final Path aliasPath = bundleDir == null ? null : bundleDir.resolve("alias.txt");
+      governed.add("--alias");
+      governed.add(
+          aliasPath != null && Files.isRegularFile(aliasPath)
+              ? Files.readString(aliasPath, StandardCharsets.UTF_8).trim()
+              : "test-attestation-alias");
+    }
+    if (!hasOption(arguments, "--challenge-hex") && !hasOption(arguments, "--challenge-file")) {
+      final Path challengePath = bundleDir == null ? null : bundleDir.resolve("challenge.hex");
+      if (challengePath != null && Files.isRegularFile(challengePath)) {
+        governed.add("--challenge-hex");
+        governed.add(Files.readString(challengePath, StandardCharsets.UTF_8).trim());
+      }
+    }
+  }
+
+  private static Path optionPath(final String[] arguments, final String option) {
+    for (int index = 0; index + 1 < arguments.length; index++) {
+      if (option.equals(arguments[index])) {
+        return Paths.get(arguments[index + 1]);
+      }
+    }
+    return null;
+  }
+
+  private static boolean hasOption(final String[] arguments, final String option) {
+    return optionPath(arguments, option) != null;
+  }
+
+  private static java.util.List<X509Certificate> readTestCertificates(final Path path)
+      throws Exception {
+    try (java.io.InputStream input = Files.newInputStream(path)) {
+      final java.util.Collection<? extends java.security.cert.Certificate> decoded =
+          CertificateFactory.getInstance("X.509").generateCertificates(input);
+      final java.util.List<X509Certificate> certificates = new java.util.ArrayList<>();
+      for (final java.security.cert.Certificate certificate : decoded) {
+        certificates.add((X509Certificate) certificate);
+      }
+      return certificates;
+    }
+  }
+
+  private static byte[] sha256(final byte[] bytes) throws Exception {
+    return MessageDigest.getInstance("SHA-256").digest(bytes);
+  }
+
+  private static String hexLower(final byte[] bytes) {
+    final StringBuilder builder = new StringBuilder(bytes.length * 2);
+    for (final byte current : bytes) {
+      builder.append(String.format(java.util.Locale.ROOT, "%02x", current));
+    }
+    return builder.toString();
   }
 
   private static byte[] decodeHex(final String hex) {

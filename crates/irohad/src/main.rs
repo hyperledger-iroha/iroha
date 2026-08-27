@@ -91,7 +91,7 @@ use iroha_core::{
     governance::manifest::{
         GovernanceGuardError, LaneManifestRegistry, LaneManifestRegistryHandle,
     },
-    kiso::KisoHandle,
+    kiso::{KisoHandle, SoranetHandshakeApplyRequest},
     kura::Kura,
     panic_hook,
     peers_gossiper::{PeersGossiper, PeersGossiperHandle},
@@ -5406,7 +5406,7 @@ mod network_relay_tests {
                 )),
                 manifest: sample_v2_manifest(),
                 body: b"body".to_vec(),
-                responder: 0,
+                responder: PeerId::new(KeyPair::random().public_key().clone()),
                 signature: vec![0x69],
             }),
         )))
@@ -9913,9 +9913,9 @@ impl Iroha {
         ensure_operator_node_key_allowlisted(&mut config);
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
-        // Normal startup subscribes before Torii exposes the configuration
+        // Normal startup registers runtime update channels before Torii exposes the configuration
         // update endpoint. Fast never exposes that endpoint, so it also leaves
-        // these mutable-runtime subscriptions and their relay task absent.
+        // these mutable-runtime channels and their relay task absent.
         let config_update_receivers = if emergency_fast {
             None
         } else {
@@ -9933,11 +9933,11 @@ impl Iroha {
                         ))
                     })?,
                 handshake: kiso
-                    .subscribe_on_soranet_handshake_updates()
+                    .register_soranet_handshake_runtime_applier()
                     .await
                     .map_err(|error| {
                         Report::new(StartError::StartTorii).attach(format!(
-                            "failed to subscribe to SoraNet handshake updates: {error}"
+                            "failed to register SoraNet handshake runtime applier: {error}"
                         ))
                     })?,
             })
@@ -10260,7 +10260,7 @@ impl Iroha {
         // serve queries without proposing or voting. Validators retain the full duties.
         if let Some(config_update_receivers) = config_update_receivers {
             let net_for_relay = network.clone();
-            // The relay retains `kiso`, so its watch senders cannot close through ordinary
+            // The relay retains `kiso`, so its update senders cannot close through ordinary
             // handle loss. Any pre-shutdown return means the supervised configuration
             // authority failed; restarting only this relay would preserve stale ACL or
             // handshake policy and is therefore deliberately not recoverable.
@@ -10505,7 +10505,7 @@ async fn start_telemetry(
 struct ConfigUpdateReceivers {
     log_level: tokio::sync::watch::Receiver<iroha_config::parameters::actual::Logger>,
     acl: tokio::sync::watch::Receiver<iroha_config::client_api::NetworkAcl>,
-    handshake: tokio::sync::watch::Receiver<iroha_config::parameters::actual::SoranetHandshake>,
+    handshake: tokio::sync::mpsc::Receiver<SoranetHandshakeApplyRequest>,
 }
 #[allow(clippy::too_many_lines)]
 async fn config_updates_relay(
@@ -10528,11 +10528,8 @@ async fn config_updates_relay(
         let digest = ivm::gas::schedule_hash();
         metrics.set_ivm_gas_schedule_hash(digest.as_ref());
     }
-    // The network actor was constructed from this same current snapshot. Wait
-    // for an actual Kiso change before rebuilding the runtime handshake state;
-    // replaying the initial value would try to reopen its already-locked
-    // persistent ticket-revocation store. See https://github.com/tokio-rs/tokio/issues/5616 and
-    // https://github.com/rust-lang/rust-clippy/issues/10636
+    // Handshake proposals are acknowledged only after the network actor accepts
+    // the exact candidate. Kiso commits and publishes its snapshot afterward.
     #[cfg(feature = "telemetry")]
     #[allow(clippy::redundant_pub_crate)]
     loop {
@@ -10564,14 +10561,16 @@ async fn config_updates_relay(
                     break;
                 }
             },
-            result = handshake_update.changed() => {
-                if let Ok(()) = result {
-                    let value = handshake_update.borrow_and_update().clone();
-                    network.update_soranet_handshake(value);
-                } else {
+            request = handshake_update.recv() => {
+                let Some(request) = request else {
                     iroha_logger::debug!("Exiting config updates relay (handshake channel closed)");
                     break;
-                }
+                };
+                let result = network
+                    .update_soranet_handshake(request.handshake)
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = request.respond_to.send(result);
             },
         };
     }
@@ -10606,14 +10605,16 @@ async fn config_updates_relay(
                     break;
                 }
             },
-            result = handshake_update.changed() => {
-                if let Ok(()) = result {
-                    let value = handshake_update.borrow_and_update().clone();
-                    network.update_soranet_handshake(value);
-                } else {
+            request = handshake_update.recv() => {
+                let Some(request) = request else {
                     iroha_logger::debug!("Exiting config updates relay (handshake channel closed)");
                     break;
-                }
+                };
+                let result = network
+                    .update_soranet_handshake(request.handshake)
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = request.respond_to.send(result);
             },
         };
     }

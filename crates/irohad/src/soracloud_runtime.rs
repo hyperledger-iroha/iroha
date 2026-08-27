@@ -28476,19 +28476,23 @@ mod tests {
         assert!(!versions.contains_key(&retired_bundle.service.service_version));
         let view = state.view();
         assert!(
-            view.world().soracloud_service_revisions().contains_key(&(
-                retired_bundle.service.service_name.to_string(),
-                retired_bundle.service.service_version.clone(),
-            )),
+            view.world()
+                .soracloud_service_revisions()
+                .get(&(
+                    retired_bundle.service.service_name.to_string(),
+                    retired_bundle.service.service_version.clone(),
+                ))
+                .is_some(),
             "retired admitted metadata may remain without becoming a serving fallback"
         );
         assert!(
             view.world()
                 .soracloud_inrou_service_placements()
-                .contains_key(&(
+                .get(&(
                     retired_bundle.service.service_name.to_string(),
                     retired_bundle.service.service_version.clone(),
-                )),
+                ))
+                .is_some(),
             "retired placement metadata may remain without becoming a serving fallback"
         );
         drop(view);

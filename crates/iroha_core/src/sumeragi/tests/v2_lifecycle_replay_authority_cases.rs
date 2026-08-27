@@ -1199,7 +1199,7 @@ fn certified_fetch_store_validate_evidence_retains_one_canonical_origin_and_fram
         request_hash: HashOf::new(&fixture.serve_request),
         manifest: manifest.clone(),
         body: vec![0xA1, 0xA2],
-        responder: 0,
+        responder: PeerId::new(responder.public_key().clone()),
         signature: Vec::new(),
     };
     response.signature = Signature::new(responder.private_key(), &response.signature_preimage())
@@ -1311,16 +1311,22 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
         manifest.subject,
         HashOf::new(&manifest),
     );
+    let retransmitted_responder = PeerId::new(
+        KeyPair::try_from_seed(vec![0xD8; 32], Algorithm::Ed25519)
+            .expect("deterministic retransmitted responder")
+            .public_key()
+            .clone(),
+    );
     let first_response = wire::CertifiedBodyResponse {
         request_hash: HashOf::from_untyped_unchecked(Hash::new(b"first request occurrence")),
         manifest: manifest.clone(),
         body: vec![0xD1, 0xD2],
-        responder: 0,
+        responder: fixture.serve_request.requester.clone(),
         signature: vec![0xD3],
     };
     let retransmitted_response = wire::CertifiedBodyResponse {
         request_hash: HashOf::from_untyped_unchecked(Hash::new(b"different request occurrence")),
-        responder: 3,
+        responder: retransmitted_responder,
         signature: vec![0xD4, 0xD5],
         ..first_response.clone()
     };
@@ -1454,7 +1460,7 @@ fn certified_pipeline_evidence_rejects_certificate_manifest_frame_and_stage_subs
         request_hash: HashOf::new(&fixture.serve_request),
         manifest: manifest.clone(),
         body: vec![0xB1],
-        responder: 0,
+        responder: fixture.serve_request.requester.clone(),
         signature: vec![0xB2],
     };
     let receipt = DurableBodyReceipt::for_test(

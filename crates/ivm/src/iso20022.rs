@@ -1433,6 +1433,12 @@ fn proxy_fallback_match<'a>(
             .fields
             .get_key_value("CdtrAcct/Prxy/Id")
             .map(|(field, value)| (field, value, FieldKind::Text)),
+        "CreDtTm" if canonical_message_type(&message.message_type).as_ref() == "pacs.009" => {
+            message
+                .fields
+                .get_key_value("AppHdr/CreDt")
+                .map(|(field, value)| (field, value, FieldKind::DateTime))
+        }
         _ => None,
     }
 }
@@ -2169,6 +2175,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             None => {
                 let tail = &text[idx..];
                 if skip_depth == 0
+                    && semantic_namespace_stack.last().is_some_and(Option::is_some)
                     && let Some(path) = current_path(&stack)
                 {
                     buffer_real_iso20022_text(
@@ -2178,7 +2185,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                         &element_child_counts,
                         &mut text_buffers,
                     )?;
-                } else if skip_depth == 0 && !tail.trim().is_empty() {
+                } else if skip_depth == 0 && stack.is_empty() && !tail.trim().is_empty() {
                     return Err(MsgError::InvalidFormat);
                 }
                 break;
@@ -2186,7 +2193,9 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         };
         if next_lt > idx && skip_depth == 0 {
             let body = &text[idx..next_lt];
-            if let Some(path) = current_path(&stack) {
+            if semantic_namespace_stack.last().is_some_and(Option::is_some)
+                && let Some(path) = current_path(&stack)
+            {
                 buffer_real_iso20022_text(
                     &stack,
                     &path,
@@ -2194,7 +2203,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                     &element_child_counts,
                     &mut text_buffers,
                 )?;
-            } else if !body.trim().is_empty() {
+            } else if stack.is_empty() && !body.trim().is_empty() {
                 return Err(MsgError::InvalidFormat);
             }
         }
@@ -2256,6 +2265,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                 skip_depth -= 1;
             }
             if skip_depth == 0
+                && semantic_namespace_stack.last().is_some_and(Option::is_some)
                 && let Some(path) = current_path(&stack)
             {
                 flush_real_iso20022_text(
@@ -2355,6 +2365,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         } else {
             None
         };
+        let materialise_semantic = semantic_namespace.is_some();
         let is_skipped = skip_depth == 0
             && (is_dsig_signature
                 || (lname == "Sgntr"
@@ -2420,7 +2431,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         element_starts.push(next_lt);
         semantic_namespace_stack.push(semantic_namespace);
         namespace_scopes.push(current_namespace_bindings);
-        if is_skipped && skip_depth == 0 {
+        if is_skipped && skip_depth == 0 && materialise_semantic {
             let path = path.as_deref().ok_or(MsgError::InvalidFormat)?;
             let marker_path = format!("{path}/@ignored");
             if marker_path.len() > REAL_XML_MAX_PATH_BYTES {
@@ -2438,6 +2449,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             skip_depth += 1;
         }
         if skip_depth == 0
+            && materialise_semantic
             && let Some(path) = path.as_deref()
         {
             for (attr_name, value) in &attrs {
@@ -3920,6 +3932,29 @@ mod tests {
         assert!(matches!(err, MsgError::InvalidFormat));
     }
     #[test]
+    fn parse_real_iso20022_ignores_fields_outside_semantic_namespaces() {
+        reset();
+        let xml = r#"<DataPDU xmlns:evil="https://attacker.invalid/iso">
+  <evil:Body>
+    <evil:MsgId>EVIL-MSG</evil:MsgId>
+    <evil:IntrBkSttlmAmt>10.00</evil:IntrBkSttlmAmt>
+    <evil:IntrBkSttlmCcy>USD</evil:IntrBkSttlmCcy>
+    <evil:IntrBkSttlmDt>2024-01-01</evil:IntrBkSttlmDt>
+    <evil:DbtrAcct>GB82WEST12345698765432</evil:DbtrAcct>
+    <evil:CdtrAcct>GB33BUKB20201555555555</evil:CdtrAcct>
+    <evil:DbtrAgt>DEUTDEFF</evil:DbtrAgt>
+    <evil:CdtrAgt>MARKDEFF</evil:CdtrAgt>
+  </evil:Body>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+    <FIToFICstmrCdtTrf/>
+  </Document>
+</DataPDU>"#;
+        let err = parse_xml_message("pacs.008", xml.as_bytes())
+            .expect_err("transport-wrapper fields must not satisfy the ISO schema");
+        assert!(matches!(err, MsgError::MissingField("MsgId")));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+    #[test]
     fn parse_real_iso20022_rejects_transparent_wrappers_inside_document() {
         reset();
         let xml = SAMPLE_PACS002_STATUS_XML
@@ -4324,6 +4359,7 @@ mod tests {
             msg_get("BizMsgIdr").as_deref(),
             Some(b"PACS009-BIZ".as_ref())
         );
+        assert_eq!(msg_get("MsgId").as_deref(), Some(b"PACS009-GRP".as_ref()));
         assert_eq!(
             msg_get("MsgDefIdr").as_deref(),
             Some(b"pacs.009.001.10".as_ref())
@@ -4352,7 +4388,7 @@ mod tests {
             Some(b"pacs.009.001.10".as_ref())
         );
         assert_eq!(
-            msg_get("CreDtTm").as_deref(),
+            msg_get("AppHdr/CreDt").as_deref(),
             Some(b"2025-11-12T09:34:09Z".as_ref())
         );
         assert_eq!(msg_get("InstgAgt").as_deref(), Some(b"DEUTDEFF".as_ref()));

@@ -14,23 +14,30 @@ use iroha_data_model::{
         GovernanceAttemptStatusV1, GovernanceCertificateId, GovernanceCertificateV1,
         ProposalContentId, ProposalKind,
     },
+    hijiri::{HijiriAccountRiskV1, HijiriParametersV1},
     isi::{
         InstructionBox,
         governance::{ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy},
     },
-    validation_fee::{ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotCommitmentV1},
+    validation_fee::{
+        ValidationFeeChargingMode, ValidationFeePolicyRegistryV1,
+        ValidationFeePolicySnapshotCommitmentV1,
+    },
 };
 use iroha_torii_shared::validation_fee_api::{
-    VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES,
+    VALIDATION_FEE_BASE_MINOR_UNITS_V1, VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES,
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1,
     ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
-    ValidationFeeProposalDetailQueryV1, ValidationFeeProposalDetailV1,
-    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
-    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalInstructionDraftV1,
-    ValidationFeeProposalListQueryV1, ValidationFeeProposalListV1, ValidationFeeProposalRecordV1,
-    ValidationFeeProposalStatusV1, decode_validation_fee_proposal_cursor_v1,
-    encode_validation_fee_proposal_cursor_v1, validation_fee_policy_proof_page_tip,
+    ValidationFeeHijiriQuoteBaseV1, ValidationFeeHijiriQuoteRequestV1,
+    ValidationFeeHijiriQuoteResponseV1, ValidationFeeProposalDetailQueryV1,
+    ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
+    ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
+    ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListQueryV1,
+    ValidationFeeProposalListV1, ValidationFeeProposalRecordV1, ValidationFeeProposalStatusV1,
+    decode_validation_fee_proposal_cursor_v1, encode_validation_fee_proposal_cursor_v1,
+    evaluate_hijiri_quote_v1, validation_fee_hijiri_quote_execution_height,
+    validation_fee_policy_proof_page_tip,
 };
 use mv::storage::StorageReadOnly as _;
 use std::ops::Bound::{Excluded, Unbounded};
@@ -43,6 +50,12 @@ fn inconsistent(message: impl Into<String>) -> Error {
 fn bad_request(message: impl Into<String>) -> Error {
     Error::AppQueryValidation {
         code: "validation_fee_request_invalid",
+        message: message.into(),
+    }
+}
+fn quote_unavailable(message: impl Into<String>) -> Error {
+    Error::AppConflict {
+        code: "validation_fee_hijiri_quote_unavailable",
         message: message.into(),
     }
 }
@@ -543,6 +556,35 @@ mod tests {
         assert!(!implementation.contains("governance_proposals().iter()"));
         assert!(!implementation.contains(".sort"));
     }
+    #[test]
+    fn hijiri_quote_selects_the_policy_at_the_checked_next_height() {
+        let activation_height = 1_000_u64;
+        let evaluated_state_height = activation_height - 1;
+        assert_eq!(
+            validation_fee_hijiri_quote_execution_height(evaluated_state_height),
+            Ok(activation_height)
+        );
+        assert!(validation_fee_hijiri_quote_execution_height(u64::MAX).is_err());
+
+        let source = include_str!("validation_fee_api.rs");
+        let start = source
+            .find("pub(crate) async fn handler_hijiri_quote")
+            .expect("Hijiri quote handler");
+        let implementation = &source[start..];
+        let end = implementation
+            .find("/// Return one bounded finality page")
+            .expect("Hijiri quote handler terminator");
+        let implementation = &implementation[..end];
+        assert!(implementation.contains("validation_fee_hijiri_quote_execution_height"));
+        assert!(implementation.contains("effective_entry_at_height(quoted_execution_height)"));
+        assert!(!implementation.contains("effective_entry_at_height(evaluated_state_height)"));
+        assert!(implementation.contains("policy_entry.policy.network_id"));
+        assert!(implementation.contains("*app.state.network_id_ref()"));
+        assert!(implementation.contains("request.account_id != verified.account"));
+        assert!(implementation.contains("validation_fee_hijiri_quote_account_mismatch"));
+        assert!(implementation.contains("account-risk parameter changed its reserved identity"));
+        assert!(!implementation.contains(".flatten()"));
+    }
 }
 fn registry_at_height(
     current: Option<ValidationFeePolicyRegistryV1>,
@@ -565,6 +607,113 @@ fn registry_at_height(
         })?;
         Ok(Some(registry))
     }
+}
+/// Return one same-snapshot, evaluated-only Hijiri validation-fee quote.
+pub(crate) async fn handler_hijiri_quote(
+    State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    headers: HeaderMap,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
+    NoritoOnly(request): NoritoOnly<ValidationFeeHijiriQuoteRequestV1>,
+) -> Result<NoritoBody<ValidationFeeHijiriQuoteResponseV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/validation-fee/hijiri/quote",
+    )
+    .await?;
+    request.validate().map_err(bad_request)?;
+    if request.account_id != verified.account {
+        return Err(Error::AppForbidden {
+            code: "validation_fee_hijiri_quote_account_mismatch",
+            message: "authenticated account must equal the requested Hijiri quote account"
+                .to_owned(),
+        });
+    }
+
+    let state_view = app.state.view();
+    let evaluated_state_height = u64::try_from(state_view.height())
+        .map_err(|_| inconsistent("ledger height does not fit the public Hijiri fee quote"))?;
+    let quoted_execution_height =
+        validation_fee_hijiri_quote_execution_height(evaluated_state_height)
+            .map_err(inconsistent)?;
+    let custom_parameters = state_view.world().parameters().custom();
+
+    let registry_parameter = custom_parameters
+        .get(&ValidationFeePolicyRegistryV1::parameter_id())
+        .ok_or_else(|| quote_unavailable("validation-fee policy registry is not configured"))?;
+    let registry = ValidationFeePolicyRegistryV1::from_custom_parameter(registry_parameter)
+        .ok_or_else(|| inconsistent("protected validation-fee registry cannot be decoded"))?;
+    registry
+        .validate()
+        .map_err(|error| inconsistent(format!("protected registry is invalid: {error}")))?;
+    let policy_entry = registry
+        .effective_entry_at_height(quoted_execution_height)
+        .ok_or_else(|| {
+            quote_unavailable("no validation-fee policy is active at the quoted execution height")
+        })?;
+    if policy_entry.policy.network_id != *app.state.network_id_ref() {
+        return Err(inconsistent(
+            "active validation-fee policy targets a different exact network",
+        ));
+    }
+    if policy_entry.policy.charging_mode == ValidationFeeChargingMode::Disabled {
+        return Err(quote_unavailable(
+            "validation-fee charging is disabled at the quoted execution height",
+        ));
+    }
+
+    let hijiri_parameter = custom_parameters
+        .get(&HijiriParametersV1::parameter_id())
+        .ok_or_else(|| quote_unavailable("global Hijiri fee parameters are not configured"))?;
+    let parameters = HijiriParametersV1::from_custom_parameter(hijiri_parameter)
+        .map_err(|error| inconsistent(format!("global Hijiri parameter is invalid: {error}")))?
+        .ok_or_else(|| inconsistent("global Hijiri parameter changed its reserved identity"))?;
+
+    let account_risk_parameter_id = HijiriAccountRiskV1::parameter_id_for(&request.account_id)
+        .map_err(|error| {
+            inconsistent(format!(
+                "Hijiri account-risk parameter id cannot be derived: {error}"
+            ))
+        })?;
+    let account_risk = match custom_parameters.get(&account_risk_parameter_id) {
+        None => None,
+        Some(parameter) => Some(
+            HijiriAccountRiskV1::from_custom_parameter(parameter)
+                .map_err(|error| {
+                    inconsistent(format!("Hijiri account-risk parameter is invalid: {error}"))
+                })?
+                .ok_or_else(|| {
+                    inconsistent("Hijiri account-risk parameter changed its reserved identity")
+                })?,
+        ),
+    };
+
+    let base = ValidationFeeHijiriQuoteBaseV1::try_new(
+        evaluated_state_height,
+        quoted_execution_height,
+        policy_entry.policy.policy_version,
+        policy_entry.policy_hash,
+        policy_entry.policy.ds_asset_id.to_string(),
+        policy_entry.policy.treasury_account_id.to_string(),
+        policy_entry.policy.ds_scale,
+        VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+    )
+    .map_err(|error| {
+        inconsistent(format!(
+            "active validation-fee quote base is invalid: {error}"
+        ))
+    })?;
+    let response = evaluate_hijiri_quote_v1(
+        base,
+        &request.account_id,
+        &parameters,
+        account_risk.as_ref(),
+        request.qualifying_transfer_count,
+    )
+    .map_err(|error| inconsistent(format!("Hijiri validation-fee quote failed: {error}")))?;
+    Ok(NoritoBody(response))
 }
 /// Return one bounded finality page for the current validation-fee registry.
 pub(crate) async fn handler_current_policy_proof(

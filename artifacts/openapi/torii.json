@@ -17432,6 +17432,41 @@
               },
               "signer_account_id": {
                 "type": "string"
+              },
+              "validation_fee_hijiri_fee_quote_hash": {
+                "description": "Optional lowercase 32-byte composite Hijiri fee-quote hash. It is accepted only with the validation-fee policy version/hash pair and binds the global policy plus the execution account's risk-record presence and value.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "validation_fee_instruction_index": {
+                "description": "Optional unsigned 64-bit instruction index encoded as a canonical decimal string. It is accepted only with the validation-fee policy version/hash pair.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(?:0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "validation_fee_policy_hash": {
+                "description": "Optional lowercase 32-byte validation-fee policy hash. It must be provided together with validation_fee_policy_version.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "validation_fee_policy_version": {
+                "description": "Optional unsigned 64-bit validation-fee policy version encoded as a canonical decimal string. It must be provided together with validation_fee_policy_hash.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(?:0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "validation_fee_transfer_entry_index": {
+                "description": "Optional unsigned 64-bit transfer-entry index encoded as a canonical decimal string. It requires validation_fee_instruction_index and the validation-fee policy version/hash pair.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(?:0|[1-9][0-9]*)$",
+                "type": "string"
               }
             },
             "required": [
@@ -46155,6 +46190,235 @@
         ],
         "type": "object",
         "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.current_policy_proof.response"
+      },
+      "ValidationFeeDecimalU64StringV1": {
+        "description": "Canonical unsigned 64-bit integer rendered as base-10 ASCII without a sign or leading zeroes (except the value zero).",
+        "maxLength": 20,
+        "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+        "type": "string"
+      },
+      "ValidationFeeHijiriQuoteRequestV1": {
+        "additionalProperties": false,
+        "description": "Canonical native-Norito request for one same-snapshot Hijiri validation-fee quote.",
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Canonical universal account whose effective Hijiri risk is priced. It must exactly equal the authenticated canonical-account principal."
+          },
+          "qualifyingTransferCount": {
+            "description": "Nonzero number of qualifying validation-fee transfers to aggregate before applying one ceiling operation.",
+            "format": "uint32",
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "accountId",
+          "qualifyingTransferCount"
+        ],
+        "type": "object",
+        "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.request"
+      },
+      "ValidationFeeHijiriQuoteResponseV1": {
+        "additionalProperties": false,
+        "description": "Evaluated-only Hijiri validation-fee quote derived from one committed-state snapshot. This response is not independently witness-verified.",
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Echoed canonical universal account."
+          },
+          "accountRiskDigest": {
+            "description": "Lowercase digest of the explicit account-risk record, or null when the global default was used. Present if and only if accountRiskRevision is present.",
+            "oneOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "accountRiskRevision": {
+            "description": "Positive revision of the explicit account-risk record, or null when the global default was used. Present if and only if accountRiskDigest is present.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activePolicyHash": {
+            "description": "Canonical lowercase hash of the validation-fee policy active at quotedExecutionHeight.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "activePolicyVersion": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Positive version of the validation-fee policy active at quotedExecutionHeight."
+          },
+          "adjustedPerTransferFeeMinorUnits": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Informational one-transfer fee after one ceiling operation. Do not multiply this rounded value to derive an aggregate fee."
+          },
+          "aggregateAdjustedFeeMinorUnits": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Exact aggregate fee after applying feeMultiplierQ16 and rounding upward once."
+          },
+          "aggregateBaseFeeMinorUnits": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Exact checked product of basePerTransferFeeMinorUnits and qualifyingTransferCount."
+          },
+          "assurance": {
+            "const": "EVALUATED_PROJECTION_NOT_INDEPENDENTLY_WITNESS_VERIFIED",
+            "description": "Honest assurance label for a live evaluation without an independent witness over both policy inputs.",
+            "type": "string"
+          },
+          "basePerTransferFeeMinorUnits": {
+            "const": "10",
+            "description": "Protected V1 base fee for one qualifying transfer, in fee-asset minor units.",
+            "type": "string"
+          },
+          "defaultAccountRiskQ16": {
+            "description": "Global default account risk as an exact raw Q16.16 integer in the inclusive range zero through one.",
+            "format": "uint32",
+            "maximum": 65536,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "effectiveAccountRiskQ16": {
+            "description": "Effective account risk as an exact raw Q16.16 integer in the inclusive range zero through one.",
+            "format": "uint32",
+            "maximum": 65536,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "evaluatedStateHeight": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Committed ledger tip read for every input in this same-snapshot evaluation."
+          },
+          "feeAssetDefinitionId": {
+            "description": "Canonical asset definition charged by the active validation-fee policy.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "feeMultiplierQ16": {
+            "description": "Applied multiplier as an exact raw Q16.16 integer. Hijiri V1 never discounts the base fee.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 65536,
+            "type": "integer"
+          },
+          "feeScale": {
+            "const": 2,
+            "description": "Protected V1 fee-asset decimal scale.",
+            "format": "uint8",
+            "type": "integer"
+          },
+          "hijiriFeeQuoteHash": {
+            "description": "Lowercase composite hash binding the global Hijiri policy, account identity, and explicit account-risk presence or value.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "hijiriParametersDigest": {
+            "description": "Domain-separated lowercase digest of the complete global Hijiri parameter.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "hijiriParametersRevision": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Positive revision of the active global Hijiri parameter."
+          },
+          "hijiriParametersVersion": {
+            "const": 1,
+            "description": "Active global Hijiri parameter schema version.",
+            "format": "uint16",
+            "type": "integer"
+          },
+          "qualifyingTransferCount": {
+            "description": "Echoed number of qualifying transfers priced as one aggregate.",
+            "format": "uint32",
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "quotedExecutionHeight": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Checked successor of evaluatedStateHeight (committed tip + 1), used to select the policy scheduled for execution."
+          },
+          "schema": {
+            "const": "iroha.torii.v1.validation_fee.hijiri_quote.response",
+            "type": "string"
+          },
+          "treasuryAccountId": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Canonical treasury account that must receive the validation fee."
+          },
+          "version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema",
+          "version",
+          "assurance",
+          "evaluatedStateHeight",
+          "quotedExecutionHeight",
+          "accountId",
+          "activePolicyVersion",
+          "activePolicyHash",
+          "feeAssetDefinitionId",
+          "treasuryAccountId",
+          "feeScale",
+          "hijiriParametersVersion",
+          "hijiriParametersRevision",
+          "hijiriParametersDigest",
+          "defaultAccountRiskQ16",
+          "effectiveAccountRiskQ16",
+          "accountRiskRevision",
+          "accountRiskDigest",
+          "feeMultiplierQ16",
+          "hijiriFeeQuoteHash",
+          "basePerTransferFeeMinorUnits",
+          "adjustedPerTransferFeeMinorUnits",
+          "qualifyingTransferCount",
+          "aggregateBaseFeeMinorUnits",
+          "aggregateAdjustedFeeMinorUnits"
+        ],
+        "type": "object",
+        "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.response"
+      },
+      "ValidationFeePositiveDecimalU64StringV1": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ValidationFeeDecimalU64StringV1"
+          },
+          {
+            "not": {
+              "const": "0"
+            }
+          }
+        ],
+        "description": "Canonical positive unsigned 64-bit integer rendered as base-10 ASCII."
       },
       "ValidationFeeProposalDetailV1": {
         "additionalProperties": false,
@@ -92887,6 +93151,466 @@
         "tags": [
           "Transactions"
         ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/validation-fee/hijiri/quote": {
+      "post": {
+        "description": "Evaluate the validation-fee base policy and Hijiri global/account-risk inputs from one committed-state snapshot for the checked successor execution height. The requested account must exactly equal the authenticated canonical-account principal. The response echoes that account and the bounded transfer count, exposes the exact aggregate base and once-rounded adjusted fee, and carries the composite hash required by signed admission. This is an evaluated projection, not an independently witness-verified proof; later state changes can make it stale and admission will reject a mismatched binding.",
+        "operationId": "validationFeeHijiriQuote",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "description": "Canonical Norito encoding of `ValidationFeeHijiriQuoteRequestV1`.",
+                "format": "binary",
+                "type": "string",
+                "x-iroha-max-bytes": 4096,
+                "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ValidationFeeHijiriQuoteResponseV1`.",
+                  "format": "binary",
+                  "type": "string",
+                  "x-iroha-max-bytes": 65536,
+                  "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.response"
+                }
+              }
+            },
+            "description": "One same-snapshot, evaluated-only quote for committed tip + 1.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The Content-Type framing, native Norito body, request version, or qualifying transfer count is invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable request rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "request_content_type_invalid",
+                    "request_norito_invalid",
+                    "validation_fee_request_invalid"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical account authentication is missing.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable canonical-authentication rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "canonical_authentication_required"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The requested account does not exactly equal the authenticated canonical-account principal.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable authenticated-principal mismatch code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "validation_fee_hijiri_quote_account_mismatch"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "A validation-fee policy is unavailable or disabled at the quoted height, or global Hijiri parameters are absent.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable quote-availability rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "validation_fee_hijiri_quote_unavailable"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The native Norito body exceeds the configured body or decode-resource limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable request-size rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "request_payload_too_large"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Content-Type is missing or is not one parameter-free application/x-norito value.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable native-Norito media rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "request_content_type_missing",
+                    "request_content_type_unsupported"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The retained validation-fee or Hijiri state is malformed or inconsistent, or checked quote arithmetic cannot complete.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable state-consistency rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "validation_fee_state_inconsistent"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Evaluate a Hijiri validation-fee quote.",
+        "tags": [
+          "Validation fee"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-operation": "validation_fee.hijiri.quote",
         "x-iroha-tool-effect": "read"
       }
     },

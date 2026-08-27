@@ -906,7 +906,8 @@ the shell).
 - Regression coverage in `DeterministicKeyExporterTests` includes wrong passphrases and tampered
   salt/nonce/ciphertext, and all-zero seed rejection. Clear passphrase char arrays after use in
   application code.
-- `KeystoreKeyProviderTests` exercises empty vs challenged attestation regeneration and the
+- `KeystoreKeyProviderTests` exercises cached inspection versus uncached recorded-chain
+  verification, explicit re-attestation rejection, and the
   `android.keystore.attestation.failure` telemetry path; run
   `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests \
   bash ci/run_android_tests.sh` to spot-check cache and challenge matrices without rebuilding the
@@ -1550,29 +1551,30 @@ Use `IrohaKeyManager.verifyAttestation(...)` (or the underlying
 when you need to validate the StrongBox/TEE attestation chain exported by the
 Android backend. The verifier checks the certificate path, decoded challenge,
 security level, explicit evaluation time, and a fresh governed offline
-revocation snapshot while surfacing parsed metadata. A non-empty expected
+revocation snapshot while surfacing parsed metadata. It also rejects an alias
+that resolves to different public keys across configured providers. A non-empty expected
 challenge is mandatory; the retained challenge-less overloads fail closed. For
 lab automation, pass the canonical `android-sdk-revocation-snapshot-v1.txt`,
 its SHA-256 commitment obtained from the separately authenticated governance
 record, and the evaluation time to `scripts/android_keystore_attestation.sh`
-together with the bundle and trust root. The snapshot commitment binds the
+together with separately trusted roots, alias, challenge, and expected leaf-SPKI
+digest. Never obtain those expectations from the untrusted evidence bundle. The snapshot commitment binds the
 payload digest, freshness metadata, and both deny lists as one object. The
 script compiles the same verifier and produces a JSON summary that should be
 archived with each attestation bundle.
 
-Need fresh attestation material? Call
-`IrohaKeyManager.generateAttestation(alias, challenge)` – it uses the selected
-provider (StrongBox/TEE first) and returns a `KeyAttestation`
-bundle when the hardware can satisfy the request, storing the artefact in the
-backing provider for subsequent verification. Pass a non-empty `challenge` to
-force fresh material; challenged authentication bypasses stored and in-memory
-attestation caches, while only challenge-less inspection may reuse cached
-material. Set
-`KeyGenParameters.Builder.setAttestationChallenge(...)` when generating keys if
-you need the challenge embedded at creation time. StrongBox preferences are
-propagated to keystore parameters (`STRONGBOX_REQUIRED` forces StrongBox,
-`STRONGBOX_PREFERRED` requests StrongBox), and generation errors are surfaced
-directly.
+Android Keystore binds an attestation challenge only when it creates a key. To
+obtain evidence for a new challenge, set
+`KeyGenParameters.Builder.setAttestationChallenge(...)` and provision a new,
+unique alias; rotate the application to that key only after its chain verifies.
+The platform cannot re-attest an existing alias, so
+`IrohaKeyManager.generateAttestation(alias, nonEmptyChallenge)` reports that
+limitation instead of returning the stored chain as fresh evidence.
+`verifyAttestation(...)` rereads the provisioning-time chain without using the
+in-memory inspection cache and compares its embedded challenge with the
+separately trusted expected value. StrongBox preferences are propagated to key
+generation (`STRONGBOX_REQUIRED` forces StrongBox and
+`STRONGBOX_PREFERRED` requests it), and backend errors are surfaced directly.
 
 To exercise CUDA acceleration on capable devices, launch the JVM with
 `-Diroha.cuda.enableNative=true` and ensure `libconnect_norito_bridge` is

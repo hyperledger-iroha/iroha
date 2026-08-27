@@ -150,8 +150,8 @@ calling the codec.
 ## Kagemusha lifecycle support
 
 The Python package intentionally exposes no offline-spend lifecycle. The first-release typed
-Kagemusha lifecycle is supported by the Swift SDK; Python keeps only generic online transaction,
-query, and privacy primitives.
+Kagemusha lifecycle is supported by the Swift and JVM SDKs; Python keeps only generic online
+transaction, query, and privacy primitives.
 
 
 ## Native Privacy Bridge

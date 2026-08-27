@@ -87,6 +87,7 @@ public final class IrohaKeyManagerTests {
     shouldFailWhenStrongBoxUnavailable();
     shouldRejectProviderReturnsNonEd25519Key();
     shouldVerifyAttestationViaManager();
+    shouldRejectAliasCollisionAcrossProviders();
     shouldGenerateAttestationViaManager();
     shouldSignPayloadViaAlias();
     shouldGenerateMlDsaKeysWhenConfigured();
@@ -297,6 +298,45 @@ public final class IrohaKeyManagerTests {
     final Optional<AttestationResult> verified =
         manager.verifyAttestation("attest-on-demand", verifier, STRONGBOX_CHALLENGE);
     assert verified.isPresent() : "Generated attestation should verify";
+  }
+
+  private static void shouldRejectAliasCollisionAcrossProviders() throws Exception {
+    final KeyProviderMetadata metadata =
+        KeyProviderMetadata.builder("attesting-strongbox")
+            .setStrongBoxBacked(true)
+            .setSupportsAttestationCertificates(true)
+            .build();
+    final AttestingBackend attesting =
+        new AttestingBackend(metadata, STRONGBOX_CERT, ROOT_CERT);
+    final AttestingBackend conflicting =
+        new AttestingBackend(metadata, STRONGBOX_CERT, ROOT_CERT);
+    attesting.setAttestation(
+        "colliding-alias",
+        KeyAttestation.builder()
+            .setAlias("colliding-alias")
+            .addCertificate(STRONGBOX_CERT)
+            .addCertificate(ROOT_CERT)
+            .build());
+    attesting.setAttestedKey("colliding-alias");
+    conflicting.setKeyFromCertificate("colliding-alias", ROOT_CERT);
+
+    final IrohaKeyManager manager =
+        IrohaKeyManager.fromProviders(
+            List.of(
+                new KeystoreKeyProvider(attesting, KeyGenParameters.builder().build()),
+                new KeystoreKeyProvider(conflicting, KeyGenParameters.builder().build())));
+    final AttestationVerifier verifier =
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+
+    boolean threw = false;
+    try {
+      manager.verifyAttestation("colliding-alias", verifier, STRONGBOX_CHALLENGE);
+    } catch (final AttestationVerificationException expected) {
+      threw = true;
+      assert expected.getMessage().contains("different public keys")
+          : "Expected a provider-collision failure";
+    }
+    assert threw : "Conflicting keys for one alias across providers must fail closed";
   }
 
   private static void shouldSignPayloadViaAlias() throws Exception {
@@ -623,10 +663,14 @@ public final class IrohaKeyManagerTests {
     }
 
     void setAttestedKey(final String alias) throws Exception {
+      setKeyFromCertificate(alias, leafCertificate);
+    }
+
+    void setKeyFromCertificate(final String alias, final byte[] certificateDer) throws Exception {
       final java.security.cert.X509Certificate certificate =
           (java.security.cert.X509Certificate)
               java.security.cert.CertificateFactory.getInstance("X.509")
-                  .generateCertificate(new ByteArrayInputStream(leafCertificate));
+                  .generateCertificate(new ByteArrayInputStream(certificateDer));
       keys.put(alias, new KeyPair(certificate.getPublicKey(), null));
     }
   }

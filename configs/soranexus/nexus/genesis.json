@@ -240,6 +240,16 @@
             "Permission": {
               "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
+                "name": "CanSetHijiriParameters"
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
                 "name": "CanReadAllLedgerData"
               }
             }

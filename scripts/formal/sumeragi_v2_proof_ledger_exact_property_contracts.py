@@ -927,8 +927,8 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "/\\ DeliverySubject(item) = subject "
         "/\\ LeaderWireCarriesContext(item, leaderContext) "
         '/\\ IF item.kind = "CertifiedResponse" '
-        "THEN /\\ item.envelope.archiveServer \\in AsyncArchiveServerIds "
-        "/\\ item.envelope.signatureOwner = item.envelope.archiveServer "
+        "THEN /\\ item.envelope.responder \\in AsyncArchiveServerIds "
+        "/\\ item.envelope.signatureOwner = item.envelope.responder "
         "ELSE TRUE"
     ),
     (
@@ -940,7 +940,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "THEN AsyncUntrustedSource ELSE item.source, "
         "detail |-> "
         'CASE item.kind = "CertifiedResponse" '
-        "-> item.envelope.archiveServer "
+        "-> item.envelope.responder "
         '[] item.kind = "Chunk" -> item.envelope.chunk '
         "[] OTHER -> NoAsyncChunk]"
     ),
@@ -3803,8 +3803,9 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "IndexedAsync(initialContext)! "
         "AsyncCertifiedRequestHashOf(node, qc, 0) "
         "/\\ candidate.item.envelope.signatureOwner = "
-        "candidate.item.envelope.archiveServer "
-        "/\\ candidate.item.envelope.citedResponder \\in qc.signers "
+        "candidate.item.envelope.responder "
+        "/\\ candidate.item.envelope.responder \\in "
+        "IndexedAsync(initialContext)!AsyncArchiveServerIds "
         "/\\ IndexedAsync(initialContext)! "
         "CertifiedResponseAuthenticatedOccurrence( "
         "candidate.item) "

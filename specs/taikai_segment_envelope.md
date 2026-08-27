@@ -280,10 +280,47 @@ the SoraNS anchor service; the SSM file contains the Norito-encoded
 `TaikaiSegmentSigningManifestV1` (including alias proofs) that was verified
 during admission, and the optional TRM file persists the
 `TaikaiRoutingManifestV1` window when publishers provide `taikai.trm`
-metadata. Configure Torii with `torii.da_ingest.taikai_anchor`
-(`endpoint`, optional `api_token`, and `poll_interval_secs`) to enable the
+metadata. Configure Torii with `torii.da_ingest.taikai_anchor` (`endpoint`,
+optional `api_token`, pinned Ed25519 `receipt_public_key`,
+`poll_interval_secs`, and non-zero `request_timeout_secs`) to enable the
 background uploader that periodically scans the spool and POSTs Taikai payloads
-to the anchor endpoint.
+to the anchor endpoint. Production endpoints must use HTTPS; plain HTTP is
+accepted only for loopback hosts. The worker does not follow redirects and the
+request timeout covers both upload and receipt download.
+
+#### Signed anchor acknowledgement contract
+
+An HTTP success status is transport evidence only. The anchor must return a
+bounded JSON `TaikaiAnchorReceiptV1` whose signed body contains:
+
+| Field | Required value |
+| --- | --- |
+| `schema` | Exact `iroha.taikai.anchor-receipt.v1`. |
+| `version` | `1`. |
+| `base_id` | The canonical five-field spool identifier from the upload. |
+| `request_digest` | BLAKE3 digest of the exact JSON request bytes received. |
+| `acknowledged_unix_secs` | Non-zero time at which durable acceptance completed. |
+| `signature` | Ed25519 signature over the complete receipt body, verifiable with the configured `receipt_public_key`. |
+
+The receiver must durably commit both the exact request identity and the anchor
+state it represents before signing or returning the receipt. Retries for the
+same `(base_id, request_digest)` must return the original, byte-identical
+canonical receipt, including the original acknowledgement time. Reusing a
+`base_id` with a different request digest is a conflict and must fail without a
+success receipt. This makes retries idempotent and prevents a successful HTTP
+response from acknowledging content that was not durably accepted.
+
+Torii captures the exact request as
+`taikai-anchor-request-<base_id>.json`, verifies every returned field and the
+pinned signature, then durably creates the no-clobber
+`taikai-anchor-<base_id>.ok` receipt before retiring the source envelope and
+companions. Restart and retention scans repeat the same verification against
+the request capture. Empty bodies, status-only replies, legacy timestamp
+markers, mismatched IDs or digests, wrong signers, and malformed receipts never
+count as delivery. Existing invalid `.ok` markers are quarantined as
+`taikai-anchor-<base_id>.ok.invalid-<blake3>`; the source upload remains pending
+and the scan continues with other entries. There is no timestamp or file
+presence fallback.
 
 ## Consumer Expectations
 
@@ -343,6 +380,10 @@ gateways can emit meaningful `Sora-Name` and `Sora-Proof` headers for viewers.
 Before Torii admits a TRM, the data-model enforces the following invariants:
 
 - The manifest `segment_window` must be well-ordered (`start <= end`).
+- A `segment_window` must cover at most 120 sequence numbers, inclusive, and
+  `end_sequence` must be less than `u64::MAX`. The terminal value is reserved
+  so every accepted window has a possible successor; neither a terminal nor an
+  oversized window can monopolise an alias lineage indefinitely.
 - Every rendition’s `ssm_range` must also be well-ordered **and** lie within
   the manifest window. A rendition that advertises `ssm_range` slices outside
   of the manifest window fails validation and is rejected before any alias or

@@ -21,16 +21,25 @@ use std::{
     cell::RefCell,
     marker::PhantomData,
     num::NonZeroU64,
-    ptr::NonNull,
     rc::Rc,
     sync::{
-        LazyLock, OnceLock,
+        Arc, LazyLock, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
+pub(crate) type SharedRegLog = Arc<parking_lot::Mutex<RegLog>>;
+#[derive(Clone)]
+struct RegLoggerState {
+    log: Option<SharedRegLog>,
+    logging_enabled: bool,
+}
 thread_local! {
-    /// Thread-local pointer used by [`Registers`] to log Merkle proofs.
-    static REG_LOGGER: RefCell<Option<NonNull<RegLog>>> = const { RefCell::new(None) };
+    /// Thread-local, ownership-safe sink used by [`Registers`] to log Merkle proofs.
+    ///
+    /// The outer `Option` distinguishes execution outside a VM run from an
+    /// explicitly masked run. That distinction prevents an untraced nested VM
+    /// from inheriting its caller's logger.
+    static REG_LOGGER: RefCell<Option<RegLoggerState>> = const { RefCell::new(None) };
 }
 static PROVER_THREADS: AtomicUsize = AtomicUsize::new(0);
 static PROVER_STACK_SIZE: LazyLock<AtomicUsize> =
@@ -38,40 +47,75 @@ static PROVER_STACK_SIZE: LazyLock<AtomicUsize> =
 static PROVER_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
 /// RAII helper that clears the register logger when dropped.
 pub(crate) struct RegLoggerGuard {
+    previous: Option<RegLoggerState>,
     // A thread-local installation must be removed on the thread that created it.
     _not_send_or_sync: PhantomData<Rc<()>>,
 }
 impl RegLoggerGuard {
-    /// Install the register logger and return a guard that will clear it on drop.
-    ///
-    /// # Safety
-    ///
-    /// `log` must remain valid, unmoved, and exclusively owned until the guard is dropped. The
-    /// guard must not be forgotten.
-    pub(crate) unsafe fn install(log: NonNull<RegLog>) -> Self {
-        REG_LOGGER.with(|slot| {
-            let mut installed = slot.borrow_mut();
-            assert!(installed.is_none(), "register logger is already installed");
-            *installed = Some(log);
+    /// Install an active or explicitly masked register logger scope and restore
+    /// any outer scope on drop.
+    pub(crate) fn install(log: Option<SharedRegLog>) -> Self {
+        let logging_enabled = log.is_some();
+        let previous = REG_LOGGER.with(|slot| {
+            slot.replace(Some(RegLoggerState {
+                log,
+                logging_enabled,
+            }))
         });
         Self {
+            previous,
+            _not_send_or_sync: PhantomData,
+        }
+    }
+    /// Temporarily suppress events while retaining the surrounding
+    /// invocation's logger identity and fixed trace policy.
+    pub(crate) fn mask() -> Self {
+        let previous = REG_LOGGER.with(|slot| {
+            let masked = slot.borrow().as_ref().map(|state| RegLoggerState {
+                log: state.log.clone(),
+                logging_enabled: false,
+            });
+            slot.replace(masked)
+        });
+        Self {
+            previous,
             _not_send_or_sync: PhantomData,
         }
     }
 }
 impl Drop for RegLoggerGuard {
     fn drop(&mut self) {
-        REG_LOGGER.with(|slot| *slot.borrow_mut() = None);
+        REG_LOGGER.with(|slot| *slot.borrow_mut() = self.previous.take());
     }
+}
+/// Return whether the current VM invocation fixed trace collection as enabled.
+///
+/// `None` means execution is outside a VM run and the VM's configured mode
+/// should be consulted instead.
+pub(crate) fn scoped_reg_logger_enabled() -> Option<bool> {
+    REG_LOGGER.with(|slot| slot.borrow().as_ref().map(|state| state.log.is_some()))
+}
+/// Clone the invocation-owned logger, if trace collection is active.
+pub(crate) fn scoped_reg_logger() -> Option<SharedRegLog> {
+    REG_LOGGER.with(|slot| slot.borrow().as_ref().and_then(|state| state.log.clone()))
+}
+/// Clone the invocation logger only when the current scope may emit events.
+pub(crate) fn event_reg_logger() -> Option<SharedRegLog> {
+    REG_LOGGER.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|state| state.logging_enabled.then(|| state.log.clone()).flatten())
+    })
 }
 /// Execute `f` if a register logger is installed.
 pub(crate) fn with_reg_logger<F: FnOnce(&mut RegLog)>(f: F) {
     REG_LOGGER.with(|l| {
-        let installed = *l.borrow();
-        if let Some(mut ptr) = installed {
-            // SAFETY: only `RegLoggerGuard::install` can publish this pointer,
-            // and its caller must keep the exclusive pointee alive until drop.
-            unsafe { f(ptr.as_mut()) };
+        let installed = l
+            .borrow()
+            .as_ref()
+            .and_then(|state| state.logging_enabled.then(|| state.log.clone()).flatten());
+        if let Some(log) = installed {
+            f(&mut log.lock());
         }
     });
 }
@@ -114,10 +158,9 @@ mod tests {
     use super::*;
     #[test]
     fn reg_logger_guard_clears_on_drop() {
-        let mut log = RegLog::default();
+        let log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
         {
-            // SAFETY: `log` remains alive and unmoved for this scope.
-            let _guard = unsafe { RegLoggerGuard::install(NonNull::from(&mut log)) };
+            let _guard = RegLoggerGuard::install(Some(Arc::clone(&log)));
             let mut observed = false;
             with_reg_logger(|_| {
                 observed = true;
@@ -132,10 +175,9 @@ mod tests {
     }
     #[test]
     fn reg_logger_guard_clears_on_unwind() {
-        let mut log = RegLog::default();
+        let log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // SAFETY: `log` remains alive and unmoved while unwinding drops the guard.
-            let _guard = unsafe { RegLoggerGuard::install(NonNull::from(&mut log)) };
+            let _guard = RegLoggerGuard::install(Some(Arc::clone(&log)));
             panic!("intentional");
         }));
         assert!(result.is_err(), "expected panic to be captured");
@@ -146,23 +188,76 @@ mod tests {
         assert!(!ran_after_panic, "logger should be cleared after panic");
     }
     #[test]
-    fn nested_reg_logger_install_is_rejected_without_replacing_outer() {
-        let mut outer_log = RegLog::default();
-        let outer_ptr = NonNull::from(&mut outer_log);
-        // SAFETY: `outer_log` remains alive and unmoved until the guard is dropped.
-        let guard = unsafe { RegLoggerGuard::install(outer_ptr) };
-        let mut inner_log = RegLog::default();
-        let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // SAFETY: `inner_log` would remain valid for the guard, but nesting is rejected.
-            let _nested = unsafe { RegLoggerGuard::install(NonNull::from(&mut inner_log)) };
-        }));
-        assert!(nested.is_err(), "nested installation must fail closed");
-        let mut still_outer = false;
+    fn nested_reg_logger_install_restores_outer_logger() {
+        let outer_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let outer_address = {
+            let log = outer_log.lock();
+            std::ptr::from_ref(&*log) as usize
+        };
+        let guard = RegLoggerGuard::install(Some(Arc::clone(&outer_log)));
+        let inner_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let inner_address = {
+            let log = inner_log.lock();
+            std::ptr::from_ref(&*log) as usize
+        };
+        {
+            let _nested = RegLoggerGuard::install(Some(Arc::clone(&inner_log)));
+            with_reg_logger(|installed| {
+                assert_eq!(
+                    std::ptr::from_mut(installed) as usize,
+                    inner_address,
+                    "nested logger must be active in its scope"
+                );
+            });
+        }
         with_reg_logger(|installed| {
-            still_outer = NonNull::from(installed) == outer_ptr;
+            assert_eq!(
+                std::ptr::from_mut(installed) as usize,
+                outer_address,
+                "nested scope must restore the outer logger"
+            );
         });
-        assert!(still_outer, "failed nesting must preserve the outer logger");
         drop(guard);
+    }
+    #[test]
+    fn masked_nested_reg_logger_scope_restores_outer_logger() {
+        let outer_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let _outer = RegLoggerGuard::install(Some(Arc::clone(&outer_log)));
+        assert_eq!(scoped_reg_logger_enabled(), Some(true));
+        {
+            let _masked = RegLoggerGuard::install(None);
+            assert_eq!(scoped_reg_logger_enabled(), Some(false));
+            let mut observed = false;
+            with_reg_logger(|_| observed = true);
+            assert!(
+                !observed,
+                "masked nested scope must suppress the outer logger"
+            );
+        }
+        assert_eq!(scoped_reg_logger_enabled(), Some(true));
+        assert!(Arc::ptr_eq(
+            &scoped_reg_logger().expect("outer logger restored"),
+            &outer_log
+        ));
+    }
+    #[test]
+    fn callback_mask_suppresses_events_but_retains_invocation_identity() {
+        let outer_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let _outer = RegLoggerGuard::install(Some(Arc::clone(&outer_log)));
+        {
+            let _masked = RegLoggerGuard::mask();
+            assert_eq!(scoped_reg_logger_enabled(), Some(true));
+            assert!(Arc::ptr_eq(
+                &scoped_reg_logger().expect("invocation logger retained"),
+                &outer_log
+            ));
+            let mut observed = false;
+            with_reg_logger(|_| observed = true);
+            assert!(!observed, "callback mask must suppress register events");
+        }
+        let mut observed = false;
+        with_reg_logger(|_| observed = true);
+        assert!(observed, "dropping callback mask restores event logging");
     }
     #[test]
     fn prover_thread_override_round_trips() {
@@ -304,6 +399,15 @@ impl MemLog {
     pub fn record(&mut self, e: MemEvent) {
         self.events.push(e);
     }
+    /// Zero retained memory values before discarding the event log.
+    pub(crate) fn scrub(&mut self) {
+        for event in &mut self.events {
+            match event {
+                MemEvent::Load { value, .. } | MemEvent::Store { value, .. } => *value = 0,
+            }
+        }
+        self.events.clear();
+    }
 }
 /// Record of a register access together with its Merkle proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,6 +434,15 @@ pub struct RegLog {
 impl RegLog {
     pub fn record(&mut self, e: RegEvent) {
         self.events.push(e);
+    }
+    /// Zero retained register values before discarding the event log.
+    pub(crate) fn scrub(&mut self) {
+        for event in &mut self.events {
+            match event {
+                RegEvent::Read { value, .. } | RegEvent::Write { value, .. } => *value = 0,
+            }
+        }
+        self.events.clear();
     }
 }
 /// Snapshot of the VM state for one cycle used when generating ZK proofs.
@@ -413,6 +526,21 @@ impl DeltaTraceLog {
             });
         }
         result
+    }
+    /// Zero retained register values before discarding the compact trace.
+    pub(crate) fn scrub(&mut self) {
+        for entry in &mut self.entries {
+            for (_, value, tag) in &mut entry.changes {
+                *value = 0;
+                *tag = false;
+            }
+        }
+        if let Some(last) = &mut self.last {
+            last.gpr.fill(0);
+            last.tags.fill(false);
+        }
+        self.entries.clear();
+        self.last = None;
     }
 }
 /// Merkle roots of registers and memory for a single cycle.

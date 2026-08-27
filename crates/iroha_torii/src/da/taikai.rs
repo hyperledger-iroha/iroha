@@ -1,7 +1,7 @@
 //! Taikai ingest helpers and anchor integration for DA.
 
 #![allow(clippy::redundant_pub_crate)]
-use super::{ingest::ManifestArtifacts, storage_class_label};
+use super::{ingest::ManifestArtifacts, persistence::DaReceiptLog, storage_class_label};
 use crate::{
     routing::MaybeTelemetry,
     sorafs::{AliasCachePolicy, AliasProofEvaluation},
@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use iroha_config::parameters::actual::DaTaikaiAnchor;
-use iroha_core::da::ReplayFingerprint;
+use iroha_core::da::{LaneEpoch, ReplayFingerprint};
 use iroha_data_model::{
     account::AccountId,
     da::prelude::*,
@@ -18,12 +18,14 @@ use iroha_data_model::{
     nexus::LaneId,
     sorafs::pin_registry::StorageClass,
     taikai::{
-        GuardDirectoryId, SegmentDuration, SegmentTimestamp, TaikaiAliasBinding, TaikaiAudioLayout,
-        TaikaiAvailabilityClass, TaikaiCarPointer, TaikaiCodec, TaikaiEnvelopeIndexes,
-        TaikaiEventId, TaikaiGuardPolicy, TaikaiIngestPointer, TaikaiParseError, TaikaiRenditionId,
-        TaikaiRenditionRouteV1, TaikaiResolution, TaikaiRoutingManifestV1, TaikaiSegmentEnvelopeV1,
-        TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1, TaikaiSegmentWindow,
-        TaikaiStreamId, TaikaiTrackKind, TaikaiTrackMetadata,
+        GuardDirectoryId, SegmentDuration, SegmentTimestamp, TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1,
+        TAIKAI_ANCHOR_RECEIPT_VERSION_V1, TaikaiAliasBinding, TaikaiAnchorReceiptBodyV1,
+        TaikaiAnchorReceiptV1, TaikaiAudioLayout, TaikaiAvailabilityClass, TaikaiCarPointer,
+        TaikaiCodec, TaikaiEnvelopeIndexes, TaikaiEventId, TaikaiGuardPolicy, TaikaiIngestPointer,
+        TaikaiParseError, TaikaiRenditionId, TaikaiRenditionRouteV1, TaikaiResolution,
+        TaikaiRoutingManifestV1, TaikaiSegmentEnvelopeV1, TaikaiSegmentSigningBodyV1,
+        TaikaiSegmentSigningManifestV1, TaikaiSegmentWindow, TaikaiStreamId, TaikaiTrackKind,
+        TaikaiTrackMetadata, is_canonical_taikai_anchor_base_id,
     },
 };
 use iroha_futures::supervisor::ShutdownSignal;
@@ -73,12 +75,15 @@ pub(crate) const META_DA_PDP_SAMPLE_WINDOW: &str = "da.proof.pdp.sample_window";
 pub(crate) const META_DA_POTR_SAMPLE_WINDOW: &str = "da.proof.potr.sample_window";
 pub(crate) const TAIKAI_ANCHOR_SENTINEL_PREFIX: &str = "taikai-anchor-";
 pub(crate) const TAIKAI_ANCHOR_SENTINEL_SUFFIX: &str = ".ok";
+pub(crate) const TAIKAI_ANCHOR_INVALID_SUFFIX: &str = ".invalid";
 pub(crate) const TAIKAI_ANCHOR_REQUEST_PREFIX: &str = "taikai-anchor-request-";
 pub(crate) const TAIKAI_ANCHOR_REQUEST_SUFFIX: &str = ".json";
 pub(crate) const TAIKAI_ANCHOR_READY_PREFIX: &str = "taikai-ready-";
 pub(crate) const TAIKAI_ANCHOR_READY_SUFFIX: &str = ".ok";
 pub(crate) const TAIKAI_TRM_LINEAGE_PREFIX: &str = "taikai-trm-state-";
 pub(crate) const TAIKAI_TRM_LINEAGE_SUFFIX: &str = ".json";
+pub(crate) const TAIKAI_TRM_PENDING_PREFIX: &str = "taikai-trm-pending-";
+pub(crate) const TAIKAI_TRM_PENDING_SUFFIX: &str = ".json";
 pub(crate) const TAIKAI_TRM_LOCK_PREFIX: &str = "taikai-trm-lock-";
 pub(crate) const TAIKAI_TRM_LOCK_SUFFIX: &str = ".lock";
 pub(crate) const TAIKAI_LINEAGE_HINT_PREFIX: &str = "taikai-lineage";
@@ -86,8 +91,10 @@ pub(crate) const TAIKAI_LINEAGE_HINT_PREFIX: &str = "taikai-lineage";
 pub(crate) const TAIKAI_ANCHOR_BATCH_MAX: usize = 16;
 /// Retained replay-suppression window: four complete anchor-worker batches.
 pub(crate) const TAIKAI_ANCHOR_ACK_RETENTION_MAX: usize = 4 * TAIKAI_ANCHOR_BATCH_MAX;
-/// Maximum ASCII Unix-second marker stored in an anchor acknowledgement.
-pub(crate) const TAIKAI_ANCHOR_SENTINEL_MAX_BYTES: usize = 32;
+/// Maximum canonical JSON signed receipt stored as an anchor acknowledgement.
+pub(crate) const TAIKAI_ANCHOR_SENTINEL_MAX_BYTES: usize = 8 * 1024;
+/// Maximum decoded HTTP body accepted from the Taikai anchor.
+pub(crate) const TAIKAI_ANCHOR_RESPONSE_MAX_BYTES: usize = TAIKAI_ANCHOR_SENTINEL_MAX_BYTES;
 const TAIKAI_ANCHOR_READY_MARKER: &[u8] = b"ready-v1\n";
 /// Maximum encoded Taikai segment envelope accepted by the anchor spool.
 pub(crate) const TAIKAI_ANCHOR_ENVELOPE_MAX_BYTES: usize = 256 * 1024;
@@ -136,7 +143,7 @@ pub(crate) mod taikai_ingest {
         pub live_edge_drift_ms: Option<i32>,
     }
     const TAIKAI_TRM_LINEAGE_VERSION: u64 = 1;
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     struct TrmLineageRecord {
         alias_namespace: String,
         alias_name: String,
@@ -170,7 +177,9 @@ pub(crate) mod taikai_ingest {
         alias_slug: String,
         _lock: TrmAliasLock,
         record_path: PathBuf,
+        pending_path: PathBuf,
         previous: Option<TrmLineageRecord>,
+        pending: Option<TrmLineageRecord>,
     }
     impl TrmLineageGuard {
         pub fn new(
@@ -190,6 +199,7 @@ pub(crate) mod taikai_ingest {
             let alias_slug = alias_slug(&alias.namespace, &alias.name);
             let lock = TrmAliasLock::acquire(&base_dir, &alias_slug)?;
             let record_path = lineage_record_path(&base_dir, &alias_slug);
+            let pending_path = pending_lineage_record_path(&base_dir, &alias_slug);
             let previous = read_lineage_record(&record_path).map_err(|err| {
                 internal_error(format!(
                     "failed to read Taikai routing manifest lineage `{}`: {err}",
@@ -205,6 +215,27 @@ pub(crate) mod taikai_ingest {
                         ))
                     })?;
             }
+            let pending = read_lineage_record(&pending_path).map_err(|err| {
+                internal_error(format!(
+                    "failed to read pending Taikai routing manifest lineage `{}`: {err}",
+                    pending_path.display()
+                ))
+            })?;
+            if let Some(pending) = &pending {
+                validate_lineage_alias(pending, &alias.namespace, &alias.name, &pending_path)
+                    .map_err(|err| {
+                        internal_error(format!(
+                            "failed to validate pending Taikai routing manifest lineage `{}`: {err}",
+                            pending_path.display()
+                        ))
+                    })?;
+                if pending.artifact_base_id.is_none() {
+                    return Err(internal_error(format!(
+                        "pending Taikai routing manifest lineage `{}` is missing artifact provenance",
+                        pending_path.display()
+                    )));
+                }
+            }
             Ok(Some(Self {
                 manifest_store_dir: spool_dir.to_path_buf(),
                 base_dir,
@@ -213,7 +244,9 @@ pub(crate) mod taikai_ingest {
                 alias_slug,
                 _lock: lock,
                 record_path,
+                pending_path,
                 previous,
+                pending,
             }))
         }
         pub fn validate(
@@ -221,6 +254,12 @@ pub(crate) mod taikai_ingest {
             manifest: &TaikaiRoutingManifestV1,
             manifest_digest_hex: &str,
         ) -> Result<(), (StatusCode, String)> {
+            if self.pending.is_some() {
+                return Err(internal_error(format!(
+                    "pending routing manifest lineage for alias {}.{} must be reconciled against the durable receipt log before validation",
+                    self.alias_name, self.alias_namespace
+                )));
+            }
             if let Some(previous) = &self.previous {
                 if previous.manifest_digest_hex == manifest_digest_hex {
                     return Err(bad_request(
@@ -292,6 +331,122 @@ pub(crate) mod taikai_ingest {
             self.validate(manifest, manifest_digest_hex)?;
             Ok(TrmLineageValidation::Fresh)
         }
+        /// Reconcile an interrupted two-phase lineage update against the
+        /// cryptographically verified durable receipt log.
+        ///
+        /// A pending record without its exact receipt is discarded. A pending
+        /// record with that receipt is promoted after its staged TRM bytes are
+        /// re-read and matched to the recorded digest. This makes the receipt,
+        /// rather than an earlier artifact write, the lineage commit point.
+        pub fn recover_pending(
+            &mut self,
+            receipt_log: &DaReceiptLog,
+        ) -> Result<(), (StatusCode, String)> {
+            let Some(pending) = self.pending.clone() else {
+                return Ok(());
+            };
+            if self.previous.as_ref() == Some(&pending) {
+                self.remove_pending_record()?;
+                return Ok(());
+            }
+            validate_lineage_successor(self.previous.as_ref(), &pending).map_err(|err| {
+                internal_error(format!(
+                    "failed to validate pending Taikai routing manifest lineage `{}`: {err}",
+                    self.pending_path.display()
+                ))
+            })?;
+            let artifact_base_id = pending.artifact_base_id.as_deref().ok_or_else(|| {
+                internal_error(
+                    "pending Taikai routing manifest lineage is missing artifact provenance",
+                )
+            })?;
+            let coordinates = parse_taikai_artifact_base_id(artifact_base_id).map_err(|err| {
+                internal_error(format!(
+                    "failed to parse pending Taikai routing manifest artifact identity: {err}"
+                ))
+            })?;
+            if coordinates.storage_ticket.as_bytes() != coordinates.fingerprint.as_bytes() {
+                return Err(internal_error(
+                    "pending Taikai routing manifest artifact identity does not bind the storage ticket to its replay fingerprint",
+                ));
+            }
+            let receipt = receipt_log
+                .receipt_for_duplicate(
+                    LaneEpoch::new(coordinates.lane_id, coordinates.epoch),
+                    coordinates.sequence,
+                    coordinates.fingerprint,
+                )
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to verify the receipt for pending Taikai routing manifest lineage: {err}"
+                    ))
+                })?;
+            let Some((_, receipt)) = receipt else {
+                self.remove_pending_record()?;
+                return Ok(());
+            };
+            if receipt.storage_ticket != coordinates.storage_ticket {
+                return Err(internal_error(
+                    "pending Taikai routing manifest lineage does not match the durable receipt storage ticket",
+                ));
+            }
+            validate_pending_trm_artifact(&self.manifest_store_dir, &pending).map_err(|err| {
+                internal_error(format!(
+                    "failed to verify the TRM for pending Taikai routing manifest lineage: {err}"
+                ))
+            })?;
+            write_lineage_record(&self.record_path, &pending).map_err(|err| {
+                internal_error(format!(
+                    "failed to promote Taikai routing manifest lineage `{}`: {err}",
+                    self.record_path.display()
+                ))
+            })?;
+            self.previous = Some(pending);
+            self.remove_pending_record()?;
+            Ok(())
+        }
+        /// Stage an alias-lineage advance before the exact durable receipt is
+        /// appended. The staged record is not authoritative until
+        /// [`Self::recover_pending`] verifies that receipt.
+        #[allow(clippy::too_many_arguments)]
+        pub fn stage_ingest(
+            &mut self,
+            window: TaikaiSegmentWindow,
+            manifest_digest_hex: &str,
+            lane_id: LaneId,
+            epoch: u64,
+            sequence: u64,
+            storage_ticket: &StorageTicketId,
+            fingerprint: &ReplayFingerprint,
+        ) -> Result<(), (StatusCode, String)> {
+            if self.pending.is_some() {
+                return Err(internal_error(format!(
+                    "pending routing manifest lineage for alias {}.{} was not reconciled before staging",
+                    self.alias_name, self.alias_namespace
+                )));
+            }
+            let artifact_base_id =
+                taikai_artifact_base_id(lane_id, epoch, sequence, storage_ticket, fingerprint);
+            let record = self.build_record(window, manifest_digest_hex, Some(artifact_base_id))?;
+            validate_lineage_successor(self.previous.as_ref(), &record).map_err(|err| {
+                internal_error(format!(
+                    "failed to validate staged Taikai routing manifest lineage: {err}"
+                ))
+            })?;
+            write_lineage_record(&self.pending_path, &record).map_err(|err| {
+                internal_error(format!(
+                    "failed to stage Taikai routing manifest lineage `{}`: {err}",
+                    self.pending_path.display()
+                ))
+            })?;
+            self.pending = Some(record);
+            Ok(())
+        }
+        /// Discard a staged lineage update after the receipt outcome proves
+        /// that the ingest did not durably commit.
+        pub fn discard_pending(&mut self) -> Result<(), (StatusCode, String)> {
+            self.remove_pending_record()
+        }
         pub fn persist_lineage_hint(
             &self,
             lane_id: LaneId,
@@ -337,8 +492,11 @@ pub(crate) mod taikai_ingest {
         ) -> Result<(), (StatusCode, String)> {
             self.commit_record(window, manifest_digest_hex, None)
         }
-        /// Commit lineage together with the deterministic artifact identity
-        /// that may authenticate a later interrupted-ingest retry.
+        /// Commit test-fixture lineage with deterministic artifact identity.
+        ///
+        /// Production ingest uses [`Self::stage_ingest`] followed by
+        /// [`Self::recover_pending`] at the durable receipt boundary.
+        #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
         pub fn commit_ingest(
             &mut self,
@@ -360,20 +518,7 @@ pub(crate) mod taikai_ingest {
             manifest_digest_hex: &str,
             artifact_base_id: Option<String>,
         ) -> Result<(), (StatusCode, String)> {
-            validate_manifest_digest_hex(manifest_digest_hex).map_err(|err| {
-                internal_error(format!(
-                    "failed to validate Taikai routing manifest digest before lineage commit: {err}"
-                ))
-            })?;
-            let record = TrmLineageRecord {
-                alias_namespace: self.alias_namespace.clone(),
-                alias_name: self.alias_name.clone(),
-                manifest_digest_hex: manifest_digest_hex.to_owned(),
-                window_start_sequence: window.start_sequence,
-                window_end_sequence: window.end_sequence,
-                artifact_base_id,
-                updated_unix: current_unix_seconds(),
-            };
+            let record = self.build_record(window, manifest_digest_hex, artifact_base_id)?;
             write_lineage_record(&self.record_path, &record).map_err(|err| {
                 internal_error(format!(
                     "failed to persist Taikai routing manifest lineage `{}`: {err}",
@@ -383,6 +528,111 @@ pub(crate) mod taikai_ingest {
             self.previous = Some(record);
             Ok(())
         }
+        fn build_record(
+            &self,
+            window: TaikaiSegmentWindow,
+            manifest_digest_hex: &str,
+            artifact_base_id: Option<String>,
+        ) -> Result<TrmLineageRecord, (StatusCode, String)> {
+            validate_manifest_digest_hex(manifest_digest_hex).map_err(|err| {
+                internal_error(format!(
+                    "failed to validate Taikai routing manifest digest before lineage commit: {err}"
+                ))
+            })?;
+            window.validate().map_err(|err| {
+                internal_error(format!(
+                    "failed to validate Taikai routing manifest window before lineage commit: {err}"
+                ))
+            })?;
+            Ok(TrmLineageRecord {
+                alias_namespace: self.alias_namespace.clone(),
+                alias_name: self.alias_name.clone(),
+                manifest_digest_hex: manifest_digest_hex.to_owned(),
+                window_start_sequence: window.start_sequence,
+                window_end_sequence: window.end_sequence,
+                artifact_base_id,
+                updated_unix: current_unix_seconds(),
+            })
+        }
+        fn remove_pending_record(&mut self) -> Result<(), (StatusCode, String)> {
+            remove_lineage_record(&self.pending_path).map_err(|err| {
+                internal_error(format!(
+                    "failed to remove pending Taikai routing manifest lineage `{}`: {err}",
+                    self.pending_path.display()
+                ))
+            })?;
+            self.pending = None;
+            Ok(())
+        }
+    }
+    /// Recover every interrupted alias-lineage transaction before an anchor
+    /// worker can observe a receipt-backed envelope.
+    pub(crate) fn recover_pending_lineages(
+        spool_dir: &Path,
+        receipt_log: &DaReceiptLog,
+    ) -> Result<(), (StatusCode, String)> {
+        if spool_dir.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let base_dir = spool_dir.join(TAIKAI_SPOOL_SUBDIR);
+        let entries = match fs::read_dir(&base_dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                return Err(internal_error(format!(
+                    "failed to scan pending Taikai routing manifest lineages in `{}`: {err}",
+                    base_dir.display()
+                )));
+            }
+        };
+        for entry in entries {
+            let entry = entry.map_err(|err| {
+                internal_error(format!(
+                    "failed to enumerate pending Taikai routing manifest lineages in `{}`: {err}",
+                    base_dir.display()
+                ))
+            })?;
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+                continue;
+            };
+            if !name.starts_with(TAIKAI_TRM_PENDING_PREFIX)
+                || !name.ends_with(TAIKAI_TRM_PENDING_SUFFIX)
+            {
+                continue;
+            }
+            let pending = read_lineage_record(&path)
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to read pending Taikai routing manifest lineage `{}`: {err}",
+                        path.display()
+                    ))
+                })?
+                .ok_or_else(|| {
+                    internal_error(format!(
+                        "pending Taikai routing manifest lineage disappeared during recovery: {}",
+                        path.display()
+                    ))
+                })?;
+            let alias = TaikaiAliasBinding {
+                name: pending.alias_name.clone(),
+                namespace: pending.alias_namespace.clone(),
+                proof: Vec::new(),
+            };
+            let expected_path =
+                pending_lineage_record_path(&base_dir, &alias_slug(&alias.namespace, &alias.name));
+            if path != expected_path {
+                return Err(internal_error(format!(
+                    "pending Taikai routing manifest lineage filename does not match its alias: {}",
+                    path.display()
+                )));
+            }
+            let mut guard = TrmLineageGuard::new(spool_dir, &alias)?.ok_or_else(|| {
+                internal_error("Taikai lineage recovery requires durable storage")
+            })?;
+            guard.recover_pending(receipt_log)?;
+        }
+        Ok(())
     }
     struct TrmAliasLock {
         _file: fs::File,
@@ -527,6 +777,11 @@ pub(crate) mod taikai_ingest {
     fn lineage_record_path(base_dir: &Path, slug: &str) -> PathBuf {
         base_dir.join(format!(
             "{TAIKAI_TRM_LINEAGE_PREFIX}{slug}{TAIKAI_TRM_LINEAGE_SUFFIX}"
+        ))
+    }
+    fn pending_lineage_record_path(base_dir: &Path, slug: &str) -> PathBuf {
+        base_dir.join(format!(
+            "{TAIKAI_TRM_PENDING_PREFIX}{slug}{TAIKAI_TRM_PENDING_SUFFIX}"
         ))
     }
     fn current_unix_seconds() -> u64 {
@@ -771,6 +1026,13 @@ pub(crate) mod taikai_ingest {
                 "Taikai routing manifest lineage record window_start_sequence exceeds window_end_sequence",
             ));
         }
+        TaikaiSegmentWindow::new(window_start_sequence, window_end_sequence)
+            .validate()
+            .map_err(|err| {
+                invalid_lineage_record(format!(
+                    "Taikai routing manifest lineage record has an invalid segment window: {err}"
+                ))
+            })?;
         let artifact_base_id = match map.get("artifact_base_id") {
             None => None,
             Some(value) => {
@@ -853,6 +1115,29 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
+    fn remove_lineage_record(path: &Path) -> io::Result<()> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "Taikai routing manifest lineage record is not a regular file: {}",
+                        path.display()
+                    ),
+                ));
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err),
+        }
+        fs::remove_file(path)?;
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            sync_dir(parent)?;
+        }
+        Ok(())
+    }
     fn validate_lineage_alias(
         record: &TrmLineageRecord,
         expected_namespace: &str,
@@ -911,6 +1196,82 @@ pub(crate) mod taikai_ingest {
             return Err(invalid_lineage_record(
                 "Taikai routing manifest lineage record artifact_base_id must be canonical lowercase hex",
             ));
+        }
+        Ok(())
+    }
+    struct TaikaiArtifactCoordinates {
+        lane_id: LaneId,
+        epoch: u64,
+        sequence: u64,
+        storage_ticket: StorageTicketId,
+        fingerprint: ReplayFingerprint,
+    }
+    fn parse_taikai_artifact_base_id(base_id: &str) -> io::Result<TaikaiArtifactCoordinates> {
+        validate_taikai_artifact_base_id(base_id)?;
+        let mut components = base_id.split('-');
+        let lane_id = u32::from_str_radix(components.next().unwrap_or_default(), 16)
+            .map(LaneId::new)
+            .map_err(|err| invalid_lineage_record(err.to_string()))?;
+        let epoch = u64::from_str_radix(components.next().unwrap_or_default(), 16)
+            .map_err(|err| invalid_lineage_record(err.to_string()))?;
+        let sequence = u64::from_str_radix(components.next().unwrap_or_default(), 16)
+            .map_err(|err| invalid_lineage_record(err.to_string()))?;
+        let mut storage_ticket = [0_u8; 32];
+        hex::decode_to_slice(components.next().unwrap_or_default(), &mut storage_ticket)
+            .map_err(|err| invalid_lineage_record(err.to_string()))?;
+        let mut fingerprint = [0_u8; 32];
+        hex::decode_to_slice(components.next().unwrap_or_default(), &mut fingerprint)
+            .map_err(|err| invalid_lineage_record(err.to_string()))?;
+        Ok(TaikaiArtifactCoordinates {
+            lane_id,
+            epoch,
+            sequence,
+            storage_ticket: StorageTicketId::new(storage_ticket),
+            fingerprint: ReplayFingerprint::from(fingerprint),
+        })
+    }
+    fn validate_lineage_successor(
+        previous: Option<&TrmLineageRecord>,
+        candidate: &TrmLineageRecord,
+    ) -> io::Result<()> {
+        if let Some(previous) = previous {
+            if previous.manifest_digest_hex == candidate.manifest_digest_hex {
+                return Err(invalid_lineage_record(
+                    "pending Taikai routing manifest repeats the committed manifest digest",
+                ));
+            }
+            if candidate.window_start_sequence <= previous.window_end_sequence {
+                return Err(invalid_lineage_record(
+                    "pending Taikai routing manifest overlaps the committed segment window",
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn validate_pending_trm_artifact(
+        manifest_store_dir: &Path,
+        pending: &TrmLineageRecord,
+    ) -> io::Result<()> {
+        let artifact_base_id = pending.artifact_base_id.as_deref().ok_or_else(|| {
+            invalid_lineage_record(
+                "pending Taikai routing manifest lineage is missing artifact provenance",
+            )
+        })?;
+        validate_taikai_artifact_base_id(artifact_base_id)?;
+        let path = manifest_store_dir
+            .join(TAIKAI_SPOOL_SUBDIR)
+            .join(format!("taikai-trm-{artifact_base_id}.norito"));
+        let bytes = read_regular_taikai_file_bounded(
+            &path,
+            "pending Taikai routing manifest",
+            TAIKAI_ANCHOR_TRM_MAX_BYTES,
+        )?;
+        let observed = hex::encode(blake3_hash(&bytes).as_bytes());
+        if observed != pending.manifest_digest_hex {
+            return Err(invalid_lineage_record(format!(
+                "pending Taikai routing manifest digest mismatch at {}",
+                path.display()
+            )));
         }
         Ok(())
     }
@@ -1964,7 +2325,7 @@ pub(crate) mod taikai_ingest {
             anchor_cfg.poll_interval
         };
         let spool_dir = manifest_store_dir.join(TAIKAI_SPOOL_SUBDIR);
-        let sender = match HttpAnchorSender::new() {
+        let sender = match HttpAnchorSender::new(anchor_cfg.request_timeout) {
             Ok(sender) => sender,
             Err(err) => {
                 iroha_logger::error!(?err, "failed to initialise Taikai anchor HTTP client");
@@ -1987,9 +2348,12 @@ pub(crate) mod taikai_ingest {
         client: Client,
     }
     impl HttpAnchorSender {
-        fn new() -> Result<Self, reqwest::Error> {
+        fn new(request_timeout: Duration) -> Result<Self, reqwest::Error> {
             Ok(Self {
-                client: Client::builder().build()?,
+                client: Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(request_timeout)
+                    .build()?,
             })
         }
     }
@@ -1999,18 +2363,20 @@ pub(crate) mod taikai_ingest {
         async fn send(
             &self,
             endpoint: &reqwest::Url,
-            body: String,
+            base_id: &str,
+            body: &str,
             api_token: Option<&str>,
-        ) -> Result<(), AnchorSendError>;
+        ) -> Result<Vec<u8>, AnchorSendError>;
     }
     #[async_trait]
     impl AnchorSender for HttpAnchorSender {
         async fn send(
             &self,
             endpoint: &reqwest::Url,
-            body: String,
+            _base_id: &str,
+            body: &str,
             api_token: Option<&str>,
-        ) -> Result<(), AnchorSendError> {
+        ) -> Result<Vec<u8>, AnchorSendError> {
             let mut request = self
                 .client
                 .post(endpoint.clone())
@@ -2018,8 +2384,18 @@ pub(crate) mod taikai_ingest {
             if let Some(token) = api_token {
                 request = request.header("authorization", token);
             }
-            request.body(body).send().await?.error_for_status()?;
-            Ok(())
+            let mut response = request
+                .body(body.to_owned())
+                .send()
+                .await?
+                .error_for_status()?;
+            crate::read_reqwest_response_body_bounded(
+                &mut response,
+                TAIKAI_ANCHOR_RESPONSE_MAX_BYTES,
+                "Taikai anchor receipt",
+            )
+            .await
+            .map_err(Into::into)
         }
     }
     pub(crate) struct PendingUpload {
@@ -2141,10 +2517,10 @@ pub(crate) mod taikai_ingest {
             ),
         ))
     }
-    fn persist_anchor_sentinel(path: &Path, marker: &str) -> io::Result<()> {
+    fn persist_anchor_sentinel(path: &Path, receipt: &[u8]) -> io::Result<()> {
         ensure_taikai_artifact_size(
             "Taikai anchor sentinel",
-            marker.len(),
+            receipt.len(),
             TAIKAI_ANCHOR_SENTINEL_MAX_BYTES,
         )?;
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -2157,16 +2533,91 @@ pub(crate) mod taikai_ingest {
             ));
         };
         let tmp_path = path.with_file_name(format!(".{name}.tmp-{}", artifact_temp_suffix()?));
-        match write_temp_artifact(&tmp_path, marker.as_bytes()) {
+        match write_temp_artifact(&tmp_path, receipt) {
             Ok(()) => {}
             Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
         }
-        if let Err(err) = fs::rename(&tmp_path, path) {
-            remove_temp_artifact(&tmp_path)?;
-            return Err(err);
+        match fs::hard_link(&tmp_path, path) {
+            Ok(()) => {
+                let sync_result = sync_parent_dir(path);
+                let remove_result = remove_temp_artifact(&tmp_path);
+                sync_result?;
+                remove_result
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                let existing_result = validate_existing_anchor_sentinel(path, receipt);
+                let remove_result = remove_temp_artifact(&tmp_path);
+                existing_result?;
+                remove_result
+            }
+            Err(err) => {
+                remove_temp_artifact(&tmp_path)?;
+                Err(err)
+            }
         }
-        sync_parent_dir(path)
     }
+    fn validate_existing_anchor_sentinel(path: &Path, expected: &[u8]) -> io::Result<()> {
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.file_type().is_file() {
+            return Err(io::Error::new(
+                ErrorKind::AlreadyExists,
+                format!(
+                    "Taikai anchor sentinel path is not a file: {}",
+                    path.display()
+                ),
+            ));
+        }
+        if metadata.len() != u64::try_from(expected.len()).unwrap_or(u64::MAX) {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Taikai anchor sentinel already exists with different contents: {}",
+                    path.display()
+                ),
+            ));
+        }
+        let existing = read_regular_taikai_file_bounded(
+            path,
+            "Taikai anchor sentinel",
+            expected.len().min(TAIKAI_ANCHOR_SENTINEL_MAX_BYTES),
+        )?;
+        if existing == expected {
+            return Ok(());
+        }
+        Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "Taikai anchor sentinel already exists with different contents: {}",
+                path.display()
+            ),
+        ))
+    }
+
+    fn quarantine_invalid_anchor_sentinel(path: &Path, marker: &[u8]) -> io::Result<PathBuf> {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "Taikai anchor sentinel path is not valid UTF-8: {}",
+                    path.display()
+                ),
+            ));
+        };
+        let digest = hex::encode(blake3_hash(marker).as_bytes());
+        let quarantine_path =
+            path.with_file_name(format!("{name}{TAIKAI_ANCHOR_INVALID_SUFFIX}-{digest}"));
+        match fs::hard_link(path, &quarantine_path) {
+            Ok(()) => sync_parent_dir(&quarantine_path)?,
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                validate_existing_anchor_sentinel(&quarantine_path, marker)?;
+            }
+            Err(err) => return Err(err),
+        }
+        fs::remove_file(path)?;
+        sync_parent_dir(path)?;
+        Ok(quarantine_path)
+    }
+
     fn retire_anchored_source_artifacts(spool_dir: &Path, base_id: &str) -> io::Result<()> {
         if !valid_spool_artifact_base_id(base_id) {
             return Err(io::Error::new(
@@ -2263,8 +2714,8 @@ pub(crate) mod taikai_ingest {
     where
         S: AnchorSender + ?Sized,
     {
-        let pending = collect_pending_envelopes(spool_dir).await?;
-        prune_anchor_ack_history(spool_dir).await?;
+        let pending = collect_pending_envelopes(spool_dir, &anchor_cfg.receipt_public_key).await?;
+        prune_anchor_ack_history(spool_dir, &anchor_cfg.receipt_public_key).await?;
         let mut processing_errors = Vec::with_capacity(pending.len());
         for candidate in pending {
             let candidate_base_id = candidate.base_id.clone();
@@ -2288,16 +2739,41 @@ pub(crate) mod taikai_ingest {
                 sentinel_path,
             } = upload;
             match sender
-                .send(&anchor_cfg.endpoint, body, anchor_cfg.api_token.as_deref())
+                .send(
+                    &anchor_cfg.endpoint,
+                    &base_id,
+                    &body,
+                    anchor_cfg.api_token.as_deref(),
+                )
                 .await
             {
-                Ok(()) => {
-                    let marker = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()
-                        .to_string();
-                    if let Err(err) = persist_anchor_sentinel(&sentinel_path, &marker) {
+                Ok(response) => {
+                    let receipt = match validate_anchor_receipt(
+                        &response,
+                        &base_id,
+                        body.as_bytes(),
+                        &anchor_cfg.receipt_public_key,
+                    ) {
+                        Ok(receipt) => receipt,
+                        Err(err) => {
+                            let message = format!(
+                                "anchor service returned an invalid Taikai receipt for `{base_id}`: {err}"
+                            );
+                            iroha_logger::warn!(
+                                base = base_id.as_str(),
+                                ?err,
+                                "anchor service returned an invalid Taikai receipt"
+                            );
+                            processing_errors.push(message);
+                            continue;
+                        }
+                    };
+                    let canonical_receipt = json::to_vec(&receipt).map_err(|err| {
+                        format!(
+                            "failed to encode verified Taikai anchor receipt for `{base_id}`: {err}"
+                        )
+                    })?;
+                    if let Err(err) = persist_anchor_sentinel(&sentinel_path, &canonical_receipt) {
                         let message = format!(
                             "failed to persist Taikai anchor sentinel `{}`: {err}",
                             sentinel_path.display()
@@ -2335,7 +2811,8 @@ pub(crate) mod taikai_ingest {
                 }
             }
         }
-        if let Err(err) = prune_anchor_ack_history(spool_dir).await {
+        if let Err(err) = prune_anchor_ack_history(spool_dir, &anchor_cfg.receipt_public_key).await
+        {
             processing_errors.push(format!(
                 "failed to prune Taikai anchor acknowledgements: {err}"
             ));
@@ -2358,14 +2835,18 @@ pub(crate) mod taikai_ingest {
     pub(crate) async fn collect_pending_uploads(
         spool_dir: &Path,
     ) -> Result<Vec<PendingUpload>, String> {
-        let pending = collect_pending_envelopes(spool_dir).await?;
+        let receipt_public_key = test_anchor_receipt_public_key();
+        let pending = collect_pending_envelopes(spool_dir, &receipt_public_key).await?;
         let mut uploads = Vec::with_capacity(pending.len());
         for candidate in pending {
             uploads.push(load_pending_upload(spool_dir, candidate).await?);
         }
         Ok(uploads)
     }
-    async fn collect_pending_envelopes(spool_dir: &Path) -> Result<Vec<PendingEnvelope>, String> {
+    async fn collect_pending_envelopes(
+        spool_dir: &Path,
+        receipt_public_key: &iroha_crypto::PublicKey,
+    ) -> Result<Vec<PendingEnvelope>, String> {
         let mut earliest = BinaryHeap::with_capacity(TAIKAI_ANCHOR_BATCH_MAX);
         let Some(mut dir) = open_taikai_spool_dir(spool_dir).await? else {
             return Ok(Vec::new());
@@ -2394,13 +2875,51 @@ pub(crate) mod taikai_ingest {
             match async_fs::symlink_metadata(&sentinel_path).await {
                 Ok(metadata) => {
                     if metadata.file_type().is_file() {
-                        read_anchor_ack_marker(&sentinel_path).await?;
-                        retire_anchored_source_artifacts(spool_dir, &base_id).map_err(|err| {
-                            format!(
-                                "failed to retire acknowledged Taikai source artifacts for `{base_id}`: {err}"
+                        if let Err(err) = read_verified_anchor_ack(
+                            spool_dir,
+                            &sentinel_path,
+                            &base_id,
+                            receipt_public_key,
+                        )
+                        .await
+                        {
+                            let marker = read_required_regular_file(
+                                &sentinel_path,
+                                "Taikai anchor sentinel",
+                                TAIKAI_ANCHOR_SENTINEL_MAX_BYTES,
                             )
-                        })?;
-                        continue;
+                            .await
+                            .map_err(|read_err| {
+                                format!(
+                                    "{err}; failed to read invalid Taikai anchor sentinel `{}` for quarantine: {read_err}",
+                                    sentinel_path.display()
+                                )
+                            })?;
+                            let quarantine_path = quarantine_invalid_anchor_sentinel(
+                                &sentinel_path,
+                                &marker,
+                            )
+                            .map_err(|quarantine_err| {
+                                format!(
+                                    "{err}; failed to quarantine invalid Taikai anchor sentinel `{}`: {quarantine_err}",
+                                    sentinel_path.display()
+                                )
+                            })?;
+                            iroha_logger::warn!(
+                                base = base_id.as_str(),
+                                sentinel = %sentinel_path.display(),
+                                quarantine = %quarantine_path.display(),
+                                reason = err,
+                                "quarantined invalid Taikai anchor acknowledgement"
+                            );
+                        } else {
+                            retire_anchored_source_artifacts(spool_dir, &base_id).map_err(|err| {
+                                format!(
+                                    "failed to retire acknowledged Taikai source artifacts for `{base_id}`: {err}"
+                                )
+                            })?;
+                            continue;
+                        }
                     }
                     return Err(format!(
                         "Taikai anchor sentinel `{}` is not a regular file",
@@ -2440,6 +2959,32 @@ pub(crate) mod taikai_ingest {
             }
         }
         Ok(earliest.into_sorted_vec())
+    }
+    #[cfg(test)]
+    fn test_anchor_receipt_public_key() -> iroha_crypto::PublicKey {
+        test_anchor_receipt_keypair().public_key().clone()
+    }
+    #[cfg(test)]
+    fn test_anchor_receipt_keypair() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_from_seed(vec![0xA7; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("derive deterministic Taikai anchor test key")
+    }
+    #[cfg(test)]
+    fn test_anchor_receipt_bytes(
+        base_id: &str,
+        request_body: &[u8],
+        acknowledged_unix_secs: u64,
+    ) -> Vec<u8> {
+        let body = TaikaiAnchorReceiptBodyV1 {
+            schema: TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1.to_owned(),
+            version: TAIKAI_ANCHOR_RECEIPT_VERSION_V1,
+            base_id: base_id.to_owned(),
+            request_digest: *blake3_hash(request_body).as_bytes(),
+            acknowledged_unix_secs,
+        };
+        let receipt = TaikaiAnchorReceiptV1::try_sign(body, &test_anchor_receipt_keypair())
+            .expect("sign deterministic Taikai anchor test receipt");
+        json::to_vec(&receipt).expect("encode deterministic Taikai anchor test receipt")
     }
     async fn load_pending_upload(
         spool_dir: &Path,
@@ -2561,7 +3106,78 @@ pub(crate) mod taikai_ingest {
             sentinel_path,
         })
     }
-    async fn prune_anchor_ack_history(spool_dir: &Path) -> Result<(), String> {
+    fn validate_anchor_receipt(
+        encoded: &[u8],
+        expected_base_id: &str,
+        request_body: &[u8],
+        receipt_public_key: &iroha_crypto::PublicKey,
+    ) -> Result<TaikaiAnchorReceiptV1, String> {
+        if encoded.is_empty() || encoded.len() > TAIKAI_ANCHOR_RESPONSE_MAX_BYTES {
+            return Err(format!(
+                "Taikai anchor receipt must contain 1..={TAIKAI_ANCHOR_RESPONSE_MAX_BYTES} bytes"
+            ));
+        }
+        let receipt: TaikaiAnchorReceiptV1 = json::from_slice(encoded)
+            .map_err(|err| format!("failed to decode Taikai anchor receipt JSON: {err}"))?;
+        if receipt.body.base_id != expected_base_id {
+            return Err(format!(
+                "Taikai anchor receipt base_id `{}` does not match `{expected_base_id}`",
+                receipt.body.base_id
+            ));
+        }
+        if !valid_spool_artifact_base_id(&receipt.body.base_id) {
+            return Err("Taikai anchor receipt base_id is not canonical".to_owned());
+        }
+        let expected_digest = *blake3_hash(request_body).as_bytes();
+        if receipt.body.request_digest != expected_digest {
+            return Err(
+                "Taikai anchor receipt request digest does not match the upload".to_owned(),
+            );
+        }
+        receipt
+            .verify(receipt_public_key)
+            .map_err(|err| format!("Taikai anchor receipt signature validation failed: {err}"))?;
+        Ok(receipt)
+    }
+    async fn read_verified_anchor_ack(
+        spool_dir: &Path,
+        sentinel_path: &Path,
+        expected_base_id: &str,
+        receipt_public_key: &iroha_crypto::PublicKey,
+    ) -> Result<TaikaiAnchorReceiptV1, String> {
+        let marker = read_required_regular_file(
+            sentinel_path,
+            "Taikai anchor sentinel",
+            TAIKAI_ANCHOR_SENTINEL_MAX_BYTES,
+        )
+        .await
+        .map_err(|err| {
+            format!(
+                "failed to validate Taikai anchor sentinel `{}`: {err}",
+                sentinel_path.display()
+            )
+        })?;
+        let request_path = spool_dir.join(format!(
+            "{TAIKAI_ANCHOR_REQUEST_PREFIX}{expected_base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
+        ));
+        let request_body = read_required_regular_file(
+            &request_path,
+            "Taikai anchor request capture",
+            TAIKAI_ANCHOR_REQUEST_MAX_BYTES,
+        )
+        .await?;
+        validate_anchor_receipt(&marker, expected_base_id, &request_body, receipt_public_key)
+            .map_err(|err| {
+                format!(
+                    "Taikai anchor sentinel `{}` is not a verified receipt: {err}",
+                    sentinel_path.display()
+                )
+            })
+    }
+    async fn prune_anchor_ack_history(
+        spool_dir: &Path,
+        receipt_public_key: &iroha_crypto::PublicKey,
+    ) -> Result<(), String> {
         let Some(mut dir) = open_taikai_spool_dir(spool_dir).await? else {
             return Ok(());
         };
@@ -2573,7 +3189,9 @@ pub(crate) mod taikai_ingest {
                 spool_dir.display()
             )
         })? {
-            let Some(record) = read_anchor_ack_record(&entry).await? else {
+            let Some(record) =
+                read_anchor_ack_record(spool_dir, &entry, receipt_public_key).await?
+            else {
                 continue;
             };
             retire_anchored_source_artifacts(spool_dir, &record.base_id).map_err(|err| {
@@ -2613,7 +3231,9 @@ pub(crate) mod taikai_ingest {
                 spool_dir.display()
             )
         })? {
-            let Some(record) = read_anchor_ack_record(&entry).await? else {
+            let Some(record) =
+                read_anchor_ack_record(spool_dir, &entry, receipt_public_key).await?
+            else {
                 continue;
             };
             if record >= retention_floor {
@@ -2634,7 +3254,9 @@ pub(crate) mod taikai_ingest {
         Ok(())
     }
     async fn read_anchor_ack_record(
+        spool_dir: &Path,
         entry: &async_fs::DirEntry,
+        receipt_public_key: &iroha_crypto::PublicKey,
     ) -> Result<Option<AnchorAckRecord>, String> {
         let file_name = entry.file_name();
         let Some(base_id) = taikai_anchor_sentinel_base_id(&file_name)?.map(ToOwned::to_owned)
@@ -2647,40 +3269,49 @@ pub(crate) mod taikai_ingest {
             ));
         }
         let sentinel_path = entry.path();
-        let acknowledged_unix_secs = read_anchor_ack_marker(&sentinel_path).await?;
-        Ok(Some(AnchorAckRecord {
-            acknowledged_unix_secs,
-            base_id,
-        }))
-    }
-    async fn read_anchor_ack_marker(sentinel_path: &Path) -> Result<u64, String> {
-        let marker = read_required_regular_file(
-            sentinel_path,
-            "Taikai anchor sentinel",
-            TAIKAI_ANCHOR_SENTINEL_MAX_BYTES,
+        let receipt = match read_verified_anchor_ack(
+            spool_dir,
+            &sentinel_path,
+            &base_id,
+            receipt_public_key,
         )
         .await
-        .map_err(|err| {
-            format!(
-                "failed to validate Taikai anchor sentinel `{}`: {err}",
-                sentinel_path.display()
-            )
-        })?;
-        let acknowledged_unix_secs = std::str::from_utf8(&marker)
-            .map_err(|_| {
-                format!(
-                    "Taikai anchor sentinel `{}` is not valid UTF-8",
-                    sentinel_path.display()
+        {
+            Ok(receipt) => receipt,
+            Err(reason) => {
+                let marker = read_required_regular_file(
+                    &sentinel_path,
+                    "Taikai anchor sentinel",
+                    TAIKAI_ANCHOR_SENTINEL_MAX_BYTES,
                 )
-            })?
-            .parse::<u64>()
-            .map_err(|err| {
-                format!(
-                    "Taikai anchor sentinel `{}` has an invalid Unix-second marker: {err}",
-                    sentinel_path.display()
-                )
-            })?;
-        Ok(acknowledged_unix_secs)
+                .await
+                .map_err(|read_err| {
+                    format!(
+                        "{reason}; failed to read invalid Taikai anchor sentinel `{}` for quarantine: {read_err}",
+                        sentinel_path.display()
+                    )
+                })?;
+                let quarantine_path = quarantine_invalid_anchor_sentinel(&sentinel_path, &marker)
+                    .map_err(|quarantine_err| {
+                        format!(
+                            "{reason}; failed to quarantine invalid Taikai anchor sentinel `{}`: {quarantine_err}",
+                            sentinel_path.display()
+                        )
+                    })?;
+                iroha_logger::warn!(
+                    base = base_id.as_str(),
+                    sentinel = %sentinel_path.display(),
+                    quarantine = %quarantine_path.display(),
+                    reason,
+                    "quarantined invalid Taikai anchor acknowledgement"
+                );
+                return Ok(None);
+            }
+        };
+        Ok(Some(AnchorAckRecord {
+            acknowledged_unix_secs: receipt.body.acknowledged_unix_secs,
+            base_id,
+        }))
     }
     async fn ensure_anchor_source_retired(spool_dir: &Path, base_id: &str) -> Result<(), String> {
         let envelope_path = spool_dir.join(format!("taikai-envelope-{base_id}.norito"));
@@ -2704,16 +3335,18 @@ pub(crate) mod taikai_ingest {
         let request_path = spool_dir.join(format!(
             "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
         ));
-        let mut removed = remove_regular_taikai_file_if_present_async(
+        let mut removed = false;
+        // Source retirement is verified before pruning. Remove the sentinel
+        // first so a crash can never leave a receipt that has lost the exact
+        // request capture required for restart verification.
+        removed |=
+            remove_regular_taikai_file_if_present_async(sentinel_path, "Taikai anchor sentinel")
+                .await?;
+        removed |= remove_regular_taikai_file_if_present_async(
             &request_path,
             "Taikai anchor request capture",
         )
         .await?;
-        // The sentinel is removed last: a crash can discard an obsolete
-        // capture, but must not make an acknowledged source deliverable again.
-        removed |=
-            remove_regular_taikai_file_if_present_async(sentinel_path, "Taikai anchor sentinel")
-                .await?;
         Ok(removed)
     }
     async fn remove_regular_taikai_file_if_present_async(
@@ -2819,28 +3452,7 @@ pub(crate) mod taikai_ingest {
         }
     }
     fn valid_spool_artifact_base_id(base_id: &str) -> bool {
-        let mut fields = base_id.split('-');
-        let Some(lane_hex) = fields.next() else {
-            return false;
-        };
-        let Some(epoch_hex) = fields.next() else {
-            return false;
-        };
-        let Some(sequence_hex) = fields.next() else {
-            return false;
-        };
-        let Some(ticket_hex) = fields.next() else {
-            return false;
-        };
-        let Some(fingerprint_hex) = fields.next() else {
-            return false;
-        };
-        fields.next().is_none()
-            && fixed_hex(lane_hex, 8)
-            && fixed_hex(epoch_hex, 16)
-            && fixed_hex(sequence_hex, 16)
-            && fixed_hex(ticket_hex, 64)
-            && fixed_hex(fingerprint_hex, 64)
+        is_canonical_taikai_anchor_base_id(base_id)
     }
     fn taikai_envelope_file_name(name: &OsStr) -> Result<Option<&str>, String> {
         if let Some(name) = name.to_str() {
@@ -2881,9 +3493,6 @@ pub(crate) mod taikai_ingest {
     #[cfg(not(unix))]
     fn non_utf8_artifact_name_matches(_name: &OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
         false
-    }
-    fn fixed_hex(value: &str, width: usize) -> bool {
-        value.len() == width && value.bytes().all(|byte| byte.is_ascii_hexdigit())
     }
     #[cfg(test)]
     mod tests {
@@ -2951,7 +3560,7 @@ pub(crate) mod taikai_ingest {
                 .await
                 .expect("write readiness marker");
             }
-            let pending = collect_pending_envelopes(&spool_dir)
+            let pending = collect_pending_envelopes(&spool_dir, &test_anchor_receipt_public_key())
                 .await
                 .expect("select bounded batch");
             let observed: Vec<_> = pending
@@ -3017,11 +3626,16 @@ pub(crate) mod taikai_ingest {
             let total = TAIKAI_ANCHOR_ACK_RETENTION_MAX + 2;
             for sequence in 0..total {
                 let base_id = anchor_test_base_id(sequence);
+                let request_body = b"request";
                 async_fs::write(
                     spool_dir.join(format!(
                         "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
                     )),
-                    sequence.to_string(),
+                    test_anchor_receipt_bytes(
+                        &base_id,
+                        request_body,
+                        u64::try_from(sequence).expect("small sequence") + 1,
+                    ),
                 )
                 .await
                 .expect("write sentinel");
@@ -3029,12 +3643,12 @@ pub(crate) mod taikai_ingest {
                     spool_dir.join(format!(
                         "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
                     )),
-                    b"request",
+                    request_body,
                 )
                 .await
                 .expect("write request capture");
             }
-            prune_anchor_ack_history(&spool_dir)
+            prune_anchor_ack_history(&spool_dir, &test_anchor_receipt_public_key())
                 .await
                 .expect("prune acknowledgement history");
             for sequence in 0..total {

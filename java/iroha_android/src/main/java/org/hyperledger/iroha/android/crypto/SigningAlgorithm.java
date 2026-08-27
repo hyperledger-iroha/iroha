@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.crypto;
 
+import java.util.Locale;
+
 /** Supported transaction and offline signing algorithms exposed by the Java/Android SDKs. */
 public enum SigningAlgorithm {
   ED25519(0, "Ed25519", "ed25519"),
@@ -100,19 +102,24 @@ public enum SigningAlgorithm {
   }
 
   private static String normalize(final String name) {
-    if (name == null || name.trim().isEmpty()) {
+    if (name == null || name.isEmpty()) {
       throw new IllegalArgumentException("signing algorithm must be a non-empty string");
     }
-    if (!name.trim().equals(name)) {
-      throw new IllegalArgumentException("signing algorithm must not contain surrounding whitespace");
-    }
-    final StringBuilder builder = new StringBuilder(name.length());
     for (int i = 0; i < name.length(); i++) {
-      final char ch = Character.toLowerCase(name.charAt(i));
-      if (ch < 0x20 || ch == 0x7F || ch > 0x7F) {
+      final char ch = name.charAt(i);
+      if (!((ch >= 'A' && ch <= 'Z')
+          || (ch >= 'a' && ch <= 'z')
+          || (ch >= '0' && ch <= '9')
+          || ch == '-'
+          || ch == '_')) {
         throw new IllegalArgumentException("Unsupported signing algorithm: " + name);
       }
-      if (Character.isLetterOrDigit(ch)) {
+    }
+    final String lowercase = name.toLowerCase(Locale.ROOT);
+    final StringBuilder builder = new StringBuilder(lowercase.length());
+    for (int i = 0; i < lowercase.length(); i++) {
+      final char ch = lowercase.charAt(i);
+      if (ch != '-' && ch != '_') {
         builder.append(ch);
       }
     }

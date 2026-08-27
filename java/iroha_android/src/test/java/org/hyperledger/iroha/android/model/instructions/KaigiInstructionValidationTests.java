@@ -273,6 +273,10 @@ public final class KaigiInstructionValidationTests {
                 .setBandwidthClass(1)
                 .build()
                 .toArguments(),
+            UnregisterKaigiRelayInstruction.builder()
+                .setRelayId("relay")
+                .build()
+                .toArguments(),
             SetKaigiRelayManifestInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
                 .build()
@@ -292,6 +296,7 @@ public final class KaigiInstructionValidationTests {
             value -> EndKaigiInstruction.fromArguments(value),
             value -> RecordKaigiUsageInstruction.fromArguments(value),
             value -> RegisterKaigiRelayInstruction.fromArguments(value),
+            value -> UnregisterKaigiRelayInstruction.fromArguments(value),
             value -> SetKaigiRelayManifestInstruction.fromArguments(value),
             value -> ReportKaigiRelayHealthInstruction.fromArguments(value));
     for (int index = 0; index < arguments.size(); index++) {
@@ -319,6 +324,14 @@ public final class KaigiInstructionValidationTests {
                 .setHpkePublicKeyBase64("AQ")
                 .setBandwidthClass(1),
         "expected non-canonical base64 to throw");
+    final UnregisterKaigiRelayInstruction unregistration =
+        UnregisterKaigiRelayInstruction.builder().setRelayId("relay").build();
+    assertEquals(
+        unregistration,
+        UnregisterKaigiRelayInstruction.fromArguments(unregistration.toArguments()));
+    assertThrows(
+        () -> UnregisterKaigiRelayInstruction.builder().setRelayId(" "),
+        "expected blank relay id to throw");
   }
 
   private static void relayHealthReportsValidateStatusNotesAndCanonicalMaps() {

@@ -35,7 +35,7 @@ final class SigningKeyTests: XCTestCase {
         XCTAssertTrue(publicKey.isValidSignature(envelope.signature, for: message))
     }
 
-    func testEd25519SignatureAdmissionRejectsInertAndMalformedR() throws {
+    func testEd25519SignatureAdmissionRejectsInertMalformedRAndNoncanonicalS() throws {
         let key = Curve25519.Signing.PrivateKey()
         let message = Data("swift-ed25519-signature-admission".utf8)
         let signature = try key.signature(for: message)
@@ -56,13 +56,33 @@ final class SigningKeyTests: XCTestCase {
         let mixedTorsionR = try XCTUnwrap(
             Data(hexString: "6AEBC0B955CE4A2F1344029986B775E6EA5C40F93F1112B86EC51678EB9DC0FB")
         )
+        let negativeZeroR = Data([0x01] + Array(repeating: 0, count: 30) + [0x80])
 
         XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(Data(repeating: 0, count: 64)))
         XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(Data(signature.dropLast())))
-        for replacementR in [smallOrderR, noncanonicalR, mixedTorsionR] {
+        for replacementR in [smallOrderR, noncanonicalR, mixedTorsionR, negativeZeroR] {
             var malformed = signature
             malformed.replaceSubrange(0..<replacementR.count, with: replacementR)
             XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(malformed))
+        }
+
+        let subgroupOrder = try XCTUnwrap(
+            Data(hexString: "EDD3F55C1A631258D69CF7A2DEF9DE1400000000000000000000000000000010")
+        )
+        var orderMinusOne = subgroupOrder
+        orderMinusOne[orderMinusOne.startIndex] = 0xEC
+        var orderPlusOne = subgroupOrder
+        orderPlusOne[orderPlusOne.startIndex] = 0xEE
+
+        var structurallyCanonical = signature
+        structurallyCanonical.replaceSubrange(32..<64, with: orderMinusOne)
+        XCTAssertTrue(Ed25519SignatureAdmission.isValidSignature(structurallyCanonical))
+        structurallyCanonical.replaceSubrange(32..<64, with: Data(repeating: 0, count: 32))
+        XCTAssertTrue(Ed25519SignatureAdmission.isValidSignature(structurallyCanonical))
+        for replacementS in [subgroupOrder, orderPlusOne] {
+            var noncanonical = signature
+            noncanonical.replaceSubrange(32..<64, with: replacementS)
+            XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(noncanonical))
         }
     }
 
@@ -82,11 +102,13 @@ final class SigningKeyTests: XCTestCase {
             0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
             0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
         ])
+        let negativeZeroKey = Data([0x01] + Array(repeating: 0, count: 30) + [0x80])
 
         XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(Data(repeating: 0, count: 32)))
         XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(Data(repeating: 0x42, count: 31)))
         XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(smallOrderKey))
         XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(noncanonicalKey))
+        XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(negativeZeroKey))
     }
 
     func testEd25519PublicKeyAdmissionMatchesSharedVectorsAndAccountBoundaries() throws {
@@ -131,6 +153,28 @@ final class SigningKeyTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testEd25519AdmissionRebasesNonzeroIndexDataSlices() throws {
+        let publicKey = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        var framedKey = Data([0xAA])
+        framedKey.append(publicKey)
+        framedKey.append(0xBB)
+        let keySlice = framedKey[1..<(1 + publicKey.count)]
+        XCTAssertNotEqual(keySlice.startIndex, 0)
+        XCTAssertTrue(Ed25519PublicKeyAdmission.isValidPublicKey(keySlice))
+
+        let address = try AccountAddress.fromAccount(publicKey: keySlice)
+        let canonical = try address.canonicalBytes()
+        var framedAddress = Data([0xAA, 0xBB])
+        framedAddress.append(canonical)
+        framedAddress.append(0xCC)
+        let addressSlice = framedAddress[2..<(2 + canonical.count)]
+        XCTAssertNotEqual(addressSlice.startIndex, 0)
+        XCTAssertEqual(
+            try AccountAddress.fromCanonicalBytes(addressSlice).canonicalBytes(),
+            canonical
+        )
     }
 
     func testMultisigBuilderRejectsMixedTorsionEd25519Member() throws {

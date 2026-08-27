@@ -179,8 +179,201 @@ fn map_iteration_has_explicit_bound(expr: &Expr) -> bool {
                 || (name == "range" && args.len() == 3)
     )
 }
+struct PendingExpr(Option<Expr>);
+impl PendingExpr {
+    fn new(expression: Expr) -> Self {
+        Self(Some(expression))
+    }
+    fn as_ref(&self) -> &Expr {
+        self.0.as_ref().expect("pending expression must be present")
+    }
+    fn take(&mut self) -> Expr {
+        self.0.take().expect("pending expression must be present")
+    }
+    fn replace(&mut self, expression: Expr) {
+        assert!(
+            self.0.replace(expression).is_none(),
+            "pending expression must be empty before replacement"
+        );
+    }
+    fn into_inner(mut self) -> Expr {
+        self.take()
+    }
+}
+impl Drop for PendingExpr {
+    fn drop(&mut self) {
+        if let Some(expression) = self.0.take() {
+            crate::ast::drop_expression_iterative(expression);
+        }
+    }
+}
+struct PendingStatement(Option<Statement>);
+impl PendingStatement {
+    fn new(statement: Statement) -> Self {
+        Self(Some(statement))
+    }
+    fn take(&mut self) -> Statement {
+        self.0.take().expect("pending statement must be present")
+    }
+}
+impl Drop for PendingStatement {
+    fn drop(&mut self) {
+        if let Some(statement) = self.0.take() {
+            crate::ast::drop_block_iterative(Block {
+                statements: vec![statement],
+                tail: None,
+            });
+        }
+    }
+}
+struct PendingExprs(Vec<Expr>);
+impl PendingExprs {
+    fn new(expressions: Vec<Expr>) -> Self {
+        Self(expressions)
+    }
+    fn push(&mut self, expression: Expr) {
+        self.0.push(expression);
+    }
+    fn pop(&mut self) -> Option<Expr> {
+        self.0.pop()
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn into_inner(mut self) -> Vec<Expr> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for PendingExprs {
+    fn drop(&mut self) {
+        for expression in std::mem::take(&mut self.0) {
+            crate::ast::drop_expression_iterative(expression);
+        }
+    }
+}
+struct PendingBlock {
+    statements: Vec<Statement>,
+    tail: Option<Box<Expr>>,
+}
+impl PendingBlock {
+    fn new() -> Self {
+        Self {
+            statements: Vec::new(),
+            tail: None,
+        }
+    }
+    fn from_block(block: Block) -> Self {
+        Self {
+            statements: block.statements,
+            tail: block.tail,
+        }
+    }
+    fn push_statement(&mut self, statement: Statement) {
+        self.statements.push(statement);
+    }
+    fn set_tail(&mut self, expression: Expr) {
+        assert!(
+            self.tail.replace(Box::new(expression)).is_none(),
+            "one parsed block may have only one tail expression"
+        );
+    }
+    fn into_inner(mut self) -> Block {
+        Block {
+            statements: std::mem::take(&mut self.statements),
+            tail: self.tail.take(),
+        }
+    }
+}
+struct PendingValues<T> {
+    values: Vec<T>,
+    drop_value: fn(T),
+}
+impl<T> PendingValues<T> {
+    fn new(drop_value: fn(T)) -> Self {
+        Self {
+            values: Vec::new(),
+            drop_value,
+        }
+    }
+    fn push(&mut self, value: T) {
+        self.values.push(value);
+    }
+    fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.values.iter()
+    }
+    fn into_inner(mut self) -> Vec<T> {
+        std::mem::take(&mut self.values)
+    }
+}
+impl<T> Drop for PendingValues<T> {
+    fn drop(&mut self) {
+        for value in std::mem::take(&mut self.values) {
+            (self.drop_value)(value);
+        }
+    }
+}
+impl Drop for PendingBlock {
+    fn drop(&mut self) {
+        if self.statements.is_empty() && self.tail.is_none() {
+            return;
+        }
+        crate::ast::drop_block_iterative(Block {
+            statements: std::mem::take(&mut self.statements),
+            tail: self.tail.take(),
+        });
+    }
+}
+struct PendingIfFrame {
+    start: u32,
+    owner: NodeId,
+    syntax: usize,
+    pattern: Option<SumPattern>,
+    value: Option<PendingExpr>,
+    condition: Option<PendingExpr>,
+    then_branch: PendingBlock,
+}
+struct PendingProgramParts {
+    items: Vec<Item>,
+    fixtures: Vec<FixtureDecl>,
+}
+impl PendingProgramParts {
+    fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            fixtures: Vec::new(),
+        }
+    }
+    fn push_item(&mut self, item: Item) {
+        self.items.push(item);
+    }
+    fn push_fixture(&mut self, fixture: FixtureDecl) {
+        self.fixtures.push(fixture);
+    }
+    fn into_inner(mut self) -> (Vec<Item>, Vec<FixtureDecl>) {
+        (
+            std::mem::take(&mut self.items),
+            std::mem::take(&mut self.fixtures),
+        )
+    }
+}
+impl Drop for PendingProgramParts {
+    fn drop(&mut self) {
+        if self.items.is_empty() && self.fixtures.is_empty() {
+            return;
+        }
+        crate::ast::drop_program_iterative(Program {
+            unit: SourceUnit {
+                kind: SourceUnitKind::Module,
+                name: String::new(),
+            },
+            items: std::mem::take(&mut self.items),
+            test_target: None,
+            fixtures: std::mem::take(&mut self.fixtures),
+        });
+    }
+}
 struct ParsedCallArguments {
-    args: Vec<Expr>,
+    args: PendingExprs,
     argument_names: Option<Vec<String>>,
     ranges: Vec<TextRange>,
 }
@@ -379,62 +572,70 @@ pub(crate) fn reset_direct_cst_lowering_count() {
 pub(crate) fn direct_cst_lowering_count() -> usize {
     CANONICAL_GRAMMAR_PARSES.with(std::cell::Cell::get)
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DelimiterKind {
+    Brace,
+    Bracket,
+    Parenthesis,
+}
+impl DelimiterKind {
+    fn opening(token: &TokenKind) -> Option<Self> {
+        match token {
+            TokenKind::LBrace => Some(Self::Brace),
+            TokenKind::LBracket => Some(Self::Bracket),
+            TokenKind::LParen => Some(Self::Parenthesis),
+            _ => None,
+        }
+    }
+    fn closing(token: &TokenKind) -> Option<Self> {
+        match token {
+            TokenKind::RBrace => Some(Self::Brace),
+            TokenKind::RBracket => Some(Self::Bracket),
+            TokenKind::RParen => Some(Self::Parenthesis),
+            _ => None,
+        }
+    }
+}
+fn update_delimiter_stack(stack: &mut Vec<DelimiterKind>, token: &TokenKind) {
+    if let Some(delimiter) = DelimiterKind::opening(token) {
+        stack.push(delimiter);
+    } else if let Some(delimiter) = DelimiterKind::closing(token)
+        && stack.last() == Some(&delimiter)
+    {
+        stack.pop();
+    }
+}
 pub(crate) fn validate_nesting(
     source: &SourceFile,
     budget: FrontendBudget,
     tokens: &[Token],
 ) -> Result<(), DiagnosticBundle> {
-    let mut delimiter_depth = 0_usize;
-    let mut angle_depth = 0_usize;
+    let mut delimiter_stack = Vec::new();
     let mut prefix_depth = 0_usize;
-    let mut conditional_count = 0_usize;
     for token in tokens {
         match &token.kind {
-            TokenKind::LBrace => {
-                delimiter_depth = delimiter_depth.saturating_add(1);
-                angle_depth = 0;
-                conditional_count = 0;
-                prefix_depth = 0;
-            }
-            TokenKind::LParen | TokenKind::LBracket => {
-                delimiter_depth = delimiter_depth.saturating_add(1);
-                prefix_depth = 0;
-            }
-            TokenKind::RBrace => {
-                delimiter_depth = delimiter_depth.saturating_sub(1);
-                angle_depth = 0;
-                conditional_count = 0;
-                prefix_depth = 0;
-            }
-            TokenKind::RParen | TokenKind::RBracket => {
-                delimiter_depth = delimiter_depth.saturating_sub(1);
-                prefix_depth = 0;
-            }
-            TokenKind::Less => {
-                angle_depth = angle_depth.saturating_add(1);
-                prefix_depth = 0;
-            }
-            TokenKind::Greater => {
-                angle_depth = angle_depth.saturating_sub(1);
+            TokenKind::LBrace
+            | TokenKind::LParen
+            | TokenKind::LBracket
+            | TokenKind::RBrace
+            | TokenKind::RParen
+            | TokenKind::RBracket => {
                 prefix_depth = 0;
             }
             TokenKind::Bang | TokenKind::Minus | TokenKind::Plus => {
                 prefix_depth = prefix_depth.saturating_add(1);
             }
-            TokenKind::Question => conditional_count = conditional_count.saturating_add(1),
-            TokenKind::Semicolon => {
-                angle_depth = 0;
-                conditional_count = 0;
+            TokenKind::Comma | TokenKind::Semicolon => {
                 prefix_depth = 0;
             }
             _ => prefix_depth = 0,
         }
-        if delimiter_depth
-            .saturating_add(angle_depth)
-            .saturating_add(prefix_depth)
-            .saturating_add(conditional_count)
-            > budget.max_nesting()
-        {
+        update_delimiter_stack(&mut delimiter_stack, &token.kind);
+        // `<` and `?` are context-sensitive operators, so counting every one
+        // until a statement delimiter conflates sibling AST branches. Generic
+        // frames and conditional frames enforce their active path below; the
+        // completed-expression validator covers comparison and mixed paths.
+        if delimiter_stack.len().saturating_add(prefix_depth) > budget.max_nesting() {
             let start = source.line_column(token.range.start);
             let end = source.line_column(token.range.end);
             return Err(DiagnosticBundle::single(Diagnostic::error(
@@ -543,14 +744,15 @@ struct CstAstLowerer<'a> {
     facts: AstFacts,
     current_function: Option<NodeId>,
     test_target: Option<TestTargetDecl>,
-    fixtures: Vec<FixtureDecl>,
     recover: bool,
     errors: Vec<ParseError>,
     allow_struct_literals: bool,
+    allow_statement_if_expression: bool,
     max_nesting: usize,
     delimiter_depths: Vec<usize>,
     expression_syntax_depths: Vec<usize>,
     recursive_expression_entry_depths: Vec<usize>,
+    statement_if_condition_depths: Vec<usize>,
     declared_function_parameters: std::collections::BTreeMap<String, Option<Vec<String>>>,
     syntax: SyntaxOutlineBuilder,
 }
@@ -563,20 +765,12 @@ impl<'a> CstAstLowerer<'a> {
     ) -> Self {
         let mut syntax = SyntaxOutlineBuilder::default();
         syntax.start(SyntaxKind::Root, 0);
-        let mut delimiter_depth = 0_usize;
+        let mut delimiter_stack = Vec::new();
         let delimiter_depths = tokens
             .iter()
             .map(|token| {
-                let depth_before = delimiter_depth;
-                match &token.kind {
-                    TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket => {
-                        delimiter_depth = delimiter_depth.saturating_add(1);
-                    }
-                    TokenKind::RBrace | TokenKind::RParen | TokenKind::RBracket => {
-                        delimiter_depth = delimiter_depth.saturating_sub(1);
-                    }
-                    _ => {}
-                }
+                let depth_before = delimiter_stack.len();
+                update_delimiter_stack(&mut delimiter_stack, &token.kind);
                 depth_before
             })
             .collect();
@@ -587,14 +781,15 @@ impl<'a> CstAstLowerer<'a> {
             facts: AstFacts::new(source.id()),
             current_function: None,
             test_target: None,
-            fixtures: Vec::new(),
             recover,
             errors: Vec::new(),
             allow_struct_literals: true,
+            allow_statement_if_expression: false,
             max_nesting: budget.max_nesting(),
             delimiter_depths,
             expression_syntax_depths: Vec::new(),
             recursive_expression_entry_depths: Vec::new(),
+            statement_if_condition_depths: Vec::new(),
             declared_function_parameters: std::collections::BTreeMap::new(),
             syntax,
         }
@@ -819,9 +1014,19 @@ impl<'a> CstAstLowerer<'a> {
         }
     }
     fn guard_expression_depth(&mut self, expression: Expr) -> Expr {
+        let root_depth = if self.allow_statement_if_expression
+            && matches!(expression.kind(), Expr::If { .. } | Expr::IfLet { .. })
+        {
+            self.current_delimiter_depth().saturating_sub(1)
+        } else {
+            self.current_delimiter_depth()
+        };
+        self.guard_expression_depth_at(expression, root_depth)
+    }
+    fn guard_expression_depth_at(&mut self, expression: Expr, root_depth: usize) -> Expr {
         let violation = crate::ast::expression_depth_violation_in_expression(
             &expression,
-            self.current_delimiter_depth(),
+            root_depth,
             self.max_nesting,
             &self.expression_syntax_depths,
         );
@@ -905,12 +1110,31 @@ impl<'a> CstAstLowerer<'a> {
         range: TextRange,
         expression: Expr,
     ) -> Expr {
+        self.finish_owned_expression_at_depth(
+            owner,
+            kind,
+            range,
+            expression,
+            self.current_delimiter_depth(),
+        )
+    }
+    fn finish_owned_expression_at_depth(
+        &mut self,
+        owner: NodeId,
+        kind: AstNodeKind,
+        range: TextRange,
+        expression: Expr,
+        root_depth: usize,
+    ) -> Expr {
         self.facts.source_map.set_kind(owner, kind);
         self.facts.source_map.finish(owner, range.end);
-        self.sourced_expression(
-            owner,
-            SourceRange::new(self.facts.source_map.source(), range),
-            expression,
+        self.guard_expression_depth_at(
+            Expr::Source {
+                node: owner,
+                source: SourceRange::new(self.facts.source_map.source(), range),
+                expression: Box::new(expression),
+            },
+            root_depth,
         )
     }
     fn finish_owned_statement(
@@ -1002,7 +1226,7 @@ impl<'a> CstAstLowerer<'a> {
                 "exactly one `seiyaku Name { ... }`/`誓約 Name { ... }` or `module Name { ... }` source unit",
             ));
         };
-        let (unit, items) = self.parse_source_unit(kind)?;
+        let (unit, parts) = self.parse_source_unit(kind)?;
         if !self.peek(TokenKind::EOF) {
             let token = self.bump();
             return Err(self.error(
@@ -1010,14 +1234,18 @@ impl<'a> CstAstLowerer<'a> {
                 "exactly one seiyaku or module is allowed per source file",
             ));
         }
+        let (items, fixtures) = parts.into_inner();
         Ok(Program {
             unit,
             items,
             test_target: self.test_target.take(),
-            fixtures: std::mem::take(&mut self.fixtures),
+            fixtures,
         })
     }
-    fn parse_source_unit(&mut self, kind: SourceUnitKind) -> ParseResult<(SourceUnit, Vec<Item>)> {
+    fn parse_source_unit(
+        &mut self,
+        kind: SourceUnitKind,
+    ) -> ParseResult<(SourceUnit, PendingProgramParts)> {
         let start = self.current_start();
         let syntax_unit = self.syntax_start(SyntaxKind::SourceUnit, start);
         let node = self.begin_node(AstNodeKind::SourceUnit, start);
@@ -1032,7 +1260,7 @@ impl<'a> CstAstLowerer<'a> {
         );
         self.expect(TokenKind::LBrace)?;
         let syntax_items = self.syntax_start(SyntaxKind::ItemList, self.previous_end(start));
-        let mut items = Vec::new();
+        let mut parts = PendingProgramParts::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let item_start = self.pos;
             let Some(item_token) = self.tokens.get(item_start) else {
@@ -1050,7 +1278,7 @@ impl<'a> CstAstLowerer<'a> {
                             "function attributes must precede a function",
                         ));
                     }
-                    items.push(self.parse_struct_def()?);
+                    parts.push_item(self.parse_struct_def()?);
                 } else if self.peek(TokenKind::Error) {
                     if !attrs.is_empty() {
                         return Err(self.error(
@@ -1058,7 +1286,7 @@ impl<'a> CstAstLowerer<'a> {
                             "function attributes must precede a function",
                         ));
                     }
-                    items.push(self.parse_error_enum_def()?);
+                    parts.push_item(self.parse_error_enum_def()?);
                 } else if self.peek(TokenKind::Const) {
                     if !attrs.is_empty() {
                         return Err(self.error(
@@ -1066,7 +1294,7 @@ impl<'a> CstAstLowerer<'a> {
                             "function attributes must precede a function",
                         ));
                     }
-                    items.push(self.parse_const_decl()?);
+                    parts.push_item(self.parse_const_decl()?);
                 } else if self.peek(TokenKind::State) {
                     if !attrs.is_empty() {
                         return Err(self.error(
@@ -1080,7 +1308,7 @@ impl<'a> CstAstLowerer<'a> {
                             "module units cannot declare durable state",
                         ));
                     }
-                    items.push(self.parse_state_decl()?);
+                    parts.push_item(self.parse_state_decl()?);
                 } else if self.peek(TokenKind::Trigger) {
                     if !attrs.is_empty() {
                         return Err(self.error(
@@ -1094,10 +1322,10 @@ impl<'a> CstAstLowerer<'a> {
                             "module units cannot declare triggers",
                         ));
                     }
-                    items.push(self.parse_trigger_decl()?);
+                    parts.push_item(self.parse_trigger_decl()?);
                 } else if self.peek(TokenKind::Fn) {
                     self.bump();
-                    items.push(self.parse_fn_loose(
+                    parts.push_item(self.parse_fn_loose(
                         None,
                         FunctionModifiers {
                             kind: FunctionKind::Private,
@@ -1116,7 +1344,7 @@ impl<'a> CstAstLowerer<'a> {
                     }
                     self.bump(); // kotoage / 言挙げ
                     self.bump(); // fn
-                    items.push(self.parse_fn_loose(
+                    parts.push_item(self.parse_fn_loose(
                         None,
                         FunctionModifiers {
                             kind: FunctionKind::Kotoage,
@@ -1135,7 +1363,7 @@ impl<'a> CstAstLowerer<'a> {
                     }
                     self.bump(); // view
                     self.bump(); // fn
-                    items.push(self.parse_fn_loose(
+                    parts.push_item(self.parse_fn_loose(
                         None,
                         FunctionModifiers {
                             kind: FunctionKind::View,
@@ -1153,7 +1381,7 @@ impl<'a> CstAstLowerer<'a> {
                         ));
                     }
                     self.bump();
-                    items.push(self.parse_fn_loose(
+                    parts.push_item(self.parse_fn_loose(
                         Some(String::from("hajimari")),
                         FunctionModifiers {
                             kind: FunctionKind::Hajimari,
@@ -1171,7 +1399,7 @@ impl<'a> CstAstLowerer<'a> {
                         ));
                     }
                     self.bump();
-                    items.push(self.parse_fn_loose(
+                    parts.push_item(self.parse_fn_loose(
                         Some(String::from("kaizen")),
                         FunctionModifiers {
                             kind: FunctionKind::Kaizen,
@@ -1195,7 +1423,7 @@ impl<'a> CstAstLowerer<'a> {
                         ));
                     }
                     let fixture = self.parse_fixture_decl()?;
-                    self.fixtures.push(fixture);
+                    parts.push_fixture(fixture);
                 } else if self.peek_ident_n(0, "koto_test") {
                     if !attrs.is_empty() {
                         return Err(self.error(
@@ -1239,7 +1467,7 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::RBrace)?;
         self.finish_node(node);
         self.syntax_finish(syntax_unit, start);
-        Ok((SourceUnit { kind, name }, items))
+        Ok((SourceUnit { kind, name }, parts))
     }
     fn parse_error_enum_def(&mut self) -> ParseResult<Item> {
         let node = self.begin_node(AstNodeKind::ErrorEnum, self.current_start());
@@ -1323,7 +1551,9 @@ impl<'a> CstAstLowerer<'a> {
         let mut filter: Option<TriggerFilter> = None;
         let mut repeats: Option<TriggerRepeats> = None;
         let mut authority: Option<String> = None;
-        let mut metadata: Vec<TriggerMetadataEntry> = Vec::new();
+        let mut metadata = PendingValues::new(|entry: TriggerMetadataEntry| {
+            crate::ast::drop_expression_iterative(entry.value);
+        });
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let field_tok = self.bump();
             let field_name = match field_tok.kind.clone() {
@@ -1383,7 +1613,7 @@ impl<'a> CstAstLowerer<'a> {
             filter,
             repeats,
             authority,
-            metadata,
+            metadata: metadata.into_inner(),
         }))
     }
     fn parse_trigger_call(&mut self) -> ParseResult<TriggerCall> {
@@ -1537,9 +1767,11 @@ impl<'a> CstAstLowerer<'a> {
         })?;
         Ok(TriggerRepeats::Exactly(count))
     }
-    fn parse_trigger_metadata_block(&mut self) -> ParseResult<Vec<TriggerMetadataEntry>> {
+    fn parse_trigger_metadata_block(&mut self) -> ParseResult<PendingValues<TriggerMetadataEntry>> {
         self.expect(TokenKind::LBrace)?;
-        let mut entries = Vec::new();
+        let mut entries = PendingValues::new(|entry: TriggerMetadataEntry| {
+            crate::ast::drop_expression_iterative(entry.value);
+        });
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let key_tok = self.bump();
             let key = match key_tok.kind {
@@ -1550,9 +1782,12 @@ impl<'a> CstAstLowerer<'a> {
                 }
             };
             self.expect(TokenKind::Colon)?;
-            let value = self.parse_expr()?;
+            let mut value = PendingExpr::new(self.parse_expr()?);
             self.expect(TokenKind::Semicolon)?;
-            entries.push(TriggerMetadataEntry { key, value });
+            entries.push(TriggerMetadataEntry {
+                key,
+                value: value.take(),
+            });
         }
         self.expect(TokenKind::RBrace)?;
         Ok(entries)
@@ -1712,11 +1947,15 @@ impl<'a> CstAstLowerer<'a> {
         }
         let name = self.expect_ident()?;
         self.expect(TokenKind::LBrace)?;
-        let mut actions = Vec::new();
+        let mut actions = PendingValues::new(|action: FixtureAction| {
+            for argument in action.args {
+                crate::ast::drop_expression_iterative(argument);
+            }
+        });
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let action_name = self.expect_ident()?;
             self.expect(TokenKind::LParen)?;
-            let mut args = Vec::new();
+            let mut args = PendingExprs::new(Vec::new());
             if !self.peek(TokenKind::RParen) {
                 loop {
                     args.push(self.parse_expr()?);
@@ -1736,11 +1975,14 @@ impl<'a> CstAstLowerer<'a> {
             }
             actions.push(FixtureAction {
                 name: action_name,
-                args,
+                args: args.into_inner(),
             });
         }
         self.expect(TokenKind::RBrace)?;
-        Ok(FixtureDecl { name, actions })
+        Ok(FixtureDecl {
+            name,
+            actions: actions.into_inner(),
+        })
     }
     fn parse_struct_def(&mut self) -> ParseResult<Item> {
         // struct Name { Type field; ... }
@@ -1828,10 +2070,14 @@ impl<'a> CstAstLowerer<'a> {
             None,
         );
         self.expect(TokenKind::Equal)?;
-        let value = self.parse_expr()?;
+        let mut value = PendingExpr::new(self.parse_expr()?);
         self.expect(TokenKind::Semicolon)?;
         self.finish_node(node);
-        Ok(Item::Const(super::ast::ConstDecl { name, ty, value }))
+        Ok(Item::Const(super::ast::ConstDecl {
+            name,
+            ty,
+            value: value.take(),
+        }))
     }
     fn parse_fn_loose(
         &mut self,
@@ -1999,8 +2245,7 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::LBrace)?;
         let syntax_statements =
             self.syntax_start(SyntaxKind::StatementList, self.previous_end(block_start));
-        let mut statements = Vec::new();
-        let mut tail = None;
+        let mut block = PendingBlock::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let statement_start = self.pos;
             let start = self.tokens[statement_start].range.start;
@@ -2014,7 +2259,7 @@ impl<'a> CstAstLowerer<'a> {
                     };
                     let start = self.tokens[statement_start].range.start;
                     let end = self.previous_end(start);
-                    statements.push(if statement.source_node().is_some() {
+                    block.push_statement(if statement.source_node().is_some() {
                         statement
                     } else {
                         self.source_statement(TextRange::new(start, end), statement)
@@ -2026,7 +2271,7 @@ impl<'a> CstAstLowerer<'a> {
                     let ParsedBlockElement::Tail(expression) = element else {
                         unreachable!("matched tail block element")
                     };
-                    tail = Some(Box::new(expression));
+                    block.set_tail(expression);
                     self.syntax_finish(syntax_statement, start);
                     break;
                 }
@@ -2047,7 +2292,7 @@ impl<'a> CstAstLowerer<'a> {
         self.syntax_finish_at(syntax_statements, self.current_start());
         self.expect(TokenKind::RBrace)?;
         self.syntax_finish(syntax_block, block_start);
-        Ok(Block { statements, tail })
+        Ok(block.into_inner())
     }
     fn parse_block_element(&mut self) -> ParseResult<ParsedBlockElement> {
         if self.peek(TokenKind::Let) || self.peek(TokenKind::Var) {
@@ -2096,7 +2341,7 @@ impl<'a> CstAstLowerer<'a> {
                 ));
             }
             self.expect(TokenKind::Equal)?;
-            let expr = self.parse_expr()?;
+            let mut expr = PendingExpr::new(self.parse_expr()?);
             self.expect(TokenKind::Semicolon)?;
             let range = TextRange::new(statement_start, self.previous_end(statement_start));
             Ok(ParsedBlockElement::Statement(self.finish_owned_statement(
@@ -2106,7 +2351,7 @@ impl<'a> CstAstLowerer<'a> {
                     mutable,
                     pat,
                     ty,
-                    value: expr,
+                    value: expr.take(),
                 },
             )))
         } else if self.peek(TokenKind::Return) {
@@ -2122,9 +2367,11 @@ impl<'a> CstAstLowerer<'a> {
                 self.expect(TokenKind::Semicolon)?;
                 unreachable!("a missing return semicolon always reports an error")
             } else {
-                let expr = self.parse_expr()?;
+                let mut expr = PendingExpr::new(self.parse_expr()?);
                 self.expect(TokenKind::Semicolon)?;
-                Ok(ParsedBlockElement::Statement(Statement::Return(Some(expr))))
+                Ok(ParsedBlockElement::Statement(Statement::Return(Some(
+                    expr.take(),
+                ))))
             }
         } else if self.peek(TokenKind::Break) {
             self.bump();
@@ -2135,7 +2382,7 @@ impl<'a> CstAstLowerer<'a> {
             self.expect(TokenKind::Semicolon)?;
             Ok(ParsedBlockElement::Statement(Statement::Continue))
         } else if self.peek(TokenKind::If) {
-            let expression = self.parse_if_expression()?;
+            let expression = self.parse_if_expression(true)?;
             self.finish_block_expression(expression)
         } else if self.peek(TokenKind::Match) {
             let expression = self.parse_match_expression()?;
@@ -2145,16 +2392,20 @@ impl<'a> CstAstLowerer<'a> {
             let for_start = self.current_start();
             self.expect(TokenKind::For)?;
             if let Some((init, cond, step)) = self.parse_for_range()? {
+                let mut init = PendingStatement::new(init);
+                let mut cond = PendingExpr::new(cond);
+                let mut step = PendingStatement::new(step);
                 let body = self.parse_block()?;
                 Ok(ParsedBlockElement::Statement(Statement::For {
                     line: for_line,
-                    init: Some(Box::new(init)),
-                    cond: Some(cond),
-                    step: Some(Box::new(step)),
+                    init: Some(Box::new(init.take())),
+                    cond: Some(cond.take()),
+                    step: Some(Box::new(step.take())),
                     body,
                 }))
             } else if let Some((owner, k, v_opt, map)) = self.parse_for_each_map(for_start)? {
-                if !map_iteration_has_explicit_bound(&map) {
+                let mut map = PendingExpr::new(map);
+                if !map_iteration_has_explicit_bound(map.as_ref()) {
                     return Err(self.error(
                         self.tokens[self.pos.saturating_sub(1)].clone(),
                         "StateMap iteration requires `.take(N)` or `.range(start, end)` with int literals",
@@ -2168,7 +2419,7 @@ impl<'a> CstAstLowerer<'a> {
                     Statement::ForEachMap {
                         key: k,
                         value: v_opt,
-                        map,
+                        map: map.take(),
                         body,
                     },
                 )))
@@ -2189,7 +2440,8 @@ impl<'a> CstAstLowerer<'a> {
             // Try assignments including compound ops and field/indexed lvalues
             let save = self.pos;
             let syntax_checkpoint = self.syntax_checkpoint();
-            if let Ok(target) = self.try_parse_lvalue_expr()
+            let mut target = self.try_parse_lvalue_expr().ok().map(PendingExpr::new);
+            if let Some(target) = target.as_mut()
                 && (self.peek(TokenKind::Equal)
                     || self.peek(TokenKind::PlusEqual)
                     || self.peek(TokenKind::MinusEqual)
@@ -2198,7 +2450,7 @@ impl<'a> CstAstLowerer<'a> {
                     || self.peek(TokenKind::PercentEqual))
             {
                 let op_tok = self.bump();
-                let rhs = self.parse_expr()?;
+                let mut rhs = PendingExpr::new(self.parse_expr()?);
                 self.expect(TokenKind::Semicolon)?;
                 let op = match op_tok.kind {
                     TokenKind::Equal => AssignOp::Set,
@@ -2211,32 +2463,40 @@ impl<'a> CstAstLowerer<'a> {
                         return Err(self.error(op_tok, "expected one of: =, +=, -=, *=, /=, %="));
                     }
                 };
+                let target = target.take();
                 return Ok(match (target, op) {
                     (Expr::Ident(name), AssignOp::Set) => {
-                        ParsedBlockElement::Statement(Statement::Assign { name, value: rhs })
+                        ParsedBlockElement::Statement(Statement::Assign {
+                            name,
+                            value: rhs.take(),
+                        })
                     }
                     (t, op) => ParsedBlockElement::Statement(Statement::AssignExpr {
                         target: t,
                         op,
-                        value: rhs,
+                        value: rhs.take(),
                     }),
                 });
             }
             // Not an assignment (or not an lvalue); rewind both the token view
             // and syntax events before parsing the expression authoritatively.
+            drop(target.take());
             self.pos = save;
             self.syntax_rollback(syntax_checkpoint);
-            let expr = self.parse_expr()?;
+            let expr = self.parse_statement_expression_candidate()?;
             self.finish_block_expression(expr)
         }
     }
     fn finish_block_expression(&mut self, expression: Expr) -> ParseResult<ParsedBlockElement> {
+        let mut expression = PendingExpr::new(expression);
         if self.peek(TokenKind::Semicolon) {
             self.bump();
-            return Ok(ParsedBlockElement::Statement(Statement::Expr(expression)));
+            let exact =
+                self.guard_expression_depth_at(expression.take(), self.current_delimiter_depth());
+            return Ok(ParsedBlockElement::Statement(Statement::Expr(exact)));
         }
         let missing_else = matches!(
-            expression.kind(),
+            expression.as_ref().kind(),
             Expr::If {
                 else_branch: None,
                 ..
@@ -2247,17 +2507,24 @@ impl<'a> CstAstLowerer<'a> {
         );
         if self.peek(TokenKind::RBrace)
             && !missing_else
-            && block_expression_flow(&expression) != BlockExpressionFlow::Unit
+            && block_expression_flow(expression.as_ref()) != BlockExpressionFlow::Unit
         {
-            return Ok(ParsedBlockElement::Tail(expression));
+            let exact =
+                self.guard_expression_depth_at(expression.take(), self.current_delimiter_depth());
+            return Ok(ParsedBlockElement::Tail(exact));
         }
-        if matches!(expression.kind(), Expr::If { .. } | Expr::IfLet { .. }) {
+        if matches!(
+            expression.as_ref().kind(),
+            Expr::If { .. } | Expr::IfLet { .. }
+        ) {
             return Ok(ParsedBlockElement::Statement(
-                self.if_expression_statement(expression),
+                self.if_expression_statement(expression.take()),
             ));
         }
-        if matches!(expression.kind(), Expr::Match { .. }) {
-            return Ok(ParsedBlockElement::Statement(Statement::Expr(expression)));
+        if matches!(expression.as_ref().kind(), Expr::Match { .. }) {
+            return Ok(ParsedBlockElement::Statement(Statement::Expr(
+                expression.take(),
+            )));
         }
         let token = self
             .tokens
@@ -2293,68 +2560,173 @@ impl<'a> CstAstLowerer<'a> {
         }
         statement
     }
-    fn parse_if_expression(&mut self) -> ParseResult<Expr> {
-        self.enter_recursive_expression()?;
-        let result = (|| {
-            let start = self.current_start();
-            let owner = self.begin_node(AstNodeKind::Expression, start);
-            let expression = self.with_syntax(SyntaxKind::IfExpr, start, |parser| {
-                parser.parse_if_expression_inner(owner)
-            })?;
-            let range = TextRange::new(start, self.previous_end(start));
-            Ok(self.finish_owned_expression(owner, AstNodeKind::Expression, range, expression))
-        })();
-        self.leave_recursive_expression();
-        result
+    fn parse_if_expression(&mut self, statement_context: bool) -> ParseResult<Expr> {
+        // Delimiter-free `else if` chains may legally reach the V1 depth
+        // boundary. Collection and reconstruction use separate call frames as
+        // well as explicit heap stacks so parsing a condition does not retain
+        // all of the reconstruction temporaries on a small editor stack.
+        let (frames, terminal_else) = self.parse_if_expression_frames(statement_context)?;
+        Ok(self.finish_if_expression_frames(frames, terminal_else, statement_context))
     }
-    fn parse_if_expression_inner(&mut self, owner: NodeId) -> ParseResult<Expr> {
-        self.expect(TokenKind::If)?;
-        let (pattern, value, condition) = if self.peek(TokenKind::Let) {
-            self.bump();
-            let pattern = self.parse_sum_pattern(owner, 0)?;
-            self.expect(TokenKind::Equal)?;
-            let value = self.parse_expr_before_block()?;
-            (Some(pattern), Some(value), None)
-        } else {
-            (None, None, Some(self.parse_expr_before_block()?))
-        };
-        let then_branch = self.parse_block()?;
-        let else_branch = if self.peek(TokenKind::Else) {
-            self.bump();
-            if self.peek(TokenKind::If) {
-                let nested = self.parse_if_expression()?;
-                if block_expression_flow(&nested) != BlockExpressionFlow::Unit {
-                    Some(Block {
+    fn parse_if_expression_frames(
+        &mut self,
+        statement_context: bool,
+    ) -> ParseResult<(Vec<PendingIfFrame>, Option<PendingBlock>)> {
+        let mut frames = Vec::new();
+        let mut open_syntax = Vec::new();
+        let terminal_else = (|| -> ParseResult<Option<PendingBlock>> {
+            loop {
+                self.enter_recursive_expression()?;
+                let start = self.current_start();
+                let syntax = self.syntax_start(SyntaxKind::IfExpr, start);
+                open_syntax.push((syntax, start));
+                let owner = self.begin_node(AstNodeKind::Expression, start);
+                self.expect(TokenKind::If)?;
+                if statement_context {
+                    self.statement_if_condition_depths
+                        .push(self.current_delimiter_depth());
+                }
+                let parsed_condition = (|| -> ParseResult<_> {
+                    if self.peek(TokenKind::Let) {
+                        self.bump();
+                        let pattern = self.parse_sum_pattern(owner, 0)?;
+                        self.expect(TokenKind::Equal)?;
+                        let value = PendingExpr::new(self.parse_expr_before_block()?);
+                        Ok((Some(pattern), Some(value), None))
+                    } else {
+                        Ok((
+                            None,
+                            None,
+                            Some(PendingExpr::new(self.parse_expr_before_block()?)),
+                        ))
+                    }
+                })();
+                if statement_context {
+                    self.statement_if_condition_depths
+                        .pop()
+                        .expect("statement-if condition depth must be balanced");
+                }
+                let (pattern, value, condition) = parsed_condition?;
+                let then_branch = PendingBlock::from_block(self.parse_block()?);
+                frames.push(PendingIfFrame {
+                    start,
+                    owner,
+                    syntax,
+                    pattern,
+                    value,
+                    condition,
+                    then_branch,
+                });
+                if !self.peek(TokenKind::Else) {
+                    break Ok(None);
+                }
+                self.bump();
+                if self.peek(TokenKind::If) {
+                    continue;
+                }
+                break self.parse_block().map(PendingBlock::from_block).map(Some);
+            }
+        })();
+        match terminal_else {
+            Ok(else_branch) => {
+                debug_assert_eq!(frames.len(), open_syntax.len());
+                Ok((frames, else_branch))
+            }
+            Err(error) => {
+                let entered = open_syntax.len();
+                while let Some((syntax, start)) = open_syntax.pop() {
+                    self.syntax_finish(syntax, start);
+                }
+                for _ in 0..entered {
+                    self.leave_recursive_expression();
+                }
+                Err(error)
+            }
+        }
+    }
+    fn finish_if_expression_frames(
+        &mut self,
+        mut frames: Vec<PendingIfFrame>,
+        mut terminal_else: Option<PendingBlock>,
+        statement_context: bool,
+    ) -> Expr {
+        let mut entered = frames.len();
+        let mut nested: Option<PendingExpr> = None;
+        while let Some(frame) = frames.pop() {
+            let PendingIfFrame {
+                start,
+                owner,
+                syntax,
+                pattern,
+                mut value,
+                mut condition,
+                then_branch,
+            } = frame;
+            let else_branch = if let Some(mut nested) = nested.take() {
+                if block_expression_flow(nested.as_ref()) != BlockExpressionFlow::Unit {
+                    Some(PendingBlock::from_block(Block {
                         statements: Vec::new(),
-                        tail: Some(Box::new(nested)),
-                    })
+                        tail: Some(Box::new(nested.take())),
+                    }))
                 } else {
-                    let statement = self.if_expression_statement(nested);
-                    Some(Block {
+                    let statement = self.if_expression_statement(nested.take());
+                    Some(PendingBlock::from_block(Block {
                         statements: vec![statement],
                         tail: None,
-                    })
+                    }))
                 }
             } else {
-                Some(self.parse_block()?)
-            }
-        } else {
-            None
-        };
-        if let Some(pattern) = pattern {
-            Ok(Expr::IfLet {
-                pattern,
-                value: Box::new(value.expect("if let value")),
-                then_branch,
-                else_branch,
-            })
-        } else {
-            Ok(Expr::If {
-                condition: Box::new(condition.expect("if condition")),
-                then_branch,
-                else_branch,
-            })
+                terminal_else.take()
+            };
+            let expression = if let Some(pattern) = pattern {
+                Expr::IfLet {
+                    pattern,
+                    value: Box::new(value.as_mut().expect("if let value").take()),
+                    then_branch: then_branch.into_inner(),
+                    else_branch: else_branch.map(PendingBlock::into_inner),
+                }
+            } else {
+                Expr::If {
+                    condition: Box::new(condition.as_mut().expect("if condition").take()),
+                    then_branch: then_branch.into_inner(),
+                    else_branch: else_branch.map(PendingBlock::into_inner),
+                }
+            };
+            self.syntax_finish(syntax, start);
+            let range = TextRange::new(start, self.previous_end(start));
+            let recursive_depth = self
+                .recursive_expression_entry_depths
+                .iter()
+                .filter(|depth| **depth >= self.current_delimiter_depth())
+                .count();
+            let statement_condition_adjustment = self
+                .statement_if_condition_depths
+                .iter()
+                .filter(|depth| **depth >= self.current_delimiter_depth())
+                .count();
+            let root_depth = self
+                .current_delimiter_depth()
+                .saturating_add(recursive_depth)
+                .saturating_sub(
+                    usize::from(statement_context)
+                        .saturating_add(statement_condition_adjustment)
+                        .saturating_add(1),
+                );
+            let expression = self.finish_owned_expression_at_depth(
+                owner,
+                AstNodeKind::Expression,
+                range,
+                expression,
+                root_depth,
+            );
+            self.leave_recursive_expression();
+            entered = entered.saturating_sub(1);
+            nested = Some(PendingExpr::new(expression));
         }
+        debug_assert_eq!(entered, 0);
+        nested
+            .expect("one if-expression parse must produce one frame")
+            .into_inner()
     }
     fn parse_match_expression(&mut self) -> ParseResult<Expr> {
         self.enter_recursive_expression()?;
@@ -2372,9 +2744,11 @@ impl<'a> CstAstLowerer<'a> {
     }
     fn parse_match_expression_inner(&mut self, owner: NodeId) -> ParseResult<Expr> {
         self.expect(TokenKind::Match)?;
-        let value = self.parse_expr_before_block()?;
+        let mut value = PendingExpr::new(self.parse_expr_before_block()?);
         self.expect(TokenKind::LBrace)?;
-        let mut arms = Vec::new();
+        let mut arms = PendingValues::new(|arm: MatchArm| {
+            crate::ast::drop_block_iterative(arm.body);
+        });
         let mut binding_ordinal = 0_usize;
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let arm_start = self.current_start();
@@ -2413,8 +2787,8 @@ impl<'a> CstAstLowerer<'a> {
         }
         self.expect(TokenKind::RBrace)?;
         Ok(Expr::Match {
-            value: Box::new(value),
-            arms,
+            value: Box::new(value.take()),
+            arms: arms.into_inner(),
         })
     }
     fn parse_sum_pattern(&mut self, owner: NodeId, ordinal: usize) -> ParseResult<SumPattern> {
@@ -2544,9 +2918,9 @@ impl<'a> CstAstLowerer<'a> {
             self.bump(); // in
             self.bump(); // range
             self.expect(TokenKind::LParen)?;
-            let end = self.parse_expr()?;
+            let mut end = PendingExpr::new(self.parse_expr()?);
             self.expect(TokenKind::RParen)?;
-            if !matches!(end.kind(), Expr::IntLiteral(value) if !value.is_negative()) {
+            if !matches!(end.as_ref().kind(), Expr::IntLiteral(value) if !value.is_negative()) {
                 return Err(self.coded_error(
                     self.tokens[self.pos.saturating_sub(1)].clone(),
                     "E_UNBOUNDED_LOOP",
@@ -2577,7 +2951,7 @@ impl<'a> CstAstLowerer<'a> {
                 Expr::Binary {
                     op: BinaryOp::Lt,
                     left: Box::new(left),
-                    right: Box::new(end),
+                    right: Box::new(end.take()),
                 },
             );
             let step = self.inc_statement(var.clone(), range);
@@ -2607,31 +2981,45 @@ impl<'a> CstAstLowerer<'a> {
         self.allow_struct_literals = previous;
         result
     }
+    fn parse_statement_expression_candidate(&mut self) -> ParseResult<Expr> {
+        let previous = std::mem::replace(&mut self.allow_statement_if_expression, true);
+        let result = self.parse_expr();
+        self.allow_statement_if_expression = previous;
+        result
+    }
     fn parse_conditional(&mut self) -> ParseResult<Expr> {
         enum Frame {
             Then {
                 start: u32,
-                condition: Expr,
+                condition: PendingExpr,
             },
             Else {
                 start: u32,
-                condition: Expr,
-                then_expr: Expr,
+                condition: PendingExpr,
+                then_expr: PendingExpr,
             },
         }
         let mut frames = Vec::new();
-        let mut current = self.parse_logical_or()?;
+        let mut current = PendingExpr::new(self.parse_logical_or()?);
         loop {
             if self.peek(TokenKind::Question) && self.question_starts_ternary() {
-                self.bump();
+                let question = self.bump();
+                let conditional_depth = self
+                    .current_delimiter_depth()
+                    .saturating_add(frames.len())
+                    .saturating_add(1);
+                if conditional_depth > self.max_nesting {
+                    return Err(self.nesting_error(question.range));
+                }
                 let start = current
+                    .as_ref()
                     .source()
                     .map_or_else(|| self.current_start(), |source| source.range.start);
                 frames.push(Frame::Then {
                     start,
                     condition: current,
                 });
-                current = self.parse_logical_or()?;
+                current = PendingExpr::new(self.parse_logical_or()?);
                 continue;
             }
             match frames.pop() {
@@ -2642,71 +3030,74 @@ impl<'a> CstAstLowerer<'a> {
                         condition,
                         then_expr: current,
                     });
-                    current = self.parse_logical_or()?;
+                    current = PendingExpr::new(self.parse_logical_or()?);
                 }
                 Some(Frame::Else {
                     start,
-                    condition,
-                    then_expr,
+                    mut condition,
+                    mut then_expr,
                 }) => {
-                    current = self.source_expression_from(
+                    let expression = self.source_expression_from(
                         start,
                         Expr::Conditional {
-                            cond: Box::new(condition),
-                            then_expr: Box::new(then_expr),
-                            else_expr: Box::new(current),
+                            cond: Box::new(condition.take()),
+                            then_expr: Box::new(then_expr.take()),
+                            else_expr: Box::new(current.take()),
                         },
                     );
+                    current.replace(expression);
                 }
-                None => return Ok(current),
+                None => return Ok(current.into_inner()),
             }
         }
     }
     fn parse_logical_or(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
-        let mut expr = self.parse_logical_and()?;
+        let mut expr = PendingExpr::new(self.parse_logical_and()?);
         loop {
             if self.peek(TokenKind::OrOr) {
                 self.bump();
                 let rhs = self.parse_logical_and()?;
-                expr = self.source_expression_from(
+                let expression = self.source_expression_from(
                     start,
                     Expr::Binary {
                         op: BinaryOp::Or,
-                        left: Box::new(expr),
+                        left: Box::new(expr.take()),
                         right: Box::new(rhs),
                     },
                 );
+                expr.replace(expression);
             } else {
                 break;
             }
         }
-        Ok(expr)
+        Ok(expr.into_inner())
     }
     fn parse_logical_and(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
-        let mut expr = self.parse_comparison()?;
+        let mut expr = PendingExpr::new(self.parse_comparison()?);
         loop {
             if self.peek(TokenKind::AndAnd) {
                 self.bump();
                 let rhs = self.parse_comparison()?;
-                expr = self.source_expression_from(
+                let expression = self.source_expression_from(
                     start,
                     Expr::Binary {
                         op: BinaryOp::And,
-                        left: Box::new(expr),
+                        left: Box::new(expr.take()),
                         right: Box::new(rhs),
                     },
                 );
+                expr.replace(expression);
             } else {
                 break;
             }
         }
-        Ok(expr)
+        Ok(expr.into_inner())
     }
     fn parse_comparison(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
-        let mut expr = self.parse_term()?;
+        let mut expr = PendingExpr::new(self.parse_term()?);
         loop {
             let op = if self.peek(TokenKind::EqualEqual) {
                 self.bump();
@@ -2731,23 +3122,24 @@ impl<'a> CstAstLowerer<'a> {
             };
             if let Some(op) = op {
                 let rhs = self.parse_term()?;
-                expr = self.source_expression_from(
+                let expression = self.source_expression_from(
                     start,
                     Expr::Binary {
                         op,
-                        left: Box::new(expr),
+                        left: Box::new(expr.take()),
                         right: Box::new(rhs),
                     },
                 );
+                expr.replace(expression);
             } else {
                 break;
             }
         }
-        Ok(expr)
+        Ok(expr.into_inner())
     }
     fn parse_term(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
-        let mut expr = self.parse_factor()?;
+        let mut expr = PendingExpr::new(self.parse_factor()?);
         loop {
             let op = if self.peek(TokenKind::Plus) {
                 self.bump();
@@ -2760,23 +3152,24 @@ impl<'a> CstAstLowerer<'a> {
             };
             if let Some(op) = op {
                 let rhs = self.parse_factor()?;
-                expr = self.source_expression_from(
+                let expression = self.source_expression_from(
                     start,
                     Expr::Binary {
                         op,
-                        left: Box::new(expr),
+                        left: Box::new(expr.take()),
                         right: Box::new(rhs),
                     },
                 );
+                expr.replace(expression);
             } else {
                 break;
             }
         }
-        Ok(expr)
+        Ok(expr.into_inner())
     }
     fn parse_factor(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
-        let mut expr = self.parse_unary()?;
+        let mut expr = PendingExpr::new(self.parse_unary()?);
         loop {
             let op = if self.peek(TokenKind::Star) {
                 self.bump();
@@ -2792,19 +3185,20 @@ impl<'a> CstAstLowerer<'a> {
             };
             if let Some(op) = op {
                 let rhs = self.parse_unary()?;
-                expr = self.source_expression_from(
+                let expression = self.source_expression_from(
                     start,
                     Expr::Binary {
                         op,
-                        left: Box::new(expr),
+                        left: Box::new(expr.take()),
                         right: Box::new(rhs),
                     },
                 );
+                expr.replace(expression);
             } else {
                 break;
             }
         }
-        Ok(expr)
+        Ok(expr.into_inner())
     }
     fn parse_unary(&mut self) -> ParseResult<Expr> {
         let mut prefixes: Vec<(UnaryOp, Token)> = Vec::new();
@@ -2884,7 +3278,8 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(expr)
     }
-    fn parse_postfix(&mut self, mut expr: Expr, expression_start: u32) -> ParseResult<Expr> {
+    fn parse_postfix(&mut self, expr: Expr, expression_start: u32) -> ParseResult<Expr> {
+        let mut expr = PendingExpr::new(expr);
         loop {
             if self.peek(TokenKind::Dot) {
                 self.bump();
@@ -2924,15 +3319,16 @@ impl<'a> CstAstLowerer<'a> {
                     self.bump();
                     let parameter_names = self.call_parameter_names(&field, true);
                     let ParsedCallArguments {
-                        mut args,
+                        args,
                         argument_names,
                         ..
                     } = self.parse_call_arguments(parameter_names.as_deref())?;
                     self.expect(TokenKind::RParen)?;
                     // Prepend the receiver as the first argument
                     let mut full_args = Vec::with_capacity(args.len() + 1);
-                    full_args.push(expr);
-                    full_args.append(&mut args);
+                    full_args.push(expr.take());
+                    let mut parsed_args = args.into_inner();
+                    full_args.append(&mut parsed_args);
                     if let Some(token) = field_token.as_ref() {
                         let call_end = self.previous_end(token.range.end);
                         let (node, source) = self.record_call(
@@ -2945,7 +3341,7 @@ impl<'a> CstAstLowerer<'a> {
                             "get" => STATE_MAP_GET_INTRINSIC.to_owned(),
                             _ => field,
                         };
-                        expr = self.sourced_expression(
+                        let expression = self.sourced_expression(
                             node,
                             source,
                             Expr::Call {
@@ -2955,13 +3351,14 @@ impl<'a> CstAstLowerer<'a> {
                                 implicit_receiver: true,
                             },
                         );
+                        expr.replace(expression);
                         continue;
                     }
                     let call_name = match field.as_str() {
                         "get" => STATE_MAP_GET_INTRINSIC.to_owned(),
                         _ => field,
                     };
-                    expr = self.source_expression_from(
+                    let expression = self.source_expression_from(
                         expression_start,
                         Expr::Call {
                             name: call_name,
@@ -2970,18 +3367,20 @@ impl<'a> CstAstLowerer<'a> {
                             implicit_receiver: true,
                         },
                     );
+                    expr.replace(expression);
                 } else {
-                    expr = self.source_expression_from(
+                    let expression = self.source_expression_from(
                         expression_start,
                         Expr::Member {
-                            object: Box::new(expr),
+                            object: Box::new(expr.take()),
                             field,
                         },
                     );
+                    expr.replace(expression);
                 }
             } else if self.peek(TokenKind::LBracket) {
                 self.bump();
-                let idx = self.parse_expr()?;
+                let mut idx = PendingExpr::new(self.parse_expr()?);
                 self.expect(TokenKind::RBracket)?;
                 let range = TextRange::new(expression_start, self.previous_end(expression_start));
                 let node = self.facts.source_map.allocate_owned(
@@ -2989,23 +3388,27 @@ impl<'a> CstAstLowerer<'a> {
                     range,
                     self.current_function,
                 );
-                expr = self.sourced_expression(
+                let expression = self.sourced_expression(
                     node,
                     SourceRange::new(self.facts.source_map.source(), range),
                     Expr::Index {
-                        target: Box::new(expr),
-                        index: Box::new(idx),
+                        target: Box::new(expr.take()),
+                        index: Box::new(idx.take()),
                     },
                 );
+                expr.replace(expression);
             } else if self.peek(TokenKind::Question) && !self.question_starts_ternary() {
                 self.bump();
-                expr =
-                    self.source_expression_from(expression_start, Expr::Propagate(Box::new(expr)));
+                let expression = self.source_expression_from(
+                    expression_start,
+                    Expr::Propagate(Box::new(expr.take())),
+                );
+                expr.replace(expression);
             } else {
                 break;
             }
         }
-        Ok(expr)
+        Ok(expr.into_inner())
     }
     fn parse_primary(&mut self) -> ParseResult<Expr> {
         let tok = self.bump();
@@ -3039,7 +3442,11 @@ impl<'a> CstAstLowerer<'a> {
             TokenKind::Ident(name) => self.parse_named_primary(tok.clone(), name.clone())?,
             TokenKind::If => {
                 self.pos = self.pos.saturating_sub(1);
-                self.parse_if_expression()?
+                let statement_context =
+                    std::mem::replace(&mut self.allow_statement_if_expression, false);
+                let parsed = self.parse_if_expression(statement_context);
+                self.allow_statement_if_expression = statement_context;
+                parsed?
             }
             TokenKind::Match => {
                 self.pos = self.pos.saturating_sub(1);
@@ -3091,7 +3498,7 @@ impl<'a> CstAstLowerer<'a> {
             self.bump();
             return Ok(Expr::List(Vec::new()));
         }
-        let first = self.parse_expr()?;
+        let mut first = PendingExpr::new(self.parse_expr()?);
         if self.peek(TokenKind::For) {
             self.bump();
             let owner = self.begin_node(AstNodeKind::ListComprehension, opening.range.start);
@@ -3104,20 +3511,22 @@ impl<'a> CstAstLowerer<'a> {
                 BindingFactKind::Comprehension,
             );
             self.expect(TokenKind::In)?;
-            let source = self.parse_expr()?;
-            let condition = if self.peek(TokenKind::If) {
+            let mut source = PendingExpr::new(self.parse_expr()?);
+            let mut condition = if self.peek(TokenKind::If) {
                 self.bump();
-                Some(Box::new(self.parse_expr()?))
+                Some(PendingExpr::new(self.parse_expr()?))
             } else {
                 None
             };
             self.expect(TokenKind::RBracket)?;
             let range = TextRange::new(opening.range.start, self.previous_end(opening.range.end));
             let expression = Expr::ListComprehension {
-                expression: Box::new(first),
+                expression: Box::new(first.take()),
                 item,
-                source: Box::new(source),
-                condition,
+                source: Box::new(source.take()),
+                condition: condition
+                    .as_mut()
+                    .map(|condition| Box::new(condition.take())),
             };
             return Ok(self.finish_owned_expression(
                 owner,
@@ -3126,7 +3535,7 @@ impl<'a> CstAstLowerer<'a> {
                 expression,
             ));
         }
-        let mut elements = vec![first];
+        let mut elements = PendingExprs::new(vec![first.take()]);
         while self.peek(TokenKind::Comma) {
             self.bump();
             if self.peek(TokenKind::RBracket) {
@@ -3135,7 +3544,7 @@ impl<'a> CstAstLowerer<'a> {
             elements.push(self.parse_expr()?);
         }
         self.expect(TokenKind::RBracket)?;
-        Ok(Expr::List(elements))
+        Ok(Expr::List(elements.into_inner()))
     }
     fn parse_parenthesized(&mut self, opening: Token) -> ParseResult<Expr> {
         let group_start = opening.range.start;
@@ -3167,27 +3576,28 @@ impl<'a> CstAstLowerer<'a> {
         }
         let opening_count = openings.len();
         let mut represented_parentheses = 0_usize;
-        let mut expression = self.parse_expr()?;
+        let mut expression = PendingExpr::new(self.parse_expr()?);
         for _ in openings.iter().rev() {
             if self.peek(TokenKind::Comma) {
-                let mut elements = vec![expression];
+                let mut elements = PendingExprs::new(vec![expression.take()]);
                 while self.peek(TokenKind::Comma) {
                     self.bump();
                     elements.push(self.parse_expr()?);
                 }
-                expression = Expr::Tuple(elements);
+                expression.replace(Expr::Tuple(elements.into_inner()));
                 represented_parentheses = represented_parentheses.saturating_add(1);
             }
             self.expect(TokenKind::RParen)?;
         }
         let range = TextRange::new(group_start, self.previous_end(group_start));
         let expression = if expression
+            .as_ref()
             .source()
             .is_some_and(|source| source.range == range)
         {
-            expression
+            expression.take()
         } else {
-            self.source_expression(AstNodeKind::Expression, range, expression)
+            self.source_expression(AstNodeKind::Expression, range, expression.take())
         };
         Ok(self.add_expression_syntax_depth(
             expression,
@@ -3310,7 +3720,10 @@ impl<'a> CstAstLowerer<'a> {
             let result = (|| -> ParseResult<Expr> {
                 let fields = self.parse_struct_literal_fields()?;
                 self.expect(TokenKind::RBrace)?;
-                Ok(Expr::StructLiteral { name, fields })
+                Ok(Expr::StructLiteral {
+                    name,
+                    fields: fields.into_inner(),
+                })
             })();
             self.syntax_finish(syntax_literal, start);
             result
@@ -3344,7 +3757,7 @@ impl<'a> CstAstLowerer<'a> {
                 source,
                 Expr::Call {
                     name,
-                    args,
+                    args: args.into_inner(),
                     argument_names,
                     implicit_receiver: false,
                 },
@@ -3362,7 +3775,9 @@ impl<'a> CstAstLowerer<'a> {
     }
     fn parse_json_object_inner(&mut self) -> ParseResult<Expr> {
         self.expect(TokenKind::LBrace)?;
-        let mut entries = Vec::new();
+        let mut entries = PendingValues::new(|entry: crate::ast::JsonObjectEntry| {
+            crate::ast::drop_expression_iterative(entry.value);
+        });
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let entry_start = self.current_start();
             let entry = self.with_syntax(SyntaxKind::JsonObjectEntry, entry_start, |this| {
@@ -3390,19 +3805,14 @@ impl<'a> CstAstLowerer<'a> {
                     value,
                 })
             })?;
-            entries.push(crate::ast::JsonObjectEntry {
-                key: entry.key,
-                key_spelling: entry.key_spelling,
-                key_range: entry.key_range,
-                value: entry.value,
-            });
+            entries.push(entry);
             if !self.peek(TokenKind::Comma) {
                 break;
             }
             self.bump();
         }
         self.expect(TokenKind::RBrace)?;
-        Ok(Expr::JsonObject(entries))
+        Ok(Expr::JsonObject(entries.into_inner()))
     }
     fn parse_json_array(&mut self, start: u32) -> ParseResult<Expr> {
         self.with_syntax(
@@ -3413,7 +3823,7 @@ impl<'a> CstAstLowerer<'a> {
     }
     fn parse_json_array_inner(&mut self) -> ParseResult<Expr> {
         self.expect(TokenKind::LBracket)?;
-        let mut elements = Vec::new();
+        let mut elements = PendingExprs::new(Vec::new());
         while !self.peek(TokenKind::RBracket) && !self.peek(TokenKind::EOF) {
             elements.push(self.parse_expr()?);
             if !self.peek(TokenKind::Comma) {
@@ -3422,7 +3832,7 @@ impl<'a> CstAstLowerer<'a> {
             self.bump();
         }
         self.expect(TokenKind::RBracket)?;
-        Ok(Expr::JsonArray(elements))
+        Ok(Expr::JsonArray(elements.into_inner()))
     }
     fn call_parameter_names(&self, name: &str, implicit_receiver: bool) -> Option<Vec<String>> {
         if !implicit_receiver {
@@ -3487,7 +3897,7 @@ impl<'a> CstAstLowerer<'a> {
         &mut self,
         parameter_names: Option<&[String]>,
     ) -> ParseResult<ParsedCallArguments> {
-        let mut args = Vec::new();
+        let mut args = PendingExprs::new(Vec::new());
         let mut names = Vec::new();
         let mut ranges: Vec<TextRange> = Vec::new();
         let mut named_mode = None;
@@ -3625,8 +4035,10 @@ impl<'a> CstAstLowerer<'a> {
             _ => None,
         }
     }
-    fn parse_struct_literal_fields(&mut self) -> ParseResult<Vec<StructLiteralField>> {
-        let mut fields = Vec::<StructLiteralField>::new();
+    fn parse_struct_literal_fields(&mut self) -> ParseResult<PendingValues<StructLiteralField>> {
+        let mut fields = PendingValues::new(|field: StructLiteralField| {
+            crate::ast::drop_expression_iterative(field.value);
+        });
         while !self.peek(TokenKind::RBrace) {
             let field_start = self.current_start();
             let field = self.with_syntax(SyntaxKind::StructLiteralField, field_start, |this| {
@@ -3791,7 +4203,17 @@ impl<'a> CstAstLowerer<'a> {
                 }
                 self.record_type_use(base.clone(), base_token.range);
                 if self.peek(TokenKind::Less) {
-                    self.bump();
+                    let opening = self.bump();
+                    let generic_depth = frames
+                        .iter()
+                        .filter(|frame| matches!(frame, Frame::Generic { .. }))
+                        .count()
+                        .saturating_add(1);
+                    if self.current_delimiter_depth().saturating_add(generic_depth)
+                        > self.max_nesting
+                    {
+                        return Err(self.nesting_error(opening.range));
+                    }
                     if self.peek(TokenKind::Greater) {
                         self.bump();
                         let range = TextRange::new(
@@ -3887,11 +4309,11 @@ impl<'a> CstAstLowerer<'a> {
             name_token.range,
             self.current_function,
         );
-        let mut expr = self.sourced_expression(
+        let mut expr = PendingExpr::new(self.sourced_expression(
             node,
             SourceRange::new(self.facts.source_map.source(), name_token.range),
             Expr::Ident(name),
-        );
+        ));
         loop {
             if self.peek(TokenKind::Dot) {
                 self.bump();
@@ -3919,17 +4341,18 @@ impl<'a> CstAstLowerer<'a> {
                     range,
                     self.current_function,
                 );
-                expr = self.sourced_expression(
+                let expression = self.sourced_expression(
                     node,
                     SourceRange::new(self.facts.source_map.source(), range),
                     Expr::Member {
-                        object: Box::new(expr),
+                        object: Box::new(expr.take()),
                         field,
                     },
                 );
+                expr.replace(expression);
             } else if self.peek(TokenKind::LBracket) {
                 self.bump();
-                let idx = self.parse_expr()?;
+                let mut idx = PendingExpr::new(self.parse_expr()?);
                 self.expect(TokenKind::RBracket)?;
                 let range = TextRange::new(expression_start, self.previous_end(expression_start));
                 let node = self.facts.source_map.allocate_owned(
@@ -3937,19 +4360,20 @@ impl<'a> CstAstLowerer<'a> {
                     range,
                     self.current_function,
                 );
-                expr = self.sourced_expression(
+                let expression = self.sourced_expression(
                     node,
                     SourceRange::new(self.facts.source_map.source(), range),
                     Expr::Index {
-                        target: Box::new(expr),
-                        index: Box::new(idx),
+                        target: Box::new(expr.take()),
+                        index: Box::new(idx.take()),
                     },
                 );
+                expr.replace(expression);
             } else {
                 break;
             }
         }
-        Ok(expr)
+        Ok(expr.into_inner())
     }
     fn parse_for_each_map(
         &mut self,
@@ -4285,9 +4709,9 @@ impl<'a> CstAstLowerer<'a> {
             .tokens
             .get(statement_start)
             .map_or(usize::MAX, |token| token.column);
-        let mut delimiter_depth = 0_usize;
+        let mut delimiter_stack = Vec::new();
         while let Some(token) = self.tokens.get(self.pos) {
-            if delimiter_depth == 0 {
+            if delimiter_stack.is_empty() {
                 if matches!(&token.kind, TokenKind::RBrace | TokenKind::EOF) {
                     return;
                 }
@@ -4298,14 +4722,9 @@ impl<'a> CstAstLowerer<'a> {
                     return;
                 }
             }
+            update_delimiter_stack(&mut delimiter_stack, &token.kind);
             match &token.kind {
-                TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
-                    delimiter_depth = delimiter_depth.saturating_add(1);
-                }
-                TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace => {
-                    delimiter_depth = delimiter_depth.saturating_sub(1);
-                }
-                TokenKind::Semicolon if delimiter_depth == 0 => {
+                TokenKind::Semicolon if delimiter_stack.is_empty() => {
                     self.pos = self.pos.saturating_add(1);
                     return;
                 }
@@ -4419,79 +4838,180 @@ fn combine_expression_branch_flows(
         BlockExpressionFlow::Diverges
     }
 }
-fn block_flow(block: &Block) -> BlockExpressionFlow {
-    if block.statements.iter().any(statement_diverges) {
-        return BlockExpressionFlow::Diverges;
-    }
-    block
-        .tail
-        .as_deref()
-        .map_or(BlockExpressionFlow::Unit, block_expression_flow)
-}
-fn statement_diverges(statement: &Statement) -> bool {
-    match statement.kind() {
-        Statement::Return(_) | Statement::Break | Statement::Continue => true,
-        Statement::If {
-            then_branch,
-            else_branch: Some(else_branch),
-            ..
-        }
-        | Statement::IfLet {
-            then_branch,
-            else_branch: Some(else_branch),
-            ..
-        } => {
-            block_flow(then_branch) == BlockExpressionFlow::Diverges
-                && block_flow(else_branch) == BlockExpressionFlow::Diverges
-        }
-        Statement::Expr(expression)
-        | Statement::Let {
-            value: expression, ..
-        }
-        | Statement::Assign {
-            value: expression, ..
-        } => block_expression_flow(expression) == BlockExpressionFlow::Diverges,
-        Statement::AssignExpr { target, value, .. } => {
-            block_expression_flow(target) == BlockExpressionFlow::Diverges
-                || block_expression_flow(value) == BlockExpressionFlow::Diverges
-        }
-        Statement::Source { .. } | Statement::Resolved { .. } => {
-            unreachable!("kind() strips provenance wrappers")
-        }
-        Statement::If {
-            else_branch: None, ..
-        }
-        | Statement::IfLet {
-            else_branch: None, ..
-        }
-        | Statement::While { .. }
-        | Statement::For { .. }
-        | Statement::ForEachMap { .. } => false,
-    }
-}
 fn block_expression_flow(expression: &Expr) -> BlockExpressionFlow {
-    match expression.kind() {
-        Expr::If {
-            then_branch,
-            else_branch: Some(else_branch),
-            ..
-        }
-        | Expr::IfLet {
-            then_branch,
-            else_branch: Some(else_branch),
-            ..
-        } => combine_expression_branch_flows([block_flow(then_branch), block_flow(else_branch)]),
-        Expr::Match { arms, .. } => {
-            combine_expression_branch_flows(arms.iter().map(|arm| block_flow(&arm.body)))
-        }
-        Expr::If {
-            else_branch: None, ..
-        }
-        | Expr::IfLet {
-            else_branch: None, ..
-        } => BlockExpressionFlow::Unit,
-        _ => BlockExpressionFlow::Value,
+    enum Pending<'a> {
+        Expr(&'a Expr),
+        Block(&'a Block),
+        Statement(&'a Statement),
+        FinishBranches(usize),
+        FinishBlock { statements: usize, has_tail: bool },
+        FinishIfStatement,
+        FinishExpressionStatement,
+        FinishAssignExpression,
     }
+
+    let mut pending = vec![Pending::Expr(expression)];
+    let mut results = Vec::new();
+    while let Some(task) = pending.pop() {
+        match task {
+            Pending::Expr(expression) => match expression {
+                Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
+                    pending.push(Pending::Expr(expression));
+                }
+                Expr::If {
+                    then_branch,
+                    else_branch: Some(else_branch),
+                    ..
+                }
+                | Expr::IfLet {
+                    then_branch,
+                    else_branch: Some(else_branch),
+                    ..
+                } => {
+                    pending.push(Pending::FinishBranches(2));
+                    pending.push(Pending::Block(else_branch));
+                    pending.push(Pending::Block(then_branch));
+                }
+                Expr::Match { arms, .. } => {
+                    pending.push(Pending::FinishBranches(arms.len()));
+                    pending.extend(arms.iter().rev().map(|arm| Pending::Block(&arm.body)));
+                }
+                Expr::If {
+                    else_branch: None, ..
+                }
+                | Expr::IfLet {
+                    else_branch: None, ..
+                } => results.push(BlockExpressionFlow::Unit),
+                _ => results.push(BlockExpressionFlow::Value),
+            },
+            Pending::Block(block) => {
+                pending.push(Pending::FinishBlock {
+                    statements: block.statements.len(),
+                    has_tail: block.tail.is_some(),
+                });
+                if let Some(tail) = block.tail.as_deref() {
+                    pending.push(Pending::Expr(tail));
+                }
+                pending.extend(block.statements.iter().rev().map(Pending::Statement));
+            }
+            Pending::Statement(statement) => match statement {
+                Statement::Source { statement, .. } | Statement::Resolved { statement, .. } => {
+                    pending.push(Pending::Statement(statement));
+                }
+                Statement::Return(_) | Statement::Break | Statement::Continue => {
+                    results.push(BlockExpressionFlow::Diverges);
+                }
+                Statement::If {
+                    then_branch,
+                    else_branch: Some(else_branch),
+                    ..
+                }
+                | Statement::IfLet {
+                    then_branch,
+                    else_branch: Some(else_branch),
+                    ..
+                } => {
+                    pending.push(Pending::FinishIfStatement);
+                    pending.push(Pending::Block(else_branch));
+                    pending.push(Pending::Block(then_branch));
+                }
+                Statement::Expr(expression)
+                | Statement::Let {
+                    value: expression, ..
+                }
+                | Statement::Assign {
+                    value: expression, ..
+                } => {
+                    pending.push(Pending::FinishExpressionStatement);
+                    pending.push(Pending::Expr(expression));
+                }
+                Statement::AssignExpr { target, value, .. } => {
+                    pending.push(Pending::FinishAssignExpression);
+                    pending.push(Pending::Expr(value));
+                    pending.push(Pending::Expr(target));
+                }
+                Statement::If {
+                    else_branch: None, ..
+                }
+                | Statement::IfLet {
+                    else_branch: None, ..
+                }
+                | Statement::While { .. }
+                | Statement::For { .. }
+                | Statement::ForEachMap { .. } => results.push(BlockExpressionFlow::Unit),
+            },
+            Pending::FinishBranches(branches) => {
+                let start = results.len().saturating_sub(branches);
+                let branch_results = results.split_off(start);
+                results.push(combine_expression_branch_flows(branch_results));
+            }
+            Pending::FinishBlock {
+                statements,
+                has_tail,
+            } => {
+                let tail = has_tail.then(|| {
+                    results
+                        .pop()
+                        .expect("a scheduled block tail must produce one flow result")
+                });
+                let start = results.len().saturating_sub(statements);
+                let diverges = results[start..].contains(&BlockExpressionFlow::Diverges);
+                results.truncate(start);
+                results.push(if diverges {
+                    BlockExpressionFlow::Diverges
+                } else {
+                    tail.unwrap_or(BlockExpressionFlow::Unit)
+                });
+            }
+            Pending::FinishIfStatement => {
+                let else_flow = results
+                    .pop()
+                    .expect("an if else branch must produce one flow result");
+                let then_flow = results
+                    .pop()
+                    .expect("an if then branch must produce one flow result");
+                results.push(
+                    if then_flow == BlockExpressionFlow::Diverges
+                        && else_flow == BlockExpressionFlow::Diverges
+                    {
+                        BlockExpressionFlow::Diverges
+                    } else {
+                        BlockExpressionFlow::Unit
+                    },
+                );
+            }
+            Pending::FinishExpressionStatement => {
+                let expression_flow = results
+                    .pop()
+                    .expect("an expression statement must produce one flow result");
+                results.push(if expression_flow == BlockExpressionFlow::Diverges {
+                    BlockExpressionFlow::Diverges
+                } else {
+                    BlockExpressionFlow::Unit
+                });
+            }
+            Pending::FinishAssignExpression => {
+                let value_flow = results
+                    .pop()
+                    .expect("an assignment value must produce one flow result");
+                let target_flow = results
+                    .pop()
+                    .expect("an assignment target must produce one flow result");
+                results.push(
+                    if target_flow == BlockExpressionFlow::Diverges
+                        || value_flow == BlockExpressionFlow::Diverges
+                    {
+                        BlockExpressionFlow::Diverges
+                    } else {
+                        BlockExpressionFlow::Unit
+                    },
+                );
+            }
+        }
+    }
+    results
+        .pop()
+        .expect("one expression flow evaluation must produce one result")
 }
 fn if_expression_statement_inner(expression: Expr) -> Statement {
     match expression.into_kind() {
@@ -4694,6 +5214,50 @@ fn retired_trigger_alias_replacement(name: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use iroha_data_model::DomainId;
+    #[test]
+    fn mismatched_closers_preserve_all_parser_depth_views() {
+        let depth = crate::source::MAX_NESTING_DEPTH - 1;
+        let mut text = String::from("seiyaku Demo { fn f() {");
+        text.push_str(&"for item in range(1) { );".repeat(depth));
+        text.push_str(&"}".repeat(depth));
+        text.push_str("} }");
+        let source = SourceFile::new(SourceId(0), "mismatched-depth.ko", text);
+        let lexed = crate::syntax::lexer::lex(&source, FrontendBudget::v1());
+        let (tokens, _, _) = crate::lexer::lower_lexed_recovering_with_omissions(
+            &source,
+            FrontendBudget::v1(),
+            lexed,
+        );
+        let diagnostics = validate_nesting(&source, FrontendBudget::v1(), &tokens)
+            .expect_err("mismatched closers must not hide excessive block depth");
+        assert!(
+            diagnostics
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "K0003")
+        );
+
+        let lowerer = CstAstLowerer::new(&tokens, &source, true, FrontendBudget::v1());
+        assert!(
+            lowerer
+                .delimiter_depths
+                .iter()
+                .copied()
+                .max()
+                .is_some_and(|maximum| maximum > crate::source::MAX_NESTING_DEPTH)
+        );
+    }
+    #[test]
+    fn statement_recovery_ignores_crossed_closing_delimiters() {
+        let source = SourceFile::new(SourceId(0), "crossed-recovery.ko", "(];)\nlet x = 0;");
+        let tokens = crate::lexer::lex(source.text()).expect("lex recovery fixture");
+        let mut lowerer = CstAstLowerer::new(&tokens, &source, true, FrontendBudget::v1());
+        lowerer.synchronize_statement(0);
+        assert!(matches!(
+            lowerer.tokens.get(lowerer.pos).map(|token| &token.kind),
+            Some(TokenKind::Let)
+        ));
+    }
     fn parse_module(body: &str) -> Result<Program, String> {
         parse(&format!("module TestModule {{ {body} }}"))
     }

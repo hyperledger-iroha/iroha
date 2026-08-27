@@ -3604,6 +3604,11 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         instructions=[instruction],
         creation_time_ms=123,
         fee_payment=_sponsor_fee_payment(),
+        validation_fee_policy_version=7,
+        validation_fee_policy_hash="0X" + "AB" * 32,
+        validation_fee_hijiri_fee_quote_hash="0X" + "CD" * 32,
+        validation_fee_instruction_index=1,
+        validation_fee_transfer_entry_index=2,
     )
     assert isinstance(result, MultisigResponse)
     assert result.ok is True
@@ -3623,6 +3628,11 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         "multisig_account_alias": "cbdc@banka",
         "creation_time_ms": 123,
         "fee_payment": _sponsor_fee_payment(),
+        "validation_fee_policy_version": "7",
+        "validation_fee_policy_hash": "ab" * 32,
+        "validation_fee_hijiri_fee_quote_hash": "cd" * 32,
+        "validation_fee_instruction_index": "1",
+        "validation_fee_transfer_entry_index": "2",
     }
 
 
@@ -3721,6 +3731,129 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
             fee_payment=_authority_fee_payment(),
             creation_time_ms=-1,
         )
+    with pytest.raises(ValueError, match="Hijiri quote hash requires policy metadata"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            validation_fee_hijiri_fee_quote_hash="cd" * 32,
+            **kwargs,
+        )
+    with pytest.raises(RuntimeError, match="64 hex characters"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            validation_fee_policy_version=7,
+            validation_fee_policy_hash="ab" * 32,
+            validation_fee_hijiri_fee_quote_hash="not-a-hash",
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ({"validation_fee_policy_version": 7}, "must be provided together"),
+        ({"validation_fee_policy_hash": "ab" * 32}, "must be provided together"),
+        ({"validation_fee_instruction_index": 0}, "instruction index requires policy metadata"),
+        (
+            {"validation_fee_transfer_entry_index": 0},
+            "transfer entry index requires policy metadata",
+        ),
+        (
+            {
+                "validation_fee_policy_version": 7,
+                "validation_fee_policy_hash": "ab" * 32,
+                "validation_fee_transfer_entry_index": 0,
+            },
+            "transfer entry index requires instruction index",
+        ),
+    ],
+)
+def test_propose_multisig_rejects_invalid_validation_fee_dependencies(
+    metadata: dict[str, object],
+    message: str,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(ValueError, match=message):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
+            **metadata,
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "validation_fee_policy_version",
+        "validation_fee_instruction_index",
+        "validation_fee_transfer_entry_index",
+    ],
+)
+@pytest.mark.parametrize("invalid", [-1, 1 << 64, True])
+def test_propose_multisig_rejects_validation_fee_values_outside_u64(
+    field: str,
+    invalid: object,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    metadata: dict[str, object] = {
+        "validation_fee_policy_version": 7,
+        "validation_fee_policy_hash": "ab" * 32,
+        "validation_fee_instruction_index": 0,
+        "validation_fee_transfer_entry_index": 0,
+    }
+    metadata[field] = invalid
+
+    with pytest.raises((TypeError, ValueError), match="unsigned 64-bit integer"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
+            **metadata,
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("validation_fee_policy_hash", "ab" * 31),
+        ("validation_fee_policy_hash", "ab" * 15 + "  " + "cd" * 16),
+        ("validation_fee_policy_hash", "g0" * 32),
+        ("validation_fee_hijiri_fee_quote_hash", "cd" * 31),
+        ("validation_fee_hijiri_fee_quote_hash", "cd" * 15 + "  " + "ab" * 16),
+        ("validation_fee_hijiri_fee_quote_hash", "g0" * 32),
+    ],
+)
+def test_propose_multisig_rejects_noncanonical_validation_fee_hashes(
+    field: str,
+    invalid: str,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    metadata = {
+        "validation_fee_policy_version": 7,
+        "validation_fee_policy_hash": "ab" * 32,
+        field: invalid,
+    }
+
+    with pytest.raises(RuntimeError, match="hex"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
+            **metadata,
+        )
+
+    assert session.calls == []
 
 
 def test_propose_multisig_rejects_malformed_response_fields() -> None:

@@ -232,6 +232,36 @@ fn validation_fee_parameters_are_reserved_from_generic_set_parameter() {
     }
 }
 #[test]
+fn hijiri_parameters_require_the_exact_dedicated_permission() {
+    let account_risk_id = format!(
+        "{}{}",
+        iroha_data_model::hijiri::HIJIRI_ACCOUNT_RISK_PARAMETER_PREFIX_V1,
+        "00".repeat(32)
+    );
+    for id in [
+        iroha_data_model::hijiri::HijiriParametersV1::PARAMETER_ID_STR,
+        account_risk_id.as_str(),
+    ] {
+        let instruction = custom_parameter(id);
+        assert_denied_with_permission(
+            instruction.clone(),
+            PermissionObject::from(CanSetParameters),
+            parameter::visit_set_parameter,
+        );
+        assert_allowed_with_permission(
+            instruction.clone(),
+            PermissionObject::from(CanSetHijiriParameters),
+            parameter::visit_set_parameter,
+        );
+        let mut genesis = MockExecutor::new(true);
+        parameter::visit_set_parameter(&mut genesis, &instruction);
+        assert!(
+            genesis.verdict().is_ok(),
+            "{id} must remain installable during genesis"
+        );
+    }
+}
+#[test]
 fn raw_domain_registration_is_genesis_only() {
     let domain_id = DomainId::try_new("planned", "universal").expect("valid domain id");
     let instruction = Register::domain(Domain::new(domain_id));
