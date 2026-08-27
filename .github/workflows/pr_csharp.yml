@@ -75,6 +75,12 @@ jobs:
             library_name: connect_norito_bridge.dll
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
+    env:
+      # Keep Windows link checkout byte-identical to the canonical Git
+      # blob instead of depending on host reparse-point semantics.
+      GIT_CONFIG_COUNT: ${{ matrix.os == 'windows-latest' && '2' || '1' }}
+      GIT_CONFIG_KEY_1: core.symlinks
+      GIT_CONFIG_VALUE_1: "false"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 

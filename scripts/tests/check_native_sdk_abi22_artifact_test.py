@@ -1193,6 +1193,51 @@ def test_symbol_tool_parsers_preserve_duplicates_and_normalize_only_macho() -> N
         f"    1    0 0000000000001000 {symbol}\n".encode("ascii"),
         "dumpbin",
     ) == (symbol,)
+    assert checker._parse_symbol_tool_output(
+        (
+            "File: bridge.dll\n"
+            "Format: COFF-x86-64\n"
+            "Export {\n"
+            "  Ordinal: 1\n"
+            f"  Name: {symbol}\n"
+            "  RVA: 0x1000\n"
+            "}\n"
+        ).encode("ascii"),
+        "llvm-coff-exports",
+    ) == (symbol,)
+
+
+def test_windows_symbol_tools_read_the_pe_export_table(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows inspects PE exports and rejects empty tool output."""
+
+    artifact = native_artifact(tmp_path)
+    symbol = checker.APPROVED_PRIVACY_C_EXPORTS[0]
+    commands: list[str] = []
+
+    monkeypatch.setattr(checker.sys, "platform", "win32")
+    monkeypatch.setattr(checker, "_windows_host_semantics", lambda: True)
+    configured = checker._symbol_tool_commands(artifact)
+    assert [tool for tool, _, _ in configured] == ["llvm-readobj", "dumpbin"]
+    assert configured[0][1][0] == "--coff-exports"
+
+    monkeypatch.setattr(checker.shutil, "which", lambda tool: tool)
+
+    def run_tool(command, **_kwargs):
+        tool = command[0]
+        commands.append(tool)
+        stdout = (
+            b""
+            if tool == "llvm-readobj"
+            else f"    1    0 0000000000001000 {symbol}\n".encode("ascii")
+        )
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr=b"")
+
+    monkeypatch.setattr(checker.subprocess, "run", run_tool)
+    assert checker.inspect_exported_symbols(artifact, required=True) == (symbol,)
+    assert commands == ["llvm-readobj", "dumpbin"]
 
 
 def test_missing_symbol_tool_fails_closed_only_for_bridge_lanes(
@@ -2347,6 +2392,12 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
     assert "if: runner.os == 'Windows'" in csharp_workflow
     assert "python -I scripts/compute_workspace_source_manifest.py" in csharp_workflow
     assert "--native-artifact-manifest" in csharp_workflow
+    assert (
+        "GIT_CONFIG_COUNT: ${{ matrix.os == 'windows-latest' && '2' || '1' }}"
+        in csharp_workflow
+    )
+    assert "GIT_CONFIG_KEY_1: core.symlinks" in csharp_workflow
+    assert 'GIT_CONFIG_VALUE_1: "false"' in csharp_workflow
     assert preflight < csharp_workflow.index(
         "Build native C# bridge on its matching release host"
     )

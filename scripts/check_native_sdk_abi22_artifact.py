@@ -362,12 +362,12 @@ def _symbol_tool_commands(path: Path) -> tuple[tuple[str, tuple[str, ...], str],
                 "macho-lines",
             ),
         )
-    if os.name == "nt":
+    if _windows_host_semantics():
         return (
             (
-                "llvm-nm",
-                ("--defined-only", "--extern-only", "-j", rendered),
-                "lines",
+                "llvm-readobj",
+                ("--coff-exports", rendered),
+                "llvm-coff-exports",
             ),
             ("dumpbin", ("/nologo", "/exports", rendered), "dumpbin"),
         )
@@ -391,6 +391,14 @@ def _parse_symbol_tool_output(raw: bytes, output_format: str) -> tuple[str, ...]
             if match is None:
                 continue
             encoded = match.group(1)
+        elif output_format == "llvm-coff-exports":
+            encoded = line.strip()
+            prefix = b"Name: "
+            if not encoded.startswith(prefix):
+                continue
+            encoded = encoded[len(prefix) :]
+            if not encoded:
+                fail("native artifact exported-symbol inventory is malformed")
         else:
             encoded = line.strip()
             if not encoded:
@@ -434,7 +442,10 @@ def inspect_exported_symbols(path: Path, *, required: bool) -> tuple[str, ...] |
             detail = result.stderr.decode("utf-8", errors="replace").strip()[:1024]
             failures.append(f"{tool}: {detail or f'exit {result.returncode}'}")
             continue
-        return _parse_symbol_tool_output(result.stdout, output_format)
+        symbols = _parse_symbol_tool_output(result.stdout, output_format)
+        if symbols:
+            return symbols
+        failures.append(f"{tool}: no exported symbols")
     if required:
         detail = "; ".join(failures[:2])
         fail(
