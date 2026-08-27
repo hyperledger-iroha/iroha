@@ -1,5 +1,8 @@
 use iroha_config::parameters::{
-    actual::{LaneProfile, Network, RelayMode, SoranetHandshake, SoranetPrivacy, SoranetVpn},
+    actual::{
+        LaneProfile, Network, RelayMode, SoranetHandshake, SoranetPrivacy, SoranetPuzzle,
+        SoranetVpn,
+    },
     defaults::network as network_defaults,
 };
 use iroha_config_base::WithOrigin;
@@ -10,10 +13,10 @@ use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use std::{
     io::ErrorKind,
     net::{SocketAddr, TcpListener},
-    num::NonZeroUsize,
+    num::{NonZeroU32, NonZeroUsize},
     sync::{
         OnceLock,
-        atomic::{AtomicU16, Ordering},
+        atomic::{AtomicU16, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -30,9 +33,17 @@ fn test_network_config(
     address: IrohaSocketAddr,
     public_address: IrohaSocketAddr,
     idle_timeout: Duration,
-    soranet_handshake: SoranetHandshake,
+    mut soranet_handshake: SoranetHandshake,
     trust_gossip: bool,
 ) -> Network {
+    static NEXT_REPLAY_LEDGER_ID: AtomicU64 = AtomicU64::new(0);
+    let replay_ledger_id = NEXT_REPLAY_LEDGER_ID.fetch_add(1, Ordering::Relaxed);
+    soranet_handshake.pow.revocation_store_path = std::env::temp_dir()
+        .join(format!("iroha-p2p-tests-{}", std::process::id()))
+        .join(format!("ticket-revocations-{replay_ledger_id}.norito"))
+        .to_string_lossy()
+        .into_owned()
+        .into();
     Network {
         address: WithOrigin::inline(address),
         public_address: WithOrigin::inline(public_address),
@@ -137,6 +148,19 @@ fn test_network_config(
         max_frame_bytes_other: 262_144,
         quic_max_idle_timeout: None,
     }
+}
+
+/// Return a low-cost mandatory admission policy for tests whose subject is not Argon2.
+fn lightweight_soranet_handshake() -> SoranetHandshake {
+    let mut handshake = SoranetHandshake::default();
+    handshake.pow.difficulty = 1;
+    handshake.pow.puzzle = SoranetPuzzle::new(
+        NonZeroU32::new(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB)
+            .expect("minimum puzzle memory is non-zero"),
+        NonZeroU32::new(1).expect("puzzle time cost is non-zero"),
+        NonZeroU32::new(1).expect("puzzle lane count is non-zero"),
+    );
+    handshake
 }
 
 fn test_network_id(seed: &str) -> NetworkId {

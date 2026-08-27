@@ -2067,6 +2067,9 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     actual_default_pow = actual_config.split("pub const fn default_const() -> Self", 1)[
         1
     ].split("impl_default!(SoranetPow", 1)[0]
+    actual_pow = actual_config.split("pub struct SoranetPow", 1)[1].split(
+        "/// Argon2 puzzle parameters shared with peers.", 1
+    )[0]
     user_pow = user_config.split("pub struct SoranetHandshakePow", 1)[1].split(
         "impl SoranetHandshakePow", 1
     )[0]
@@ -2092,16 +2095,20 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "require_sm_handshake_match = Some(false)" not in into_payload
     assert "require_sm_openssl_preview_match = Some(false)" not in into_payload
 
-    assert "required: true" in actual_default_pow
+    assert "required:" not in actual_default_pow
+    assert "required:" not in actual_pow
+    assert "pub puzzle: SoranetPuzzle" in actual_pow
     assert "signed_ticket_public_key" not in actual_config
     assert "signed_ticket_public_key_hex" not in user_config
     assert "signed_ticket_public_key_hex" not in client_api
     assert "required: bool" not in user_pow
     assert "enabled: bool" not in user_puzzle
-    assert "required: true" in user_config.split("fn parse(self) -> actual::SoranetPow", 1)[1].split(
+    parsed_user_pow = user_config.split("fn parse(self) -> actual::SoranetPow", 1)[1].split(
         "/// Puzzle configuration supplied at the user level.", 1
     )[0]
-    assert "puzzle: Some(puzzle.parse())" in user_config.split(
+    assert "required:" not in parsed_user_pow
+    assert "puzzle: puzzle.parse()" in parsed_user_pow
+    assert "puzzle: Some(puzzle.parse())" not in user_config.split(
         "fn parse(self) -> actual::SoranetPow", 1
     )[1].split("/// Puzzle configuration supplied at the user level.", 1)[0]
     assert "actual::SoranetPuzzle" in user_config.split(
@@ -2115,7 +2122,7 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "-> Result<(), String>" in apply_pow_update
     assert "PoW admission is mandatory" in apply_pow_update
     assert "Argon2 puzzle admission is mandatory" in apply_pow_update
-    assert "pow.required = required;" in apply_pow_update
+    assert "pow.required" not in apply_pow_update
     assert "pow.puzzle = None" not in apply_pow_update
 
     assert "Fallback to unsigned tickets" not in peer

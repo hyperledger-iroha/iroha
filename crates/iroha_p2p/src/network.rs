@@ -5,6 +5,8 @@
     clippy::needless_pass_by_value
 )]
 use crate::boilerplate;
+#[cfg(test)]
+use crate::soranet_handshake_runtime::runtime_from_handshake_in_memory;
 use crate::{
     Broadcast, Error, NetworkMessage, OnlinePeers, P2pIdentityKeys, Post, Priority, RelayRole,
     UpdatePeers, UpdateTopology, UpdateTrustedPeers,
@@ -59,9 +61,8 @@ fn test_network_id(seed: &str) -> NetworkId {
 }
 #[cfg(test)]
 fn test_soranet_handshake_runtime() -> Arc<SoranetHandshakeRuntime> {
-    let mut handshake = ActualSoranetHandshake::default();
-    handshake.pow.required = false;
-    runtime_from_handshake(handshake).expect("test SoraNet handshake runtime")
+    runtime_from_handshake_in_memory(ActualSoranetHandshake::default())
+        .expect("test SoraNet handshake runtime")
 }
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -18060,7 +18061,6 @@ mod tests {
         let initial_capacity = initial.puzzle_work_capacities().0;
         let changed_capacity = if initial_capacity.get() == 1 { 2 } else { 1 };
         let mut rejected = ActualSoranetHandshake::default();
-        rejected.pow.required = false;
         rejected.pow.outbound_mint_capacity =
             std::num::NonZeroUsize::new(changed_capacity).expect("non-zero capacity");
         let (rejected_response, rejected_result) = oneshot::channel();
@@ -18085,7 +18085,6 @@ mod tests {
         ));
 
         let mut accepted = ActualSoranetHandshake::default();
-        accepted.pow.required = false;
         accepted.pow.difficulty = 6;
         let (accepted_response, accepted_result) = oneshot::channel();
         network.handle_soranet_handshake_update(message::UpdateHandshake {

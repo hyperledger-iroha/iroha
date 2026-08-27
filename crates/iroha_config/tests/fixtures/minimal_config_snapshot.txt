@@ -198,7 +198,7 @@ Root {
             kem_id: 1,
             sig_id: 1,
             resume_hash: None,
-            pow: SoranetPow { required: true, difficulty: 6, max_future_skew_secs: 300, min_ticket_ttl_secs: 30, ticket_ttl_secs: 60, revocation_store_capacity: 8192, revocation_max_ttl_secs: 900, revocation_store_path: ./storage/soranet/ticket_revocations.norito, puzzle: Some { memory_kib: 65536, time_cost: 2, lanes: 1 } },
+            pow: SoranetPow { difficulty: 6, max_future_skew_secs: 300, min_ticket_ttl_secs: 30, ticket_ttl_secs: 60, outbound_mint_capacity: 3, inbound_verify_capacity: 3, revocation_store_capacity: 8192, revocation_max_ttl_secs: 900, revocation_store_path: ./storage/soranet/ticket_revocations.norito, puzzle: { memory_kib: 65536, time_cost: 2, lanes: 1 } },
         },
         soranet_privacy: SoranetPrivacy {
             bucket_secs: 60,

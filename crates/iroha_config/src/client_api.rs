@@ -2773,7 +2773,7 @@ impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
 /// Summary of the proof-of-work admission settings.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePowSummary {
-    /// Indicates whether `PoW` tickets are required.
+    /// Whether `PoW` tickets are required; always `true` for first-release snapshots.
     pub required: bool,
     /// Required difficulty in leading zero bits.
     pub difficulty: u8,
@@ -2787,20 +2787,20 @@ pub struct SoranetHandshakePowSummary {
     pub outbound_mint_capacity: usize,
     /// Maximum concurrent remote Argon2 ticket verifications.
     pub inbound_verify_capacity: usize,
-    /// Optional Argon2 puzzle parameters.
+    /// Argon2 puzzle parameters; always populated for first-release snapshots.
     pub puzzle: Option<SoranetHandshakePuzzleSummary>,
 }
 impl From<&'_ base::SoranetPow> for SoranetHandshakePowSummary {
     fn from(value: &'_ base::SoranetPow) -> Self {
         Self {
-            required: value.required,
+            required: true,
             difficulty: value.difficulty,
             max_future_skew_secs: value.max_future_skew.as_secs(),
             min_ticket_ttl_secs: value.min_ticket_ttl.as_secs(),
             ticket_ttl_secs: value.ticket_ttl.as_secs(),
             outbound_mint_capacity: value.outbound_mint_capacity.get(),
             inbound_verify_capacity: value.inbound_verify_capacity.get(),
-            puzzle: value.puzzle.map(SoranetHandshakePuzzleSummary::from),
+            puzzle: Some(SoranetHandshakePuzzleSummary::from(value.puzzle)),
         }
     }
 }
@@ -2876,7 +2876,7 @@ impl SoranetHandshakePuzzleSummary {
 /// Partial update directive for Argon2 puzzle parameters.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePuzzleUpdate {
-    /// Toggle the puzzle requirement.
+    /// Compatibility directive; `false` is rejected because the puzzle is mandatory.
     pub enabled: Option<bool>,
     /// Override memory cost (KiB).
     pub memory_kib: Option<u32>,
@@ -2997,7 +2997,7 @@ pub struct SoranetHandshakeUpdate {
 /// Partial update DTO for `PoW` admission configuration.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePowUpdate {
-    /// Override the required flag.
+    /// Compatibility directive; `false` is rejected because `PoW` is mandatory.
     pub required: Option<bool>,
     /// Override difficulty.
     pub difficulty: Option<u8>,
@@ -3547,6 +3547,20 @@ mod test {
         let network = parsed.network.expect("network update should roundtrip");
         assert_eq!(network.require_sm_handshake_match, Some(false));
         assert_eq!(network.require_sm_openssl_preview_match, Some(true));
+    }
+    #[test]
+    fn mandatory_soranet_pow_is_exposed_in_client_summary() {
+        let pow = base::SoranetPow::default();
+
+        let summary = SoranetHandshakePowSummary::from(&pow);
+
+        assert!(summary.required);
+        let puzzle = summary
+            .puzzle
+            .expect("mandatory SoraNet PoW must expose puzzle parameters");
+        assert_eq!(puzzle.memory_kib, pow.puzzle.memory_kib.get());
+        assert_eq!(puzzle.time_cost, pow.puzzle.time_cost.get());
+        assert_eq!(puzzle.lanes, pow.puzzle.lanes.get());
     }
     #[test]
     fn config_update_rejects_confidential_gas_override() {

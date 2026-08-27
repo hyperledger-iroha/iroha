@@ -34,7 +34,6 @@ fn config_scenarios() -> eyre::Result<()> {
         .with_config_layer(|c| {
             c.write(["network", "block_gossip_size"], 100)
                 .write(["queue", "capacity"], 100_000)
-                .write(["network", "soranet_handshake", "pow", "required"], true)
                 .write(["network", "soranet_handshake", "pow", "difficulty"], 6_i64)
                 .write(
                     [
@@ -52,10 +51,6 @@ fn config_scenarios() -> eyre::Result<()> {
                 .write(
                     ["network", "soranet_handshake", "pow", "ticket_ttl_secs"],
                     240_i64,
-                )
-                .write(
-                    ["network", "soranet_handshake", "pow", "puzzle", "enabled"],
-                    true,
                 )
                 .write(
                     [

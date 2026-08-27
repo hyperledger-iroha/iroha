@@ -11,16 +11,15 @@ use tempfile::tempdir;
 #[test]
 fn runtime_from_handshake_preserves_puzzle_parameters() {
     let mut handshake = ActualSoranetHandshake::default();
-    handshake.pow.required = true;
     handshake.pow.difficulty = 6;
     handshake.pow.max_future_skew = Duration::from_secs(300);
     handshake.pow.min_ticket_ttl = Duration::from_secs(60);
     handshake.pow.ticket_ttl = Duration::from_secs(240);
-    handshake.pow.puzzle = Some(ConfigPuzzle {
+    handshake.pow.puzzle = ConfigPuzzle {
         memory_kib: NonZeroU32::new(64 * 1024).expect("memory"),
         time_cost: NonZeroU32::new(3).expect("time_cost"),
         lanes: NonZeroU32::new(2).expect("lanes"),
-    });
+    };
     let dir = tempdir().expect("tempdir");
     handshake.pow.revocation_store_path = dir
         .path()
@@ -103,7 +102,6 @@ fn runtime_from_handshake_rejects_oversized_actual_puzzle_capacity() {
 #[test]
 fn runtime_from_handshake_rejects_invalid_pow_bounds() {
     let mut handshake = ActualSoranetHandshake::default();
-    handshake.pow.required = true;
     handshake.pow.max_future_skew = Duration::from_secs(30);
     handshake.pow.min_ticket_ttl = Duration::from_secs(60);
     let err = runtime_from_handshake(handshake).expect_err("invalid PoW bounds must fail");
@@ -122,7 +120,6 @@ fn runtime_from_handshake_rejects_invalid_pow_bounds() {
 #[test]
 fn runtime_from_handshake_rejects_puzzle_ticket_ttl_without_solution_window() {
     let mut handshake = ActualSoranetHandshake::default();
-    handshake.pow.required = true;
     handshake.pow.max_future_skew = Duration::from_secs(300);
     handshake.pow.min_ticket_ttl = Duration::from_secs(60);
     handshake.pow.ticket_ttl = Duration::from_secs(60);
@@ -141,7 +138,6 @@ fn runtime_from_handshake_rejects_puzzle_ticket_ttl_without_solution_window() {
 #[test]
 fn runtime_from_handshake_rejects_invalid_revocation_limits() {
     let mut handshake = ActualSoranetHandshake::default();
-    handshake.pow.required = true;
     handshake.pow.revocation_store_capacity = 0;
     let err = runtime_from_handshake(handshake).expect_err("should fail");
     match err {
@@ -160,7 +156,6 @@ fn runtime_from_handshake_fails_closed_on_corrupt_revocation_snapshot() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("revocations.norito");
     fs::write(&path, b"corrupt snapshot").expect("write corrupt revocation file");
-    handshake.pow.required = true;
     handshake.pow.difficulty = 1;
     handshake.pow.revocation_store_path = path.to_string_lossy().into_owned().into();
     let err = runtime_from_handshake(handshake)
@@ -174,21 +169,6 @@ fn runtime_from_handshake_fails_closed_on_corrupt_revocation_snapshot() {
         "unexpected error: {err:?}"
     );
 }
-#[test]
-fn disabled_test_admission_uses_only_in_memory_replay_state() {
-    let mut handshake = ActualSoranetHandshake::default();
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("intentionally-unused-revocations.norito");
-    fs::write(&path, b"corrupt snapshot").expect("write corrupt revocation file");
-    handshake.pow.required = false;
-    handshake.pow.revocation_store_path = path.to_string_lossy().into_owned().into();
-    let runtime =
-        runtime_from_handshake(handshake).expect("test-local disabled admission is in-memory");
-    let policy = runtime.snapshot().expect("runtime policy");
-    assert!(!policy.inbound_pow_required());
-    assert_eq!(policy.active_revocations().expect("active count"), 0);
-}
-
 fn handshake_with_replay_path(path: &std::path::Path) -> ActualSoranetHandshake {
     let mut handshake = ActualSoranetHandshake::default();
     handshake.pow.revocation_store_path = path.to_string_lossy().into_owned().into();
