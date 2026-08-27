@@ -164,8 +164,6 @@ enum HandshakeError {
     AdmissionWorker(String),
     #[error("authenticated relay transport trust has expired")]
     TransportTrustExpired,
-    #[error("missing admission challenge")]
-    MissingChallenge,
     #[error("token decode failed: {0}")]
     TokenDecode(TokenDecodeError),
     #[error("token verification failed: {0}")]

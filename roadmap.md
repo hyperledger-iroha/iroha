@@ -49,9 +49,13 @@ Completed history lives in [`status.md`](./status.md).
   closure to every maintained SDK. CI should reject unreferenced shipping files, generated package
   metadata, deprecated annotations, compatibility-only aliases, and test helpers in production
   artifacts.
-- Finish the Kotlin/Java reflection audit by replacing the remaining optional compression,
-  telemetry, and transport probes with direct typed dependencies or explicit unsupported results.
-  Remove raw-string status adapters and unused profile parameters in the same mirrored changes.
+- Finish the remaining Java Android platform-reflection audit by moving telemetry, HTTP transport,
+  and keystore integrations behind typed Android source-set implementations with explicit JVM
+  injection or unsupported results. Norito compression and generic adapter dispatch are now direct;
+  raw subscription/compression spellings and unused peer-profile limit parameters are removed.
+- Rebase the stale Android direct-`javac` lint lane on the complete Gradle-owned SDK dependency
+  classpath, then clear its existing source warnings and missing test dependencies. The lane now
+  resolves mandatory Norito compression correctly, but does not yet qualify the full Java SDK.
 - Reduce Python transaction signing to one typed credential input per operation and remove any
   remaining alternate keyword shapes. Keep exact canonical request validation before transport.
 - Select one first-release transaction executable carrier in the data model and every SDK. Migrate

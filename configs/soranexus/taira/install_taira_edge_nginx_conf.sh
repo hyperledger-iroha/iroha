@@ -6,7 +6,9 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 ROSTER="${ROSTER:-${REPO_ROOT}/configs/soranexus/taira/validator_roster.local.toml}"
 OUTPUT="${OUTPUT:-${REPO_ROOT}/dist/taira-edge/taira.sora.org.conf}"
 TARGET_CONF="${TARGET_CONF:-}"
-NGINX_BIN="${NGINX_BIN:-nginx}"
+readonly NGINX_BIN="/usr/sbin/nginx"
+readonly SYSTEM_OWNER_UID=0
+readonly SYSTEM_OWNER_GID=0
 INSTALL=0
 RELOAD=0
 ALIAS_ROUTES=()
@@ -16,6 +18,8 @@ INSTALL_BACKUP_DIR=""
 INSTALL_BACKUP_CONF=""
 TARGET_CONF_EXISTED=0
 INSTALL_ROLLBACK_NEEDED=0
+BACKED_UP_TARGET_FINGERPRINT="absent"
+INSTALLED_CONF_FINGERPRINT=""
 
 cleanup_nginx_test_dirs() {
   local path
@@ -47,13 +51,13 @@ Usage: install_taira_edge_nginx_conf.sh [--roster PATH] [--output PATH]
                                        [--soracloud-alias-route ALIAS=HOST:PORT]
                                        [--require-alias ALIAS]
                                        [--install] [--reload]
-                                       [--nginx-bin PATH]
 
 Render and optionally install/reload the shared Taira edge nginx config.
 
 Default behavior is safe: render and validate the generated file, but do not
-copy it into nginx and do not reload nginx. Use `--install --reload` only on
-the edge host after reviewing the rendered config.
+copy it into nginx and do not reload nginx. The validator is pinned to
+/usr/sbin/nginx. Run the script as root with `--install --reload` only on the
+edge host after reviewing the rendered config.
 
 For the current Solswap indexer edge binding:
   bash configs/soranexus/taira/install_taira_edge_nginx_conf.sh \
@@ -62,9 +66,7 @@ For the current Solswap indexer edge binding:
     --require-alias solswap-indexer.sora \
     --install --reload
 
-On Linux, the default target is /etc/nginx/conf.d/taira.conf.
-On Homebrew nginx hosts, when /opt/homebrew/etc/nginx/servers exists, the
-default target is /opt/homebrew/etc/nginx/servers/taira.sora.org.conf.
+The default target is /etc/nginx/conf.d/taira.conf.
 EOF
 }
 
@@ -119,14 +121,6 @@ while [[ $# -gt 0 ]]; do
       INSTALL=1
       shift
       ;;
-    --nginx-bin)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --nginx-bin" >&2
-        exit 1
-      }
-      NGINX_BIN="$2"
-      shift 2
-      ;;
     -h|--help)
       usage
       exit 0
@@ -140,11 +134,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$TARGET_CONF" ]]; then
-  if [[ -d /opt/homebrew/etc/nginx/servers ]]; then
-    TARGET_CONF="/opt/homebrew/etc/nginx/servers/taira.sora.org.conf"
-  else
-    TARGET_CONF="/etc/nginx/conf.d/taira.conf"
-  fi
+  TARGET_CONF="/etc/nginx/conf.d/taira.conf"
 fi
 
 if [[ ! -f "$ROSTER" ]]; then

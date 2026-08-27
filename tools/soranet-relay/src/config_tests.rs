@@ -855,7 +855,6 @@ fn load_minimal_structural_config_in_test_build() {
     let cfg = RelayConfig::load(path).expect("load config");
     assert_eq!(cfg.mode, RelayMode::Entry);
     assert_eq!(cfg.listen_addr().unwrap().port(), 0);
-    assert!(cfg.pow_config().required);
     assert_eq!(cfg.pow_config().difficulty, 18);
     assert_eq!(cfg.pow_config().max_future_skew_secs, 300);
     assert_eq!(cfg.pow_config().min_ticket_ttl_secs, 30);
@@ -1079,7 +1078,7 @@ fn padding_cell_size_must_fit_ipv6_mtu() {
         r#"{{
                 "mode": "Middle",
                 "listen": "127.0.0.1:0",
-                "pow": {{ "required": true, "difficulty": 18 }},
+                "pow": {{ "difficulty": 18 }},
                 "padding": {{ "cell_size": {invalid}, "max_idle_millis": 200 }}
             }}"#
     );
@@ -1318,12 +1317,8 @@ fn exit_routing_validation_pins_canonical_wss_origins() {
 #[test]
 fn pow_defaults_match_first_release_admission_policy() {
     let pow = PowConfig::default();
-    assert!(pow.required);
     assert_eq!(pow.difficulty, u32::from(puzzle::DEFAULT_DIFFICULTY));
-    assert!(
-        pow.puzzle.as_ref().is_some_and(|puzzle| puzzle.enabled),
-        "the default Argon2 gate must be enabled"
-    );
+    assert_eq!(pow.puzzle, PuzzleConfig::default());
 }
 #[test]
 fn pow_revocation_store_capacity_enforces_first_release_ceiling() {
@@ -1352,18 +1347,11 @@ fn omitted_pow_policy_fields_use_secure_first_release_defaults() {
     let json = config_fixture!("pow_defaults.json");
     let path = write_config(json);
     let config = RelayConfig::load(path).expect("load config with secure PoW defaults");
-    assert!(config.pow_config().required);
     assert_eq!(
         config.pow_config().difficulty,
         u32::from(puzzle::DEFAULT_DIFFICULTY)
     );
-    assert!(
-        config
-            .pow_config()
-            .puzzle
-            .as_ref()
-            .is_some_and(|puzzle| puzzle.enabled)
-    );
+    assert_eq!(config.pow_config().puzzle, PuzzleConfig::default());
 }
 #[test]
 fn pow_config_rejects_zero_difficulty() {
@@ -1394,17 +1382,13 @@ fn pow_config_rejects_difficulty_above_supported_corridor() {
     );
 }
 #[test]
-fn pow_config_rejects_optional_admission() {
-    let mut pow = PowConfig {
-        required: false,
-        ..PowConfig::default()
-    };
-    let err = pow
-        .apply_defaults()
-        .expect_err("optional admission must fail");
+fn pow_config_rejects_retired_required_key_as_unknown() {
+    let err = norito::json::from_str::<PowConfig>(r#"{"required":false}"#)
+        .expect_err("the retired admission toggle must fail closed");
+    let message = err.to_string();
     assert!(
-        matches!(err, ConfigError::Puzzle(ref message) if message.contains("required")),
-        "unexpected error: {err:?}"
+        message.contains("unknown field") && message.contains("required"),
+        "unexpected error: {message}"
     );
 }
 #[test]
@@ -1418,20 +1402,13 @@ fn pow_config_rejects_retired_adaptive_key_as_unknown() {
     );
 }
 #[test]
-fn puzzle_config_disabled_is_rejected() {
-    let mut pow = PowConfig {
-        puzzle: Some(PuzzleConfig {
-            enabled: false,
-            memory_kib: 0,
-            time_cost: 0,
-            lanes: 0,
-        }),
-        ..PowConfig::default()
-    };
-    let err = pow.apply_defaults().expect_err("disabled puzzle must fail");
+fn puzzle_config_rejects_retired_enabled_key_as_unknown() {
+    let err = norito::json::from_str::<PuzzleConfig>(r#"{"enabled":false}"#)
+        .expect_err("the retired puzzle toggle must fail closed");
+    let message = err.to_string();
     assert!(
-        matches!(err, ConfigError::Puzzle(ref message) if message.contains("enabled")),
-        "unexpected error: {err:?}"
+        message.contains("unknown field") && message.contains("enabled"),
+        "unexpected error: {message}"
     );
 }
 #[test]
@@ -1440,8 +1417,6 @@ fn quotas_for_mode_honours_overrides() {
         quotas: QuotaConfig {
             per_remote_burst: 100,
             per_remote_window_secs: 45,
-            per_descriptor_burst: 0,
-            per_descriptor_window_secs: 35,
             cooldown_secs: 15,
             max_entries: 2048,
         },
@@ -1449,8 +1424,6 @@ fn quotas_for_mode_honours_overrides() {
             entry: Some(QuotaConfig {
                 per_remote_burst: 5,
                 per_remote_window_secs: 30,
-                per_descriptor_burst: 0,
-                per_descriptor_window_secs: 0,
                 cooldown_secs: 9,
                 max_entries: 1024,
             }),
@@ -1458,8 +1431,6 @@ fn quotas_for_mode_honours_overrides() {
             exit: Some(QuotaConfig {
                 per_remote_burst: 70,
                 per_remote_window_secs: 0,
-                per_descriptor_burst: 0,
-                per_descriptor_window_secs: 0,
                 cooldown_secs: 0,
                 max_entries: 0,
             }),
@@ -1470,7 +1441,6 @@ fn quotas_for_mode_honours_overrides() {
     let entry = pow.quotas_for_mode(RelayMode::Entry);
     assert_eq!(entry.per_remote_burst, 5);
     assert_eq!(entry.per_remote_window_secs, 30);
-    assert_eq!(entry.per_descriptor_burst, 0);
     assert_eq!(entry.cooldown_secs, 9);
     assert_eq!(entry.max_entries, 1024);
     let middle = pow.quotas_for_mode(RelayMode::Middle);
@@ -1484,48 +1454,21 @@ fn quotas_for_mode_honours_overrides() {
         exit.per_remote_window_secs,
         QuotaConfig::default_per_remote_window_secs()
     );
-    assert_eq!(
-        exit.per_descriptor_window_secs,
-        QuotaConfig::default_per_descriptor_window_secs()
-    );
     assert_eq!(exit.cooldown_secs, QuotaConfig::default_cooldown_secs());
     assert_eq!(exit.max_entries, QuotaConfig::default_max_entries());
-    assert_eq!(exit.per_descriptor_burst, 0);
 }
 #[test]
-fn relay_static_descriptor_quotas_are_rejected() {
-    let mut base = PowConfig {
-        quotas: QuotaConfig {
-            per_descriptor_burst: 1,
-            ..QuotaConfig::default()
-        },
-        ..PowConfig::default()
-    };
-    let error = base
-        .apply_defaults()
-        .expect_err("base descriptor quota must fail");
-    assert!(
-        matches!(error, ConfigError::Quota(ref message) if message.contains("quotas.per_descriptor_burst") && message.contains("relay-static")),
-        "unexpected error: {error:?}"
-    );
-
-    let mut override_config = PowConfig {
-        quotas_per_mode: Some(HopQuotaOverrides {
-            exit: Some(QuotaConfig {
-                per_descriptor_burst: 1,
-                ..QuotaConfig::default()
-            }),
-            ..HopQuotaOverrides::default()
-        }),
-        ..PowConfig::default()
-    };
-    let error = override_config
-        .apply_defaults()
-        .expect_err("per-mode descriptor quota must fail");
-    assert!(
-        matches!(error, ConfigError::Quota(ref message) if message.contains("quotas_per_mode.exit.per_descriptor_burst") && message.contains("relay-static")),
-        "unexpected error: {error:?}"
-    );
+fn quota_config_rejects_retired_descriptor_keys_as_unknown() {
+    for field in ["per_descriptor_burst", "per_descriptor_window_secs"] {
+        let document = format!(r#"{{"{field}":1}}"#);
+        let error = norito::json::from_str::<QuotaConfig>(&document)
+            .expect_err("retired descriptor quota key must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("unknown field") && message.contains(field),
+            "unexpected error for {field}: {message}"
+        );
+    }
 }
 #[test]
 fn quota_tracker_capacity_accepts_exact_limit_and_rejects_plus_one() {
@@ -1612,12 +1555,11 @@ fn quota_duration_horizon_accepts_boundary_and_rejects_overflow() {
 #[test]
 fn puzzle_config_rejects_invalid_values() {
     let mut pow = PowConfig {
-        puzzle: Some(PuzzleConfig {
-            enabled: true,
+        puzzle: PuzzleConfig {
             memory_kib: 1024,
             time_cost: 0,
             lanes: 0,
-        }),
+        },
         ..PowConfig::default()
     };
     let err = pow.apply_defaults().expect_err("invalid puzzle config");
@@ -1657,101 +1599,29 @@ fn puzzle_config_builds_parameters() {
         difficulty: 12,
         max_future_skew_secs: 45,
         min_ticket_ttl_secs: 15,
-        puzzle: Some(PuzzleConfig {
-            enabled: true,
+        puzzle: PuzzleConfig {
             memory_kib: 32 * 1024,
             time_cost: 3,
             lanes: 2,
-        }),
+        },
         ..PowConfig::default()
     };
     pow.apply_defaults().expect("defaults");
     let base = pow::Parameters::new(12, Duration::from_secs(45), Duration::from_secs(15));
-    let params = pow
-        .puzzle_parameters(&base)
-        .expect("parameters")
-        .expect("enabled puzzle");
+    let params = pow.puzzle_parameters(&base).expect("parameters");
     assert_eq!(params.memory_kib().get(), 32 * 1024);
     assert_eq!(params.time_cost().get(), 3);
     assert_eq!(params.lanes().get(), 2);
     assert_eq!(params.difficulty(), 12);
 }
 #[test]
-fn replay_filter_defaults_and_rounds_parameters() {
-    let mut cfg = ReplayFilterConfig {
-        enabled: false,
-        bits: 1_000,
-        hash_functions: 0,
-        ttl_secs: 0,
-    };
-    cfg.apply_defaults().expect("defaults");
-    assert_eq!(cfg.bits, 1_024);
-    assert_eq!(
-        cfg.hash_functions,
-        ReplayFilterConfig::default_hash_functions()
-    );
-    assert_eq!(cfg.ttl_secs, ReplayFilterConfig::default_ttl_secs());
-    assert_eq!(cfg.bits_usize(), 1_024);
-    assert_eq!(
-        cfg.hash_count(),
-        ReplayFilterConfig::default_hash_functions()
-    );
-    assert_eq!(
-        cfg.ttl(),
-        Duration::from_secs(ReplayFilterConfig::default_ttl_secs())
-    );
-}
-#[test]
-fn replay_filter_rejects_invalid_parameters() {
-    let mut too_many_bits = ReplayFilterConfig {
-        enabled: false,
-        bits: (1 << 24) + 1,
-        hash_functions: 4,
-        ttl_secs: 10,
-    };
-    let err = too_many_bits
-        .apply_defaults()
-        .expect_err("bits exceeding limit should fail");
-    assert!(
-        matches!(err, ConfigError::ReplayFilter(ref message) if message.contains("bits")),
-        "unexpected error: {err:?}"
-    );
-    let mut overflowing_bits = ReplayFilterConfig {
-        enabled: false,
-        bits: u32::MAX,
-        hash_functions: 4,
-        ttl_secs: 10,
-    };
-    let err = overflowing_bits
-        .apply_defaults()
-        .expect_err("overflowing bit count should fail");
-    assert!(
-        matches!(err, ConfigError::ReplayFilter(ref message) if message.contains("bits")),
-        "unexpected error: {err:?}"
-    );
-    let mut too_many_hashes = ReplayFilterConfig {
-        enabled: false,
-        bits: 256,
-        hash_functions: 17,
-        ttl_secs: 10,
-    };
-    let err = too_many_hashes
-        .apply_defaults()
-        .expect_err("hash functions exceeding limit should fail");
-    assert!(
-        matches!(err, ConfigError::ReplayFilter(ref message) if message.contains("hash_functions")),
-        "unexpected error: {err:?}"
-    );
-}
-#[test]
 fn relay_config_rejects_retired_descriptor_replay_filter() {
     let json = config_fixture!("replay_filter.json");
     let path = write_config(json);
     let error = RelayConfig::load(path).expect_err("unsafe static-descriptor filter must fail");
-    assert!(
-        matches!(error, ConfigError::ReplayFilter(ref message) if message.contains("relay-static") && message.contains("durable replay stores")),
-        "unexpected error: {error:?}"
-    );
+    assert!(matches!(error, ConfigError::Json(_)), "unexpected error: {error:?}");
+    let message = error.to_string();
+    assert!(message.contains("unknown field") && message.contains("replay_filter"));
 }
 #[test]
 fn rejects_partial_tls_paths() {

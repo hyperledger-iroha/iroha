@@ -77,8 +77,6 @@ class PrivacyThrottleScope(str, Enum):
     COOLDOWN = "Cooldown"
     EMERGENCY = "Emergency"
     REMOTE_QUOTA = "RemoteQuota"
-    DESCRIPTOR_QUOTA = "DescriptorQuota"
-    DESCRIPTOR_REPLAY = "DescriptorReplay"
 
     @classmethod
     def from_value(cls, value: str) -> "PrivacyThrottleScope":
@@ -86,8 +84,7 @@ class PrivacyThrottleScope(str, Enum):
             return cls(value)
         except ValueError as exc:
             raise TypeError(
-                "throttle scope must be one of Congestion, Cooldown, Emergency, "
-                "RemoteQuota, DescriptorQuota, DescriptorReplay"
+                "throttle scope must be one of Congestion, Cooldown, Emergency, or RemoteQuota"
             ) from exc
 
 

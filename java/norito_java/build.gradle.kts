@@ -31,6 +31,21 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 val sourceSets = the<SourceSetContainer>()
+val runtimeClasspath = configurations.named("runtimeClasspath")
+
+tasks.register("writeRuntimeClasspath") {
+    group = "help"
+    description = "Writes the resolved runtime dependency classpath for direct JVM tooling."
+    val outputFile = layout.buildDirectory.file("runtime-classpath.txt")
+    inputs.files(runtimeClasspath)
+    outputs.file(outputFile)
+
+    doLast {
+        val destination = outputFile.get().asFile
+        destination.parentFile.mkdirs()
+        destination.writeText("${runtimeClasspath.get().asPath}\n")
+    }
+}
 
 val runNoritoTests =
     tasks.register<JavaExec>("runNoritoTests") {
@@ -40,6 +55,11 @@ val runNoritoTests =
         mainClass.set("org.hyperledger.iroha.norito.NoritoTests")
         jvmArgs("-ea")
     }
+
+// This module intentionally uses the assertion-based harness above instead of JUnit.
+tasks.named("test") {
+    enabled = false
+}
 
 tasks.named("check") {
     dependsOn(runNoritoTests)

@@ -2,6 +2,6 @@
             {
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
-                "pow": { "required": true, "difficulty": 18 },
+                "pow": { "difficulty": 18 },
                 "constant_rate_capability": { "enabled": false, "strict": true }
             }

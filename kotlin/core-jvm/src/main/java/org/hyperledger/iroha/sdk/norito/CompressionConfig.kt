@@ -3,8 +3,6 @@
 
 package org.hyperledger.iroha.sdk.norito
 
-import java.util.Locale
-
 private const val ZSTD_MIN_LEVEL = 1
 private const val ZSTD_MAX_LEVEL = 22
 
@@ -48,15 +46,6 @@ class CompressionConfig private constructor(
             }
             return clampLevel(buckets.last().level)
         }
-
-        companion object {
-            @JvmStatic
-            fun fromString(value: String): CompressionProfile = try {
-                valueOf(value.trim().uppercase(Locale.ROOT))
-            } catch (ex: IllegalArgumentException) {
-                throw IllegalArgumentException("Unknown compression profile: $value", ex)
-            }
-        }
     }
 
     private data class LevelBucket(
@@ -76,10 +65,6 @@ class CompressionConfig private constructor(
         @JvmStatic
         fun zstd(level: Int): CompressionConfig =
             CompressionConfig(NoritoHeader.COMPRESSION_ZSTD, clampLevel(level))
-
-        @JvmStatic
-        fun zstdProfile(profile: String, payloadBytes: Int): CompressionConfig =
-            zstdProfile(CompressionProfile.fromString(profile), payloadBytes)
 
         @JvmStatic
         fun zstdProfile(profile: CompressionProfile, payloadBytes: Int): CompressionConfig {

@@ -50,10 +50,11 @@ import unicodedata
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeVar
 
 try:
     from taira_constants import (
@@ -152,6 +153,9 @@ LOCALNET_ONBOARDING_TOKEN_FILE = Path("runtime") / "onboarding.token"
 MAX_PREPARED_ENVELOPE_BYTES = 4 * 1024 * 1024
 PREPARED_MUTATION_PHASE = "pre_edge"
 PREPARED_EXECUTION_LEASE_MIN_SECONDS = 15 * 60
+PREPARED_RECOVERY_INITIAL_BACKOFF_SECONDS = 0.25
+PREPARED_RECOVERY_MAX_BACKOFF_SECONDS = 2.0
+PREPARED_RECOVERY_MAX_ATTEMPTS = 256
 PREPARED_WRITE_CHILDREN = (
     ("onboarding", "onboarding", "onboarding"),
     ("faucet", "faucet", "faucet"),
@@ -454,10 +458,34 @@ class DevnetError(RuntimeError):
     """A disposable Taira operation failed."""
 
 
+class AmbiguousRetainedEnvelopeAction(DevnetError):
+    """A retained-envelope child failed after it may have contacted Torii."""
+
+
 def fail(message: str) -> NoReturn:
     """Raise a concise operator-facing error."""
 
     raise DevnetError(message)
+
+
+ParallelInput = TypeVar("ParallelInput")
+ParallelOutput = TypeVar("ParallelOutput")
+
+
+def parallel_map(
+    values: Sequence[ParallelInput],
+    operation: Callable[[ParallelInput], ParallelOutput],
+) -> list[ParallelOutput]:
+    """Run independent bounded peer work concurrently and retain input order."""
+
+    if len(values) < 2:
+        return [operation(value) for value in values]
+    with ThreadPoolExecutor(
+        max_workers=min(PEER_COUNT, len(values)),
+        thread_name_prefix="taira-devnet",
+    ) as executor:
+        futures = [executor.submit(operation, value) for value in values]
+        return [future.result() for future in futures]
 
 
 def _decode_canonical_i105_account_id(value: str) -> bytes:
@@ -977,46 +1005,6 @@ def require_runtime_signer_files(target: Path) -> None:
         identities.add(identity)
 
 
-def delete_runtime_signer_files(target: Path) -> None:
-    """Idempotently delete the stopped cohort's validated signer material."""
-
-    directory = target / RUNTIME_SIGNER_DIRECTORY
-    if directory.is_symlink():
-        fail(f"refusing symlinked Taira runtime signer directory: {directory}")
-    if not directory.exists():
-        return
-    if not directory.is_dir():
-        fail(f"Taira runtime signer path is not a directory: {directory}")
-    require_runtime_signer_files(target)
-    source_paths = runtime_signer_paths(target)
-    launch_paths = runtime_signer_launch_paths(target)
-    expected = {path.name for path in (*source_paths, *launch_paths)}
-    actual = {path.name for path in directory.iterdir()}
-    if not actual.issubset(expected):
-        fail(f"refusing unexpected Taira runtime signer directory contents: {directory}")
-    for path in launch_paths:
-        if path.is_symlink():
-            fail(f"refusing symlinked Taira FD198 launch file: {path}")
-        if not path.exists():
-            continue
-        try:
-            metadata = path.stat()
-        except OSError as error:
-            fail(f"cannot inspect Taira FD198 launch file {path}: {error}")
-        if (
-            not path.is_file()
-            or metadata.st_uid != os.geteuid()
-            or metadata.st_mode & 0o7777 != 0o600
-            or metadata.st_nlink != 1
-            or metadata.st_size not in (0, RUNTIME_SIGNER_FILE_BYTES)
-        ):
-            fail(f"untrusted Taira FD198 launch file: {path}")
-        path.unlink()
-    for path in source_paths:
-        path.unlink()
-    directory.rmdir()
-
-
 def require_stoppable_network(root: Path) -> Path:
     """Require the generated stop surface without depending on intact configs."""
 
@@ -1031,20 +1019,89 @@ def require_stoppable_network(root: Path) -> Path:
     return target
 
 
-def read_bounded_text(path: Path, *, limit: int, label: str) -> str:
-    """Read one regular bundle file without accepting an oversized substitute."""
+def _stable_file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Return the pathname and descriptor fields that must stay fixed while reading."""
 
-    if path.is_symlink() or not path.is_file():
-        fail(f"{label} is missing or not a regular file: {path}")
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def read_stable_bytes(
+    path: Path,
+    *,
+    limit: int,
+    label: str,
+    owner: int | None = None,
+    exact_mode: int | None = None,
+    require_nonempty: bool = False,
+) -> bytes:
+    """Read one bounded regular file through a stable no-follow descriptor."""
+
     try:
-        size = path.stat().st_size
+        before = path.lstat()
     except OSError as error:
-        fail(f"cannot inspect {label} {path}: {error}")
-    if size > limit:
+        fail(f"{label} is missing or not a regular file: {path}: {error}")
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        fail(f"{label} is missing or not a direct single-link regular file: {path}")
+    if owner is not None and before.st_uid != owner:
+        fail(f"{label} is not owned by uid {owner}: {path}")
+    if exact_mode is not None and stat.S_IMODE(before.st_mode) != exact_mode:
+        fail(f"{label} does not have mode {exact_mode:04o}: {path}")
+    if before.st_size > limit:
         fail(f"{label} exceeds the {limit}-byte safety bound: {path}")
+    if require_nonempty and before.st_size == 0:
+        fail(f"{label} is empty: {path}")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        return path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        fail(f"cannot open {label} {path}: {error}")
+    try:
+        opened = os.fstat(descriptor)
+        payload = bytearray()
+        while len(payload) <= limit:
+            try:
+                chunk = os.read(descriptor, min(64 * 1024, limit + 1 - len(payload)))
+            except OSError as error:
+                fail(f"cannot read {label} {path}: {error}")
+            if not chunk:
+                break
+            payload.extend(chunk)
+        after_open = os.fstat(descriptor)
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            fail(f"cannot close {label} {path}: {error}")
+    try:
+        after_path = path.lstat()
+    except OSError as error:
+        fail(f"cannot re-inspect {label} {path}: {error}")
+    identity = _stable_file_identity(before)
+    if (
+        _stable_file_identity(opened) != identity
+        or _stable_file_identity(after_open) != identity
+        or _stable_file_identity(after_path) != identity
+        or len(payload) != before.st_size
+    ):
+        fail(f"{label} changed while it was read: {path}")
+    if len(payload) > limit:
+        fail(f"{label} exceeds the {limit}-byte safety bound: {path}")
+    return bytes(payload)
+
+
+def read_bounded_text(path: Path, *, limit: int, label: str) -> str:
+    """Read one stable regular UTF-8 bundle file within an exact byte bound."""
+
+    try:
+        return read_stable_bytes(path, limit=limit, label=label).decode("utf-8")
+    except UnicodeDecodeError as error:
         fail(f"cannot read {label} {path}: {error}")
 
 
@@ -1210,7 +1267,7 @@ def require_stopped_cohort(target: Path, run: Runner) -> None:
         fail(f"Taira teardown left managed peer processes running: {residual}")
 
 
-def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> None:
+def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> bool:
     """Stop only peers owned by the generated Kagami bundle."""
 
     try:
@@ -1218,7 +1275,7 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
         if target.is_symlink():
             fail(f"refusing symlinked network directory: {target}")
         if not target.exists():
-            return
+            return True
         if not target.is_dir():
             fail(f"network path is not a directory: {target}")
         pid_paths = [target / f"peer{index}.pid" for index in range(PEER_COUNT)]
@@ -1227,7 +1284,7 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
         ]
         if not present_pid_paths:
             require_stopped_cohort(target, run)
-            return
+            return True
         if len(present_pid_paths) != PEER_COUNT:
             fail(
                 "Taira teardown left peer PID files: "
@@ -1242,10 +1299,12 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
             fail(f"generated Taira network is incomplete: missing safe {stop.name}")
         run(["/bin/bash", str(stop)], cwd=stop.parent, timeout=30)
         require_stopped_cohort(target, run)
+        return True
     except (DevnetError, subprocess.TimeoutExpired) as error:
         if not tolerate_failure:
             raise
         print(f"warning: could not prove Taira cohort stopped: {error}", file=sys.stderr)
+        return False
 
 
 def _direct_root_owned_directory_identity(
@@ -1305,10 +1364,12 @@ def require_safe_cleanup_target(
     root: Path,
     target: Path,
     *,
-    expected_owner: int = 0,
+    expected_owner: int | None = None,
 ) -> tuple[int, int, int] | None:
     """Validate the exact privileged tree before recursive replacement."""
 
+    if expected_owner is None:
+        expected_owner = os.geteuid()
     root_identity = _direct_root_owned_directory_identity(
         root,
         label="managed devnet root",
@@ -1341,6 +1402,24 @@ def require_safe_cleanup_target(
     return target_metadata.st_dev, target_metadata.st_ino, target_metadata.st_uid
 
 
+def destroy_network(
+    root: Path,
+    target: Path,
+    expected_identity: tuple[int, int, int] | None,
+) -> bool:
+    """Destroy one previously pinned, stopped disposable network tree."""
+
+    current_identity = require_safe_cleanup_target(root, target)
+    if current_identity != expected_identity:
+        fail(f"network cleanup target changed before destruction: {target}")
+    if current_identity is None:
+        return False
+    shutil.rmtree(target)
+    if target.exists() or target.is_symlink():
+        fail(f"network cleanup target survived destruction: {target}")
+    return True
+
+
 def reset_network(
     root: Path,
     run: Runner,
@@ -1360,14 +1439,7 @@ def reset_network(
     target = network_dir(root)
     target_identity = require_safe_cleanup_target(root, target)
     stop_network(root, run, tolerate_failure=False)
-    if target.is_symlink():
-        fail(f"refusing symlinked network directory: {target}")
-    if target.exists():
-        if not target.is_dir():
-            fail(f"network path is not a directory: {target}")
-        if require_safe_cleanup_target(root, target) != target_identity:
-            fail(f"network cleanup target changed while peers were stopping: {target}")
-        shutil.rmtree(target)
+    destroy_network(root, target, target_identity)
     return target
 
 
@@ -1852,10 +1924,13 @@ def compiled_toolchain_evidence(
         "iroha": iroha,
         "sorafs-node": sorafs_node,
     }
-    return {
-        name: {"path": str(require_executable(path)), **executable_evidence(path)}
-        for name, path in binaries.items()
-    }
+    items = tuple(binaries.items())
+
+    def inspect(item: tuple[str, Path]) -> tuple[str, dict[str, int | str]]:
+        name, path = item
+        return name, {"path": str(require_executable(path)), **executable_evidence(path)}
+
+    return dict(parallel_map(items, inspect))
 
 
 def help_has_option(help_text: str, option: str) -> bool:
@@ -1886,7 +1961,10 @@ def preflight_cli_surfaces(
         surfaces.append(
             ("iroha", ("taira", "doctor"), ("--public-root", "--json"))
         )
-    for binary_name, subcommands, required_options in surfaces:
+    def validate_surface(
+        surface_spec: tuple[str, tuple[str, ...], tuple[str, ...]],
+    ) -> None:
+        binary_name, subcommands, required_options = surface_spec
         command = [str(binaries[binary_name]), *subcommands, "--help"]
         completed = run(command, cwd=REPO_ROOT, timeout=20)
         help_text = "\n".join((completed.stdout or "", completed.stderr or ""))
@@ -1899,6 +1977,8 @@ def preflight_cli_surfaces(
                 f"compiled CLI surface `{surface}` is missing current options: "
                 + ", ".join(missing)
             )
+
+    parallel_map(surfaces, validate_surface)
 
 
 def generate_network(
@@ -1952,7 +2032,7 @@ def validate_configs(
     """Run the current daemon's offline validator for every generated peer."""
 
     require_canonical_taira_profiles(target, trusted_guest)
-    for index in range(PEER_COUNT):
+    def validate(index: int) -> None:
         config = target / f"peer{index}.toml"
         run(
             [
@@ -1967,6 +2047,8 @@ def validate_configs(
             cwd=target,
             timeout=120,
         )
+
+    parallel_map(tuple(range(PEER_COUNT)), validate)
 
 
 def http_request(url: str, payload: object | None = None) -> tuple[int, object | None]:
@@ -2033,7 +2115,7 @@ def require_cluster_build_identity(
 ) -> None:
     """Require every running validator to expose the current Linux/AArch64 build."""
 
-    for root in roots:
+    def check(root: str) -> None:
         status, payload = request(root + "status", None)
         build = payload.get("build") if isinstance(payload, dict) else None
         git_commit_sha = build.get("git_commit_sha") if isinstance(build, dict) else None
@@ -2045,6 +2127,8 @@ def require_cluster_build_identity(
             )
         if target_triple != expected_target_triple:
             fail(f"validator build target does not match the native compiler at {root}")
+
+    parallel_map(roots, check)
 
 
 def require_cli_build_identity(
@@ -2110,15 +2194,17 @@ def wait_for_cluster(
         # published fail-stop or watchdog blocker terminal immediately.  Keep
         # them outside the retryable readiness block so a serious consensus
         # diagnosis is not hidden behind a generic convergence timeout.
-        for root in roots:
-            check_sumeragi_status(root, request)
+        parallel_map(roots, lambda root: check_sumeragi_status(root, request))
+
+        def ready_height(root: str) -> int:
+            for endpoint in ("health", "readyz"):
+                status, _ = request(root + endpoint, None)
+                if not 200 <= status < 300:
+                    fail(f"{root}{endpoint} returned HTTP {status}")
+            return read_height(root, request)
+
         try:
-            for root in roots:
-                for endpoint in ("health", "readyz"):
-                    status, _ = request(root + endpoint, None)
-                    if not 200 <= status < 300:
-                        fail(f"{root}{endpoint} returned HTTP {status}")
-            heights = [read_height(root, request) for root in roots]
+            heights = parallel_map(roots, ready_height)
             if len(set(heights)) == 1 and (above is None or heights[0] > above):
                 return heights
             last = f"heights={heights}, required_above={above}"
@@ -2204,8 +2290,7 @@ def check_mcp(root: str, request: Request) -> None:
 def check_all_mcp(roots: Sequence[str], request: Request) -> None:
     """Verify the live MCP handshake and curated tools on every validator."""
 
-    for root in roots:
-        check_mcp(root, request)
+    parallel_map(roots, lambda root: check_mcp(root, request))
 
 
 def run_full_doctor(target: Path, iroha: Path, root: str, run: Runner) -> None:
@@ -3381,86 +3466,16 @@ def _read_inrou_stage_receipt(stage_dir: Path) -> dict[str, Any]:
     """Read the staged receipt through one stable owner-only descriptor."""
 
     path = stage_dir / INROU_STAGE_RECEIPT_FILE
-    before = _require_owner_only_entry(
+    payload = read_stable_bytes(
         path,
-        directory=False,
+        limit=MAX_INROU_STAGE_RECEIPT_BYTES,
         label="native Taira Inrou stage receipt",
+        owner=os.geteuid(),
+        exact_mode=0o600,
+        require_nonempty=True,
     )
-    if before.st_size == 0 or before.st_size > MAX_INROU_STAGE_RECEIPT_BYTES:
-        fail("native Taira Inrou stage receipt exceeds its exact safety bound")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        fail(f"cannot open native Taira Inrou stage receipt: {error}")
-    try:
-        opened = os.fstat(descriptor)
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-            fail("native Taira Inrou stage receipt changed while opening it")
-        payload = bytearray()
-        while len(payload) <= MAX_INROU_STAGE_RECEIPT_BYTES:
-            try:
-                chunk = os.read(
-                    descriptor,
-                    min(
-                        64 * 1024,
-                        MAX_INROU_STAGE_RECEIPT_BYTES + 1 - len(payload),
-                    ),
-                )
-            except OSError as error:
-                fail(f"cannot read native Taira Inrou stage receipt: {error}")
-            if not chunk:
-                break
-            payload.extend(chunk)
-        after_open = os.fstat(descriptor)
-    finally:
-        try:
-            os.close(descriptor)
-        except OSError as error:
-            fail(f"cannot close native Taira Inrou stage receipt: {error}")
-    after_path = _require_owner_only_entry(
-        path,
-        directory=False,
-        label="native Taira Inrou stage receipt",
-    )
-    before_identity = (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
-    )
-    opened_identity = (
-        after_open.st_dev,
-        after_open.st_ino,
-        after_open.st_size,
-        after_open.st_mtime_ns,
-        after_open.st_ctime_ns,
-    )
-    after_identity = (
-        after_path.st_dev,
-        after_path.st_ino,
-        after_path.st_size,
-        after_path.st_mtime_ns,
-        after_path.st_ctime_ns,
-    )
-    if before_identity != opened_identity or before_identity != after_identity:
-        fail("native Taira Inrou stage receipt changed while it was read")
-    if len(payload) > MAX_INROU_STAGE_RECEIPT_BYTES:
-        fail("native Taira Inrou stage receipt exceeds its exact safety bound")
-    def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"duplicate JSON field {key}")
-            result[key] = value
-        return result
-
-    try:
-        receipt = json.loads(
-            payload.decode("utf-8"),
-            object_pairs_hook=unique_json_object,
-        )
+        receipt = json_loads_no_duplicates(payload.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         fail("native Taira Inrou stage receipt is not JSON")
     if not isinstance(receipt, dict) or set(receipt) != INROU_STAGE_RECEIPT_KEYS_V1:
@@ -3709,7 +3724,8 @@ def preseed_inrou_stage(
     ]
     if len(set(data_dirs)) != PEER_COUNT:
         fail("Taira Inrou preseed requires four disjoint SoraFS roots")
-    for data_dir in data_dirs:
+
+    def preseed_peer(data_dir: Path) -> None:
         for manifest, source_flag, source in (
             (
                 stage_dir / INROU_STAGE_BUNDLE_MANIFEST,
@@ -3735,18 +3751,7 @@ def preseed_inrou_stage(
                 timeout=timeout_seconds + 300,
             )
 
-
-def canonical_inrou_canary_outcome(
-    completed: subprocess.CompletedProcess[str],
-    expected_public_root: str,
-) -> dict[str, Any]:
-    """Decode and require the compiled canary's exact success receipt."""
-
-    try:
-        receipt = json_loads_no_duplicates(completed.stdout or "")
-    except (TypeError, ValueError):
-        fail("compiled Taira Inrou canary did not return its JSON receipt")
-    return require_canonical_inrou_canary_receipt(receipt, expected_public_root)
+    parallel_map(data_dirs, preseed_peer)
 
 
 def require_canonical_inrou_canary_receipt(
@@ -4009,78 +4014,14 @@ def require_canonical_inrou_check_receipt(
 def _read_inrou_guest_qualification_payload(path: Path) -> object:
     """Read one stable owner-only qualification record without following links."""
 
-    try:
-        before = path.lstat()
-    except OSError as error:
-        fail(f"Inrou guest qualification record is missing: {error}")
-    if (
-        not stat.S_ISREG(before.st_mode)
-        or before.st_uid != os.geteuid()
-        or stat.S_IMODE(before.st_mode) != 0o600
-        or before.st_nlink != 1
-        or before.st_size == 0
-        or before.st_size > MAX_INROU_GUEST_QUALIFICATION_BYTES
-    ):
-        fail("Inrou guest qualification record lacks direct owner-only custody")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        fail(f"cannot open Inrou guest qualification record: {error}")
-    try:
-        opened = os.fstat(descriptor)
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-            fail("Inrou guest qualification record changed while it was opened")
-        payload = bytearray()
-        while len(payload) <= MAX_INROU_GUEST_QUALIFICATION_BYTES:
-            try:
-                chunk = os.read(
-                    descriptor,
-                    min(
-                        64 * 1024,
-                        MAX_INROU_GUEST_QUALIFICATION_BYTES + 1 - len(payload),
-                    ),
-                )
-            except OSError as error:
-                fail(f"cannot read Inrou guest qualification record: {error}")
-            if not chunk:
-                break
-            payload.extend(chunk)
-        after_open = os.fstat(descriptor)
-    finally:
-        try:
-            os.close(descriptor)
-        except OSError as error:
-            fail(f"cannot close Inrou guest qualification record: {error}")
-    try:
-        after_path = path.lstat()
-    except OSError as error:
-        fail(f"cannot re-inspect Inrou guest qualification record: {error}")
-    identity_before = (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
+    payload = read_stable_bytes(
+        path,
+        limit=MAX_INROU_GUEST_QUALIFICATION_BYTES,
+        label="Inrou guest qualification record",
+        owner=os.geteuid(),
+        exact_mode=0o600,
+        require_nonempty=True,
     )
-    identity_opened = (
-        after_open.st_dev,
-        after_open.st_ino,
-        after_open.st_size,
-        after_open.st_mtime_ns,
-        after_open.st_ctime_ns,
-    )
-    identity_after = (
-        after_path.st_dev,
-        after_path.st_ino,
-        after_path.st_size,
-        after_path.st_mtime_ns,
-        after_path.st_ctime_ns,
-    )
-    if identity_before != identity_opened or identity_before != identity_after:
-        fail("Inrou guest qualification record changed while it was read")
-    if len(payload) > MAX_INROU_GUEST_QUALIFICATION_BYTES:
-        fail("Inrou guest qualification record exceeds its exact safety bound")
     try:
         decoded = json_loads_no_duplicates(payload.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
@@ -4088,7 +4029,7 @@ def _read_inrou_guest_qualification_payload(path: Path) -> object:
     canonical = (json.dumps(decoded, sort_keys=True, separators=(",", ":")) + "\n").encode(
         "utf-8"
     )
-    if bytes(payload) != canonical:
+    if payload != canonical:
         fail("Inrou guest qualification record is not canonical JSON")
     return decoded
 
@@ -4322,12 +4263,26 @@ def _prepared_canary_authorization(
     """Create one runtime-only authorization identity for the disposable cohort."""
 
     nonce = os.urandom(16).hex()
+    genesis_hash = read_stable_bytes(
+        target / "genesis.expected_hash",
+        limit=256,
+        label="generated genesis hash",
+        require_nonempty=True,
+    )
+    stage_receipt = read_stable_bytes(
+        stage_dir / INROU_STAGE_RECEIPT_FILE,
+        limit=MAX_INROU_STAGE_RECEIPT_BYTES,
+        label="native Taira Inrou stage receipt",
+        owner=os.geteuid(),
+        exact_mode=0o600,
+        require_nonempty=True,
+    )
     digest = hashlib.sha256()
     for frame in (
         b"iroha:taira:disposable-prepared-canary:v1\0",
         nonce.encode("ascii"),
-        (target / "genesis.expected_hash").read_bytes(),
-        (stage_dir / INROU_STAGE_RECEIPT_FILE).read_bytes(),
+        genesis_hash,
+        stage_receipt,
     ):
         digest.update(len(frame).to_bytes(8, "big"))
         digest.update(frame)
@@ -5347,54 +5302,15 @@ def _validate_prepared_envelope_v1(
 def _read_prepared_envelope(path: Path) -> tuple[bytes, dict[str, Any]]:
     """Read one immutable owner-only prepared envelope without following links."""
 
-    try:
-        before = path.lstat()
-    except OSError as error:
-        fail(f"prepared canary envelope is missing: {error}")
-    if (
-        not stat.S_ISREG(before.st_mode)
-        or before.st_uid != os.geteuid()
-        or stat.S_IMODE(before.st_mode) != 0o600
-        or before.st_nlink != 1
-        or before.st_size <= 0
-        or before.st_size > MAX_PREPARED_ENVELOPE_BYTES
-    ):
-        fail("prepared canary envelope lacks exact owner-only custody")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        fail(f"cannot open prepared canary envelope: {error}")
-    try:
-        opened = os.fstat(descriptor)
-        payload = bytearray()
-        while len(payload) <= MAX_PREPARED_ENVELOPE_BYTES:
-            chunk = os.read(
-                descriptor,
-                min(64 * 1024, MAX_PREPARED_ENVELOPE_BYTES + 1 - len(payload)),
-            )
-            if not chunk:
-                break
-            payload.extend(chunk)
-        after_open = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    try:
-        after_path = path.lstat()
-    except OSError as error:
-        fail(f"cannot re-inspect prepared canary envelope: {error}")
-    identity = lambda value: (
-        value.st_dev,
-        value.st_ino,
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
+    payload = read_stable_bytes(
+        path,
+        limit=MAX_PREPARED_ENVELOPE_BYTES,
+        label="prepared canary envelope",
+        owner=os.geteuid(),
+        exact_mode=0o600,
+        require_nonempty=True,
     )
-    if identity(before) != identity(opened) or identity(before) != identity(after_open):
-        fail("prepared canary envelope changed while it was read")
-    if identity(before) != identity(after_path):
-        fail("prepared canary envelope path changed while it was read")
-    if len(payload) > MAX_PREPARED_ENVELOPE_BYTES or not payload.endswith(b"\n"):
+    if not payload.endswith(b"\n"):
         fail("prepared canary envelope is oversized or lacks its canonical newline")
     try:
         value = json_loads_no_duplicates(payload.decode("utf-8"))
@@ -5408,7 +5324,7 @@ def _read_prepared_envelope(path: Path) -> tuple[bytes, dict[str, Any]]:
     ).encode("utf-8")
     if canonical != payload:
         fail("prepared canary envelope is not exact canonical newline JSON")
-    return bytes(payload), value
+    return payload, value
 
 
 def _run_prepare_envelope(
@@ -5495,12 +5411,15 @@ def _run_retained_envelope_action(
         fail(f"cannot open retained prepared envelope: {error}")
     try:
         command.extend([action_flag, str(descriptor)])
-        return run(
-            command,
-            cwd=target,
-            timeout=timeout_seconds + 30,
-            pass_fds=(descriptor,),
-        )
+        try:
+            return run(
+                command,
+                cwd=target,
+                timeout=timeout_seconds + 30,
+                pass_fds=(descriptor,),
+            )
+        except (DevnetError, subprocess.TimeoutExpired) as error:
+            raise AmbiguousRetainedEnvelopeAction(str(error)) from error
     finally:
         os.close(descriptor)
 
@@ -5796,6 +5715,7 @@ def _converge_prepared_child(
         fail("prepared child did not produce a forward-safe preparation outcome")
     proof_required = preparation_outcome == "ProofRequired"
     submit_was_ambiguous = False
+    last_ambiguous_error: AmbiguousRetainedEnvelopeAction | None = None
     if proof_required:
         # The envelope is durable before this point. A no-op prepare result is
         # never terminal and never submittable; recovery performs one fresh
@@ -5811,10 +5731,11 @@ def _converge_prepared_child(
                 max(1.0, deadline - time.monotonic()),
                 run,
             )
-        except (DevnetError, subprocess.TimeoutExpired):
+        except AmbiguousRetainedEnvelopeAction as error:
             # The process may have lost its response after Torii accepted the exact
             # retained bytes. Never resubmit: recovery is the only safe next step.
             submit_was_ambiguous = True
+            last_ambiguous_error = error
             receipt = None
         else:
             receipt = _prepared_report(
@@ -5823,15 +5744,19 @@ def _converge_prepared_child(
                 **report_args,
             )
     recovery_attempted = False
+    recovery_attempts = 0
+    recovery_backoff = PREPARED_RECOVERY_INITIAL_BACKOFF_SECONDS
     while (
         receipt is None or receipt["recovery_outcome"] == "Pending"
     ) and (
         time.monotonic() < deadline
         or ((submit_was_ambiguous or proof_required) and not recovery_attempted)
-    ):
-        if receipt is not None:
-            time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+    ) and recovery_attempts < PREPARED_RECOVERY_MAX_ATTEMPTS:
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(recovery_backoff, remaining))
         recovery_attempted = True
+        recovery_attempts += 1
         try:
             recovered = _run_retained_envelope_action(
                 recover_command.copy(),
@@ -5841,16 +5766,33 @@ def _converge_prepared_child(
                 max(1.0, deadline - time.monotonic()),
                 run,
             )
-        except (DevnetError, subprocess.TimeoutExpired):
+        except AmbiguousRetainedEnvelopeAction as error:
+            last_ambiguous_error = error
             receipt = None
+            recovery_backoff = min(
+                PREPARED_RECOVERY_MAX_BACKOFF_SECONDS,
+                recovery_backoff * 2,
+            )
             continue
         receipt = _prepared_report(
             recovered,
             envelope_path=envelope_path,
             **report_args,
         )
+        recovery_backoff = min(
+            PREPARED_RECOVERY_MAX_BACKOFF_SECONDS,
+            recovery_backoff * 2,
+        )
     if receipt is None:
-        fail("prepared canary child has no authoritative recovery outcome")
+        detail = (
+            f": {last_ambiguous_error}"
+            if last_ambiguous_error is not None
+            else ""
+        )
+        fail(
+            "prepared canary child has no authoritative recovery outcome after "
+            f"{recovery_attempts} recovery attempts{detail}"
+        )
     if receipt["recovery_outcome"] != "Applied":
         fail(
             "prepared canary child did not reach Applied: "
@@ -6437,8 +6379,26 @@ def up(
             toolchain_evidence,
         )
     except (DevnetError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
-        stop_network(root, run, tolerate_failure=True)
+        cleanup_identity: tuple[int, int, int] | None = None
+        cleanup_target_was_validated = False
+        try:
+            cleanup_identity = require_safe_cleanup_target(root, target)
+            cleanup_target_was_validated = True
+        except DevnetError as cleanup_error:
+            print(
+                f"warning: cannot safely identify failed Taira network: {cleanup_error}",
+                file=sys.stderr,
+            )
+        stopped = stop_network(root, run, tolerate_failure=True)
         dump_logs(target)
+        if stopped and cleanup_target_was_validated:
+            try:
+                destroy_network(root, target, cleanup_identity)
+            except DevnetError as cleanup_error:
+                print(
+                    f"warning: could not destroy stopped Taira network: {cleanup_error}",
+                    file=sys.stderr,
+                )
         if isinstance(error, subprocess.TimeoutExpired):
             fail(f"command timed out: {error.cmd}")
         if isinstance(error, KeyboardInterrupt):
@@ -6466,7 +6426,6 @@ def up(
         },
         "toolchain": toolchain_evidence,
     }
-    print(json.dumps(report, indent=2, sort_keys=True))
     return report
 
 
@@ -6517,10 +6476,16 @@ def check(
     if source_observation != guest_qualification["source_observation"]:
         fail("current source observation differs from the retained Inrou qualification")
     toolchain = guest_qualification["toolchain"]
-    for name in COMPILED_TOOLCHAIN_NAMES_V1:
+
+    def current_tool(name: str) -> tuple[str, dict[str, int | str]]:
         retained = toolchain[name]
         path = Path(str(retained["path"]))
-        current = {"path": str(path), **executable_evidence(path)}
+        return name, {"path": str(path), **executable_evidence(path)}
+
+    current_toolchain = dict(parallel_map(COMPILED_TOOLCHAIN_NAMES_V1, current_tool))
+    for name in COMPILED_TOOLCHAIN_NAMES_V1:
+        current = current_toolchain[name]
+        retained = toolchain[name]
         if current != retained:
             fail(f"compiled {name} binary changed after Inrou qualification")
     iroha = Path(str(toolchain["iroha"]["path"]))
@@ -6573,20 +6538,24 @@ def check(
         "target_triple": guest_qualification["target_triple"],
         "toolchain": toolchain,
     }
-    print(json.dumps(report, indent=2, sort_keys=True))
     return report
 
 
 def down(args: argparse.Namespace, *, run: Runner = run_command) -> dict[str, Any]:
-    """Stop the peers and destroy their disposable runtime signer keys."""
+    """Stop the peers and destroy the complete disposable network tree."""
 
     root = managed_root(args.dir, create=False)
     target = require_stoppable_network(root)
+    target_identity = require_safe_cleanup_target(root, target)
+    if target_identity is None:
+        fail(f"network cleanup target disappeared before teardown: {target}")
     stop_network(root, run)
-    delete_runtime_signer_files(target)
-    report = {"directory": str(target), "runtime_signers_deleted": True, "stopped": True}
-    print(json.dumps(report, indent=2, sort_keys=True))
-    return report
+    destroy_network(root, target, target_identity)
+    return {
+        "directory": str(target),
+        "network_destroyed": True,
+        "stopped": True,
+    }
 
 
 def parser() -> argparse.ArgumentParser:
@@ -6651,7 +6620,9 @@ def parser() -> argparse.ArgumentParser:
     )
     check_parser.set_defaults(handler=check)
 
-    down_parser = commands.add_parser("down", help="stop the disposable peers and retain logs")
+    down_parser = commands.add_parser(
+        "down", help="stop the disposable peers and destroy the generated network"
+    )
     down_parser.set_defaults(handler=down)
     return result
 
@@ -6661,10 +6632,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = parser().parse_args(argv)
     try:
-        args.handler(args)
+        report = args.handler(args)
     except DevnetError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
+    print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 

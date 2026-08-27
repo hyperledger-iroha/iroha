@@ -399,8 +399,6 @@ fn clear_sensitive_vec(bytes: &mut Vec<u8>) {
 #[derive(Debug)]
 struct SuiteList {
     suites: Vec<HandshakeSuite>,
-    #[allow(dead_code)]
-    required: bool,
 }
 impl SuiteList {
     fn preferred(&self) -> Option<HandshakeSuite> {
@@ -902,10 +900,7 @@ fn parse_first_release_suite_ids(
 }
 fn parse_suite_list(cap: &CapabilityTlv) -> Result<SuiteList, HarnessError> {
     let suites = parse_first_release_suite_ids(cap.value.iter().copied())?;
-    Ok(SuiteList {
-        suites,
-        required: cap.required,
-    })
+    Ok(SuiteList { suites })
 }
 fn suite_list_capability(caps: &[CapabilityTlv]) -> Result<Option<SuiteList>, HarnessError> {
     caps.iter()

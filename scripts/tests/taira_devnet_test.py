@@ -2666,8 +2666,8 @@ class TairaDevnetTests(unittest.TestCase):
         down_args = module.parser().parse_args(["--dir", str(state), "down"])
         down_report = module.down(down_args, run=runtime.run)
         self.assertTrue(down_report["stopped"])
-        self.assertTrue(down_report["runtime_signers_deleted"])
-        self.assertFalse((state / "network" / module.RUNTIME_SIGNER_DIRECTORY).exists())
+        self.assertTrue(down_report["network_destroyed"])
+        self.assertFalse((state / "network").exists())
 
     def test_check_rejects_missing_guest_qualification_evidence(self) -> None:
         runtime = FakeRuntime()
@@ -3009,7 +3009,7 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "run `up` first"):
             module.down(args, run=FakeRuntime().run)
 
-    def test_down_accepts_an_already_absent_runtime_signer_directory(self) -> None:
+    def test_down_destroys_an_already_stopped_network(self) -> None:
         state = module.managed_root(self.root / "state", create=True)
         target = state / "network"
         target.mkdir()
@@ -3019,7 +3019,8 @@ class TairaDevnetTests(unittest.TestCase):
         report = module.down(args, run=FakeRuntime().run)
 
         self.assertTrue(report["stopped"])
-        self.assertTrue(report["runtime_signers_deleted"])
+        self.assertTrue(report["network_destroyed"])
+        self.assertFalse(target.exists())
 
     def test_up_preserves_incomplete_network_with_residual_pid_evidence(self) -> None:
         state = module.managed_root(self.root / "state", create=True)
@@ -3584,15 +3585,9 @@ class TairaDevnetTests(unittest.TestCase):
             with self.subTest(name=name):
                 receipt = json.loads(json.dumps(baseline))
                 mutate(receipt)
-                completed = subprocess.CompletedProcess(
-                    ["iroha", "taira", "inrou-canary"],
-                    0,
-                    json.dumps(receipt),
-                    "",
-                )
                 with self.assertRaisesRegex(module.DevnetError, error):
-                    module.canonical_inrou_canary_outcome(
-                        completed,
+                    module.require_canonical_inrou_canary_receipt(
+                        receipt,
                         "http://127.0.0.1:29080",
                     )
 
@@ -3686,15 +3681,9 @@ class TairaDevnetTests(unittest.TestCase):
             with self.subTest(name=name):
                 receipt = json.loads(json.dumps(baseline))
                 mutate(receipt)
-                completed = subprocess.CompletedProcess(
-                    ["iroha", "taira", "inrou-canary"],
-                    0,
-                    json.dumps(receipt),
-                    "",
-                )
                 with self.assertRaisesRegex(module.DevnetError, error):
-                    module.canonical_inrou_canary_outcome(
-                        completed,
+                    module.require_canonical_inrou_canary_receipt(
+                        receipt,
                         "http://127.0.0.1:29080",
                     )
 
