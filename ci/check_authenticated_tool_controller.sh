@@ -22,7 +22,9 @@ trap cleanup EXIT
 
 rustc --edition 2024 -D warnings -D unsafe-code "$SOURCE" \
   -o "$QUALIFICATION_ROOT/iroha_authenticated_tool_controller"
-rustc --edition 2024 -D warnings -D unsafe-code --test "$SOURCE" \
+# The test harness replaces the binary entrypoint, leaving the production-only
+# controller graph intentionally unreachable; keep every other warning denied.
+rustc --edition 2024 -D warnings -D unsafe-code -A dead-code --test "$SOURCE" \
   -o "$QUALIFICATION_ROOT/iroha_authenticated_tool_controller_tests"
 "$QUALIFICATION_ROOT/iroha_authenticated_tool_controller_tests"
 if [[ "$(uname -s)" == "Darwin" ]]; then
