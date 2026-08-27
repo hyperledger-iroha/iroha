@@ -287,7 +287,19 @@ class CSharpNativePackageTests(unittest.TestCase):
         )
         native_job = workflow[
             workflow.index("  native-release-artifacts:")
+            : workflow.index("  native-release-artifact-linux-arm:")
+        ]
+        arm_primary_job = workflow[
+            workflow.index("  native-release-artifact-linux-arm:")
+            : workflow.index("  native-release-artifact-linux-arm-retry:")
+        ]
+        arm_retry_job = workflow[
+            workflow.index("  native-release-artifact-linux-arm-retry:")
             : workflow.index("  build-test-pack:")
+        ]
+        build_job = workflow[
+            workflow.index("  build-test-pack:")
+            : workflow.index("  native-package-smoke:")
         ]
         smoke_job = workflow[
             workflow.index("  native-package-smoke:")
@@ -309,31 +321,110 @@ class CSharpNativePackageTests(unittest.TestCase):
                 f"            rid: {rid}\n"
                 f"            library_name: {library_name}"
             )
-            self.assertIn(row, native_job)
+            if target == "aarch64-unknown-linux-gnu":
+                self.assertNotIn(row, native_job)
+            else:
+                self.assertIn(row, native_job)
             self.assertIn(row, smoke_job)
             self.assertIn(f"runtimes/{rid}/native/{library_name}", project)
 
+        self.assertNotIn("ubuntu-24.04-arm", native_job)
+        self.assertNotIn("aarch64-unknown-linux-gnu", native_job)
         self.assertEqual(native_job.count("check_native_sdk_abi22_artifact.py"), 2)
         self.assertIn("--sdk csharp", native_job)
         self.assertIn('if [[ "$host_target" != "$target" ]]', native_job)
         self.assertIn('if [[ -e target ]]', native_job)
-        self.assertEqual(native_job.count('cargo_jobs: "2"'), 1)
-        arm_start = native_job.index("          - os: ubuntu-24.04-arm")
-        arm_end = native_job.index("          - os: macos-15-intel")
-        arm_row = native_job[arm_start:arm_end]
-        self.assertIn('cargo_jobs: "2"', arm_row)
-        self.assertIn('cargo_jobs="${{ matrix.cargo_jobs }}"', native_job)
-        self.assertIn(
-            'if [[ "$target" == "aarch64-unknown-linux-gnu" ]]', native_job
-        )
-        self.assertIn('export CARGO_BUILD_JOBS="$cargo_jobs"', native_job)
-        self.assertNotIn("CARGO_BUILD_JOBS=1", native_job)
         self.assertIn('cp "target/$target/release/$library_name" "$artifact"', native_job)
-        self.assertIn("package_csharp_native_artifacts.py stage", workflow)
-        self.assertIn("package_csharp_native_artifacts.py verify-package", workflow)
+
+        for arm_job in (arm_primary_job, arm_retry_job):
+            self.assertIn("runs-on: ubuntu-24.04-arm", arm_job)
+            self.assertIn("target: aarch64-unknown-linux-gnu", arm_job)
+            self.assertIn('target="aarch64-unknown-linux-gnu"', arm_job)
+            self.assertIn('library_name="libconnect_norito_bridge.so"', arm_job)
+            self.assertIn('if [[ "$host_target" != "$target" ]]', arm_job)
+            self.assertIn('if [[ -e target ]]', arm_job)
+            self.assertIn("export CARGO_BUILD_JOBS=2", arm_job)
+            self.assertIn(
+                "cargo build --locked --release -p connect_norito_bridge "
+                '--target "$target"',
+                arm_job,
+            )
+            self.assertIn(
+                'cp "target/$target/release/$library_name" "$artifact"', arm_job
+            )
+            self.assertEqual(arm_job.count("check_native_sdk_abi22_artifact.py"), 2)
+            self.assertIn("--sdk csharp", arm_job)
+            self.assertEqual(
+                arm_job.count("name: csharp-native-aarch64-unknown-linux-gnu"), 1
+            )
+            self.assertIn("path: ${{ runner.temp }}/csharp-native-upload", arm_job)
+            self.assertIn("if-no-files-found: error", arm_job)
+            self.assertIn("retention-days: 14", arm_job)
+            self.assertEqual(
+                arm_job.count(
+                    "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+                ),
+                1,
+            )
+            self.assertEqual(
+                arm_job.count(
+                    "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1"
+                ),
+                1,
+            )
+            self.assertEqual(
+                arm_job.count(
+                    "actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659"
+                ),
+                1,
+            )
+            self.assertEqual(
+                arm_job.count(
+                    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+                ),
+                1,
+            )
+
+        self.assertEqual(workflow.count("export CARGO_BUILD_JOBS=2"), 2)
+        self.assertNotIn("CARGO_BUILD_JOBS=1", workflow)
+        self.assertIn("continue-on-error: true", arm_primary_job)
+        self.assertIn(
+            "artifact_id: ${{ steps.upload.outputs.artifact-id }}", arm_primary_job
+        )
+        self.assertIn("        id: upload\n", arm_primary_job)
+        self.assertNotIn("overwrite: true", arm_primary_job)
+        self.assertIn("needs: native-release-artifact-linux-arm", arm_retry_job)
+        self.assertIn("!cancelled()", arm_retry_job)
+        self.assertIn(
+            "needs.native-release-artifact-linux-arm.outputs.artifact_id == ''",
+            arm_retry_job,
+        )
+        self.assertNotIn("continue-on-error: true", arm_retry_job)
+        self.assertEqual(arm_retry_job.count("overwrite: true"), 1)
+        self.assertNotIn("csharp-native-aarch64-unknown-linux-gnu-retry", workflow)
+
+        self.assertIn("      - native-release-artifacts", build_job)
+        self.assertIn("      - native-release-artifact-linux-arm", build_job)
+        self.assertIn("      - native-release-artifact-linux-arm-retry", build_job)
+        self.assertIn("!cancelled()", build_job)
+        self.assertIn(
+            "needs.native-release-artifacts.result == 'success'", build_job
+        )
+        self.assertIn(
+            "needs.native-release-artifact-linux-arm.outputs.artifact_id != ''",
+            build_job,
+        )
+        self.assertIn(
+            "needs.native-release-artifact-linux-arm-retry.result == 'success'",
+            build_job,
+        )
+        self.assertIn("pattern: csharp-native-*", build_job)
+        self.assertIn("merge-multiple: true", build_job)
+        self.assertIn("package_csharp_native_artifacts.py stage", build_job)
+        self.assertIn("package_csharp_native_artifacts.py verify-package", build_job)
         self.assertIn(
             "python3 -I scripts/tests/package_csharp_native_artifacts_test.py",
-            workflow,
+            build_job,
         )
         self.assertIn("BeforeTargets=\"GenerateNuspec\"", project)
         self.assertIn("$(IrohaNativePackageScript)&quot; verify-stage", project)
