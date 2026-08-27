@@ -243,10 +243,10 @@ fn authenticate_certified_body_response_for_request(
     response: wire::CertifiedBodyResponse,
     authenticated_responder: &PeerId,
 ) -> Result<AuthenticatedCertifiedBodyResponse, V2TransportError> {
-    let claimed_responder = roster_peer(context, response.responder)?;
+    let claimed_responder = response.responder.clone();
     bind_outer_identity(
         TransportIdentityKind::Responder,
-        claimed_responder,
+        &claimed_responder,
         authenticated_responder,
     )?;
     response.validate_against(
@@ -256,7 +256,7 @@ fn authenticate_certified_body_response_for_request(
     )?;
     verify_signature(
         TransportSignatureKind::CertifiedBodyResponse,
-        claimed_responder,
+        &claimed_responder,
         &response.signature,
         &response.signature_preimage(),
     )?;
@@ -826,8 +826,8 @@ impl OutstandingCertifiedBodyRequests {
     /// # Errors
     ///
     /// Returns an error for unsolicited/replayed responses, malformed bodies
-    /// or manifests, out-of-roster/spoofed responders, and invalid signatures.
-    /// A frozen-roster historical archive peer does not have to be a signer of
+    /// or manifests, spoofed responders, and invalid signatures. A current
+    /// historical archive peer does not have to be a signer of
     /// the old request QC: the verified QC authenticates the exact subject,
     /// while the response signature authenticates the peer serving the
     /// hash-bound canonical body.
@@ -1251,14 +1251,14 @@ mod tests {
             request: &wire::CertifiedBodyRequest,
             responder: wire::ValidatorIndex,
         ) -> wire::CertifiedBodyResponse {
+            let signer = &self.validators[usize::try_from(responder).expect("small index")];
             let mut response = wire::CertifiedBodyResponse {
                 request_hash: HashOf::new(request),
                 manifest: self.manifest.clone(),
                 body: self.body.clone(),
-                responder,
+                responder: Self::peer(signer),
                 signature: Vec::new(),
             };
-            let signer = &self.validators[usize::try_from(responder).expect("small index")];
             response.signature =
                 Signature::new(signer.private_key(), &response.signature_preimage())
                     .payload()
@@ -1531,21 +1531,20 @@ mod tests {
             .authenticate_response(&fixture.context, archive_response.clone(), &archive_sender)
             .expect("frozen-roster archive need not have signed the old QC");
         assert_eq!(authenticated_archive.response(), &archive_response);
+        let rotated_responder = KeyPair::try_from_seed(vec![91; 32], Algorithm::Ed25519)
+            .expect("deterministic rotated responder key");
+        let rotated_sender = Fixture::peer(&rotated_responder);
         let mut outside_roster = archive_response;
-        outside_roster.responder =
-            u32::try_from(fixture.context.roster.len()).expect("small fixture roster");
+        outside_roster.responder = rotated_sender.clone();
         outside_roster.signature = Signature::new(
-            fixture.validators[3].private_key(),
+            rotated_responder.private_key(),
             &outside_roster.signature_preimage(),
         )
         .payload()
         .to_vec();
-        assert!(matches!(
-            tracker.authenticate_response(&fixture.context, outside_roster, &archive_sender,),
-            Err(V2TransportError::Wire(
-                wire::ValidationError::SignerOutOfRange
-            ))
-        ));
+        tracker
+            .authenticate_response(&fixture.context, outside_roster, &rotated_sender)
+            .expect("current rotated archive identity authenticates historical body");
         assert!(tracker.contains(request_hash));
         assert!(
             tracker.response_claims.is_empty(),

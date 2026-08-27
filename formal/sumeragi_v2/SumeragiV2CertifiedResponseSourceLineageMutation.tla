@@ -7,14 +7,13 @@ Bounded mutation witness for the certified-response Decision handoff.
 An honest certified response is a transport completion.  Its outer `source`
 is therefore the aggregate untrusted relay/resource hop.  The response
 separately retains the exact signed-request hash, authenticated current
-archive server, archive signature owner, and explicit frozen-QC signer
-citation.  V5 requires the archive server itself to belong to the frozen
-CommitQC signer set while keeping it distinct from the outer relay.  The fixed
-ownership predicate follows the request hash, archive signer, and cited
-responder.  The mutant incorrectly treats the outer relay source as the
-CommitQC signer and consequently loses the Decision recovery owner when the
-response candidate is scheduled.  The legacy fixed Mode string is retained
-for the frozen runner configuration.
+archive responder, and response-signature owner.  The current responder may
+have rotated out of the historical CommitQC signer set.  The fixed ownership
+predicate follows the request hash and current authenticated responder.  The
+mutant incorrectly treats the outer relay source as the CommitQC signer and
+consequently loses the Decision recovery owner when the response candidate is
+scheduled.  The legacy fixed Mode string is retained for the frozen runner
+configuration.
 
 This small model isolates the source projection used by
 `DecisionCertifiedFetchOwned`.  It is bounded mutation evidence, not a proof
@@ -49,7 +48,7 @@ CommitQc ==
    view |-> RecoveryView,
    phase |-> "Commit",
    subject |-> RecoverySubject,
-   signers |-> {Node, RemoteSigner, OtherSigner, RotatedArchive}]
+   signers |-> {Node, RemoteSigner, OtherSigner, "validator-3"}]
 
 ExactRequestPreimage ==
   [round |-> [height |-> RecoveryContext.height, view |-> RecoveryView],
@@ -86,8 +85,7 @@ CertifiedResponse ==
       view |-> RecoveryView,
       subject |-> RecoverySubject,
       requestHash |-> ExactRequestHash,
-      archiveServer |-> RotatedArchive,
-      citedResponder |-> RemoteSigner,
+      responder |-> RotatedArchive,
       signatureOwner |-> RotatedArchive]]
 
 VARIABLES stage, candidateScheduled
@@ -125,17 +123,18 @@ HonestCertifiedResponseShape ==
   /\ Node \in CommitQc.signers
   /\ RemoteSigner \in CommitQc.signers \ {Node}
   /\ AsyncUntrustedSource \notin Validators
-  /\ RotatedArchive \in CommitQc.signers \ {Node}
+  /\ RotatedArchive \in Validators
+  /\ RotatedArchive \notin CommitQc.signers
   /\ CertifiedResponse.source = AsyncUntrustedSource
   /\ CertifiedRequest.source = Node
   /\ CertifiedRequest.envelope.recipient = RotatedArchive
   /\ CertifiedRequest.envelope.certificate = CommitQc
   /\ CertifiedResponse.envelope.requestHash =
        CertifiedRequest.envelope.requestHash
-  /\ CertifiedResponse.envelope.archiveServer = RotatedArchive
+  /\ CertifiedResponse.envelope.responder = RotatedArchive
   /\ CertifiedResponse.envelope.signatureOwner = RotatedArchive
 
-ExplicitCitedResponderOwnsResponse ==
+AuthenticatedResponderOwnsResponse ==
   /\ CertifiedResponse.kind = "CertifiedResponse"
   /\ CertifiedResponse.envelope.recipient = Node
   /\ CertifiedResponse.envelope.height = CommitQc.context.height
@@ -143,9 +142,8 @@ ExplicitCitedResponderOwnsResponse ==
   /\ CertifiedResponse.envelope.subject = CommitQc.subject
   /\ CertifiedResponse.envelope.requestHash = ExactRequestHash
   /\ CertifiedResponse.envelope.signatureOwner =
-       CertifiedResponse.envelope.archiveServer
-  /\ CertifiedResponse.envelope.archiveServer \in CommitQc.signers
-  /\ CertifiedResponse.envelope.citedResponder \in CommitQc.signers
+       CertifiedResponse.envelope.responder
+  /\ CertifiedResponse.envelope.responder \in Validators
   /\ candidateScheduled
 
 OuterTransportSourceOwnsResponse ==
@@ -159,7 +157,7 @@ OuterTransportSourceOwnsResponse ==
 
 DecisionCertifiedFetchOwned ==
   IF Mode = "EmbeddedCitedSignerSurrogate"
-  THEN ExplicitCitedResponderOwnsResponse
+  THEN AuthenticatedResponderOwnsResponse
   ELSE OuterTransportSourceOwnsResponse
 
 DecisionRecoveryOwnerRetained ==

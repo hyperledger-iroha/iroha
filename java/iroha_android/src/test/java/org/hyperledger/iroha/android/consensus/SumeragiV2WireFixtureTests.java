@@ -159,6 +159,18 @@ public final class SumeragiV2WireFixtureTests {
   }
 
   @Test
+  public void certifiedBodyResponseCarriesThePeerIdResponderPayload() throws Exception {
+    FixtureRow row = fixtureRow("message", "certified_body_response");
+    SumeragiV2Wire.ConsensusMessageV2 message =
+        SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(hexBytes(row.hex));
+    SumeragiV2Wire.CertifiedBodyResponse response =
+        ((SumeragiV2Wire.ConsensusPayload.CertifiedBodyResponseMessage) message.payload).value;
+
+    assertEquals(75, response.responder.bytes().length);
+    assertArrayEquals(hexBytes(row.hex), message.encode());
+  }
+
+  @Test
   public void rustMergeCarrierFixturePinsCurrentV4Shape() throws Exception {
     SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage payload =
         (SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage)

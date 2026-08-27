@@ -25,8 +25,148 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
+fn direct_signature_program(opcode: u8) -> (u32, Vec<u8>) {
+    let word = encoding::wide::encode_rr(opcode, 3, 1, 2);
+    let mut code = word.to_le_bytes().to_vec();
+    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    (word, code)
+}
+fn aliased_signature_operand_vm(opcode: u8, payload_len: usize, gas: u64) -> IVM {
+    let tlv = make_tlv(PointerType::Blob as u16, &vec![0xA5; payload_len]);
+    let mut vm = IVM::new(gas);
+    vm.memory
+        .preload_input(0, &tlv)
+        .expect("aliased signature operand fits INPUT");
+    for register in 1..=3 {
+        vm.set_register(register, Memory::INPUT_START);
+    }
+    let (_, code) = direct_signature_program(opcode);
+    vm.memory.load_code(&code);
+    vm
+}
 fn ed25519_test_key(tag: u8) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[tag; 32])
+}
+#[test]
+fn direct_signature_opcodes_charge_each_aliased_payload_before_hashing() {
+    const PAYLOAD_LEN: usize = 48 * 1024;
+    for opcode in [
+        instruction::wide::crypto::ED25519VERIFY,
+        instruction::wide::crypto::ECDSAVERIFY,
+        instruction::wide::crypto::DILITHIUMVERIFY,
+    ] {
+        let (word, _) = direct_signature_program(opcode);
+        let base = ivm::gas::cost_of(word).expect("signature opcode must be scheduled");
+        let payload_len = u64::try_from(PAYLOAD_LEN).unwrap();
+        let surcharge = ivm::gas::signature_opcode_extra_gas(payload_len, payload_len, payload_len)
+            .expect("test surcharge fits u64");
+
+        let mut exact = aliased_signature_operand_vm(opcode, PAYLOAD_LEN, base + surcharge);
+        exact
+            .run()
+            .expect("the exact byte-linear signature budget must succeed");
+        assert_eq!(exact.gas_remaining, 0, "opcode {opcode:#x}");
+        assert_eq!(exact.register(3), 0, "oversized key material must reject");
+
+        let mut short = aliased_signature_operand_vm(opcode, PAYLOAD_LEN, base + surcharge - 1);
+        assert_eq!(short.run(), Err(VMError::OutOfGas), "opcode {opcode:#x}");
+        assert_eq!(
+            short.gas_remaining,
+            surcharge - 1,
+            "the surcharge must fail atomically after the fixed opcode debit"
+        );
+    }
+}
+
+#[test]
+fn direct_signature_opcodes_reject_unknown_tlv_version_without_byte_surcharge() {
+    const PAYLOAD_LEN: usize = 48 * 1024;
+    for opcode in [
+        instruction::wide::crypto::ED25519VERIFY,
+        instruction::wide::crypto::ECDSAVERIFY,
+        instruction::wide::crypto::DILITHIUMVERIFY,
+    ] {
+        let (word, code) = direct_signature_program(opcode);
+        let base = ivm::gas::cost_of(word).expect("signature opcode must be scheduled");
+        let mut tlv = make_tlv(PointerType::Blob as u16, &vec![0xA5; PAYLOAD_LEN]);
+        tlv[2] = 2; // unsupported pointer-ABI envelope version
+
+        let mut vm = IVM::new(base);
+        vm.memory
+            .preload_input(0, &tlv)
+            .expect("unknown-version signature operand fits INPUT");
+        for register in 1..=3 {
+            vm.set_register(register, Memory::INPUT_START);
+        }
+        vm.memory.load_code(&code);
+
+        vm.run()
+            .expect("a header-rejected envelope must consume only the opcode base");
+        assert_eq!(vm.gas_remaining, 0, "opcode {opcode:#x}");
+        assert_eq!(vm.register(3), 0, "unknown TLV versions must reject");
+    }
+}
+
+#[test]
+fn direct_signature_preflight_reports_private_memory_after_a_malformed_operand() {
+    let opcode = instruction::wide::crypto::ED25519VERIFY;
+    let signature_word = encoding::wide::encode_rr(opcode, 3, 1, 2);
+    let private_store = encoding::wide::encode_store(instruction::wide::memory::STORE64, 20, 21, 0);
+    let mut program = ivm::ProgramMetadata {
+        mode: ivm::ivm_mode::ZK,
+        max_cycles: 32,
+        ..ivm::ProgramMetadata::default()
+    }
+    .encode();
+    for word in [private_store, signature_word, encoding::wide::encode_halt()] {
+        program.extend_from_slice(&word.to_le_bytes());
+    }
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&program)
+        .expect("load ZK signature fixture");
+
+    let payload = [0x5A; 8];
+    let tlv = make_tlv(PointerType::Blob as u16, &payload);
+    let tlv_pointer = Memory::STACK_START + 1;
+    vm.store_bytes(tlv_pointer, &tlv)
+        .expect("store stack-owned TLV fixture");
+    vm.set_register(20, Memory::STACK_START + 8);
+    vm.set_register(21, u64::from_le_bytes(payload));
+    vm.registers.set_tag(21, true);
+
+    vm.set_register(1, 0); // malformed public message pointer
+    vm.set_register(2, tlv_pointer); // later private signature range
+    vm.set_register(3, 0);
+    assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
+}
+
+#[test]
+fn direct_signature_preflight_classifies_overflowing_public_pointers_as_malformed() {
+    let opcode = instruction::wide::crypto::ED25519VERIFY;
+    let signature_word = encoding::wide::encode_rr(opcode, 3, 1, 2);
+    let private_store = encoding::wide::encode_store(instruction::wide::memory::STORE64, 20, 21, 0);
+    let mut program = ivm::ProgramMetadata {
+        mode: ivm::ivm_mode::ZK,
+        max_cycles: 32,
+        ..ivm::ProgramMetadata::default()
+    }
+    .encode();
+    for word in [private_store, signature_word, encoding::wide::encode_halt()] {
+        program.extend_from_slice(&word.to_le_bytes());
+    }
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&program)
+        .expect("load ZK signature overflow fixture");
+    vm.set_register(20, Memory::STACK_START + 8);
+    vm.set_register(21, 0x5A5A_A5A5);
+    vm.registers.set_tag(21, true);
+    for register in 1..=3 {
+        vm.set_register(register, u64::MAX);
+    }
+
+    vm.run()
+        .expect("overflowing public pointers are malformed, not private");
+    assert_eq!(vm.register(3), 0);
 }
 fn ed25519_signature_with_replacement_r(
     signing_key: &ed25519_dalek::SigningKey,
@@ -760,7 +900,7 @@ fn opcode_verify_dilithium_rejects_all_zero_signature_material() {
     let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
     let sig_tlv = make_tlv(PointerType::Blob as u16, &signature);
     let pk_tlv = make_tlv(PointerType::Blob as u16, pk.as_bytes());
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(20_000);
     vm.memory.preload_input(0, &msg_tlv).expect("preload input");
     let p_msg = Memory::INPUT_START;
     let p_sig = p_msg + msg_tlv.len() as u64 + 8;
@@ -794,7 +934,7 @@ fn opcode_verify_dilithium_rejects_all_zero_public_key_material() {
     let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
     let sig_tlv = make_tlv(PointerType::Blob as u16, sig.as_bytes());
     let pk_tlv = make_tlv(PointerType::Blob as u16, &public_key);
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(20_000);
     vm.memory.preload_input(0, &msg_tlv).expect("preload input");
     let p_msg = Memory::INPUT_START;
     let p_sig = p_msg + msg_tlv.len() as u64 + 8;
@@ -827,7 +967,7 @@ fn opcode_verify_dilithium_via_tlv() {
     let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
     let sig_tlv = make_tlv(PointerType::Blob as u16, sig.as_bytes());
     let pk_tlv = make_tlv(PointerType::Blob as u16, pk.as_bytes());
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(20_000);
     vm.memory.preload_input(0, &msg_tlv).expect("preload input");
     let p_msg = Memory::INPUT_START;
     let p_sig = p_msg + msg_tlv.len() as u64 + 8;

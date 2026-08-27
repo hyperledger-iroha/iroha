@@ -149,7 +149,7 @@ struct MessageMeta {
     subject: Option<BlockSubject>,
     execution_commitment: Option<ExecutionCommitment>,
     signer: Option<ValidatorIndex>,
-    cited_responder: Option<ValidatorIndex>,
+    cited_responder: Option<PeerId>,
     certificate_signers: Vec<ValidatorIndex>,
     envelope_digest: Hash,
 }
@@ -1353,7 +1353,8 @@ fn descriptor_value(descriptor: &HeldDescriptor) -> Result<Value, ControlError> 
             descriptor
                 .meta
                 .cited_responder
-                .map_or(Value::Null, |responder| Value::from(u64::from(responder))),
+                .as_ref()
+                .map_or(Value::Null, |responder| Value::from(responder.to_string())),
         ),
         (
             "envelope_digest",
@@ -1580,7 +1581,7 @@ fn message_meta(
             ),
         };
     let cited_responder = match &message.payload {
-        ConsensusMessageV2Payload::CertifiedBodyResponse(value) => Some(value.responder),
+        ConsensusMessageV2Payload::CertifiedBodyResponse(value) => Some(value.responder.clone()),
         _ => None,
     };
     let (manifest_hash, chunk_index) = match &message.payload {
@@ -2141,7 +2142,7 @@ mod tests {
                 Some(subject),
                 None,
                 None,
-                Some(0),
+                Some(sender.clone()),
                 Vec::new(),
             ),
             MessageKind::CommitCertificateRequest => {
@@ -2743,7 +2744,10 @@ mod tests {
             if kind == MessageKind::CertifiedBodyResponse {
                 let descriptor = descriptor.as_object().expect("descriptor object");
                 assert_eq!(descriptor.get("signer"), Some(&Value::Null));
-                assert_eq!(descriptor.get("cited_responder"), Some(&Value::from(0_u64)));
+                assert_eq!(
+                    descriptor.get("cited_responder"),
+                    Some(&Value::from(peer(42).to_string()))
+                );
             }
         }
     }
@@ -2789,7 +2793,7 @@ mod tests {
         false_response_signer.signer = Some(0);
         cases.push(false_response_signer);
         let mut spurious_cited_responder = valid_meta(MessageKind::PrepareVote);
-        spurious_cited_responder.cited_responder = Some(0);
+        spurious_cited_responder.cited_responder = Some(peer(42));
         cases.push(spurious_cited_responder);
         for meta in cases {
             assert!(matches!(

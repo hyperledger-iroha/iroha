@@ -209,17 +209,28 @@ pub(crate) fn quote_and_sign_transaction(
             response.body(),
         )));
     }
+    let mut content_types = response.headers().get_all("content-type").iter();
+    let content_type = content_types
+        .next()
+        .ok_or_else(|| eyre!("Fee quote response Content-Type must be application/json"))?
+        .to_str()
+        .map_err(|_| eyre!("Fee quote response Content-Type must be application/json"))?;
+    if content_types.next().is_some()
+        || !content_type
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .eq_ignore_ascii_case("application/json")
+    {
+        eyre::bail!("Fee quote response Content-Type must be application/json");
+    }
     let quote: FeeQuoteResponse = norito::json::from_slice(response.body())
         .wrap_err("Failed to decode the exact transaction fee quote")?;
-    if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
-        eyre::bail!(
-            "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
-        );
-    }
     quote
-        .intent
-        .validate()
-        .wrap_err("Fee quote returned an invalid signature-bound payment intent")?;
+        .validate_for_draft(&payload)
+        .map_err(|error| eyre!(error))
+        .wrap_err("Fee quote response does not match the requested transaction payload")?;
     validate_executable_fee_payment(&executable, &quote.intent)?;
     payload.fee_payment = quote.intent.clone();
     let transaction = client

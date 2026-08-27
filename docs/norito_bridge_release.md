@@ -199,6 +199,13 @@ and both same-version specs are published in dependency order and a clean public
 
 ## CI considerations
 
+- The Kagemusha PR workflow alone may invoke the builder with
+  `--ci-handoff-only`. That restricted mode rejects archives and dirty sources,
+  performs the source-seal and exact XCFramework validators, and atomically
+  stages `NoritoBridge.ci-handoff` without publishing the canonical
+  `NoritoBridge.xcframework` paths. Its digest-authenticated consumer restores
+  those canonical paths in a fresh job and runs the full Apple artifact checker
+  before any Swift lifecycle test. Release builds must not use this mode.
 - `.github/workflows/mobile_sdk_artifacts.yml` runs the packaging and artifact
   checkers on `macos-14`, uploads the generated archives, and publishes release
   assets for `v*` tags.

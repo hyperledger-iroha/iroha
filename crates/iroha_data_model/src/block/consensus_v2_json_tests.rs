@@ -425,7 +425,7 @@ fn authenticated_consensus_json_rejects_unknown_fields_at_every_signed_layer() {
             request_hash: HashOf::from_untyped_unchecked(Hash::new(b"signed-layer body request",)),
             manifest,
             body_hash: Hash::new(payload),
-            responder: 0,
+            responder: context.roster[0].validator.clone(),
         }
     );
     assert_unknown_rejected!(

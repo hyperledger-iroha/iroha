@@ -1,33 +1,31 @@
 package org.hyperledger.iroha.android.alias;
 
-import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.MessageDigest;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
-import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.NetworkId;
-import org.hyperledger.iroha.android.model.TransactionPayload;
-import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
-import org.hyperledger.iroha.android.tx.SignedTransaction;
-import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.junit.Test;
 
 /** Cross-language golden coverage for exact prepared-transaction authentication. */
 public final class PreparedTransactionSignatureFixtureTests {
   private static final String FIXTURE_PATH =
       "fixtures/prepared_transactions/prepared_transaction_signature_v1.json";
+  private static final String FAUCET_ASSET_DEFINITION_ID =
+      "4rPeAP6jAjiLVZThZYwwPRBuQagt";
+  private static final String FAUCET_AMOUNT = "5";
 
   /** Authenticates prepared, proof-required, and faucet vectors against the Rust golden. */
   @Test
@@ -78,13 +76,26 @@ public final class PreparedTransactionSignatureFixtureTests {
         prepared.serverSignature());
     final AccountOnboardingPreparedTransactionV1 independentlyParsedPrepared =
         (AccountOnboardingPreparedTransactionV1) parseResponse(preparedVector);
+    final FeePaymentIntent expectedFeePayment =
+        FeePaymentIntent.authority(Collections.emptyList());
     AccountOnboardingPreparedVerifier.requireValidPrepared(
         prepared,
         prepared.receipt().body().request(),
         independentlyParsedPrepared.receipt(),
         independentlyParsedPrepared.binding(),
+        expectedFeePayment,
         networkId,
         string(preparedVector, "signer_account_id"));
+    expectIllegalArgument(
+        () ->
+            AccountOnboardingPreparedVerifier.requireValidPrepared(
+                prepared,
+                prepared.receipt().body().request(),
+                independentlyParsedPrepared.receipt(),
+                independentlyParsedPrepared.binding(),
+                FeePaymentIntent.authority(Collections.emptyList(), 1L),
+                networkId,
+                string(preparedVector, "signer_account_id")));
     final Map<String, Object> submitJson = new LinkedHashMap<>();
     submitJson.put("schema", PreparedTransactionSubmitResponseV1.SCHEMA);
     submitJson.put("binding", prepared.binding().toJsonMap());
@@ -94,8 +105,17 @@ public final class PreparedTransactionSignatureFixtureTests {
     final PreparedTransactionSubmitResponseV1 submitResponse =
         AccountOnboardingJsonParser.parseSubmitResponse(
             JsonEncoder.encode(submitJson).getBytes(StandardCharsets.UTF_8));
-    AccountOnboardingPreparedVerifier.requireValidSubmitResponse(submitResponse, prepared, 200);
-    AccountOnboardingPreparedVerifier.requireValidSubmitResponse(submitResponse, prepared, 202);
+    AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
+        submitResponse, prepared, expectedFeePayment, 200);
+    AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
+        submitResponse, prepared, expectedFeePayment, 202);
+    expectIllegalArgument(
+        () ->
+            AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
+                submitResponse,
+                prepared,
+                FeePaymentIntent.authority(Collections.emptyList(), 1L),
+                200));
     final PreparedTransactionSubmitResponseV1 incorrectlyAppliedAtAcceptance =
         new PreparedTransactionSubmitResponseV1(
             PreparedTransactionSubmitResponseV1.SCHEMA,
@@ -106,7 +126,7 @@ public final class PreparedTransactionSignatureFixtureTests {
     expectIllegalArgument(
         () ->
             AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
-                incorrectlyAppliedAtAcceptance, prepared, 202));
+                incorrectlyAppliedAtAcceptance, prepared, expectedFeePayment, 202));
 
     final Map<String, Object> proofRequiredVector = vectors.get("onboarding_proof_required");
     assertEquals(networkId, NetworkId.parse(string(proofRequiredVector, "network_id")));
@@ -141,6 +161,7 @@ public final class PreparedTransactionSignatureFixtureTests {
                 substitutedRequest,
                 prepared.receipt(),
                 prepared.binding(),
+                expectedFeePayment,
                 networkId,
                 string(preparedVector, "signer_account_id")));
     expectIllegalArgument(
@@ -232,6 +253,7 @@ public final class PreparedTransactionSignatureFixtureTests {
         source.receipt().body().request(),
         source.receipt(),
         candidate.binding(),
+        FeePaymentIntent.authority(Collections.emptyList()),
         networkId,
         authority);
   }
@@ -239,26 +261,80 @@ public final class PreparedTransactionSignatureFixtureTests {
   private static void assertFaucetVector(
       final Map<String, Object> vector, final NetworkId networkId) throws Exception {
     final Map<String, Object> response = object(vector.get("response"), "faucet response");
-    final byte[] transcript = faucetTranscript(response);
-    assertVectorTranscript(vector, transcript, string(response, "server_signature"));
-    final byte[] wire = decodeHex(string(response, "signed_transaction_wire_hex"));
-    assertEquals(
-        string(response, "signed_transaction_wire_sha256"),
-        hex(MessageDigest.getInstance("SHA-256").digest(wire)));
-    final SignedTransaction transaction = SignedTransactionEncoder.decodeVersioned(wire);
-    assertArrayEquals(wire, SignedTransactionEncoder.encodeVersioned(transaction));
-    assertEquals(
-        string(response, "transaction_hash_hex"), SignedTransactionHasher.hashHex(transaction));
-    final TransactionPayload payload = SignedTransactionEncoder.decodeCanonicalPayload(transaction);
-    assertEquals(networkId, payload.networkId());
-    assertTrue(
-        AccountOnboardingReceiptVerifier.sameAccountIdentity(
-            string(vector, "signer_account_id"), payload.authority()));
-    assertTrue(
-        AccountOnboardingReceiptVerifier.verifyAuthoritySignature(
-            payload.authority(),
-            IrohaHash.prehash(transaction.encodedPayload()),
-            transaction.signature()));
+    final AccountFaucetPreparedTransactionV1 prepared =
+        AccountOnboardingJsonParser.parseFaucetPrepareResponse(
+            JsonEncoder.encode(response).getBytes(StandardCharsets.UTF_8));
+    assertVectorTranscript(
+        vector,
+        PreparedTransactionSignatureV1.faucetPrepared(prepared),
+        prepared.serverSignature());
+    assertEquals(prepared.claim().semanticHashHex(), prepared.semanticHashHex());
+    final FeePaymentIntent expectedFeePayment =
+        FeePaymentIntent.authority(Collections.emptyList());
+    final AccountFaucetPolicyV1 policy =
+        new AccountFaucetPolicyV1(
+            string(vector, "signer_account_id"),
+            FAUCET_ASSET_DEFINITION_ID,
+            NumericV1.QuantityValue.parseCanonical(FAUCET_AMOUNT));
+    AccountFaucetPreparedVerifier.requireValidPrepared(
+        prepared,
+        prepared.claim(),
+        prepared.binding(),
+        expectedFeePayment,
+        policy,
+        networkId);
+    final PreparedTransactionSubmitResponseV1 submitResponse =
+        new PreparedTransactionSubmitResponseV1(
+            PreparedTransactionSubmitResponseV1.SCHEMA,
+            prepared.binding(),
+            prepared.operation(),
+            prepared.transactionHashHex(),
+            PreparedTransactionOutcomeV1.PENDING);
+    AccountFaucetPreparedVerifier.requireValidSubmitResponse(
+        submitResponse, prepared, expectedFeePayment, policy, networkId, 202);
+    expectIllegalArgument(
+        () ->
+            AccountFaucetPreparedVerifier.requireValidPrepared(
+                prepared,
+                prepared.claim(),
+                prepared.binding(),
+                FeePaymentIntent.authority(Collections.emptyList(), 1L),
+                policy,
+                networkId));
+    final AccountFaucetPolicyV1[] substitutedPolicies = {
+      new AccountFaucetPolicyV1(
+          prepared.accountId(),
+          FAUCET_ASSET_DEFINITION_ID,
+          NumericV1.QuantityValue.parseCanonical(FAUCET_AMOUNT)),
+      new AccountFaucetPolicyV1(
+          policy.faucetAuthority(),
+          otherAssetDefinition(),
+          NumericV1.QuantityValue.parseCanonical(FAUCET_AMOUNT)),
+      new AccountFaucetPolicyV1(
+          policy.faucetAuthority(),
+          FAUCET_ASSET_DEFINITION_ID,
+          NumericV1.QuantityValue.parseCanonical("6"))
+    };
+    for (final AccountFaucetPolicyV1 substitutedPolicy : substitutedPolicies) {
+      expectIllegalArgument(
+          () ->
+              AccountFaucetPreparedVerifier.requireValidPrepared(
+                  prepared,
+                  prepared.claim(),
+                  prepared.binding(),
+                  expectedFeePayment,
+                  substitutedPolicy,
+                  networkId));
+      expectIllegalArgument(
+          () ->
+              AccountFaucetPreparedVerifier.requireValidSubmitResponse(
+                  submitResponse,
+                  prepared,
+                  expectedFeePayment,
+                  substitutedPolicy,
+                  networkId,
+                  202));
+    }
   }
 
   private static void assertVectorTranscript(
@@ -274,47 +350,6 @@ public final class PreparedTransactionSignatureFixtureTests {
             string(vector, "signer_account_id"),
             PreparedTransactionSignatureV1.digest(transcript),
             responseSignature));
-  }
-
-  private static byte[] faucetTranscript(final Map<String, Object> response) {
-    final Map<String, Object> binding = object(response.get("binding"), "faucet binding");
-    final Map<String, Object> claim = object(response.get("claim"), "faucet claim");
-    final ByteArrayOutputStream output = new ByteArrayOutputStream();
-    frame(
-        output,
-        decodeHex(
-            "69726f68613a74616972613a70726570617265642d7472616e73616374696f6e3a763100"));
-    field(output, "transcript_schema", PreparedTransactionSignatureV1.TRANSCRIPT_SCHEMA);
-    field(output, "envelope_schema", string(response, "schema"));
-    field(output, "operation", string(response, "operation"));
-    field(output, "binding.schema", string(binding, "schema"));
-    field(output, "binding.authorization_sha256", string(binding, "authorization_sha256"));
-    field(output, "binding.authorization_nonce", string(binding, "authorization_nonce"));
-    field(output, "binding.kind", string(binding, "kind"));
-    field(output, "binding.phase", string(binding, "phase"));
-    field(output, "binding.idempotency_key", string(binding, "idempotency_key"));
-    field(
-        output,
-        "binding.execution_expires_at_unix_ms",
-        Long.toString(number(binding, "execution_expires_at_unix_ms")));
-    field(output, "claim.account_id", string(claim, "account_id"));
-    field(output, "claim.pow_anchor_height", optionalNumber(claim, "pow_anchor_height"));
-    field(output, "claim.pow_nonce_hex", optionalString(claim, "pow_nonce_hex"));
-    field(output, "semantic_hash_hex", string(response, "semantic_hash_hex"));
-    field(output, "account_id", string(response, "account_id"));
-    field(output, "asset_definition_id", string(response, "asset_definition_id"));
-    field(output, "asset_id", string(response, "asset_id"));
-    field(output, "amount", string(response, "amount"));
-    field(output, "transaction_hash_hex", string(response, "transaction_hash_hex"));
-    field(
-        output,
-        "signed_transaction_wire_sha256",
-        string(response, "signed_transaction_wire_sha256"));
-    field(
-        output,
-        "signed_transaction_wire",
-        decodeHex(string(response, "signed_transaction_wire_hex")));
-    return output.toByteArray();
   }
 
   private static AccountOnboardingPreparedTransactionV1 copyPrepared(
@@ -346,33 +381,12 @@ public final class PreparedTransactionSignatureFixtureTests {
             .getBytes(StandardCharsets.UTF_8));
   }
 
-  private static void field(
-      final ByteArrayOutputStream output, final String label, final String value) {
-    field(output, label, value.getBytes(StandardCharsets.UTF_8));
-  }
-
-  private static void field(
-      final ByteArrayOutputStream output, final String label, final byte[] value) {
-    frame(output, label.getBytes(StandardCharsets.UTF_8));
-    frame(output, value);
-  }
-
-  private static void frame(final ByteArrayOutputStream output, final byte[] value) {
-    final long length = value.length;
-    for (int shift = 56; shift >= 0; shift -= 8) {
-      output.write((int) ((length >>> shift) & 0xffL));
-    }
-    output.write(value, 0, value.length);
-  }
-
-  private static String optionalNumber(final Map<String, Object> map, final String key) {
-    final Object value = map.get(key);
-    return value == null ? "none" : "some:" + ((Number) value).longValue();
-  }
-
-  private static String optionalString(final Map<String, Object> map, final String key) {
-    final Object value = map.get(key);
-    return value == null ? "none" : "some:" + value;
+  private static String otherAssetDefinition() {
+    final byte[] bytes = new byte[16];
+    for (int index = 0; index < bytes.length; index++) bytes[index] = (byte) (index + 1);
+    bytes[6] = 0x47;
+    bytes[8] = (byte) 0x89;
+    return AssetDefinitionIdEncoder.encodeFromBytes(bytes);
   }
 
   private static String flipHex(final String value) {
@@ -418,12 +432,6 @@ public final class PreparedTransactionSignatureFixtureTests {
     final Object value = map.get(key);
     if (!(value instanceof String)) throw new AssertionError(key + " must be a string");
     return (String) value;
-  }
-
-  private static long number(final Map<String, Object> map, final String key) {
-    final Object value = map.get(key);
-    if (!(value instanceof Number)) throw new AssertionError(key + " must be a number");
-    return ((Number) value).longValue();
   }
 
   private static void expectIllegalArgument(final Runnable action) {

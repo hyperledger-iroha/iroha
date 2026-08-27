@@ -156,16 +156,16 @@ def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> N
     assert len(draft) == 1
     assert draft.config.metadata == {"purpose": "stale-cancel-guard"}
     assert instruction_json_bytes == (
-        b'"TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCOAAAAAAAAAHlkviSo5tQGAi8uaXJvaGFfZGF0YV9tb2RlbDo6'
-        b"aXNpOjplc2Nyb3c6OkNhbmNlbEFzc2V0TG9ja11VAAAAAAAAAE5SVDAAALXIpmWn3oDi7vdcyyhwePoALQAA"
-        b'AAAAAACG3Fptkn+hwwIgigyS0HjBmiKawik0EvjKoV6DBVSoxaJxqi80+Us5JkkLBQEAAAAKBAAAAAA="'
+        b'"TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCNAAAAAAAAAG8KFNTMlvogAi4taXJvaGEuaW5zdHJ1Y3Rpb24u'
+        b"djE6OmVzY3Jvdzo6Q2FuY2VsQXNzZXRMb2NrXVUAAAAAAAAATlJUMAAAtcimZafegOLu91zLKHB4+gAtAAAA"
+        b'AAAAAIbcWm2Sf6HDAiCKDJLQeMGaIprCKTQS+MqhXoMFVKjFonGqLzT5SzkmSQsFAQAAAAoEAAAAAA=="'
     )
     assert instruction_archive == bytes.fromhex(
-        "4e5254300000862a7d77075d4d23ff6c1261db027811008e000000000000007964be24a8e6d406"
-        "022f2e69726f68615f646174615f6d6f64656c3a3a6973693a3a657363726f773a3a43616e6365"
-        "6c41737365744c6f636b5d55000000000000004e5254300000b5c8a665a7de80e2eef75ccb2870"
-        "78fa002d0000000000000086dc5a6d927fa1c302208a0c92d078c19a229ac2293412f8caa15e83"
-        "0554a8c5a271aa2f34f94b3926490b05010000000a0400000000"
+        "4e5254300000862a7d77075d4d23ff6c1261db027811008d000000000000006f0a14d4cc96fa20"
+        "022e2d69726f68612e696e737472756374696f6e2e76313a3a657363726f773a3a43616e63656c"
+        "41737365744c6f636b5d55000000000000004e5254300000b5c8a665a7de80e2eef75ccb287078"
+        "fa002d0000000000000086dc5a6d927fa1c302208a0c92d078c19a229ac2293412f8caa15e8305"
+        "54a8c5a271aa2f34f94b3926490b05010000000a0400000000"
     )
     assert len(cancel_asset_lock_archive) == 85
     assert decoded_cancel_asset_lock.escrow_id == (

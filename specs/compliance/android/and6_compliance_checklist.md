@@ -60,7 +60,7 @@ Japan’s regulators expect a parallel bundle with bilingual documentation:
   EN and JA columns and reference the specific section of `sdk/android/security.md`
   or the StrongBox attestation bundle that satisfies each control.
 - `strongbox_attestation.md` summarises the latest runs of
-  `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md`
+  `specs/sdk/android/strongbox_attestation_harness_plan.md`
   (per-device JSON + Norito envelopes). Embed links to the immutable artefacts
   under `artifacts/android/attestation/<device>/` and note the rotation cadence.
 - Record the bilingual cover letter template that ships with submissions inside

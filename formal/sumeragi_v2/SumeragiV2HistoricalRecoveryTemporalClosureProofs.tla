@@ -1515,8 +1515,9 @@ IndexedHistoricalDecisionCandidateFor(
                  IndexedAsync(initialContext)!
                    AsyncCertifiedRequestHashOf(node, qc, 0)
             /\ candidate.item.envelope.signatureOwner =
-                 candidate.item.envelope.archiveServer
-            /\ candidate.item.envelope.citedResponder \in qc.signers
+                 candidate.item.envelope.responder
+            /\ candidate.item.envelope.responder
+                 \in IndexedAsync(initialContext)!AsyncArchiveServerIds
             /\ IndexedAsync(initialContext)!
                  CertifiedResponseAuthenticatedOccurrence(
                    candidate.item)

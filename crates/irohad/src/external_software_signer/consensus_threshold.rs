@@ -34,12 +34,12 @@ use iroha_core::{
         TleProjectedPartialReleaseSignerV1 as _, ValidatedTleReleaseProjectionV1,
     },
 };
+use iroha_crypto::sha256_reader_bounded;
 use iroha_data_model::{
     NetworkId,
     consensus::{GlobalThresholdBeaconKeySessionV1, GlobalThresholdBeaconPartialSignatureV1},
 };
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
-use sha2::{Digest as _, Sha256};
 use std::{fmt, io::Read as _, path::Path, sync::Arc};
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -281,11 +281,23 @@ fn canonical_public_inventory_digest_v1<T: NoritoSerialize>(
     }
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
-    let mut hasher = Sha256::new();
-    hasher.update(CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1);
-    hasher.update(encoded_len.to_be_bytes());
-    hasher.update(encoded);
-    let digest: [u8; 32] = hasher.finalize().into();
+    let encoded_len_bytes = encoded_len.to_be_bytes();
+    let digest_input_len = CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1
+        .len()
+        .checked_add(encoded_len_bytes.len())
+        .and_then(|len| len.checked_add(encoded.len()))
+        .and_then(|len| u64::try_from(len).ok())
+        .ok_or(RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
+    let (digest, observed_len) = sha256_reader_bounded(
+        CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1
+            .chain(encoded_len_bytes.as_slice())
+            .chain(encoded.as_slice()),
+        digest_input_len,
+    )
+    .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
+    if observed_len != digest_input_len {
+        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding);
+    }
     if digest == [0; 32] {
         return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
     }
@@ -676,6 +688,8 @@ fn credential_header_v1(
 fn encode_secret_credential_v1<T: NoritoSerialize>(
     wire: &T,
 ) -> Result<Zeroizing<Vec<u8>>, RuntimeConsensusThresholdSignerCredentialErrorV1> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let encoded = Zeroizing::new(
         norito::core::to_bytes_bounded(wire, MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1)
             .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?,
@@ -1742,12 +1756,11 @@ pub(crate) mod tests {
             .payload_bytes()
             .try_into()
             .expect("fixed-size TLE identity payload");
-        let identity_digest = Sha256::digest(
+        let identity_digest = iroha_crypto::sha256(
             identity
                 .release_message()
                 .expect("frame TLE release identity"),
-        )
-        .into();
+        );
         let projection = AuthorizedTleReleaseProjectionV1 {
             version: TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1,
             ballot_attempt_id: BallotAttemptId::new([0x63; 32]),
@@ -2202,6 +2215,33 @@ pub(crate) mod tests {
         successor_session
             .verify_partial_release(&successor_identity, 100, &successor_partial)
             .expect("verify restarted successor TLE partial");
+    }
+
+    #[test]
+    fn secret_credential_encoding_ignores_ambient_layout_flags() {
+        let wire = credential_header_v1(
+            IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
+            network_id_v1(0xC1),
+            HANDLE.to_owned(),
+            REVISION,
+            POLICY_DIGEST,
+        );
+        let canonical =
+            norito::encode_canonical(&wire).expect("encode canonical credential header fixture");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::core::to_bytes(&wire).expect("encode alternate-layout header fixture")
+        };
+        assert_ne!(alternate, canonical, "fixture must exercise layout drift");
+
+        let encoded = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            encode_secret_credential_v1(&wire)
+                .expect("bounded secret credential encoding must force canonical layout")
+        };
+        assert_eq!(encoded.as_slice(), canonical.as_slice());
     }
 
     #[test]

@@ -124,9 +124,11 @@ Purpose
 Design
 - Local basis: use a monotonic clock (`t_mono`) to avoid leap seconds and OS
   adjustments. Define `t_net = t_mono + network_offset`.
-- Peer sampling: every few seconds (default 5s) select up to a capped number of
-  peers (default 8) and send a ping `(id, t1)`. Peers reply with
-  `(id, t2_recv, t3_send)`.
+- Peer sampling: every few seconds (default 5s) select a rotating bounded batch
+  of accepted, key-ACL-filtered configured logical peers (default cap 8) and
+  send a ping `(id, t1)`. Peers reply with `(id, t2_recv, t3_send)`. Effective
+  membership changes invalidate prior samples and unanswered probes as one
+  generation; authenticated observers never become time authorities.
 - NTP‑style estimation: when the reply is received at local time `t3_net`,
   compute offset `θ = ((t1_net_recv - t0_net) + (t2_net_send - t3_net))/2` and
   delay `δ = (t3_net - t0_net) - (t2_net_send - t1_net_recv)`.
@@ -154,8 +156,9 @@ Interfaces
   and NTS do not influence acceptance.
 
 Security & behavior
-- Multiple malicious peers cannot easily skew the trimmed median; stake/trust
-  weights cap influence. Single‑source attacks are ineffective due to quorum.
+- Multiple malicious configured peers cannot easily skew the trimmed median;
+  one current sample per configured identity contributes to the aggregate and
+  the health quorum prevents a single source from becoming authoritative.
 - Observers run NTS for consistent query TTLs; light clients may fetch
   `time/now` as advisory only.
 

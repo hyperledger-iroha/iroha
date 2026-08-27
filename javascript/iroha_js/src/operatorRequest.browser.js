@@ -9,12 +9,15 @@ const OPERATOR_REQUEST_DOMAIN_V1 = Buffer.from(
 );
 const FORBIDDEN_AUTH_HEADERS = new Set([
   "authorization",
+  "cookie",
+  "proxy-authorization",
   "x-api-token",
   "x-iroha-account",
   "x-iroha-signature",
   "x-iroha-timestamp-ms",
   "x-iroha-nonce",
   "x-iroha-witness",
+  "x-iroha-iso-profile",
   "x-iroha-operator-public-key",
   "x-iroha-operator-timestamp-ms",
   "x-iroha-operator-nonce",

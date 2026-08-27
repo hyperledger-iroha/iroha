@@ -11,14 +11,21 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.alias.AccountFaucetClaimV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPolicyV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPreparedTransactionV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanReceiptV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPrepareResponseV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedTransactionV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1
+import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1
 import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
 import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -131,6 +138,25 @@ class SumeragiHttpTransportContractTest {
         }
 
         val defaultClient = object : IrohaClient {
+            override fun planSponsoredAccountOnboarding(
+                request: AccountOnboardingPlanRequestV1,
+                onboardingToken: String,
+                expectedAuthority: String,
+                expectedNetworkId: NetworkId,
+            ): CompletableFuture<AccountOnboardingPlanReceiptV1> =
+                throw AssertionError("account onboarding is not used by this interface-default test")
+
+            override fun prepareSponsoredAccountOnboarding(
+                request: AccountOnboardingPlanRequestV1,
+                receipt: AccountOnboardingPlanReceiptV1,
+                binding: TairaPublicResetMutationBindingV1,
+                feePayment: FeePaymentIntent,
+                onboardingToken: String,
+                expectedAuthority: String,
+                expectedNetworkId: NetworkId,
+            ): CompletableFuture<AccountOnboardingPrepareResponseV1> =
+                throw AssertionError("account onboarding is not used by this interface-default test")
+
             override fun verifyAccountOnboardingCurrentState(
                 proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
                 request: AccountOnboardingPlanRequestV1,
@@ -141,6 +167,33 @@ class SumeragiHttpTransportContractTest {
                 canonicalAuth: ToriiCanonicalRequestAuth,
             ): CompletableFuture<AccountOnboardingCurrentStateV1> =
                 throw AssertionError("account onboarding is not used by this interface-default test")
+
+            override fun submitPreparedAccountOnboarding(
+                request: AccountOnboardingPlanRequestV1,
+                prepared: AccountOnboardingPreparedTransactionV1,
+                expectedFeePayment: FeePaymentIntent,
+                onboardingToken: String,
+                expectedAuthority: String,
+                expectedNetworkId: NetworkId,
+            ): CompletableFuture<PreparedTransactionSubmitResponseV1> =
+                throw AssertionError("account onboarding is not used by this interface-default test")
+
+            override fun prepareAccountFaucetTransaction(
+                claim: AccountFaucetClaimV1,
+                binding: TairaPublicResetMutationBindingV1,
+                feePayment: FeePaymentIntent,
+                policy: AccountFaucetPolicyV1,
+                expectedNetworkId: NetworkId,
+            ): CompletableFuture<AccountFaucetPreparedTransactionV1> =
+                throw AssertionError("account faucet is not used by this interface-default test")
+
+            override fun submitPreparedAccountFaucetTransaction(
+                prepared: AccountFaucetPreparedTransactionV1,
+                expectedFeePayment: FeePaymentIntent,
+                policy: AccountFaucetPolicyV1,
+                expectedNetworkId: NetworkId,
+            ): CompletableFuture<PreparedTransactionSubmitResponseV1> =
+                throw AssertionError("account faucet is not used by this interface-default test")
 
             override fun submitTransaction(
                 transaction: SignedTransaction,

@@ -139,6 +139,10 @@ enum HandshakeError {
     FrameTooLarge(usize),
     #[error("capability negotiation failed: {0}")]
     Capability(#[from] CapabilityError),
+    #[error(
+        "strict constant-rate transport is unavailable until application payload is carried by the fixed-rate scheduler and DATAGRAM failures close the circuit"
+    )]
+    StrictConstantRateUnavailable,
     #[error("invalid client handshake material: {0}")]
     InvalidClient(&'static str),
     #[error("handshake downgrade detected")]

@@ -223,7 +223,7 @@ async fn taikai_ingest_node_id_metadata_requires_utf8() -> Result<()> {
     Ok(())
 }
 #[tokio::test]
-async fn taikai_ssm_payload_must_decode_into_manifest() -> Result<()> {
+async fn taikai_ssm_payload_requires_caller_manifest() -> Result<()> {
     let manifest_dir = tempdir()?;
     let replay_dir = tempdir()?;
     let manifest_path = manifest_dir.path().to_owned();
@@ -233,7 +233,7 @@ async fn taikai_ssm_payload_must_decode_into_manifest() -> Result<()> {
         .with_config_layer(move |layer| {
             configure_da_spool(layer, &manifest_path, &replay_path);
         });
-    let Some(network) = start_network_async_or_skip(builder, "taikai_ssm_decode").await? else {
+    let Some(network) = start_network_async_or_skip(builder, "taikai_ssm_manifest").await? else {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
@@ -244,8 +244,8 @@ async fn taikai_ssm_payload_must_decode_into_manifest() -> Result<()> {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = response.text().await?;
     assert!(
-        body.contains("failed to decode signing manifest"),
-        "expected SSM decode failure, got body: {body}"
+        body.contains("norito_manifest"),
+        "expected caller-manifest requirement, got body: {body}"
     );
     network.shutdown().await;
     Ok(())

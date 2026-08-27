@@ -313,7 +313,7 @@ fn active_height_tail_bounds_executor_work_before_the_producer_point() {
 }
 
 #[test]
-fn apply_barriers_reconcile_only_current_serve_owners_before_direct_recovery() {
+fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_direct_recovery() {
     let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
     let barrier = source_region(
         run_inner,
@@ -348,9 +348,51 @@ fn apply_barriers_reconcile_only_current_serve_owners_before_direct_recovery() {
             ".settle_deliver_and_acknowledge(",
             "self.launched.pending_ingress_capacity.take()",
             "PendingIngressCapacityV1::CertifiedServe(wait)",
+            "PendingIngressCapacityV1::CertifiedFetch(wait)",
+            "pending @ PendingIngressCapacityV1::RecoveredDecisionFetch(_)",
+        ],
+    );
+    let certified_serve = source_region(
+        reconcile,
+        "PendingIngressCapacityV1::CertifiedServe(wait)",
+        "PendingIngressCapacityV1::CertifiedFetch(wait)",
+    );
+    assert_source_tokens_in_order(
+        certified_serve,
+        &[
             "LifecycleIoCapacityWaitStatus::SamePending",
             "LifecycleIoCapacityWaitStatus::Released",
             "drop(wait)",
+            "LifecycleIoCapacityWaitStatus::GenerationExhausted",
+            "close_admission_for_restart()",
+        ],
+    );
+    let certified_fetch = source_region(
+        reconcile,
+        "PendingIngressCapacityV1::CertifiedFetch(wait)",
+        "pending @ PendingIngressCapacityV1::RecoveredDecisionFetch(_)",
+    );
+    assert_source_tokens_in_order(
+        certified_fetch,
+        &[
+            "wait.capacity_status(&self.launched.services)",
+            "ProductionIngressCapacityStatus::Pending",
+            "ProductionIngressCapacityStatus::Released",
+            "This attempt captured capacity before admitting a new",
+            "drop(wait)",
+            "ProductionIngressCapacityStatus::GenerationExhausted",
+            "close_admission_for_restart()",
+        ],
+    );
+    let (_, recovered_fetch) = reconcile
+        .split_once("pending @ PendingIngressCapacityV1::RecoveredDecisionFetch(_)")
+        .expect("recovered Decision-Fetch capacity branch");
+    assert_source_tokens_in_order(
+        recovered_fetch,
+        &[
+            "self.launched.pending_ingress_capacity = Some(pending)",
+            "close_admission_for_restart()",
+            "terminal barrier retained a recovered Decision-Fetch ingress-capacity owner",
         ],
     );
     assert!(!reconcile.contains("drive_completion_turn("));

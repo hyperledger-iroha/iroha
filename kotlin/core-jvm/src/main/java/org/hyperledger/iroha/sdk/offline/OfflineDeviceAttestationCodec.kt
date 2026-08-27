@@ -26,6 +26,7 @@ internal object OfflineDeviceAttestationCodec {
         "iroha_data_model::offline::OfflineAndroidKeyMintChallengePreimage"
     const val INSTRUCTION_SCHEMA: String =
         "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation"
+    const val INSTRUCTION_WIRE_ID: String = "iroha.offline.device_attestation.register"
 
     private val registrationAdapter = RegistrationAdapter()
     private val instructionAdapter = InstructionAdapter()
@@ -83,7 +84,7 @@ internal object OfflineDeviceAttestationCodec {
         }
 
     fun instruction(registration: DeviceAttestationRegistration): InstructionBox =
-        InstructionBox.fromWirePayload(INSTRUCTION_SCHEMA, encodeInstructionPayload(registration))
+        InstructionBox.fromWirePayload(INSTRUCTION_WIRE_ID, encodeInstructionPayload(registration))
 
     fun canonicalChallengeHash(value: DeviceAttestationRegistration): ByteArray {
         if (value.platform == DeviceAttestationRegistration.ANDROID_KEYMINT_PLATFORM) {

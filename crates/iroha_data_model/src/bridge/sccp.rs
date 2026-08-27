@@ -33,6 +33,38 @@ pub const SCCP_SOLANA_TESTNET_GENESIS_HASH_V1: [u8; 32] = [
     0x3a, 0x13, 0x2e, 0xce, 0x10, 0x30, 0x5e, 0xc1, 0x83, 0x07, 0x25, 0x50, 0x2f, 0xa2, 0xb7, 0xe7,
     0xeb, 0x81, 0x57, 0xe9, 0x12, 0x3d, 0x4c, 0x1f, 0x65, 0x4a, 0x71, 0x78, 0x71, 0x61, 0xdc, 0x21,
 ];
+/// TON mainnet global identifier committed by the V1 network profile.
+pub const SCCP_TON_MAINNET_GLOBAL_ID_V1: i32 = -239;
+/// TON testnet global identifier committed by the V1 network profile.
+pub const SCCP_TON_TESTNET_GLOBAL_ID_V1: i32 = -3;
+/// TON masterchain workchain used by both governed zero-state identities.
+pub const SCCP_TON_MASTERCHAIN_WORKCHAIN_V1: i32 = -1;
+/// TON all-shards masterchain shard id used by both governed zero states.
+pub const SCCP_TON_MASTERCHAIN_SHARD_V1: u64 = 0x8000_0000_0000_0000;
+/// TON zero-state sequence number.
+pub const SCCP_TON_ZERO_STATE_SEQNO_V1: u32 = 0;
+/// TON mainnet zero-state root hash.
+pub const SCCP_TON_MAINNET_ZERO_STATE_ROOT_HASH_V1: [u8; 32] = [
+    0x17, 0xa3, 0xa9, 0x29, 0x92, 0xaa, 0xbe, 0xa7, 0x85, 0xa7, 0xa0, 0x90, 0x98, 0x5a, 0x26, 0x5c,
+    0xd3, 0x1f, 0x32, 0x3d, 0x84, 0x9d, 0xa5, 0x12, 0x39, 0x73, 0x7e, 0x32, 0x1f, 0xb0, 0x55, 0x69,
+];
+/// TON mainnet zero-state file hash.
+pub const SCCP_TON_MAINNET_ZERO_STATE_FILE_HASH_V1: [u8; 32] = [
+    0x5e, 0x99, 0x4f, 0xcf, 0x4d, 0x42, 0x5c, 0x0a, 0x6c, 0xe6, 0xa7, 0x92, 0x59, 0x4b, 0x71, 0x73,
+    0x20, 0x5f, 0x74, 0x0a, 0x39, 0xcd, 0x56, 0xf5, 0x37, 0xde, 0xfd, 0x28, 0xb4, 0x8a, 0x0f, 0x6e,
+];
+/// TON testnet zero-state root hash.
+pub const SCCP_TON_TESTNET_ZERO_STATE_ROOT_HASH_V1: [u8; 32] = [
+    0x82, 0x3f, 0x81, 0xf3, 0x06, 0xff, 0x02, 0x69, 0x4f, 0x93, 0x5c, 0xf5, 0x02, 0x15, 0x48, 0xe3,
+    0xce, 0x2b, 0x86, 0xb5, 0x29, 0x81, 0x2a, 0xf6, 0xa1, 0x21, 0x48, 0x87, 0x9e, 0x95, 0xa1, 0x28,
+];
+/// TON testnet zero-state file hash.
+pub const SCCP_TON_TESTNET_ZERO_STATE_FILE_HASH_V1: [u8; 32] = [
+    0x67, 0xe2, 0x0a, 0xc1, 0x84, 0xb9, 0xe0, 0x39, 0xa6, 0x26, 0x67, 0xac, 0xc3, 0xf9, 0xc0, 0x0f,
+    0x90, 0xf3, 0x59, 0xa7, 0x67, 0x38, 0x23, 0x33, 0x79, 0xef, 0xa4, 0x76, 0x04, 0x98, 0x0c, 0xe8,
+];
+/// TON basechain workchain used by the first-release SCCP contracts.
+pub const SCCP_TON_BASECHAIN_WORKCHAIN_V1: i32 = 0;
 /// A supported SCCP network profile for the V1 wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -85,6 +117,17 @@ pub enum SccpNetworkV1 {
     #[codec(index = 13)]
     #[norito(rename = "solana_testnet")]
     SolanaTestnet,
+    /// TON mainnet, bound to global id [`SCCP_TON_MAINNET_GLOBAL_ID_V1`].
+    ///
+    /// Tags `6..=9` remain permanently reserved; TON begins at the next free
+    /// profile tag after the retained Solana identity.
+    #[codec(index = 14)]
+    #[norito(rename = "ton_mainnet")]
+    TonMainnet,
+    /// TON testnet, bound to global id [`SCCP_TON_TESTNET_GLOBAL_ID_V1`].
+    #[codec(index = 15)]
+    #[norito(rename = "ton_testnet")]
+    TonTestnet,
 }
 impl SccpNetworkV1 {
     /// Return the SCCP protocol domain carried by messages for this profile.
@@ -95,6 +138,7 @@ impl SccpNetworkV1 {
             Self::EthereumMainnet | Self::EthereumSepolia => 1,
             Self::BscMainnet | Self::BscTestnet => 2,
             Self::SolanaTestnet => 3,
+            Self::TonMainnet | Self::TonTestnet => 4,
             Self::TronMainnet | Self::TronNile | Self::TronShasta => 5,
         }
     }
@@ -111,6 +155,8 @@ impl SccpNetworkV1 {
             Self::TronNile => "tron-nile",
             Self::TronShasta => "tron-shasta",
             Self::SolanaTestnet => "solana-testnet",
+            Self::TonMainnet => "ton-mainnet",
+            Self::TonTestnet => "ton-testnet",
         }
     }
     /// Parse an exact canonical profile key.
@@ -130,6 +176,8 @@ impl SccpNetworkV1 {
             "tron-nile" => Some(Self::TronNile),
             "tron-shasta" => Some(Self::TronShasta),
             "solana-testnet" => Some(Self::SolanaTestnet),
+            "ton-mainnet" => Some(Self::TonMainnet),
+            "ton-testnet" => Some(Self::TonTestnet),
             _ => None,
         }
     }
@@ -138,7 +186,11 @@ impl SccpNetworkV1 {
     pub const fn is_production_profile(self) -> bool {
         matches!(
             self,
-            Self::SoraTaira | Self::EthereumMainnet | Self::BscMainnet | Self::TronMainnet
+            Self::SoraTaira
+                | Self::EthereumMainnet
+                | Self::BscMainnet
+                | Self::TronMainnet
+                | Self::TonMainnet
         )
     }
     /// Return whether this is a staging or test network profile.
@@ -172,6 +224,8 @@ impl SccpNetworkV1 {
                 | Self::TronNile
                 | Self::TronShasta
                 | Self::SolanaTestnet
+                | Self::TonMainnet
+                | Self::TonTestnet
         )
     }
 }
@@ -839,6 +893,53 @@ pub struct SccpSolanaSourceEmitterV1 {
     /// Commitment to the exact source program's immutable route configuration.
     pub route_config_hash: [u8; 32],
 }
+/// Canonical TON raw account identifier.
+///
+/// Friendly/base64 address flags and checksums are presentation-only. SCCP
+/// consensus state retains the signed workchain id and 256-bit account id
+/// directly, so no network or bounceability flag can alter route identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpTonAddressV1 {
+    /// Signed TON workchain identifier.
+    pub workchain: i32,
+    /// Raw 256-bit account identifier within the workchain.
+    pub account: [u8; 32],
+}
+impl SccpTonAddressV1 {
+    /// Return whether the raw account identifier is nonzero.
+    #[must_use]
+    pub fn is_well_formed(self) -> bool {
+        nonzero(&self.account)
+    }
+
+    /// Return whether this address is a nonzero first-release basechain contract.
+    #[must_use]
+    pub fn is_sccp_basechain_contract(self) -> bool {
+        self.workchain == SCCP_TON_BASECHAIN_WORKCHAIN_V1 && self.is_well_formed()
+    }
+}
+/// Exact governed TON source bridge identity.
+///
+/// TON account-state proofs authenticate the account code hash and persistent
+/// route commitment. The source bridge is intentionally a distinct role from
+/// the destination route and verifier contracts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpTonSourceEmitterV1 {
+    /// Canonical raw basechain source-bridge address.
+    pub address: SccpTonAddressV1,
+    /// TON representation hash of the immutable source-bridge code cell.
+    pub code_hash: [u8; 32],
+    /// Commitment to the immutable route/token/network configuration.
+    pub route_config_hash: [u8; 32],
+}
 /// Exact source-bridge emitter identity for a supported external chain family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -859,6 +960,10 @@ pub enum SccpSourceEmitterV1 {
     #[codec(index = 2)]
     #[norito(rename = "solana")]
     Solana(SccpSolanaSourceEmitterV1),
+    /// TON basechain source-bridge identity.
+    #[codec(index = 3)]
+    #[norito(rename = "ton")]
+    Ton(SccpTonSourceEmitterV1),
 }
 impl SccpSourceEmitterV1 {
     /// Return whether this emitter variant belongs to the supplied network family.
@@ -876,6 +981,10 @@ impl SccpSourceEmitterV1 {
                 Self::Tron(_),
                 SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
             ) | (Self::Solana(_), SccpNetworkV1::SolanaTestnet)
+                | (
+                    Self::Ton(_),
+                    SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
+                )
         )
     }
     /// Return whether chain-specific identity roles match the exact network profile.
@@ -938,6 +1047,12 @@ impl SccpSourceEmitterV1 {
                         emitter.program_code_hash,
                         emitter.route_config_hash,
                     ])
+            }
+            Self::Ton(emitter) => {
+                emitter.address.is_sccp_basechain_contract()
+                    && nonzero(&emitter.code_hash)
+                    && nonzero(&emitter.route_config_hash)
+                    && emitter.code_hash != emitter.route_config_hash
             }
         }
     }
@@ -1007,7 +1122,7 @@ mod tests {
     use super::*;
     use crate::bridge::BridgeNativeProofBackendV1;
     use norito::codec::DecodeAll as _;
-    const NETWORKS: [SccpNetworkV1; 9] = [
+    const NETWORKS: [SccpNetworkV1; 11] = [
         SccpNetworkV1::SoraTaira,
         SccpNetworkV1::EthereumMainnet,
         SccpNetworkV1::EthereumSepolia,
@@ -1017,6 +1132,8 @@ mod tests {
         SccpNetworkV1::TronNile,
         SccpNetworkV1::TronShasta,
         SccpNetworkV1::SolanaTestnet,
+        SccpNetworkV1::TonMainnet,
+        SccpNetworkV1::TonTestnet,
     ];
     fn evm_emitter() -> SccpSourceEmitterV1 {
         SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
@@ -1044,6 +1161,22 @@ mod tests {
     }
     fn solana_emitter() -> SccpSourceEmitterV1 {
         SccpSourceEmitterV1::Solana(solana_emitter_value())
+    }
+    fn ton_address(byte: u8) -> SccpTonAddressV1 {
+        SccpTonAddressV1 {
+            workchain: SCCP_TON_BASECHAIN_WORKCHAIN_V1,
+            account: [byte; 32],
+        }
+    }
+    fn ton_emitter_value() -> SccpTonSourceEmitterV1 {
+        SccpTonSourceEmitterV1 {
+            address: ton_address(13),
+            code_hash: [14; 32],
+            route_config_hash: [15; 32],
+        }
+    }
+    fn ton_emitter() -> SccpSourceEmitterV1 {
+        SccpSourceEmitterV1::Ton(ton_emitter_value())
     }
     fn inbound_lane(source: SccpNetworkV1) -> SccpLaneIdV1 {
         SccpLaneIdV1 {
@@ -1120,7 +1253,7 @@ mod tests {
     }
     #[test]
     fn network_inventory_and_profile_keys_are_exact() {
-        assert_eq!(NETWORKS.len(), 9);
+        assert_eq!(NETWORKS.len(), 11);
         for network in NETWORKS {
             assert_eq!(
                 SccpNetworkV1::from_profile_key(network.profile_key()),
@@ -1135,8 +1268,9 @@ mod tests {
             "ETHEREUM-MAINNET",
             "solana-mainnet-beta",
             "solana_testnet",
-            "ton-mainnet",
-            "ton-testnet",
+            "ton",
+            "TON-MAINNET",
+            "ton_mainnet",
         ] {
             assert_eq!(SccpNetworkV1::from_profile_key(unsupported), None);
         }
@@ -1149,8 +1283,12 @@ mod tests {
         assert_eq!(SccpNetworkV1::TronNile.domain_id(), 5);
         assert_eq!(SccpNetworkV1::TronShasta.domain_id(), 5);
         assert_eq!(SccpNetworkV1::SolanaTestnet.domain_id(), 3);
+        assert_eq!(SccpNetworkV1::TonMainnet.domain_id(), 4);
+        assert_eq!(SccpNetworkV1::TonTestnet.domain_id(), 4);
         assert!(SccpNetworkV1::SolanaTestnet.is_staging_profile());
         assert!(!SccpNetworkV1::SolanaTestnet.is_production_profile());
+        assert!(SccpNetworkV1::TonMainnet.is_production_profile());
+        assert!(SccpNetworkV1::TonTestnet.is_staging_profile());
     }
     #[test]
     fn network_and_emitter_binary_roundtrips_cover_the_closed_inventory() {
@@ -1161,7 +1299,12 @@ mod tests {
                 network
             );
         }
-        for emitter in [evm_emitter(), tron_emitter(), solana_emitter()] {
+        for emitter in [
+            evm_emitter(),
+            tron_emitter(),
+            solana_emitter(),
+            ton_emitter(),
+        ] {
             let encoded = emitter.encode();
             assert_eq!(
                 SccpSourceEmitterV1::decode_all(&mut encoded.as_slice()).expect("emitter decodes"),
@@ -1171,14 +1314,14 @@ mod tests {
     }
     #[test]
     fn unknown_binary_enum_tags_are_rejected() {
-        for unsupported_tag in [0_u32, 6, 7, 8, 9, 14, u32::MAX] {
+        for unsupported_tag in [0_u32, 6, 7, 8, 9, 16, u32::MAX] {
             let encoded = unsupported_tag.encode();
             assert!(
                 SccpNetworkV1::decode_all(&mut encoded.as_slice()).is_err(),
                 "network tag {unsupported_tag} unexpectedly decoded"
             );
         }
-        for unsupported_tag in [3_u32, 4, u32::MAX] {
+        for unsupported_tag in [4_u32, 5, u32::MAX] {
             let encoded = unsupported_tag.encode();
             assert!(
                 SccpSourceEmitterV1::decode_all(&mut encoded.as_slice()).is_err(),
@@ -1198,6 +1341,8 @@ mod tests {
             (SccpNetworkV1::TronNile, 11),
             (SccpNetworkV1::TronShasta, 12),
             (SccpNetworkV1::SolanaTestnet, 13),
+            (SccpNetworkV1::TonMainnet, 14),
+            (SccpNetworkV1::TonTestnet, 15),
         ];
         for (network, tag) in expected {
             assert_eq!(
@@ -1209,25 +1354,19 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
-    fn removed_networks_and_emitters_are_not_json_decodable() {
-        for profile in [
-            "sora_nexus",
-            "solana_mainnet_beta",
-            "ton_mainnet",
-            "ton_testnet",
-            "unknown_network",
-        ] {
+    fn unsupported_networks_and_emitters_are_not_json_decodable() {
+        for profile in ["sora_nexus", "solana_mainnet_beta", "unknown_network"] {
             let json = format!(r#"{{"network":"{profile}","profile":null}}"#);
             assert!(
                 norito::json::from_json::<SccpNetworkV1>(&json).is_err(),
-                "removed profile {profile} unexpectedly decoded"
+                "unsupported profile {profile} unexpectedly decoded"
             );
         }
-        for emitter in ["ton", "unknown_emitter"] {
+        for emitter in ["unknown_emitter"] {
             let json = format!(r#"{{"emitter":"{emitter}","identity":{{}}}}"#);
             assert!(
                 norito::json::from_json::<SccpSourceEmitterV1>(&json).is_err(),
-                "removed emitter {emitter} unexpectedly decoded"
+                "unsupported emitter {emitter} unexpectedly decoded"
             );
         }
     }
@@ -1236,15 +1375,18 @@ mod tests {
     fn json_roundtrips_advertise_only_first_release_profiles() {
         for network in NETWORKS {
             let json = norito::json::to_json(&network).expect("network serializes");
-            assert!(!json.to_ascii_lowercase().contains("ton_"));
             assert_eq!(
                 norito::json::from_json::<SccpNetworkV1>(&json).expect("network decodes"),
                 network
             );
         }
-        for emitter in [evm_emitter(), tron_emitter(), solana_emitter()] {
+        for emitter in [
+            evm_emitter(),
+            tron_emitter(),
+            solana_emitter(),
+            ton_emitter(),
+        ] {
             let json = norito::json::to_json(&emitter).expect("emitter serializes");
-            assert!(!json.to_ascii_lowercase().contains(r#""ton""#));
             assert_eq!(
                 norito::json::from_json::<SccpSourceEmitterV1>(&json).expect("emitter decodes"),
                 emitter
@@ -1338,6 +1480,13 @@ mod tests {
                 solana_emitter().matches_network(network),
                 matches!(network, SccpNetworkV1::SolanaTestnet)
             );
+            assert_eq!(
+                ton_emitter().matches_network(network),
+                matches!(
+                    network,
+                    SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
+                )
+            );
         }
     }
     #[test]
@@ -1345,6 +1494,7 @@ mod tests {
         assert!(evm_emitter().is_well_formed());
         assert!(tron_emitter().is_well_formed());
         assert!(solana_emitter().is_well_formed());
+        assert!(ton_emitter().is_well_formed());
         for invalid in [
             SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
                 address: [0; 20],
@@ -1422,6 +1572,29 @@ mod tests {
                 program_code_hash: [12; 32],
                 ..solana_emitter_value()
             }),
+            SccpSourceEmitterV1::Ton(SccpTonSourceEmitterV1 {
+                address: ton_address(0),
+                ..ton_emitter_value()
+            }),
+            SccpSourceEmitterV1::Ton(SccpTonSourceEmitterV1 {
+                address: SccpTonAddressV1 {
+                    workchain: SCCP_TON_MASTERCHAIN_WORKCHAIN_V1,
+                    account: [13; 32],
+                },
+                ..ton_emitter_value()
+            }),
+            SccpSourceEmitterV1::Ton(SccpTonSourceEmitterV1 {
+                code_hash: [0; 32],
+                ..ton_emitter_value()
+            }),
+            SccpSourceEmitterV1::Ton(SccpTonSourceEmitterV1 {
+                route_config_hash: [0; 32],
+                ..ton_emitter_value()
+            }),
+            SccpSourceEmitterV1::Ton(SccpTonSourceEmitterV1 {
+                route_config_hash: [14; 32],
+                ..ton_emitter_value()
+            }),
         ] {
             assert!(!invalid.is_well_formed(), "{invalid:?}");
         }
@@ -1432,6 +1605,7 @@ mod tests {
             (SccpNetworkV1::EthereumMainnet, evm_emitter()),
             (SccpNetworkV1::BscMainnet, evm_emitter()),
             (SccpNetworkV1::TronMainnet, tron_emitter()),
+            (SccpNetworkV1::TonMainnet, ton_emitter()),
         ] {
             let identity = SccpSourceIdentityV1 {
                 lane: inbound_lane(source),
@@ -1458,6 +1632,13 @@ mod tests {
         assert!(sepolia.is_well_formed());
         assert!(!sepolia.has_governance_activatable_source());
         assert!(!sepolia.has_production_source());
+        let ton_testnet = SccpSourceIdentityV1 {
+            lane: inbound_lane(SccpNetworkV1::TonTestnet),
+            emitter: ton_emitter(),
+        };
+        assert!(ton_testnet.is_well_formed());
+        assert!(!ton_testnet.has_governance_activatable_source());
+        assert!(!ton_testnet.has_production_source());
         for identity in [
             SccpSourceIdentityV1 {
                 lane: outbound_lane(SccpNetworkV1::EthereumMainnet),
@@ -1478,6 +1659,14 @@ mod tests {
             SccpSourceIdentityV1 {
                 lane: inbound_lane(SccpNetworkV1::EthereumMainnet),
                 emitter: solana_emitter(),
+            },
+            SccpSourceIdentityV1 {
+                lane: inbound_lane(SccpNetworkV1::EthereumMainnet),
+                emitter: ton_emitter(),
+            },
+            SccpSourceIdentityV1 {
+                lane: inbound_lane(SccpNetworkV1::TonMainnet),
+                emitter: evm_emitter(),
             },
             SccpSourceIdentityV1 {
                 lane: inbound_lane(SccpNetworkV1::EthereumMainnet),
@@ -1814,6 +2003,14 @@ mod tests {
                 SccpNetworkV1::SolanaTestnet,
                 BridgeNativeProofBackendV1::SolanaAgave,
             ),
+            (
+                SccpNetworkV1::TonMainnet,
+                BridgeNativeProofBackendV1::TonMasterchain,
+            ),
+            (
+                SccpNetworkV1::TonTestnet,
+                BridgeNativeProofBackendV1::TonMasterchain,
+            ),
         ];
         for (source, backend) in cases {
             let record = inbound_record(backend);
@@ -1824,6 +2021,7 @@ mod tests {
                 BridgeNativeProofBackendV1::BscParlia,
                 BridgeNativeProofBackendV1::TronDpos,
                 BridgeNativeProofBackendV1::SolanaAgave,
+                BridgeNativeProofBackendV1::TonMasterchain,
             ] {
                 assert_eq!(
                     SccpInboundMessageRecordV1 {

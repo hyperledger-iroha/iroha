@@ -650,6 +650,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                 finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
             }
+            let response_request_hash = response.request_hash;
             let discovered = match block_sync.authenticate_response(response, &sender) {
                 Ok(discovered) => discovered,
                 Err(error) => {
@@ -662,7 +663,11 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 executor.enqueue_discovered_commit_certificate(message, ingress_ownership)
             });
             if commit_certificate_admission_completed(admission)? {
-                *block_sync_request = None;
+                retire_admitted_block_sync_request(
+                    block_sync_request,
+                    response_request_hash,
+                    services,
+                )?;
             }
         }
     }

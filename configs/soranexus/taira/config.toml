@@ -327,8 +327,14 @@ max_bls_aggregate_checks_per_transaction = 1004
 max_bls_aggregate_checks_per_block = 4016
 max_bls_signer_contributions_per_transaction = 131713
 max_bls_signer_contributions_per_block = 526852
+max_ed25519_signature_checks_per_transaction = 65536
+max_ed25519_signature_checks_per_block = 262144
+max_ed25519_validator_key_checks_per_transaction = 198656
+max_ed25519_validator_key_checks_per_block = 794624
 max_bn254_pairing_checks_per_transaction = 1
 max_bn254_pairing_checks_per_block = 4
+max_bls12_381_pairing_checks_per_transaction = 1
+max_bls12_381_pairing_checks_per_block = 4
 
 [zk.halo2]
 enabled = true

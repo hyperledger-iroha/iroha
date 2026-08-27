@@ -7261,19 +7261,15 @@ impl Executor {
             None
         };
         if let Some(reg_trg) = reg_trg {
-            // Allow in genesis, or if tx authority owns any domain linked to trigger owner,
-            // or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
+            // Allow in genesis, for the exact trigger owner, or if tx authority has
+            // explicit CanRegisterTrigger { authority: <owner> }. Alias-domain
+            // ownership does not authorize the canonical, domainless account.
             let trg_owner = reg_trg.object().action().authority().clone();
-            let is_domain_owner = authority_owns_any_alias_domain(
-                &state_transaction.world,
-                authority,
-                &trg_owner,
-                state_transaction.block_unix_timestamp_ms(),
-            )?;
+            let is_owner = authority == &trg_owner;
             // Prefer cached permission check; parse once per tx/account.
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &trg_owner);
-            if !(is_genesis || is_domain_owner || has_permission) {
+            if !(is_genesis || is_owner || has_permission) {
                 return Err(ValidationFail::NotPermitted(
                     "Can't register trigger owned by another account".to_owned(),
                 ));
@@ -8103,6 +8099,20 @@ fn authority_has_permission(
     }
     Ok(false)
 }
+fn authority_has_direct_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    target: &Permission,
+) -> Result<bool, ValidationFail> {
+    world
+        .account_permissions_iter(authority)
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))
+        .map(|permissions| {
+            permissions
+                .into_iter()
+                .any(|permission| permission == target)
+        })
+}
 fn authority_has_role(world: &impl WorldReadOnly, authority: &AccountId, role_id: &RoleId) -> bool {
     world
         .account_roles_iter(authority)
@@ -8613,6 +8623,31 @@ fn initial_permission_capability_root_authority(
             let manager: Permission = executor_permission::settlement::CanManageFxCorridors.into();
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
+        "DpnAdmin" => {
+            let _ = decode!(executor_permission::dpn::DpnAdmin);
+            let admin: Permission = executor_permission::dpn::DpnAdmin.into();
+            authority_has_direct_permission(&state_transaction.world, authority, &admin)?
+        }
+        "DpnUser" => {
+            let _ = decode!(executor_permission::dpn::DpnUser);
+            let admin: Permission = executor_permission::dpn::DpnAdmin.into();
+            authority_has_direct_permission(&state_transaction.world, authority, &admin)?
+        }
+        "DpnInori" => {
+            let _ = decode!(executor_permission::dpn::DpnInori);
+            let admin: Permission = executor_permission::dpn::DpnAdmin.into();
+            authority_has_direct_permission(&state_transaction.world, authority, &admin)?
+        }
+        "DpnSettlement" => {
+            let _ = decode!(executor_permission::dpn::DpnSettlement);
+            let admin: Permission = executor_permission::dpn::DpnAdmin.into();
+            authority_has_direct_permission(&state_transaction.world, authority, &admin)?
+        }
+        "DpnEprGuard" => {
+            let _ = decode!(executor_permission::dpn::DpnEprGuard);
+            let admin: Permission = executor_permission::dpn::DpnAdmin.into();
+            authority_has_direct_permission(&state_transaction.world, authority, &admin)?
+        }
         "CanPublishSpaceDirectoryManifest" => {
             let _ = decode!(executor_permission::nexus::CanPublishSpaceDirectoryManifest);
             false
@@ -8717,7 +8752,17 @@ fn initial_permission_delegation_allowed(
     } else {
         !matches!(
             permission.name().as_ref(),
-            "CanReadAccountData" | "CanIssueSoranetVpnQuote"
+            "CanReadAccountData"
+                | "CanResolveAccountAlias"
+                | "CanIssueSoranetVpnQuote"
+                | "CanExecuteSettlement"
+                | "CanSetFxCorridorPolicy"
+                | "CanManageFeeSponsorProgram"
+                | "DpnAdmin"
+                | "DpnUser"
+                | "DpnInori"
+                | "DpnSettlement"
+                | "DpnEprGuard"
         )
     };
     if holder_delegable
@@ -9313,6 +9358,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::kaigi::RecordKaigiUsage,
         iroha_data_model::isi::kaigi::SetKaigiRelayManifest,
         iroha_data_model::isi::kaigi::RegisterKaigiRelay,
+        iroha_data_model::isi::kaigi::UnregisterKaigiRelay,
         iroha_data_model::isi::kaigi::ReportKaigiRelayHealth,
     ) {
         return true;
@@ -9452,6 +9498,22 @@ fn validate_initial_native_instruction_authority(
         return deny("authority cannot mutate another account's multisig controller");
     }
     if let Some(set_parameter) = any.downcast_ref::<iroha_data_model::isi::SetParameter>() {
+        if matches!(
+            set_parameter.inner(),
+            iroha_data_model::parameter::Parameter::Custom(parameter)
+                if iroha_data_model::hijiri::is_hijiri_parameter_id(parameter.id())
+        ) {
+            if is_genesis
+                || initial_authority_has_exact_permission(
+                    state_transaction,
+                    authority,
+                    executor_permission::parameter::CanSetHijiriParameters.into(),
+                )?
+            {
+                return Ok(());
+            }
+            return deny("Can't set Hijiri parameters without CanSetHijiriParameters");
+        }
         if matches!(
             set_parameter.inner(),
             iroha_data_model::parameter::Parameter::Custom(parameter)
@@ -10355,6 +10417,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanExecuteTrigger",
     "CanModifyTriggerMetadata",
     "CanSetParameters",
+    "CanSetHijiriParameters",
     "CanManageVerifyingKeys",
     "CanManageRuntimeUpgrades",
     "CanManageConsensusKeys",
@@ -11371,7 +11434,7 @@ mod tests {
         use iroha_data_model::{
             isi::kaigi::{
                 CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
-                ReportKaigiRelayHealth, SetKaigiRelayManifest,
+                ReportKaigiRelayHealth, SetKaigiRelayManifest, UnregisterKaigiRelay,
             },
             kaigi::{KaigiId, KaigiRelayHealthStatus, KaigiRelayRegistration, NewKaigi},
         };
@@ -11439,6 +11502,10 @@ mod tests {
                     hpke_public_key: vec![1],
                     bandwidth_class: 1,
                 },
+            }
+            .into(),
+            UnregisterKaigiRelay {
+                relay_id: relay.clone(),
             }
             .into(),
             ReportKaigiRelayHealth {
@@ -12002,6 +12069,73 @@ mod tests {
         assert!(state_transaction.world.account(&victim).is_ok());
     }
     #[test]
+    fn initial_executor_reserves_hijiri_parameters_for_dedicated_permission() {
+        use iroha_data_model::hijiri::{
+            FeeMultiplierBand, HijiriFeePolicy, HijiriParametersV1, Q16,
+        };
+        let generic_parameter_admin = checked_account_id();
+        let hijiri_admin = checked_account_id();
+        let mut world = World::with(
+            [],
+            [
+                Account::new(generic_parameter_admin.clone()).build(&generic_parameter_admin),
+                Account::new(hijiri_admin.clone()).build(&hijiri_admin),
+            ],
+            [],
+        );
+        world.account_permissions.insert(
+            generic_parameter_admin.clone(),
+            BTreeSet::from([executor_permission::parameter::CanSetParameters.into()]),
+        );
+        world.account_permissions.insert(
+            hijiri_admin.clone(),
+            BTreeSet::from([executor_permission::parameter::CanSetHijiriParameters.into()]),
+        );
+        let state = state_for_testing(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let parameters = HijiriParametersV1::try_new(
+            1,
+            None,
+            HijiriFeePolicy::new(
+                vec![FeeMultiplierBand::new(Q16::ONE, Q16::ONE).unwrap()],
+                Q16::ONE,
+            )
+            .unwrap(),
+            Q16::ONE,
+        )
+        .unwrap();
+        let instruction = || {
+            InstructionBox::from(iroha_data_model::isi::SetParameter::new(
+                iroha_data_model::parameter::Parameter::Custom(
+                    parameters.clone().into_custom_parameter(),
+                ),
+            ))
+        };
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &generic_parameter_admin,
+                instruction(),
+            )
+            .expect_err("generic parameter permission must not control Hijiri fees");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("CanSetHijiriParameters")),
+            "unexpected generic-admin rejection: {error:?}"
+        );
+        super::Executor::Initial
+            .execute_instruction(&mut state_transaction, &hijiri_admin, instruction())
+            .expect("dedicated Hijiri permission must install the initial parameter");
+        assert!(
+            state_transaction
+                .world
+                .parameters()
+                .custom()
+                .contains_key(&HijiriParametersV1::parameter_id())
+        );
+    }
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
         use iroha_data_model::{
@@ -12013,6 +12147,7 @@ mod tests {
         use iroha_executor_data_model::permission::account::AccountAliasPermissionScope;
         let legitimate_root = checked_account_id();
         let adjacent_owner = checked_account_id();
+        let delegation_sink = checked_account_id();
         let governed_domain =
             DomainId::try_new("grant_policy", "universal").expect("governed domain");
         let adjacent_domain =
@@ -12082,6 +12217,7 @@ mod tests {
             [
                 Account::new(legitimate_root.clone()).build(&legitimate_root),
                 Account::new(adjacent_owner.clone()).build(&adjacent_owner),
+                Account::new(delegation_sink.clone()).build(&delegation_sink),
             ],
             [AssetDefinition::numeric(
                 asset_definition.clone(),
@@ -12598,7 +12734,14 @@ mod tests {
                     Grant::account_permission(permission.clone(), adjacent_owner.clone()).into(),
                 )
                 .unwrap_or_else(|error| panic!("legitimate root could not grant {name}: {error}"));
-            assert!(
+            let holder_delegable = !matches!(
+                *name,
+                "CanResolveAccountAlias"
+                    | "CanExecuteSettlement"
+                    | "CanSetFxCorridorPolicy"
+                    | "CanManageFeeSponsorProgram"
+            );
+            assert_eq!(
                 initial_permission_delegation_allowed(
                     &state_transaction,
                     &adjacent_owner,
@@ -12606,8 +12749,31 @@ mod tests {
                     None,
                 )
                 .expect("exact-holder delegation lookup"),
-                "an exact holder must be able to propagate {name}",
+                holder_delegable,
+                "wrong exact-holder delegation decision for {name}",
             );
+            if !holder_delegable {
+                let error = super::Executor::Initial
+                    .execute_instruction(
+                        &mut state_transaction,
+                        &adjacent_owner,
+                        Grant::account_permission(permission.clone(), delegation_sink.clone())
+                            .into(),
+                    )
+                    .expect_err("a leaf holder must not bypass its dedicated delegation root");
+                assert!(
+                    matches!(error, ValidationFail::NotPermitted(_)),
+                    "{error:?}"
+                );
+                assert!(
+                    !state_transaction
+                        .world
+                        .account_permissions_iter(&delegation_sink)
+                        .expect("delegation sink permissions")
+                        .any(|candidate| candidate == permission),
+                    "unauthorized {name} grant reached storage",
+                );
+            }
             super::Executor::Initial
                 .execute_instruction(
                     &mut state_transaction,
@@ -12855,6 +13021,103 @@ mod tests {
                 Revoke::account_permission(issuer_permission, destination).into(),
             )
             .expect("the issuer manager may revoke an issuer");
+    }
+    #[test]
+    fn initial_executor_requires_direct_dpn_admin_for_dpn_permission_lifecycle() {
+        use iroha_executor_data_model::permission::dpn::{
+            DpnAdmin, DpnEprGuard, DpnInori, DpnSettlement, DpnUser,
+        };
+
+        let admin = checked_account_id();
+        let leaf_holder = checked_account_id();
+        let role_admin = checked_account_id();
+        let destination = checked_account_id();
+        let admin_permission: Permission = DpnAdmin.into();
+        let leaf_permissions: Vec<Permission> = vec![
+            DpnUser.into(),
+            DpnInori.into(),
+            DpnSettlement.into(),
+            DpnEprGuard.into(),
+        ];
+        let mut world = World::with(
+            [],
+            [
+                Account::new(admin.clone()).build(&admin),
+                Account::new(leaf_holder.clone()).build(&leaf_holder),
+                Account::new(role_admin.clone()).build(&role_admin),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [],
+        );
+        world
+            .account_permissions
+            .insert(admin.clone(), BTreeSet::from([admin_permission.clone()]));
+        world.account_permissions.insert(
+            leaf_holder.clone(),
+            leaf_permissions.iter().cloned().collect(),
+        );
+        let state = state_for_testing(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let admin_role: RoleId = "initial_dpn_role_admin".parse().expect("role id");
+        Register::role(
+            Role::new(admin_role.clone(), admin.clone()).add_permission(admin_permission.clone()),
+        )
+        .execute(&admin, &mut state_transaction)
+        .expect("seed DPN admin role");
+        Grant::account_role(admin_role, role_admin.clone())
+            .execute(&admin, &mut state_transaction)
+            .expect("seed role-derived DPN admin");
+
+        for permission in &leaf_permissions {
+            for unauthorized in [&leaf_holder, &role_admin] {
+                assert!(
+                    !initial_permission_delegation_allowed(
+                        &state_transaction,
+                        unauthorized,
+                        permission,
+                        None,
+                    )
+                    .expect("DPN delegation decision"),
+                    "only a direct DpnAdmin may manage {}",
+                    permission.name(),
+                );
+                super::Executor::Initial
+                    .execute_instruction(
+                        &mut state_transaction,
+                        unauthorized,
+                        Grant::account_permission(permission.clone(), destination.clone()).into(),
+                    )
+                    .expect_err("a DPN leaf or role-derived admin must not delegate DPN markers");
+            }
+        }
+
+        for permission in std::iter::once(&admin_permission).chain(&leaf_permissions) {
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    &admin,
+                    Grant::account_permission(permission.clone(), destination.clone()).into(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "direct DpnAdmin could not grant {}: {error}",
+                        permission.name()
+                    )
+                });
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    &admin,
+                    Revoke::account_permission(permission.clone(), destination.clone()).into(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "direct DpnAdmin could not revoke {}: {error}",
+                        permission.name()
+                    )
+                });
+        }
     }
     #[test]
     fn initial_executor_exact_asset_alias_lifecycle_survives_clear_without_issuer_guessing() {
@@ -17135,6 +17398,115 @@ mod tests {
         assert!(
             matches!(concrete_result, Err(ValidationFail::NotPermitted(_))),
             "active alias-domain ownership must not authorize a borrowed concrete transfer: {concrete_result:?}"
+        );
+    }
+    #[test]
+    fn initial_executor_trigger_registration_requires_exact_canonical_authority() {
+        use crate::smartcontracts::triggers::set::SetReadOnly as _;
+        use iroha_data_model::{
+            account::{
+                AccountAddress,
+                rekey::{AccountAlias, AccountAliasDomain},
+            },
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            nexus::DataSpaceCatalog,
+            sns::{NameControllerV1, NameRecordV1},
+        };
+
+        let alias_domain_owner = ALICE_ID.clone();
+        let trigger_owner = checked_account_id();
+        let alias_domain_id =
+            DomainId::try_new("triggerbank", "universal").expect("alias domain id");
+        let mut world = World::with(
+            [Domain::new(alias_domain_id).build(&alias_domain_owner)],
+            [
+                Account::new(alias_domain_owner.clone()).build(&alias_domain_owner),
+                Account::new(trigger_owner.clone()).build(&trigger_owner),
+            ],
+            [],
+        );
+        let alias = AccountAlias::new(
+            "customer".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "triggerbank".parse().expect("alias domain"),
+            )),
+            DataSpaceId::UNIVERSAL,
+        );
+        let selector = crate::sns::selector_for_account_alias(&alias, &DataSpaceCatalog::default())
+            .expect("account alias selector");
+        let address = AccountAddress::from_account_id(&trigger_owner).expect("owner address");
+        let lease = NameRecordV1::new(
+            selector.clone(),
+            trigger_owner.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            100,
+            200,
+            300,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(crate::sns::record_storage_key(&selector), lease.encode());
+        world
+            .account_aliases
+            .insert(alias.clone(), trigger_owner.clone());
+        world
+            .account_aliases_by_account
+            .insert(trigger_owner.clone(), BTreeSet::from([alias.clone()]));
+        world.account_rekey_records.insert(
+            alias.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, trigger_owner.clone()),
+        );
+        assert!(
+            authority_owns_any_alias_domain(
+                &world.view(),
+                &alias_domain_owner,
+                &trigger_owner,
+                50,
+            )
+            .expect("active alias-domain ownership check"),
+            "fixture must expose the retired authorization shortcut",
+        );
+
+        let state = state_for_testing(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
+        let mut transaction = block.transaction();
+        let trigger_id: TriggerId = "initial_exact_trigger_owner".parse().expect("trigger id");
+        let registration = || {
+            Register::trigger(Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Vec::<InstructionBox>::new(),
+                    Repeats::Indefinitely,
+                    trigger_owner.clone(),
+                    ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+                )
+                .expect("valid trigger action"),
+            ))
+            .into()
+        };
+
+        let attacker_result = super::Executor::Initial.execute_instruction(
+            &mut transaction,
+            &alias_domain_owner,
+            registration(),
+        );
+        assert!(
+            matches!(attacker_result, Err(ValidationFail::NotPermitted(_))),
+            "alias-domain owner must not install code for the canonical account: {attacker_result:?}",
+        );
+        super::Executor::Initial
+            .execute_instruction(&mut transaction, &trigger_owner, registration())
+            .expect("the exact trigger owner must not need an alias or self-grant");
+        assert!(
+            transaction
+                .world
+                .triggers
+                .inspect_by_id(&trigger_id, |_| ())
+                .is_some(),
+            "exact-owner registration must reach trigger storage",
         );
     }
     include!("executor_initial_batch_authorization_tests.rs");

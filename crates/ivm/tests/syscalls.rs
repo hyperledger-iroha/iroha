@@ -6,12 +6,15 @@ use iroha_crypto::{
     },
 };
 use iroha_data_model::{name::Name, prelude::AccountId};
-use ivm::{ExecutionProof, IVM, PointerType, VMError, encoding, instruction, syscalls};
+use ivm::{
+    ExecutionProof, IVM, IVMHost, PointerType, VMError, encoding, host::DefaultHost, instruction,
+    syscalls,
+};
 use sha2::Digest as Sha2Digest;
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
-use std::collections::BTreeMap;
+use std::{cell::Cell, collections::BTreeMap};
 mod common;
-use common::assemble;
+use common::{assemble, assemble_zk};
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
 fn assemble_syscall(syscall: u8) -> Vec<u8> {
     let mut code = Vec::with_capacity(8);
@@ -346,6 +349,61 @@ fn test_prove_execution_syscall_returns_deterministic_summary() {
     assert_eq!(
         first_payload, tlv_again.payload,
         "execution proof summaries must be byte-identical for identical input"
+    );
+}
+
+#[test]
+fn traced_prove_execution_quotes_and_commits_the_invocation_register_log() {
+    struct RecordingProofHost {
+        inner: DefaultHost,
+        quote: Cell<Option<u64>>,
+        actual: Option<u64>,
+    }
+
+    impl IVMHost for RecordingProofHost {
+        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+            let quote = self.inner.prepare_syscall(number, vm)?;
+            self.quote.set(Some(quote));
+            Ok(quote)
+        }
+
+        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+            let actual = self.inner.syscall(number, vm)?;
+            self.actual = Some(actual);
+            Ok(actual)
+        }
+
+        fn as_any(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    let mut code = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 0, 7)
+        .to_le_bytes()
+        .to_vec();
+    code.extend_from_slice(
+        &encoding::wide::encode_syscallx(syscalls::SYSCALL_PROVE_EXECUTION).to_le_bytes(),
+    );
+    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    let program = assemble_zk(&code, 8);
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&program)
+        .expect("load traced proof program");
+    vm.set_zk_trace_enabled(true);
+    let mut host = RecordingProofHost {
+        inner: DefaultHost::new(),
+        quote: Cell::new(None),
+        actual: None,
+    };
+
+    vm.run_with_host(&mut host)
+        .expect("PROVE_EXECUTION should preserve the active invocation log");
+    assert_eq!(host.quote.get(), host.actual);
+    let tlv = vm.memory.validate_tlv(vm.register(10)).expect("proof TLV");
+    let proof: ExecutionProof = norito::decode_from_bytes(tlv.payload).expect("decode proof");
+    assert!(
+        proof.register_log_len > 0,
+        "proof generated inside the callback must include earlier register events"
     );
 }
 #[test]

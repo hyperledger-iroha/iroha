@@ -287,8 +287,8 @@ fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
         ));
     }
     if !algorithm
-        .chars()
-        .all(|ch| ch.is_ascii() && !ch.is_ascii_control())
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(PyValueError::new_err(format!(
             "unsupported crypto algorithm `{algorithm}`"
@@ -301,7 +301,7 @@ fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
     let compact = normalized
         .chars()
         .map(|ch| match ch {
-            '_' | ' ' | '.' => '-',
+            '_' => '-',
             _ => ch,
         })
         .collect::<String>();
@@ -13200,10 +13200,8 @@ struct PythonPreparedOnboardingContextV1 {
 #[norito(deny_unknown_fields)]
 struct PythonAccountFaucetClaimV1 {
     account_id: String,
-    #[norito(default)]
-    pow_anchor_height: Option<u64>,
-    #[norito(default)]
-    pow_nonce_hex: Option<String>,
+    pow_anchor_height: u64,
+    pow_nonce_hex: String,
 }
 
 #[derive(Clone, Debug, JsonDeserialize)]
@@ -13296,15 +13294,21 @@ fn verify_python_prepared_faucet_context_v1(
     }
     let account_id =
         parse_exact_i105_account_id(&context.account_id, "prepared faucet account_id")?;
-    if let Some(nonce) = context.claim.pow_nonce_hex.as_deref()
-        && (nonce.is_empty()
-            || nonce.len() % 2 != 0
-            || !nonce
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    if context.claim.pow_anchor_height == 0 {
+        return Err(PyValueError::new_err(
+            "prepared faucet proof anchor height must be a positive u64",
+        ));
+    }
+    let nonce = context.claim.pow_nonce_hex.as_str();
+    if nonce.is_empty()
+        || nonce.len() > 64
+        || nonce.len() % 2 != 0
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(PyValueError::new_err(
-            "prepared faucet proof nonce is not canonical lowercase hexadecimal",
+            "prepared faucet proof nonce must be 1..32 bytes of canonical lowercase hexadecimal",
         ));
     }
     use norito::codec::Encode as _;

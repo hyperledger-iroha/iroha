@@ -1850,7 +1850,7 @@
             "fn can_enqueue(&self, fanout: &PendingExactFanout)",
             "if self.retains_retryable_sidecar_responder_control_for(fanout) {",
             "if false && self.retains_retryable_sidecar_responder_control_for(fanout) {",
-            "lane-effect preflight must validate geometry, consume only a same-target duplicate responder control, and otherwise charge reservation capacity",
+            "lane-effect preflight must validate geometry, preflight a safely replaceable responder control, reuse identical topology ownership, retain a different rotating acquisition batch at source while ranked targets drain, retain a distinct reply duplicate at lane ownership, and otherwise charge reservation capacity",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",

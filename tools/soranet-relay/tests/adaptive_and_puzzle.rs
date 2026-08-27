@@ -72,7 +72,7 @@ fn puzzle_failures_surface_and_sync_policies() {
         min_ticket_ttl_secs: 30,
         quotas: QuotaConfig {
             per_remote_burst: 8,
-            per_descriptor_burst: 4,
+            per_descriptor_burst: 0,
             ..QuotaConfig::default()
         },
         puzzle: Some(PuzzleConfig {
@@ -290,7 +290,7 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         quotas: QuotaConfig {
             per_remote_burst: 6,
             per_remote_window_secs: 3,
-            per_descriptor_burst: 24,
+            per_descriptor_burst: 0,
             per_descriptor_window_secs: 3,
             cooldown_secs: 4,
             max_entries: 128,

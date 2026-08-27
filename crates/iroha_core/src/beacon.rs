@@ -23,6 +23,8 @@ use iroha_crypto::{
 use iroha_crypto::{HashOf, threshold_bls::DasRenDealerSecret};
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use iroha_data_model::block::BlockHeader;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::consensus::GlobalThresholdBeaconDkgConstantProofV1;
 use iroha_data_model::{
     NetworkId,
     consensus::{
@@ -2643,7 +2645,7 @@ pub(crate) mod tests {
         musubi::MusubiRegistrySnapshotV1,
         peer::PeerId,
     };
-    use rand::{SeedableRng as _, rngs::StdRng};
+    use rand::rngs::StdRng;
     use std::sync::Arc;
 
     struct AcceptingAdaptiveDkgCrypto;

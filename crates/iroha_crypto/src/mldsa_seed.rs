@@ -21,7 +21,7 @@ pub mod mldsa65 {
     const FIPS_SEED_BYTES: usize = 32;
     const HKDF_SALT: &[u8] = b"iroha:ml-dsa:keygen:v1";
     const HKDF_INFO: &[u8] = b"iroha:ml-dsa:fips204:keypair";
-    /// Derive a canonical ML-DSA-65 keypair from arbitrary-length secret seed material.
+    /// Derive a canonical ML-DSA-65 keypair from non-empty, arbitrary-length secret seed material.
     pub fn keypair_from_seed(seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
         validate_seed_material_not_all_zero(seed)?;
         let seed_material = derive_seed_material(seed)?;
@@ -61,7 +61,12 @@ pub mod mldsa65 {
         Ok(out)
     }
     fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), Error> {
-        if !seed.is_empty() && seed.iter().all(|&byte| byte == 0) {
+        if seed.is_empty() {
+            return Err(Error::KeyGen(String::from(
+                "ML-DSA seed material must not be empty",
+            )));
+        }
+        if seed.iter().all(|&byte| byte == 0) {
             return Err(Error::KeyGen(String::from(
                 "ML-DSA seed material must not be all zero",
             )));
@@ -514,6 +519,21 @@ pub mod mldsa65 {
                 Err(err) => panic!("expected all-zero seed KeyGen error, got {err:?}"),
                 Ok(_) => panic!("all-zero ML-DSA seed material must fail"),
             }
+        }
+        #[test]
+        fn seeded_keypair_rejects_empty_seed_material() {
+            match keypair_from_seed(&[]) {
+                Err(Error::KeyGen(message)) => assert!(message.contains("empty")),
+                Err(err) => panic!("expected empty seed KeyGen error, got {err:?}"),
+                Ok(_) => panic!("empty ML-DSA seed material must fail"),
+            }
+        }
+        #[test]
+        fn seeded_keypair_accepts_short_nonzero_seed_material() {
+            let first = keypair_from_seed(&[1]).expect("non-empty seed material");
+            let second = keypair_from_seed(&[1]).expect("non-empty seed material");
+            assert_eq!(first.0, second.0);
+            assert_eq!(first.1.to_bytes(), second.1.to_bytes());
         }
         #[cfg(feature = "rand")]
         #[test]

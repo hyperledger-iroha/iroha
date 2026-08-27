@@ -88,8 +88,6 @@ const CRYPTO_ALGORITHM_ALIASES = new Map([
   ["secpk1", CRYPTO_ALGORITHMS.SECP256K1],
   ["mldsa", CRYPTO_ALGORITHMS.ML_DSA],
   ["mldsa65", CRYPTO_ALGORITHMS.ML_DSA],
-  ["mldsa44", CRYPTO_ALGORITHMS.ML_DSA],
-  ["mldsa87", CRYPTO_ALGORITHMS.ML_DSA],
   ["blsnormal", CRYPTO_ALGORITHMS.BLS_NORMAL],
   ["bls12381g1", CRYPTO_ALGORITHMS.BLS_NORMAL],
   ["blssmall", CRYPTO_ALGORITHMS.BLS_SMALL],
@@ -162,11 +160,10 @@ function resolveOptionalNativeBinding() {
 
 function cryptoAlgorithmAliasKey(value) {
   const raw = String(value);
-  const trimmed = raw.trim();
-  if (!/^[\x20-\x7e]+$/.test(trimmed)) {
+  if (!/^[A-Za-z0-9_-]+$/.test(raw)) {
     throw new Error(`unsupported crypto algorithm: ${raw}`);
   }
-  return trimmed.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return raw.toLowerCase().replace(/[-_]/g, "");
 }
 
 export function supportedCryptoAlgorithms() {
@@ -180,7 +177,7 @@ export function supportedCryptoAlgorithms() {
 }
 
 export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) {
-  if (algorithm === undefined || algorithm === null || algorithm === "") {
+  if (algorithm === undefined || algorithm === null) {
     return CRYPTO_ALGORITHMS.ED25519;
   }
   const normalized = CRYPTO_ALGORITHM_ALIASES.get(cryptoAlgorithmAliasKey(algorithm));

@@ -61,7 +61,9 @@ the same deterministic framing.
   receipts keyed by the exit class.
 - **Cover ratio + seeding:** `cover_to_data_per_mille` accepts 0-1000; an explicit
   `0` disables cover even when `vpn.cover.enabled=true`, and burst caps insert
-  data slots while resetting the cover streak. `VpnBridge` draws a non-zero
+  data slots while resetting the cover streak. V1 accepts at most 64 consecutive
+  cover cells, clamps programmatic callers to the same bound, and generates one
+  bounded deterministic prefix rather than rebuilding every prefix. `VpnBridge` draws a non-zero
   secret master seed from the operating system and derives a domain-separated
   seed for every batch from that master, the circuit id, flow label, starting
   sequence, and batch length. Equal-sized batches therefore do not repeat a
@@ -347,8 +349,9 @@ the same deterministic framing.
   single-link, owner-private direct regular file under trusted parent
   directories; neither the caller, environment, nor payload can select another
   key. Both the parent and hidden worker verify the signed capability, and the
-  worker checks expiry again before privileged tunnel preparation and while the
-  tunnel is active. V1 requires 1–64 pushed routes, 0–64 exclusions, and 1–8
+  worker checks expiry again before privileged tunnel preparation, before the
+  `STARTED` publication barrier, and while the tunnel is active. V1 requires
+  1–64 pushed routes, 0–64 exclusions, and 1–8
   DNS resolvers. Route entries are canonical network prefixes with cleared host
   bits; duplicates and exact include/exclude equality are rejected, while a
   more-specific exclusion under a pushed default remains valid. DNS literals
@@ -359,8 +362,11 @@ the same deterministic framing.
   omission or substitution fails before host networking changes. Usage voucher
   signing uses the signed tariff and one fixed one-second first-release cadence;
   the caller cannot select a timer interval, lease lifetime, or exit class in
-  the privileged payload. Helper traffic counters are batched in memory with
-  at-most-once-per-second state-file flushes plus a forced shutdown flush.
+  the privileged payload. The supervisor validates cumulative helper traffic
+  counters monotonically in memory, accepts at most 64 authenticated `TRAFFIC`
+  frames per one-second accounting interval, and performs at most one
+  state-file flush per interval. Orderly, error, and stopping-drain exits force
+  one latest-counter flush; stopping drains never fsync per frame.
   First-release privileged mutations are Linux-only and fail closed unless the
   root-owned executable was entered directly through a set-user-ID transition:
   the real UID must be non-root while the effective and saved UIDs are root.
@@ -394,8 +400,11 @@ the same deterministic framing.
   `NoNewPrivs=1`, `Seccomp=2`, `TracerPid=0`, `Threads=1`, and root custody of
   the child's `/proc` directory before releasing the payload. The child then
   returns one exact 8 KiB plan containing the signed helper ticket and canonical
-  network fields. The supervisor reparses that ticket with the fixed issuer key,
-  recomputes its policy hash, and accepts no unused or nonzero padding bytes.
+  network fields. Its variable route region begins at the next 64-byte boundary
+  after the complete fixed-width ML-DSA-65 relay identity, and all intervening
+  and unused bytes must remain zero. The supervisor reparses that ticket with
+  the fixed issuer key, recomputes its policy hash, and accepts no unused or
+  nonzero padding bytes.
   The subsequent fixed 64-byte credential-bearing IPC sequence is
   `WORKER_READY`, `TUN_READY(fd)`, `TUN_ACK`, `START`, `STARTED`, cumulative
   `TRAFFIC`, `STOP`, and `WORKER_EXIT`. Every datagram carries kernel peer
@@ -405,8 +414,15 @@ the same deterministic framing.
   the same parent PID and its real caller UID/GID, matching Linux credential
   semantics. The worker validates that descriptor as the expected
   read/write, nonblocking, close-on-exec `/dev/net/tun` device, with the exact
-  interface name, `IFF_TUN|IFF_NO_PI`, and signed MTU. Connected state is not
-  published until `STARTED` is received.
+  interface name, `IFF_TUN|IFF_NO_PI`, and signed MTU. The worker cannot emit
+  `STARTED` for an expired ticket, and the supervisor rechecks both ticket
+  expiry and exact child liveness after receiving it and again immediately
+  before the durable connected-state write. Connected state is not published
+  until that final barrier succeeds. The signed expiry is retained in the
+  versioned durable state; at or after that deadline, readiness and status
+  normalize the session to repair-required even while the expiry-triggered
+  child is still shutting down. They also require the live persisted
+  network-child identity as well as the tunnel supervisor.
   Before the first host mutation the supervisor proves that every excluded exact
   prefix is absent against the pre-VPN route table and fsyncs the complete
   repair-required plan. A pre-existing exact route is a configuration conflict,
@@ -447,8 +463,13 @@ the same deterministic framing.
   recursively killable. Teardown always stops and reaps the exact network child,
   closes the final TUN custody, then restores global state. V1 requires a
   trusted `resolvectl`; it never edits or backs up `/etc/resolv.conf` directly.
-  Cleanup durably advances after the per-link DNS revert and restores/pops each
-  ownership-checked excluded route one at a time.
+  Before each excluded-route add, the journal durably records a versioned ownership tuple
+  containing the exact prefix, gateway (when present), device, and reserved numeric protocol
+  186 marker. A successful add replaces that precommit with the exact numeric kernel readback.
+  Recovery after a crash in between accepts only a live route matching the complete precommit
+  and deletes using that live exact readback; any destination, gateway, device, or protocol
+  drift remains repair-required. Cleanup durably advances after the per-link DNS revert and
+  restores/pops each ownership-checked excluded route one at a time.
   Every external cleanup unit is idempotent, so a failure or crash resumes from
   the last durable phase without skipping later routes.
   If the outer connect path observes an early supervisor exit or readiness

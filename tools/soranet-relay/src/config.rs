@@ -872,6 +872,8 @@ const DEFAULT_VPN_COVER_TO_DATA_PER_MILLE: u16 = 250;
 const DEFAULT_VPN_HEARTBEAT_MILLIS: u16 = 500;
 const DEFAULT_VPN_COVER_BURST_CELLS: u16 = 3;
 const DEFAULT_VPN_COVER_JITTER_MILLIS: u16 = 10;
+/// Maximum cover-cell burst accepted by the first-release relay scheduler.
+pub const VPN_MAX_COVER_BURST_CELLS_V1: u16 = 64;
 const DEFAULT_VPN_EXIT_CLASS: &str = "standard";
 const DEFAULT_VPN_LEASE_SECS: u32 = 10 * 60;
 const DEFAULT_VPN_DNS_PUSH_INTERVAL_SECS: u32 = 90;
@@ -2047,6 +2049,11 @@ impl VpnCoverTrafficConfig {
                 "vpn.cover.heartbeat_ms and vpn.cover.max_cover_burst must be non-zero".to_string(),
             ));
         }
+        if self.max_cover_burst > VPN_MAX_COVER_BURST_CELLS_V1 {
+            return Err(ConfigError::Vpn(format!(
+                "vpn.cover.max_cover_burst must not exceed {VPN_MAX_COVER_BURST_CELLS_V1}"
+            )));
+        }
         if self.cover_to_data_per_mille > 1_000 {
             return Err(ConfigError::Vpn(
                 "vpn.cover.cover_to_data_per_mille must be between 0 and 1000".to_string(),
@@ -2107,7 +2114,10 @@ pub struct PowConfig {
     /// Optional signed token authentication layer.
     #[norito(default)]
     pub token: Option<TokenConfig>,
-    /// Replay filter enforcing nonce uniqueness for admission.
+    /// Retired descriptor replay-filter settings retained for config compatibility.
+    ///
+    /// Enabling this field is rejected because the only available descriptor is relay-static;
+    /// credential-specific replay protection is enforced by the durable ticket/token stores.
     #[norito(default)]
     pub replay_filter: ReplayFilterConfig,
     /// Emergency throttle applied when the relay is degraded.
@@ -2729,7 +2739,7 @@ impl GuardDirectoryConfig {
         self.pinning_proof_path.as_deref()
     }
 }
-/// Configuration for the blinded descriptor replay filter.
+/// Retired configuration for the blinded descriptor replay filter.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct ReplayFilterConfig {
     /// Whether the replay filter is enforced during handshakes.
@@ -2789,7 +2799,17 @@ impl ReplayFilterConfig {
         if self.ttl_secs == 0 {
             self.ttl_secs = Self::default_ttl_secs();
         }
-        Ok(())
+        self.ensure_disabled()
+    }
+    /// Reject the retired relay-static filter even when a caller bypasses config normalization.
+    pub(crate) fn ensure_disabled(&self) -> Result<(), ConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        Err(ConfigError::ReplayFilter(
+            "pow.replay_filter.enabled is unsupported because the descriptor is relay-static; use the credential-specific durable replay stores"
+                .to_owned(),
+        ))
     }
     #[must_use]
     pub fn is_enabled(&self) -> bool {
@@ -2817,10 +2837,10 @@ pub struct QuotaConfig {
     /// Window (seconds) over which `per_remote_burst` is measured.
     #[norito(default = "QuotaConfig::default_per_remote_window_secs")]
     pub per_remote_window_secs: u64,
-    /// Burst of circuits permitted per blinded descriptor.
+    /// Retired per-descriptor burst. It must remain zero because the descriptor is relay-static.
     #[norito(default = "QuotaConfig::default_per_descriptor_burst")]
     pub per_descriptor_burst: u32,
-    /// Window (seconds) over which `per_descriptor_burst` is measured.
+    /// Retired per-descriptor window retained only for configuration-schema compatibility.
     #[norito(default = "QuotaConfig::default_per_descriptor_window_secs")]
     pub per_descriptor_window_secs: u64,
     /// Cooldown applied after exceeding a quota window.
@@ -2850,7 +2870,7 @@ impl QuotaConfig {
         60
     }
     const fn default_per_descriptor_burst() -> u32 {
-        160
+        0
     }
     const fn default_per_descriptor_window_secs() -> u64 {
         60
@@ -2880,6 +2900,20 @@ impl QuotaConfig {
         self.validate_named("quotas")
     }
     fn validate_named(&self, path: &str) -> Result<(), ConfigError> {
+        if self.per_descriptor_burst != 0 {
+            return Err(ConfigError::Quota(format!(
+                "{path}.per_descriptor_burst must be 0 because the descriptor commitment is relay-static; use per-remote quotas and authenticated credential limits"
+            )));
+        }
+        if self
+            .per_remote_window_secs
+            .checked_add(self.cooldown_secs)
+            .is_none()
+        {
+            return Err(ConfigError::Quota(format!(
+                "{path}.per_remote_window_secs + cooldown_secs must not overflow u64 seconds"
+            )));
+        }
         if self.max_entries > QUOTA_TRACKER_MAX_ENTRIES_V1 {
             return Err(ConfigError::Quota(format!(
                 "{path}.max_entries ({}) exceeds the first-release limit of {QUOTA_TRACKER_MAX_ENTRIES_V1}",
@@ -3062,16 +3096,18 @@ impl Default for PaddingConfig {
         }
     }
 }
-/// Capability advertisement for constant-rate transport lanes.
+/// Capability advertisement for best-effort constant-rate cover lanes.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct ConstantRateCapabilityConfig {
-    /// Whether constant-rate support is advertised.
+    /// Whether best-effort constant-rate cover support is advertised.
     #[norito(default = "ConstantRateCapabilityConfig::default_enabled")]
     pub enabled: bool,
     /// Protocol version for the capability handshake.
     #[norito(default = "ConstantRateCapabilityConfig::default_version")]
     pub version: u8,
     /// Whether to require peers to honour constant-rate strictly.
+    ///
+    /// Strict mode is rejected until application payload is carried by the fixed-rate scheduler.
     #[norito(default = "ConstantRateCapabilityConfig::default_strict")]
     pub strict: bool,
 }
@@ -3091,6 +3127,12 @@ impl ConstantRateCapabilityConfig {
                 "constant-rate version {} is not supported",
                 self.version
             )));
+        }
+        if self.enabled && self.strict {
+            return Err(ConfigError::ConstantRateCapability(
+                "strict mode is unavailable until application payload is carried by the fixed-rate scheduler and DATAGRAM failures close the circuit"
+                    .to_owned(),
+            ));
         }
         Ok(())
     }

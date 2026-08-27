@@ -1193,25 +1193,24 @@ public final class SumeragiV2Wire {
     }
   }
 
-  /** Archive-signed certified body response with a distinct frozen-QC signer citation. */
+  /** Archive-signed certified body response carrying the responder's current network identity. */
   public static final class CertifiedBodyResponse extends WireValue {
     public final Hash32 requestHash;
     public final PayloadManifest manifest;
     private final byte[] body;
-    public final long citedResponder;
+    public final PeerIdPayload responder;
     private final byte[] signature;
 
     public CertifiedBodyResponse(
         Hash32 requestHash,
         PayloadManifest manifest,
         byte[] body,
-        long citedResponder,
+        PeerIdPayload responder,
         byte[] signature) {
       this.requestHash = nonNull(requestHash, "requestHash");
       this.manifest = nonNull(manifest, "manifest");
       this.body = copy(body, "body");
-      requireU32(citedResponder, "citedResponder");
-      this.citedResponder = citedResponder;
+      this.responder = nonNull(responder, "responder");
       this.signature = copy(signature, "signature");
     }
 
@@ -1229,7 +1228,7 @@ public final class SumeragiV2Wire {
           requestHash.bytes(),
           manifest.encode(),
           byteVector(body),
-          u32(citedResponder),
+          responder.bytes(),
           byteVector(signature));
     }
 
@@ -1240,7 +1239,7 @@ public final class SumeragiV2Wire {
               new Hash32(reader.field("body response request hash", SumeragiV2Wire::decodeHash)),
               reader.field("body response manifest", PayloadManifest::decode),
               reader.field("body response body", SumeragiV2Wire::decodeByteVector),
-              reader.field("body response cited responder", SumeragiV2Wire::decodeU32),
+              new PeerIdPayload(reader.compactField("body response responder")),
               reader.field("body response signature", SumeragiV2Wire::decodeByteVector));
       reader.finish("certified body response");
       return value;

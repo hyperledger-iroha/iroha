@@ -35,7 +35,8 @@ explicitly checked.
 
 Account roles are deliberately asymmetric. An external-to-Taira burn accepts
 only the exact `test...` I105 spelling for discriminant `369` and a single,
-canonical, non-weak Ed25519 controller, matching Taira settlement admission.
+canonical Ed25519 controller in the prime-order subgroup, matching Taira
+settlement admission and rejecting both small-order and mixed-torsion points.
 A proof-authenticated Taira-to-external sender may instead be a single-key or
 canonical multisig `AccountId` composed from Ed25519 and compressed secp256k1
 keys. The parser checks the complete V1 AccountAddress tags, big-endian policy

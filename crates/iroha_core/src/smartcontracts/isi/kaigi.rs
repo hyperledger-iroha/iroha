@@ -1,16 +1,17 @@
 //! Host-side execution of Kaigi instruction family.
 use crate::{
     smartcontracts::limits,
-    state::{StateTransaction, WorldReadOnly},
+    state::{StateTransaction, World, WorldReadOnly},
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    HasMetadata,
+    HasMetadata, Identifiable,
     account::rekey::{AccountAlias, AccountRekeyTransitionProvenance},
     events::{
         data::prelude::{
             KaigiRelayHealthSummary, KaigiRelayManifestSummary, KaigiRelayRegistrationSummary,
-            KaigiRosterSummary, KaigiUsageSummary,
+            KaigiRelayUnregistrationSummary, KaigiRosterSummary, KaigiStatusSummary,
+            KaigiUsageSummary,
         },
         prelude::{DomainEvent, MetadataChanged},
     },
@@ -18,14 +19,16 @@ use iroha_data_model::{
         error::{InstructionExecutionError as Error, InvalidParameterError},
         kaigi::{
             CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
-            ReportKaigiRelayHealth, SetKaigiRelayManifest,
+            ReportKaigiRelayHealth, SetKaigiRelayManifest, UnregisterKaigiRelay,
         },
     },
     kaigi::{
-        KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-        KaigiRecord, KaigiRelayAllowlist, KaigiRelayFeedback, KaigiRelayManifest,
-        KaigiRelayRegistration, KaigiStatus, kaigi_metadata_key, kaigi_relay_allowlist_key,
-        kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+        KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1, KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
+        KAIGI_RELAY_MANIFEST_MIN_HOPS_V1, KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1, KaigiId,
+        KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode, KaigiRecord,
+        KaigiRelayAllowlist, KaigiRelayFeedback, KaigiRelayManifest, KaigiRelayRegistration,
+        KaigiStatus, kaigi_metadata_key, kaigi_relay_allowlist_key, kaigi_relay_feedback_key,
+        kaigi_relay_metadata_key,
     },
     prelude::{AccountId, DomainId, Json, Name},
     query::error::FindError,
@@ -61,6 +64,7 @@ enum RecordUpdateEffect {
     Roster,
     Usage,
     RelayManifest,
+    Status,
 }
 use super::super::Execute;
 trait ExecuteKaigiAuthorized {
@@ -165,6 +169,7 @@ impl ExecuteKaigiAuthorized for CreateKaigi {
             }
         }
         store_record(state_transaction, &domain_id, key, &record)?;
+        emit_status_summary(state_transaction, &record);
         emit_roster_summary(state_transaction, &record);
         if let Some(manifest) = record.relay_manifest.as_ref() {
             emit_relay_manifest_summary(state_transaction, &record.id, Some(manifest));
@@ -307,7 +312,7 @@ impl ExecuteKaigiAuthorized for EndKaigi {
             &call_id,
             authorization,
             false,
-            RecordUpdateEffect::None,
+            RecordUpdateEffect::Status,
             move |stx, record| {
                 if record.status == KaigiStatus::Ended {
                     return Err(Error::InvariantViolation("Kaigi already ended".into()));
@@ -538,20 +543,55 @@ impl Execute for RegisterKaigiRelay {
             ));
         }
         state_transaction.world.account(authority)?;
-        if registration.hpke_public_key.is_empty() {
-            return Err(relay_error(
-                "relay registration requires an HPKE public key",
-            ));
-        }
+        validate_relay_hpke_public_key(&registration.hpke_public_key)?;
         if registration.bandwidth_class == 0 {
             return Err(relay_error(
                 "relay registration requires a non-zero bandwidth class",
             ));
         }
-        ensure_relay_allowed_by_governance(state_transaction, &registration.relay_id)?;
+        let rekey_graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
         let key = kaigi_relay_metadata_key(&registration.relay_id).map_err(|err| {
             Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
         })?;
+        let domain_id =
+            relay_domain_with_graph(state_transaction, &registration.relay_id, &rekey_graph)?;
+        let existing = state_transaction
+            .world
+            .domain(&domain_id)?
+            .metadata()
+            .get(&key)
+            .cloned()
+            .map(|value| decode_stored_relay_registration(&domain_id, &key, value))
+            .transpose()?;
+        let indexed_domain = state_transaction
+            .world
+            .kaigi_relay_registry
+            .get(&registration.relay_id);
+        match (existing.is_some(), indexed_domain) {
+            (true, Some(indexed_domain)) if indexed_domain == &domain_id => {}
+            (false, None) => {}
+            _ => {
+                return Err(Error::InvariantViolation(
+                    "Kaigi relay metadata and registry index disagree".into(),
+                ));
+            }
+        }
+        if existing.as_ref() == Some(&registration) {
+            return Ok(());
+        }
+        ensure_relay_allowed_by_governance_with_graph(
+            state_transaction,
+            &registration.relay_id,
+            &rekey_graph,
+        )?;
+        if existing.is_none()
+            && validated_kaigi_relay_registry_count_with_graph(state_transaction, &rekey_graph)?
+                >= KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1
+        {
+            return Err(relay_error(format!(
+                "Kaigi relay registry is at its {KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1}-entry limit"
+            )));
+        }
         let value = Json::try_new(registration.clone())
             .map_err(|err| Error::Conversion(err.to_string()))?;
         limits::enforce_json_size(
@@ -560,14 +600,20 @@ impl Execute for RegisterKaigiRelay {
             "max_metadata_value_bytes",
             limits::DEFAULT_JSON_LIMIT,
         )?;
-        let domain_id = relay_domain(state_transaction, &registration.relay_id)?;
         {
             let domain = state_transaction.world.domain_mut(&domain_id)?;
             domain.metadata_mut().insert(key.clone(), value.clone());
         }
+        if existing.is_none() {
+            let replaced = state_transaction
+                .world
+                .kaigi_relay_registry
+                .insert(registration.relay_id.clone(), domain_id.clone());
+            debug_assert!(replaced.is_none());
+        }
         state_transaction
             .world
-            .emit_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
+            .emit_internal_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
                 target: domain_id.clone(),
                 key,
                 value: value.clone(),
@@ -577,6 +623,109 @@ impl Execute for RegisterKaigiRelay {
         state_transaction
             .telemetry
             .record_kaigi_relay_registration(&domain_id, registration.bandwidth_class);
+        Ok(())
+    }
+}
+impl Execute for UnregisterKaigiRelay {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        state_transaction.world.account(authority)?;
+        let rekey_graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+        if !accounts_share_active_lineage_with_graph(
+            state_transaction,
+            authority,
+            &self.relay_id,
+            &rekey_graph,
+        )? {
+            return Err(unauthorized(
+                "only the relay account or its active account-id rekey successor may unregister it",
+            ));
+        }
+        let domain_id = relay_domain_with_graph(state_transaction, &self.relay_id, &rekey_graph)?;
+        let registration_key = kaigi_relay_metadata_key(&self.relay_id).map_err(|err| {
+            Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
+        })?;
+        let indexed_domain = state_transaction
+            .world
+            .kaigi_relay_registry
+            .get(&self.relay_id)
+            .ok_or_else(|| Error::Find(FindError::MetadataKey(registration_key.clone())))?;
+        if indexed_domain != &domain_id {
+            return Err(Error::InvariantViolation(
+                "Kaigi relay metadata and registry index disagree".into(),
+            ));
+        }
+        let registration_value = state_transaction
+            .world
+            .domain(&domain_id)?
+            .metadata()
+            .get(&registration_key)
+            .cloned()
+            .ok_or_else(|| Error::Find(FindError::MetadataKey(registration_key.clone())))?;
+        let registration = decode_stored_relay_registration(
+            &domain_id,
+            &registration_key,
+            registration_value.clone(),
+        )?;
+        if registration.relay_id != self.relay_id {
+            return Err(Error::InvariantViolation(
+                "stored Kaigi relay registration identifier does not match unregister target"
+                    .into(),
+            ));
+        }
+        let feedback_key = kaigi_relay_feedback_key(&self.relay_id).map_err(|err| {
+            Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
+        })?;
+        let feedback_value = state_transaction
+            .world
+            .domain(&domain_id)?
+            .metadata()
+            .get(&feedback_key)
+            .cloned();
+        if let Some(value) = feedback_value.as_ref() {
+            let feedback: KaigiRelayFeedback = value
+                .clone()
+                .try_into_any_norito()
+                .map_err(|err| Error::Conversion(err.to_string()))?;
+            if feedback.relay_id != self.relay_id {
+                return Err(Error::InvariantViolation(
+                    "stored Kaigi relay feedback identifier does not match unregister target"
+                        .into(),
+                ));
+            }
+        }
+
+        {
+            let domain = state_transaction.world.domain_mut(&domain_id)?;
+            domain.metadata_mut().remove(&registration_key);
+            if feedback_value.is_some() {
+                domain.metadata_mut().remove(&feedback_key);
+            }
+        }
+        let removed = state_transaction
+            .world
+            .kaigi_relay_registry
+            .remove(self.relay_id.clone());
+        debug_assert_eq!(removed.as_ref(), Some(&domain_id));
+        let mut internal_events = vec![DomainEvent::MetadataRemoved(MetadataChanged {
+            target: domain_id.clone(),
+            key: registration_key,
+            value: registration_value,
+        })];
+        if let Some(value) = feedback_value {
+            internal_events.push(DomainEvent::MetadataRemoved(MetadataChanged {
+                target: domain_id.clone(),
+                key: feedback_key,
+                value,
+            }));
+        }
+        state_transaction
+            .world
+            .emit_internal_events(internal_events);
+        emit_relay_unregistration_summary(state_transaction, &domain_id, &self.relay_id);
         Ok(())
     }
 }
@@ -648,10 +797,8 @@ impl Execute for ReportKaigiRelayHealth {
                         ));
                     }
                 }
-                store_relay_feedback(stx, &feedback)?;
-                emit_relay_health_summary(stx, &feedback);
-                #[cfg(feature = "telemetry")]
-                let relay_domain = relay_domain(stx, &relay_id)?;
+                let relay_domain = store_relay_feedback(stx, &feedback)?;
+                emit_relay_health_summary(stx, &relay_domain, &feedback);
                 #[cfg(feature = "telemetry")]
                 stx.telemetry
                     .record_kaigi_relay_health(&relay_domain, &relay_id, status);
@@ -708,6 +855,15 @@ where
             "stored Kaigi record identifier does not match metadata key".into(),
         ));
     }
+    if record
+        .relay_manifest
+        .as_ref()
+        .is_some_and(|manifest| validate_relay_manifest(manifest).is_err())
+    {
+        return Err(Error::InvariantViolation(
+            "stored Kaigi relay manifest violates V1 constraints".into(),
+        ));
+    }
     #[cfg(feature = "telemetry")]
     let previous_manifest = record.relay_manifest.clone();
     let authority = authorization.signed_account();
@@ -760,6 +916,7 @@ where
                 }
             }
         }
+        RecordUpdateEffect::Status => emit_status_summary(state_transaction, &record),
     }
     Ok(())
 }
@@ -782,7 +939,7 @@ fn store_record(
     domain.metadata_mut().insert(key.clone(), value.clone());
     state_transaction
         .world
-        .emit_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
+        .emit_internal_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
             target: domain_id.clone(),
             key,
             value,
@@ -803,7 +960,7 @@ fn clear_ledger_visible_privacy_hints(record: &mut KaigiRecord) {
 fn store_relay_feedback(
     state_transaction: &mut StateTransaction<'_, '_>,
     feedback: &KaigiRelayFeedback,
-) -> Result<(), Error> {
+) -> Result<DomainId, Error> {
     let key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
         Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
     })?;
@@ -822,12 +979,12 @@ fn store_relay_feedback(
     }
     state_transaction
         .world
-        .emit_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
-            target: domain_id,
+        .emit_internal_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
+            target: domain_id.clone(),
             key,
             value,
         })));
-    Ok(())
+    Ok(domain_id)
 }
 fn metadata_key(call_id: &KaigiId) -> Result<Name, Error> {
     kaigi_metadata_key(&call_id.call_name).map_err(|err| {
@@ -846,9 +1003,9 @@ pub(crate) fn is_reserved_kaigi_metadata_key(key: &Name) -> bool {
 }
 /// Reject moving a registered relay's primary alias outside its storage domain.
 ///
-/// Relay descriptors and feedback are domain metadata keyed by the relay ID. Until
-/// native relay migration/removal exists, changing the primary alias domain would
-/// strand that protected state in the previous domain.
+/// Relay descriptors and feedback are domain metadata keyed by the relay ID.
+/// A relay must execute `UnregisterKaigiRelay` before changing its primary alias
+/// domain so protected state is not stranded in the previous domain.
 pub(crate) fn ensure_kaigi_relay_home_change_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     account: &AccountId,
@@ -1191,6 +1348,14 @@ fn resolve_active_kaigi_account(
     state_transaction: &StateTransaction<'_, '_>,
     account: &AccountId,
 ) -> Result<Option<AccountId>, Error> {
+    let graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+    resolve_active_kaigi_account_with_graph(state_transaction, account, &graph)
+}
+fn resolve_active_kaigi_account_with_graph(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+    graph: &PersistedKaigiRekeyGraph,
+) -> Result<Option<AccountId>, Error> {
     let live = crate::sns::resolve_active_account_id_rekey_lineage(
         &state_transaction.world,
         state_transaction.world.dataspace_catalog(),
@@ -1202,7 +1367,8 @@ fn resolve_active_kaigi_account(
             format!("failed to resolve Kaigi account-id rekey lineage: {err}").into(),
         )
     })?;
-    let persisted = resolve_persisted_kaigi_rekey_successor(state_transaction, account)?;
+    let persisted =
+        resolve_persisted_kaigi_rekey_successor(&state_transaction.world, account, graph)?;
     if let (Some(live), Some(persisted)) = (&live, &persisted)
         && live != persisted
     {
@@ -1217,15 +1383,24 @@ fn accounts_share_active_lineage(
     left: &AccountId,
     right: &AccountId,
 ) -> Result<bool, Error> {
-    let left_active = resolve_active_kaigi_account(state_transaction, left)?;
-    let right_active = resolve_active_kaigi_account(state_transaction, right)?;
+    let graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+    accounts_share_active_lineage_with_graph(state_transaction, left, right, &graph)
+}
+fn accounts_share_active_lineage_with_graph(
+    state_transaction: &StateTransaction<'_, '_>,
+    left: &AccountId,
+    right: &AccountId,
+    graph: &PersistedKaigiRekeyGraph,
+) -> Result<bool, Error> {
+    let left_active = resolve_active_kaigi_account_with_graph(state_transaction, left, graph)?;
+    let right_active = resolve_active_kaigi_account_with_graph(state_transaction, right, graph)?;
     Ok(left_active.is_some() && left_active == right_active)
 }
 fn resolve_persisted_kaigi_rekey_successor(
-    state_transaction: &StateTransaction<'_, '_>,
+    world: &impl WorldReadOnly,
     account: &AccountId,
+    graph: &PersistedKaigiRekeyGraph,
 ) -> Result<Option<AccountId>, Error> {
-    let graph = persisted_kaigi_rekey_graph(state_transaction)?;
     let component = persisted_kaigi_rekey_component(&graph.neighbours, account);
     let mut terminal = account.clone();
     while let Some(successor) = graph.forward.get(&terminal) {
@@ -1233,7 +1408,7 @@ fn resolve_persisted_kaigi_rekey_successor(
     }
     let registered = component
         .into_iter()
-        .filter(|candidate| state_transaction.world.account(candidate).is_ok())
+        .filter(|candidate| world.account(candidate).is_ok())
         .collect::<BTreeSet<_>>();
     if registered.is_empty() {
         return Ok(None);
@@ -1252,11 +1427,11 @@ struct PersistedKaigiRekeyGraph {
     neighbours: BTreeMap<AccountId, BTreeSet<AccountId>>,
 }
 fn persisted_kaigi_rekey_graph(
-    state_transaction: &StateTransaction<'_, '_>,
+    world: &impl WorldReadOnly,
 ) -> Result<PersistedKaigiRekeyGraph, Error> {
     let mut graph = PersistedKaigiRekeyGraph::default();
     let mut reverse = BTreeMap::<AccountId, AccountId>::new();
-    for (label, record) in state_transaction.world.account_rekey_records.iter() {
+    for (label, record) in world.account_rekey_records().iter() {
         if label != &record.label {
             return Err(Error::InvariantViolation(
                 "account-id rekey history key does not match its embedded alias".into(),
@@ -1351,20 +1526,23 @@ fn record_has_participant_in_active_lineage(
     Ok(false)
 }
 fn validate_relay_manifest(manifest: &KaigiRelayManifest) -> Result<(), Error> {
-    if manifest.hops.len() < 3 {
+    if manifest.hops.len() < KAIGI_RELAY_MANIFEST_MIN_HOPS_V1 {
         return Err(Error::InvalidParameter(
             InvalidParameterError::SmartContract(
                 "relay manifest must include at least three hops".into(),
             ),
         ));
     }
+    if manifest.hops.len() > KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 {
+        return Err(Error::InvalidParameter(
+            InvalidParameterError::SmartContract(format!(
+                "relay manifest must not include more than {KAIGI_RELAY_MANIFEST_MAX_HOPS_V1} hops"
+            )),
+        ));
+    }
     let mut seen_relays = BTreeSet::new();
     for hop in &manifest.hops {
-        if hop.hpke_public_key.is_empty() {
-            return Err(Error::InvalidParameter(
-                InvalidParameterError::SmartContract("relay hops require HPKE keys".into()),
-            ));
-        }
+        validate_relay_hpke_public_key(&hop.hpke_public_key)?;
         if hop.weight == 0 {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract("relay weights must be non-zero".into()),
@@ -1380,6 +1558,170 @@ fn validate_relay_manifest(manifest: &KaigiRelayManifest) -> Result<(), Error> {
     }
     Ok(())
 }
+fn validate_relay_hpke_public_key(hpke_public_key: &[u8]) -> Result<(), Error> {
+    if hpke_public_key.is_empty() {
+        return Err(relay_error("relay HPKE public key must be non-empty"));
+    }
+    if hpke_public_key.len() > KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 {
+        return Err(relay_error(format!(
+            "relay HPKE public key must not exceed {KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1} bytes"
+        )));
+    }
+    Ok(())
+}
+fn decode_stored_relay_registration(
+    domain_id: &DomainId,
+    key: &Name,
+    value: Json,
+) -> Result<KaigiRelayRegistration, Error> {
+    let registration: KaigiRelayRegistration = value.try_into_any_norito().map_err(|err| {
+        Error::InvariantViolation(
+            format!("malformed Kaigi relay registration in domain {domain_id}: {err}").into(),
+        )
+    })?;
+    let expected_key = kaigi_relay_metadata_key(&registration.relay_id).map_err(|err| {
+        Error::InvariantViolation(
+            format!("invalid stored Kaigi relay registration identity: {err}").into(),
+        )
+    })?;
+    if key != &expected_key {
+        return Err(Error::InvariantViolation(
+            "stored Kaigi relay registration key does not match its relay ID".into(),
+        ));
+    }
+    validate_relay_hpke_public_key(&registration.hpke_public_key).map_err(|error| {
+        Error::InvariantViolation(
+            format!("stored Kaigi relay registration has an invalid HPKE key: {error}").into(),
+        )
+    })?;
+    if registration.bandwidth_class == 0 {
+        return Err(Error::InvariantViolation(
+            "stored Kaigi relay registration has an invalid zero bandwidth class".into(),
+        ));
+    }
+    Ok(registration)
+}
+fn collect_kaigi_relay_registry(
+    world: &impl WorldReadOnly,
+) -> Result<BTreeMap<AccountId, DomainId>, Error> {
+    let mut rebuilt = BTreeMap::new();
+    for domain in world.domains_iter() {
+        for (key, value) in domain.metadata().iter() {
+            if !key.as_ref().starts_with("kaigi_relay__") {
+                continue;
+            }
+            let registration = decode_stored_relay_registration(domain.id(), key, value.clone())?;
+            if rebuilt
+                .insert(registration.relay_id, domain.id().clone())
+                .is_some()
+            {
+                return Err(Error::InvariantViolation(
+                    "duplicate Kaigi relay registration found across domains".into(),
+                ));
+            }
+        }
+    }
+    Ok(rebuilt)
+}
+/// Rebuild the derived relay-to-domain index from authoritative domain metadata.
+///
+/// The first-release limit is an admission constraint, not a restore constraint:
+/// valid legacy over-cap state remains loadable so relays can retire it.
+///
+/// # Errors
+///
+/// Returns an error when an authoritative relay row is malformed or duplicated.
+pub(crate) fn rebuild_kaigi_relay_registry(world: &mut World) -> Result<(), String> {
+    let rebuilt = collect_kaigi_relay_registry(&world.view()).map_err(|error| error.to_string())?;
+    world.kaigi_relay_registry = rebuilt.into_iter().collect();
+    Ok(())
+}
+/// Validate rebuilt relay membership against persisted account lineage and home domains.
+///
+/// # Errors
+///
+/// Returns an error when the index disagrees with authoritative metadata or relay lineage.
+pub(crate) fn validate_rebuilt_kaigi_relay_registry(
+    world: &impl WorldReadOnly,
+) -> Result<(), String> {
+    let graph = persisted_kaigi_rekey_graph(world).map_err(|error| error.to_string())?;
+    for (relay_id, domain_id) in world.kaigi_relay_registry().iter() {
+        let key = kaigi_relay_metadata_key(relay_id).map_err(|error| error.to_string())?;
+        let value = world
+            .domain(domain_id)
+            .map_err(|error| error.to_string())?
+            .metadata()
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Kaigi relay registry entry for {relay_id} is missing authoritative metadata"
+                )
+            })?;
+        let registration = decode_stored_relay_registration(domain_id, &key, value)
+            .map_err(|error| error.to_string())?;
+        if &registration.relay_id != relay_id {
+            return Err(format!(
+                "Kaigi relay registry key {relay_id} does not match its metadata registration"
+            ));
+        }
+        let resolved_domain =
+            persisted_relay_domain(world, relay_id, &graph).map_err(|error| error.to_string())?;
+        if &resolved_domain != domain_id {
+            return Err(format!(
+                "Kaigi relay {relay_id} is stored in {domain_id}, outside its persisted home domain {resolved_domain}"
+            ));
+        }
+    }
+    Ok(())
+}
+fn validated_kaigi_relay_registry_count(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<usize, Error> {
+    let graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+    validated_kaigi_relay_registry_count_with_graph(state_transaction, &graph)
+}
+fn validated_kaigi_relay_registry_count_with_graph(
+    state_transaction: &StateTransaction<'_, '_>,
+    graph: &PersistedKaigiRekeyGraph,
+) -> Result<usize, Error> {
+    let mut count = 0usize;
+    for (relay_id, domain_id) in state_transaction.world.kaigi_relay_registry.iter() {
+        let key = kaigi_relay_metadata_key(relay_id).map_err(|err| {
+            Error::InvariantViolation(
+                format!("invalid indexed Kaigi relay registration identity: {err}").into(),
+            )
+        })?;
+        let value = state_transaction
+            .world
+            .domain(domain_id)?
+            .metadata()
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "Kaigi relay registry entry is missing authoritative metadata".into(),
+                )
+            })?;
+        let registration = decode_stored_relay_registration(domain_id, &key, value)?;
+        if &registration.relay_id != relay_id {
+            return Err(Error::InvariantViolation(
+                "Kaigi relay registry key does not match its metadata registration".into(),
+            ));
+        }
+        let resolved_domain = relay_domain_from_persisted_graph(state_transaction, relay_id, graph)?;
+        if &resolved_domain != domain_id {
+            return Err(Error::InvariantViolation(
+                "stored Kaigi relay registration is outside its relay's active home domain".into(),
+            ));
+        }
+        count = count.saturating_add(1);
+        if count > KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 {
+            return Ok(count);
+        }
+    }
+    Ok(count)
+}
 fn ensure_manifest_relays_registered(
     state_transaction: &StateTransaction<'_, '_>,
     manifest: &KaigiRelayManifest,
@@ -1389,10 +1731,15 @@ fn ensure_manifest_relays_registered(
             "relay manifest expiry must be greater than the current block time",
         ));
     }
+    let rekey_graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
     let mut active_relays = BTreeSet::new();
     for hop in &manifest.hops {
-        let active_relay = resolve_active_kaigi_account(state_transaction, &hop.relay_id)?
-            .ok_or_else(|| {
+        let active_relay = resolve_active_kaigi_account_with_graph(
+            state_transaction,
+            &hop.relay_id,
+            &rekey_graph,
+        )?
+        .ok_or_else(|| {
                 relay_error("relay manifest references an unregistered relay account")
             })?;
         if !active_relays.insert(active_relay) {
@@ -1402,11 +1749,15 @@ fn ensure_manifest_relays_registered(
         }
     }
     for hop in &manifest.hops {
-        ensure_relay_allowed_by_governance(state_transaction, &hop.relay_id)?;
+        ensure_relay_allowed_by_governance_with_graph(
+            state_transaction,
+            &hop.relay_id,
+            &rekey_graph,
+        )?;
         let key = kaigi_relay_metadata_key(&hop.relay_id).map_err(|err| {
             Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
         })?;
-        let domain_id = relay_domain(state_transaction, &hop.relay_id)?;
+        let domain_id = relay_domain_with_graph(state_transaction, &hop.relay_id, &rekey_graph)?;
         let domain = state_transaction.world.domain(&domain_id)?;
         let stored = domain.metadata().get(&key).cloned().ok_or_else(|| {
             relay_error("relay referenced in manifest is not registered in its domain")
@@ -1432,16 +1783,22 @@ fn ensure_manifest_relays_registered(
     }
     Ok(())
 }
-fn ensure_relay_allowed_by_governance(
+fn ensure_relay_allowed_by_governance_with_graph(
     state_transaction: &StateTransaction<'_, '_>,
     relay_id: &AccountId,
+    graph: &PersistedKaigiRekeyGraph,
 ) -> Result<(), Error> {
-    let domain_id = relay_domain(state_transaction, relay_id)?;
+    let domain_id = relay_domain_with_graph(state_transaction, relay_id, graph)?;
     let allowlist = load_allowlist(state_transaction, &domain_id)?;
     if let Some(allowlist) = allowlist {
         let mut allowed = false;
         for allowlisted_relay in &allowlist.allowed_relays {
-            if accounts_share_active_lineage(state_transaction, allowlisted_relay, relay_id)? {
+            if accounts_share_active_lineage_with_graph(
+                state_transaction,
+                allowlisted_relay,
+                relay_id,
+                graph,
+            )? {
                 allowed = true;
                 break;
             }
@@ -1527,17 +1884,52 @@ fn emit_relay_registration_summary(
     stx.world
         .emit_events(Some(DomainEvent::KaigiRelayRegistered(summary)));
 }
+fn emit_relay_unregistration_summary(
+    stx: &mut StateTransaction<'_, '_>,
+    domain_id: &DomainId,
+    relay_id: &AccountId,
+) {
+    let summary = KaigiRelayUnregistrationSummary::new(domain_id.clone(), relay_id.clone());
+    stx.world
+        .emit_events(Some(DomainEvent::KaigiRelayUnregistered(summary)));
+}
 fn relay_domain(
     state_transaction: &StateTransaction<'_, '_>,
     relay_id: &AccountId,
 ) -> Result<DomainId, Error> {
+    let graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+    relay_domain_with_graph(state_transaction, relay_id, &graph)
+}
+fn relay_domain_with_graph(
+    state_transaction: &StateTransaction<'_, '_>,
+    relay_id: &AccountId,
+    graph: &PersistedKaigiRekeyGraph,
+) -> Result<DomainId, Error> {
     let relay_subject =
-        resolve_active_kaigi_account(state_transaction, relay_id)?.ok_or_else(|| {
-            relay_error("relay account is not registered or in an active rekey lineage")
-        })?;
+        resolve_active_kaigi_account_with_graph(state_transaction, relay_id, graph)?.ok_or_else(
+            || relay_error("relay account is not registered or in an active rekey lineage"),
+        )?;
+    active_relay_subject_domain(state_transaction, &relay_subject)
+}
+fn relay_domain_from_persisted_graph(
+    state_transaction: &StateTransaction<'_, '_>,
+    relay_id: &AccountId,
+    graph: &PersistedKaigiRekeyGraph,
+) -> Result<DomainId, Error> {
+    let relay_subject =
+        resolve_persisted_kaigi_rekey_successor(&state_transaction.world, relay_id, graph)?
+            .ok_or_else(|| {
+                relay_error("relay account is not registered or in a persisted lineage")
+            })?;
+    active_relay_subject_domain(state_transaction, &relay_subject)
+}
+fn active_relay_subject_domain(
+    state_transaction: &StateTransaction<'_, '_>,
+    relay_subject: &AccountId,
+) -> Result<DomainId, Error> {
     let primary_alias = state_transaction
         .world
-        .account(&relay_subject)?
+        .account(relay_subject)?
         .label()
         .cloned()
         .ok_or_else(|| {
@@ -1555,13 +1947,26 @@ fn relay_domain(
                 .into(),
         )
     })?;
-    if resolved.as_ref() != Some(&relay_subject) {
+    if resolved.as_ref() != Some(relay_subject) {
         return Err(relay_error(
             "relay account requires an active domain-qualified primary alias",
         ));
     }
+    relay_subject_domain(&state_transaction.world, relay_subject)
+}
+fn relay_subject_domain(
+    world: &impl WorldReadOnly,
+    relay_subject: &AccountId,
+) -> Result<DomainId, Error> {
+    let primary_alias = world
+        .account(relay_subject)?
+        .label()
+        .cloned()
+        .ok_or_else(|| {
+            relay_error("relay account requires an active domain-qualified primary alias")
+        })?;
     let domain_id = primary_alias
-        .domain_id(state_transaction.world.dataspace_catalog())
+        .domain_id(world.dataspace_catalog())
         .map_err(|err| {
             Error::InvariantViolation(
                 format!("failed to resolve relay primary alias domain `{primary_alias:?}`: {err}")
@@ -1571,8 +1976,17 @@ fn relay_domain(
         .ok_or_else(|| {
             relay_error("relay account requires an active domain-qualified primary alias")
         })?;
-    state_transaction.world.domain(&domain_id)?;
+    world.domain(&domain_id)?;
     Ok(domain_id)
+}
+fn persisted_relay_domain(
+    world: &impl WorldReadOnly,
+    relay_id: &AccountId,
+    graph: &PersistedKaigiRekeyGraph,
+) -> Result<DomainId, Error> {
+    let relay_subject = resolve_persisted_kaigi_rekey_successor(world, relay_id, graph)?
+        .ok_or_else(|| relay_error("relay account is not registered or in a persisted lineage"))?;
+    relay_subject_domain(world, &relay_subject)
 }
 fn emit_relay_manifest_summary(
     stx: &mut StateTransaction<'_, '_>,
@@ -1590,6 +2004,11 @@ fn emit_relay_manifest_summary(
     stx.world
         .emit_events(Some(DomainEvent::KaigiRelayManifestUpdated(summary)));
 }
+fn emit_status_summary(stx: &mut StateTransaction<'_, '_>, record: &KaigiRecord) {
+    let summary = KaigiStatusSummary::new(record.id.clone(), record.status, record.ended_at_ms);
+    stx.world
+        .emit_events(Some(DomainEvent::KaigiStatusChanged(summary)));
+}
 fn emit_usage_summary(stx: &mut StateTransaction<'_, '_>, record: &KaigiRecord) {
     let summary = KaigiUsageSummary {
         call: record.id.clone(),
@@ -1600,8 +2019,13 @@ fn emit_usage_summary(stx: &mut StateTransaction<'_, '_>, record: &KaigiRecord) 
     stx.world
         .emit_events(Some(DomainEvent::KaigiUsageSummary(summary)));
 }
-fn emit_relay_health_summary(stx: &mut StateTransaction<'_, '_>, feedback: &KaigiRelayFeedback) {
+fn emit_relay_health_summary(
+    stx: &mut StateTransaction<'_, '_>,
+    relay_domain: &DomainId,
+    feedback: &KaigiRelayFeedback,
+) {
     let summary = KaigiRelayHealthSummary::new(
+        relay_domain.clone(),
         feedback.call.clone(),
         feedback.relay_id.clone(),
         feedback.status,
@@ -1799,7 +2223,10 @@ mod tests {
     use core::num::NonZeroU64;
     use iroha_data_model::{
         events::{
-            data::prelude::{DataEvent, DomainEvent, KaigiRelayRegistrationSummary},
+            data::prelude::{
+                DataEvent, DomainEvent, KaigiRelayRegistrationSummary,
+                KaigiRelayUnregistrationSummary, KaigiStatusSummary,
+            },
             prelude::EventBox,
         },
         kaigi::{KaigiRelayHop, KaigiRelayManifest, KaigiRelayRegistration, NewKaigi},
@@ -1902,6 +2329,21 @@ mod tests {
         });
     }
     #[test]
+    fn relay_hpke_public_key_validation_enforces_v1_byte_boundaries() {
+        assert!(validate_relay_hpke_public_key(&[]).is_err());
+        assert!(
+            validate_relay_hpke_public_key(&vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1])
+                .is_ok()
+        );
+        assert!(
+            validate_relay_hpke_public_key(&vec![
+                0xA5;
+                KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1
+            ])
+            .is_err()
+        );
+    }
+    #[test]
     fn relay_manifest_validation_enforces_rules() {
         let manifest = KaigiRelayManifest {
             hops: Vec::new(),
@@ -1935,12 +2377,23 @@ mod tests {
         let mut invalid = valid.clone();
         invalid.hops[1].hpke_public_key.clear();
         assert!(validate_relay_manifest(&invalid).is_err());
+        let mut oversized_key = valid.clone();
+        oversized_key.hops[1].hpke_public_key =
+            vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1];
+        assert!(validate_relay_manifest(&oversized_key).is_err());
         let mut zero_weight = valid.clone();
         zero_weight.hops[0].weight = 0;
         assert!(validate_relay_manifest(&zero_weight).is_err());
         let mut duplicate = valid.clone();
         duplicate.hops[2].relay_id = hop_a;
         assert!(validate_relay_manifest(&duplicate).is_err());
+        let mut too_many = valid;
+        while too_many.hops.len() <= KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 {
+            too_many.hops.push(too_many.hops[0].clone());
+        }
+        let error = validate_relay_manifest(&too_many)
+            .expect_err("a nine-hop first-release relay route must be rejected");
+        assert_smart_contract_error(error, "must not include more than 8 hops");
     }
     #[test]
     fn relay_manifest_rejects_two_ids_from_one_active_rekey_lineage() {
@@ -3589,17 +4042,37 @@ mod tests {
                 .expect("register relay account");
             add_relay_to_allowlist(stx, &domain_id, &relay_id);
             stx.world.take_external_events();
+            let oversized_error = RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: relay_id.clone(),
+                    hpke_public_key: vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1],
+                    bandwidth_class: 5,
+                },
+            }
+            .execute(&relay_id, stx)
+            .expect_err("oversized relay key must fail before persistence or event emission");
+            assert_smart_contract_error(oversized_error, "must not exceed 4096 bytes");
+            let key = kaigi_relay_metadata_key(&relay_id).expect("metadata key");
+            assert!(
+                stx.world
+                    .domain(&domain_id)
+                    .expect("domain lookup")
+                    .metadata()
+                    .get(&key)
+                    .is_none()
+            );
+            assert!(stx.world.take_external_events().is_empty());
             RegisterKaigiRelay {
                 relay: registration.clone(),
             }
             .execute(&relay_id, stx)
             .expect("register relay");
             let events = stx.world.take_external_events();
+            assert_eq!(events.len(), 1, "full relay metadata must remain internal");
             let summary =
                 extract_registration_summary(&events).expect("relay registration summary event");
             assert_eq!(summary.relay().subject_id(), relay_id.subject_id());
             assert_eq!(*summary.bandwidth_class(), 5);
-            let key = kaigi_relay_metadata_key(&relay_id).expect("metadata key");
             let domain = stx.world.domain(&domain_id).expect("domain lookup");
             let stored = domain
                 .metadata()
@@ -3615,7 +4088,477 @@ mod tests {
             );
             assert_eq!(decoded.hpke_public_key, registration.hpke_public_key);
             assert_eq!(decoded.bandwidth_class, registration.bandwidth_class);
+            assert_eq!(
+                stx.world.kaigi_relay_registry.get(&relay_id),
+                Some(&domain_id)
+            );
+
+            stx.world
+                .domain_mut(&domain_id)
+                .expect("relay domain")
+                .metadata_mut()
+                .insert(
+                    kaigi_relay_allowlist_key().expect("allowlist key"),
+                    Json::try_new(KaigiRelayAllowlist::default())
+                        .expect("serialize empty allowlist"),
+                );
+            let internal_len = stx.world.internal_event_buf.len();
+            RegisterKaigiRelay {
+                relay: registration.clone(),
+            }
+            .execute(&relay_id, stx)
+            .expect("identical relay registration is an idempotent lookup even after delisting");
+            assert!(stx.world.take_external_events().is_empty());
+            assert_eq!(stx.world.internal_event_buf.len(), internal_len);
+
+            add_relay_to_allowlist(stx, &domain_id, &relay_id);
+            let mut rotated = registration.clone();
+            rotated.bandwidth_class = 6;
+            RegisterKaigiRelay {
+                relay: rotated.clone(),
+            }
+            .execute(&relay_id, stx)
+            .expect("changed relay descriptor updates in place");
+            let events = stx.world.take_external_events();
+            assert_eq!(events.len(), 1, "descriptor updates expose only a summary");
+            assert_eq!(
+                *extract_registration_summary(&events)
+                    .expect("updated registration summary")
+                    .bandwidth_class(),
+                6
+            );
+            assert_eq!(
+                load_relay_registration(stx, &domain_id, &relay_id),
+                Some(rotated)
+            );
         });
+    }
+    #[test]
+    fn relay_registry_cap_rejects_new_entries_but_allows_update_and_retirement() {
+        let domain_id = DomainId::try_new("relay-cap", "universal").expect("domain id");
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay domain");
+            let mut relay_ids = Vec::with_capacity(KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 + 1);
+            for index in 0..=KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 {
+                let (relay_id, _) = gen_account_in("relay-cap");
+                Register::account(Account::new(relay_id.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register relay account");
+                seed_relay_primary_alias_for_testing(stx, &domain_id, &relay_id);
+                if index < KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 {
+                    let registration = KaigiRelayRegistration {
+                        relay_id: relay_id.clone(),
+                        hpke_public_key: vec![u8::try_from(index % 251).expect("bounded byte") + 1],
+                        bandwidth_class: 1,
+                    };
+                    stx.world
+                        .domain_mut(&domain_id)
+                        .expect("relay domain")
+                        .metadata_mut()
+                        .insert(
+                            kaigi_relay_metadata_key(&relay_id).expect("registration key"),
+                            Json::try_new(registration).expect("serialize registration"),
+                        );
+                    stx.world
+                        .kaigi_relay_registry
+                        .insert(relay_id.clone(), domain_id.clone());
+                }
+                relay_ids.push(relay_id);
+            }
+            let existing = relay_ids[0].clone();
+            let new_relay = relay_ids.last().expect("extra relay account").clone();
+            add_relay_to_allowlist(stx, &domain_id, &existing);
+            add_relay_to_allowlist(stx, &domain_id, &new_relay);
+            stx.world.take_external_events();
+
+            let rotated = KaigiRelayRegistration {
+                relay_id: existing.clone(),
+                hpke_public_key: vec![0xAA, 0xBB],
+                bandwidth_class: 2,
+            };
+            RegisterKaigiRelay {
+                relay: rotated.clone(),
+            }
+            .execute(&existing, stx)
+            .expect("an existing descriptor may rotate at the registry cap");
+            assert_eq!(
+                load_relay_registration(stx, &domain_id, &existing),
+                Some(rotated)
+            );
+            stx.world.take_external_events();
+
+            let rejected = KaigiRelayRegistration {
+                relay_id: new_relay.clone(),
+                hpke_public_key: vec![0xCC],
+                bandwidth_class: 1,
+            };
+            let error = RegisterKaigiRelay {
+                relay: rejected.clone(),
+            }
+            .execute(&new_relay, stx)
+            .expect_err("a new descriptor must be rejected at the registry cap");
+            assert_smart_contract_error(error, "500-entry limit");
+            assert_eq!(load_relay_registration(stx, &domain_id, &new_relay), None);
+            assert!(stx.world.take_external_events().is_empty());
+
+            stx.world
+                .domain_mut(&domain_id)
+                .expect("relay domain")
+                .metadata_mut()
+                .insert(
+                    kaigi_relay_metadata_key(&new_relay).expect("registration key"),
+                    Json::try_new(rejected).expect("serialize legacy over-cap registration"),
+                );
+            stx.world
+                .kaigi_relay_registry
+                .insert(new_relay.clone(), domain_id.clone());
+            assert_eq!(
+                collect_kaigi_relay_registry(&stx.world)
+                    .expect("valid legacy over-cap registry remains rebuildable")
+                    .len(),
+                KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 + 1
+            );
+            assert_eq!(
+                validated_kaigi_relay_registry_count(stx).expect("validate over-cap registry"),
+                KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 + 1
+            );
+            UnregisterKaigiRelay {
+                relay_id: existing.clone(),
+            }
+            .execute(&existing, stx)
+            .expect("retirement must remain available above the cap");
+            assert_eq!(
+                validated_kaigi_relay_registry_count(stx).expect("validate repaired registry"),
+                KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1
+            );
+        });
+    }
+    #[test]
+    fn relay_registry_rebuild_fails_closed_on_malformed_row() {
+        let domain_id = DomainId::try_new("relay-corrupt", "universal").expect("domain id");
+        let (corrupt_key_owner, _) = gen_account_in("relay-corrupt");
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay domain");
+            Register::account(Account::new(corrupt_key_owner.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
+            seed_relay_primary_alias_for_testing(stx, &domain_id, &corrupt_key_owner);
+            let corrupt_key =
+                kaigi_relay_metadata_key(&corrupt_key_owner).expect("corrupt registration key");
+            stx.world
+                .domain_mut(&domain_id)
+                .expect("relay domain")
+                .metadata_mut()
+                .insert(
+                    corrupt_key,
+                    Json::try_new("not a relay registration").expect("serialize corrupt row"),
+                );
+            let error = collect_kaigi_relay_registry(&stx.world)
+                .expect_err("a malformed registry row must fail closed during rebuild");
+            assert_invariant_error(error, "malformed Kaigi relay registration");
+        });
+    }
+    #[test]
+    fn relay_registry_rebuild_rejects_duplicate_relay_rows() {
+        let first = DomainId::try_new("relay-first", "universal").expect("first domain id");
+        let second = DomainId::try_new("relay-second", "universal").expect("second domain id");
+        let (relay_id, _) = gen_account_in("relay-first");
+        with_state_transaction(|stx| {
+            for domain_id in [&first, &second] {
+                Register::domain(Domain::new(domain_id.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register relay domain");
+                let registration = KaigiRelayRegistration {
+                    relay_id: relay_id.clone(),
+                    hpke_public_key: vec![0xAA],
+                    bandwidth_class: 1,
+                };
+                stx.world
+                    .domain_mut(domain_id)
+                    .expect("relay domain")
+                    .metadata_mut()
+                    .insert(
+                        kaigi_relay_metadata_key(&relay_id).expect("registration key"),
+                        Json::try_new(registration).expect("serialize registration"),
+                    );
+            }
+
+            let error = collect_kaigi_relay_registry(&stx.world)
+                .expect_err("duplicate relay rows must fail state rebuild");
+            assert_invariant_error(error, "duplicate Kaigi relay registration");
+        });
+    }
+    #[test]
+    fn rebuilt_relay_registry_rejects_mis_homed_metadata() {
+        let home = DomainId::try_new("relay-home", "universal").expect("home domain id");
+        let wrong = DomainId::try_new("relay-wrong", "universal").expect("wrong domain id");
+        let (relay_id, _) = gen_account_in("relay-home");
+        with_state_transaction(|stx| {
+            for domain_id in [&home, &wrong] {
+                Register::domain(Domain::new(domain_id.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register relay domain");
+            }
+            Register::account(Account::new(relay_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
+            seed_relay_primary_alias_for_testing(stx, &home, &relay_id);
+            let registration = KaigiRelayRegistration {
+                relay_id: relay_id.clone(),
+                hpke_public_key: vec![0xAA],
+                bandwidth_class: 1,
+            };
+            stx.world
+                .domain_mut(&wrong)
+                .expect("wrong domain")
+                .metadata_mut()
+                .insert(
+                    kaigi_relay_metadata_key(&relay_id).expect("registration key"),
+                    Json::try_new(registration).expect("serialize registration"),
+                );
+            let rebuilt =
+                collect_kaigi_relay_registry(&stx.world).expect("structurally valid registry");
+            for (relay_id, domain_id) in rebuilt {
+                stx.world.kaigi_relay_registry.insert(relay_id, domain_id);
+            }
+
+            let error = validate_rebuilt_kaigi_relay_registry(&stx.world)
+                .expect_err("mis-homed relay metadata must fail state rebuild");
+            assert!(
+                error.contains("outside its persisted home domain"),
+                "unexpected rebuild error: {error}"
+            );
+        });
+    }
+    #[test]
+    fn relay_registration_fails_closed_when_metadata_and_index_disagree() {
+        let domain_id = DomainId::try_new("relay-index", "universal").expect("domain id");
+        let (relay_id, _) = gen_account_in("relay-index");
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay domain");
+            Register::account(Account::new(relay_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
+            seed_relay_primary_alias_for_testing(stx, &domain_id, &relay_id);
+            add_relay_to_allowlist(stx, &domain_id, &relay_id);
+            let registration = KaigiRelayRegistration {
+                relay_id: relay_id.clone(),
+                hpke_public_key: vec![0xAA],
+                bandwidth_class: 1,
+            };
+            stx.world
+                .domain_mut(&domain_id)
+                .expect("relay domain")
+                .metadata_mut()
+                .insert(
+                    kaigi_relay_metadata_key(&relay_id).expect("registration key"),
+                    Json::try_new(registration.clone()).expect("serialize registration"),
+                );
+
+            let error = RegisterKaigiRelay {
+                relay: registration,
+            }
+            .execute(&relay_id, stx)
+            .expect_err("an unindexed metadata row must not pass as an idempotent registration");
+            assert_invariant_error(error, "metadata and registry index disagree");
+        });
+    }
+    #[test]
+    fn relay_retirement_is_atomic_and_active_manifests_remain_self_contained() {
+        let (domain, host, _) = sample_ids();
+        let call_id = KaigiId::new(
+            domain.clone(),
+            Name::from_str("retired-relay").expect("call name"),
+        );
+        let manifest = sample_manifest();
+        let retired_relay = manifest.hops[0].relay_id.clone();
+        with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&host), |stx| {
+            register_manifest_relays(stx, &domain, &manifest);
+            let mut template = NewKaigi::with_defaults(call_id.clone(), host.clone());
+            template.relay_manifest = Some(manifest.clone());
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create call with pinned relay manifest");
+            let feedback = KaigiRelayFeedback {
+                relay_id: retired_relay.clone(),
+                call: call_id.clone(),
+                reported_by: host.clone(),
+                status: KaigiRelayHealthStatus::Degraded,
+                reported_at_ms: 0,
+                notes: Some("retiring".to_owned()),
+            };
+            store_relay_feedback(stx, &feedback).expect("seed relay feedback");
+            stx.world.take_external_events();
+            let internal_len = stx.world.internal_event_buf.len();
+
+            UnregisterKaigiRelay {
+                relay_id: retired_relay.clone(),
+            }
+            .execute(&retired_relay, stx)
+            .expect("relay may retire while an existing manifest pins its descriptor");
+            let events = stx.world.take_external_events();
+            assert_eq!(events.len(), 1, "removal metadata must remain internal");
+            let summary = extract_unregistration_summary(&events)
+                .expect("relay unregistration summary event");
+            assert_eq!(summary.relay(), &retired_relay);
+            assert_eq!(summary.domain(), &domain);
+            assert_eq!(stx.world.internal_event_buf.len(), internal_len + 3);
+            assert_eq!(load_relay_registration(stx, &domain, &retired_relay), None);
+            assert!(stx.world.kaigi_relay_registry.get(&retired_relay).is_none());
+            assert_eq!(
+                load_relay_feedback(stx, &retired_relay).expect("load removed feedback"),
+                None
+            );
+            assert_eq!(
+                load_call_record(stx, &call_id).relay_manifest,
+                Some(manifest.clone()),
+                "retirement must not rewrite an active call's pinned manifest"
+            );
+
+            let error = SetKaigiRelayManifest {
+                call_id: call_id.clone(),
+                relay_manifest: Some(manifest.clone()),
+            }
+            .execute(&host, stx)
+            .expect_err("retired descriptors must be unavailable to future manifest admission");
+            assert_smart_contract_error(error, "not registered");
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn relay_retirement_validates_feedback_before_removing_either_row() {
+        let domain_id = DomainId::try_new("relay-atomic", "universal").expect("domain id");
+        let (relay_id, _) = gen_account_in("relay-atomic");
+        let (other_relay, _) = gen_account_in("relay-atomic");
+        with_seeded_kaigi_state_transaction(
+            &domain_id,
+            &[relay_id.clone(), other_relay.clone()],
+            |stx| {
+                add_relay_to_allowlist(stx, &domain_id, &relay_id);
+                let registration = KaigiRelayRegistration {
+                    relay_id: relay_id.clone(),
+                    hpke_public_key: vec![0xAA],
+                    bandwidth_class: 1,
+                };
+                RegisterKaigiRelay {
+                    relay: registration.clone(),
+                }
+                .execute(&relay_id, stx)
+                .expect("register relay");
+                stx.world.take_external_events();
+                let error = UnregisterKaigiRelay {
+                    relay_id: relay_id.clone(),
+                }
+                .execute(&other_relay, stx)
+                .expect_err("an unrelated account must not retire a relay descriptor");
+                assert_smart_contract_error(error, "only the relay account");
+                assert_eq!(
+                    load_relay_registration(stx, &domain_id, &relay_id),
+                    Some(registration.clone())
+                );
+                assert!(stx.world.take_external_events().is_empty());
+
+                let feedback_key = kaigi_relay_feedback_key(&relay_id).expect("relay feedback key");
+                let corrupt_feedback = KaigiRelayFeedback {
+                    relay_id: other_relay.clone(),
+                    call: KaigiId::new(
+                        domain_id.clone(),
+                        Name::from_str("corrupt-feedback").expect("call name"),
+                    ),
+                    reported_by: relay_id.clone(),
+                    status: KaigiRelayHealthStatus::Healthy,
+                    reported_at_ms: 0,
+                    notes: None,
+                };
+                stx.world
+                    .domain_mut(&domain_id)
+                    .expect("relay domain")
+                    .metadata_mut()
+                    .insert(
+                        feedback_key.clone(),
+                        Json::try_new(corrupt_feedback).expect("serialize corrupt feedback"),
+                    );
+                stx.world.take_external_events();
+
+                let error = UnregisterKaigiRelay {
+                    relay_id: relay_id.clone(),
+                }
+                .execute(&relay_id, stx)
+                .expect_err("corrupt feedback must abort relay retirement");
+                assert_invariant_error(error, "feedback identifier does not match");
+                assert_eq!(
+                    load_relay_registration(stx, &domain_id, &relay_id),
+                    Some(registration)
+                );
+                assert_eq!(
+                    stx.world.kaigi_relay_registry.get(&relay_id),
+                    Some(&domain_id)
+                );
+                assert!(
+                    stx.world
+                        .domain(&domain_id)
+                        .expect("relay domain")
+                        .metadata()
+                        .contains(&feedback_key)
+                );
+                assert!(stx.world.take_external_events().is_empty());
+            },
+        );
+    }
+    #[test]
+    fn active_rekey_successor_may_retire_predecessor_relay_descriptor() {
+        let domain_id = DomainId::try_new("relay-lineage", "universal").expect("domain id");
+        let (retired_relay, _) = gen_account_in("relay-lineage");
+        let (active_relay, _) = gen_account_in("relay-lineage");
+        with_seeded_kaigi_state_transaction(
+            &domain_id,
+            &[retired_relay.clone(), active_relay.clone()],
+            |stx| {
+                add_relay_to_allowlist(stx, &domain_id, &retired_relay);
+                RegisterKaigiRelay {
+                    relay: KaigiRelayRegistration {
+                        relay_id: retired_relay.clone(),
+                        hpke_public_key: vec![0xAA],
+                        bandwidth_class: 1,
+                    },
+                }
+                .execute(&retired_relay, stx)
+                .expect("register predecessor descriptor");
+                seed_active_account_id_rekey_lineage(
+                    stx,
+                    "relay-retirement-lineage",
+                    &retired_relay,
+                    &active_relay,
+                );
+                seed_relay_primary_alias_for_testing(stx, &domain_id, &active_relay);
+                stx.world.take_external_events();
+
+                UnregisterKaigiRelay {
+                    relay_id: retired_relay.clone(),
+                }
+                .execute(&active_relay, stx)
+                .expect("active canonical successor may retire predecessor descriptor");
+                assert_eq!(
+                    load_relay_registration(stx, &domain_id, &retired_relay),
+                    None
+                );
+                assert!(
+                    extract_unregistration_summary(&stx.world.take_external_events()).is_some()
+                );
+            },
+        );
     }
     #[test]
     fn manifest_requires_registered_relays() {
@@ -4201,7 +5144,15 @@ mod tests {
             .execute(&host, stx)
             .expect("create kaigi");
             let active = load_call_record(stx, &call);
-            stx.world.take_external_events();
+            let create_events = stx.world.take_external_events();
+            let created = extract_status_summary(&create_events).expect("active status event");
+            assert_eq!(*created.status(), KaigiStatus::Active);
+            assert_eq!(*created.ended_at_ms(), None);
+            assert!(create_events.iter().all(|event| !matches!(
+                event,
+                EventBox::Data(data)
+                    if matches!(data.as_ref(), DataEvent::Domain(DomainEvent::MetadataInserted(_)))
+            )));
 
             for (timestamp, message) in [(99, "precede creation"), (101, "current block time")] {
                 let error = EndKaigi {
@@ -4230,6 +5181,15 @@ mod tests {
             .execute(&host, stx)
             .expect("current block time is a valid end timestamp");
             assert_eq!(load_call_record(stx, &call).ended_at_ms, Some(100));
+            let end_events = stx.world.take_external_events();
+            assert_eq!(
+                end_events.len(),
+                1,
+                "ending exposes only a compact status event"
+            );
+            let ended = extract_status_summary(&end_events).expect("ended status event");
+            assert_eq!(*ended.status(), KaigiStatus::Ended);
+            assert_eq!(*ended.ended_at_ms(), Some(100));
         });
     }
     #[test]
@@ -4273,6 +5233,77 @@ mod tests {
             .expect_err("mismatched stored identifier must reject");
             assert_invariant_error(err, "identifier does not match metadata key");
             assert_eq!(load_call_record(stx, &call), mismatched);
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn stored_record_relay_manifest_must_satisfy_v1_constraints() {
+        let (record, host, _participant) = new_record(KaigiPrivacyMode::Transparent);
+        let call = record.id.clone();
+        let domain = call.domain_id.clone();
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            create_call(stx, &record, &host);
+
+            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+            let mut persisted = load_call_record(stx, &call);
+            let mut too_many = sample_manifest();
+            while too_many.hops.len() <= KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 {
+                too_many.hops.push(too_many.hops[0].clone());
+            }
+            persisted.relay_manifest = Some(too_many);
+            stx.world
+                .domain_mut(&domain)
+                .expect("domain")
+                .metadata_mut()
+                .insert(
+                    key.clone(),
+                    Json::try_new(persisted.clone()).expect("serialize oversized manifest"),
+                );
+            stx.world.take_external_events();
+
+            let error = RecordKaigiUsage {
+                call_id: call.clone(),
+                duration_ms: 1,
+                billed_gas: 1,
+                usage_commitment: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("a persisted overlong relay manifest must fail closed");
+            assert_invariant_error(error, "relay manifest violates V1 constraints");
+            assert_eq!(load_call_record(stx, &call), persisted);
+            assert!(stx.world.take_external_events().is_empty());
+
+            let mut oversized_key = sample_manifest();
+            oversized_key.hops[0].hpke_public_key =
+                vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1];
+            persisted.relay_manifest = Some(oversized_key);
+            stx.world
+                .domain_mut(&domain)
+                .expect("domain")
+                .metadata_mut()
+                .insert(
+                    key,
+                    Json::try_new(persisted.clone()).expect("serialize oversized relay key"),
+                );
+
+            let error = RecordKaigiUsage {
+                call_id: call.clone(),
+                duration_ms: 1,
+                billed_gas: 1,
+                usage_commitment: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("a persisted oversized relay key must fail closed");
+            assert_invariant_error(error, "relay manifest violates V1 constraints");
+            assert_eq!(load_call_record(stx, &call), persisted);
             assert!(stx.world.take_external_events().is_empty());
         });
     }
@@ -4861,6 +5892,24 @@ mod tests {
             .try_into_any_norito()
             .expect("deserialize record")
     }
+    fn load_relay_registration(
+        stx: &StateTransaction<'_, '_>,
+        domain_id: &DomainId,
+        relay_id: &AccountId,
+    ) -> Option<KaigiRelayRegistration> {
+        let key = kaigi_relay_metadata_key(relay_id).expect("relay registration key");
+        stx.world
+            .domain(domain_id)
+            .expect("relay domain")
+            .metadata()
+            .get(&key)
+            .cloned()
+            .map(|value| {
+                value
+                    .try_into_any_norito()
+                    .expect("decode relay registration")
+            })
+    }
     fn assert_kaigi_not_active(error: Error) {
         assert_invariant_error(error, "Kaigi is not active");
     }
@@ -4930,6 +5979,29 @@ mod tests {
         events.iter().find_map(|event| {
             if let EventBox::Data(ev) = event {
                 if let DataEvent::Domain(DomainEvent::KaigiRelayRegistered(summary)) = ev.as_ref() {
+                    return Some(summary.clone());
+                }
+            }
+            None
+        })
+    }
+    fn extract_unregistration_summary(
+        events: &[EventBox],
+    ) -> Option<KaigiRelayUnregistrationSummary> {
+        events.iter().find_map(|event| {
+            if let EventBox::Data(ev) = event {
+                if let DataEvent::Domain(DomainEvent::KaigiRelayUnregistered(summary)) = ev.as_ref()
+                {
+                    return Some(summary.clone());
+                }
+            }
+            None
+        })
+    }
+    fn extract_status_summary(events: &[EventBox]) -> Option<KaigiStatusSummary> {
+        events.iter().find_map(|event| {
+            if let EventBox::Data(ev) = event {
+                if let DataEvent::Domain(DomainEvent::KaigiStatusChanged(summary)) = ev.as_ref() {
                     return Some(summary.clone());
                 }
             }

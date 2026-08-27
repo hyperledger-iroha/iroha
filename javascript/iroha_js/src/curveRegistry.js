@@ -37,7 +37,15 @@ export const CURVE_REGISTRY = Object.freeze([
     id: CurveId.MLDSA,
     feature: CurveFeature.ML_DSA,
     algorithm: "ml-dsa",
-    aliases: ["ml-dsa", "mldsa", "ml_dsa"],
+    aliases: [
+      "ml-dsa",
+      "mldsa",
+      "ml_dsa",
+      "mldsa65",
+      "ml-dsa-65",
+      "ml_dsa_65",
+      "ml_dsa-65",
+    ],
     publicKeyLength: 1952,
     publicKeyMulticodec: 0xee,
   },
@@ -160,13 +168,10 @@ export function getCurveEntryByAlgorithm(algorithm) {
   if (typeof algorithm !== JS_TYPE_STRING) {
     return null;
   }
-  if (algorithm.trim() === "" || algorithm.trim() !== algorithm) {
+  if (!/^[A-Za-z0-9_-]+$/.test(algorithm)) {
     return null;
   }
   const normalized = algorithm.toLowerCase();
-  if (!/^[\x20-\x7e]+$/.test(normalized)) {
-    return null;
-  }
   return CURVE_NAME_TO_ENTRY.get(normalized) ?? null;
 }
 

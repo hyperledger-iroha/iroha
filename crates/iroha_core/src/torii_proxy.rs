@@ -1735,7 +1735,8 @@ pub struct ToriiHostedHttpProxyRequestV1 {
     pub method: String,
     /// Raw query string without the leading `?`.
     pub query_string: Option<String>,
-    /// Original request headers preserved by ingress.
+    /// End-to-end application headers preserved after ingress removes platform and hop-by-hop
+    /// metadata.
     pub headers: Vec<ToriiProxyHeaderV1>,
     /// Raw request body bytes.
     pub body: Vec<u8>,

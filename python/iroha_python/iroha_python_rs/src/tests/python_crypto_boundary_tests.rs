@@ -101,6 +101,16 @@ fn seed_derivation_pyfunctions_use_checked_backend_derivation() {
     });
 }
 #[test]
+fn seed_derivation_pyfunction_rejects_empty_ml_dsa_seed() {
+    ensure_python();
+    Python::attach(|py| {
+        match derive_keypair_from_seed_py(py, b"", Algorithm::MlDsa.as_static_str()) {
+            Err(error) => assert!(error.to_string().contains("must not be empty")),
+            Ok(_) => panic!("empty ML-DSA seed material must fail"),
+        }
+    });
+}
+#[test]
 fn parse_algorithm_arg_accepts_exact_supported_aliases() {
     for (label, expected) in [
         ("ed-25519", Algorithm::Ed25519),

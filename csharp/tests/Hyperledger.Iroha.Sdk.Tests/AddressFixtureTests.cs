@@ -182,6 +182,125 @@ public sealed class AddressFixtureTests
     }
 
     [Fact]
+    public void MlDsaAccountAddressesUseCanonicalExtendedSuite65Keys()
+    {
+        var publicKey = Enumerable.Repeat((byte)0xA5, 1_952).ToArray();
+        foreach (var algorithm in new[] { "mldsa", "mldsa65", "ml-dsa-65", "ml_dsa_65", "ml_dsa-65" })
+        {
+            var address = AccountAddress.FromPublicKey(publicKey, algorithm);
+            var canonical = address.CanonicalBytes();
+            Assert.Equal(new byte[] { 0x02, 0x02, 0x02, 0x07, 0xA0 }, canonical[..5]);
+            Assert.Equal(publicKey, canonical[5..]);
+            Assert.Equal(canonical, AccountAddress.FromCanonicalBytes(canonical).CanonicalBytes());
+            var literal = address.ToI105(AccountAddress.DevChainDiscriminant);
+            Assert.Equal(canonical, AccountAddress.Parse(literal).CanonicalBytes());
+        }
+        foreach (var algorithm in new[] { "mldsa44", "ml-dsa-44", "ml_dsa_87", "mldsa87" })
+        {
+            Assert.Equal(
+                AccountAddressErrorCode.UnsupportedAlgorithm,
+                Assert.Throws<AccountAddressException>(() =>
+                    AccountAddress.FromPublicKey(publicKey, algorithm)).Code);
+        }
+    }
+
+    [Fact]
+    public void MlDsaAccountAddressesRejectNonSuite65KeyMaterial()
+    {
+        foreach (var publicKey in new[]
+        {
+            Array.Empty<byte>(),
+            Enumerable.Repeat((byte)0x20, 32).ToArray(),
+            Enumerable.Repeat((byte)0x44, 1_312).ToArray(),
+            Enumerable.Repeat((byte)0x65, 1_951).ToArray(),
+            Enumerable.Repeat((byte)0x65, 1_953).ToArray(),
+            Enumerable.Repeat((byte)0x87, 2_592).ToArray(),
+            new byte[1_952],
+        })
+        {
+            var exception = Assert.Throws<AccountAddressException>(() =>
+                AccountAddress.FromPublicKey(publicKey, "ml-dsa-65"));
+            Assert.Equal(AccountAddressErrorCode.InvalidPublicKey, exception.Code);
+            Assert.Contains("1952-byte ML-DSA-65", exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void MlDsaCanonicalDecodeRejectsShortAndAllZeroControllers()
+    {
+        var shortCompact = new byte[4 + 32];
+        shortCompact[0] = 0x02;
+        shortCompact[1] = 0x00;
+        shortCompact[2] = 0x02;
+        shortCompact[3] = 32;
+        Array.Fill(shortCompact, (byte)0x44, 4, 32);
+        Assert.Equal(
+            AccountAddressErrorCode.InvalidPublicKey,
+            Assert.Throws<AccountAddressException>(() => AccountAddress.FromCanonicalBytes(shortCompact)).Code);
+
+        var allZeroExtended = new byte[5 + 1_952];
+        allZeroExtended[0] = 0x02;
+        allZeroExtended[1] = 0x02;
+        allZeroExtended[2] = 0x02;
+        allZeroExtended[3] = 0x07;
+        allZeroExtended[4] = 0xA0;
+        Assert.Equal(
+            AccountAddressErrorCode.InvalidPublicKey,
+            Assert.Throws<AccountAddressException>(() => AccountAddress.FromCanonicalBytes(allZeroExtended)).Code);
+
+        var shortExtended = new byte[5 + 32];
+        shortExtended[0] = 0x02;
+        shortExtended[1] = 0x02;
+        shortExtended[2] = 0x01;
+        shortExtended[3] = 0x00;
+        shortExtended[4] = 0x20;
+        Array.Fill(shortExtended, (byte)0x11, 5, 32);
+        Assert.Equal(
+            AccountAddressErrorCode.InvalidLength,
+            Assert.Throws<AccountAddressException>(() => AccountAddress.FromCanonicalBytes(shortExtended)).Code);
+    }
+
+    [Fact]
+    public void MlDsaMultisigDecodeRequiresSuite65KeyMaterial()
+    {
+        var validKey = Enumerable.Repeat((byte)0xA5, 1_952).ToArray();
+        var valid = BuildSingleMemberMultisig(0x02, validKey);
+        Assert.Equal(valid, AccountAddress.FromCanonicalBytes(valid).CanonicalBytes());
+
+        foreach (var invalidKey in new[]
+        {
+            Enumerable.Repeat((byte)0x44, 1_312).ToArray(),
+            Enumerable.Repeat((byte)0x87, 2_592).ToArray(),
+            new byte[1_952],
+        })
+        {
+            Assert.Equal(
+                AccountAddressErrorCode.InvalidPublicKey,
+                Assert.Throws<AccountAddressException>(() =>
+                    AccountAddress.FromCanonicalBytes(BuildSingleMemberMultisig(0x02, invalidKey))).Code);
+        }
+    }
+
+    private static byte[] BuildSingleMemberMultisig(byte curveId, byte[] publicKey)
+    {
+        var canonical = new byte[12 + publicKey.Length];
+        canonical[0] = 0x0A;
+        canonical[1] = 0x01;
+        canonical[2] = 0x01;
+        canonical[3] = 0x00;
+        canonical[4] = 0x01;
+        canonical[5] = 0x00;
+        canonical[6] = 0x01;
+        canonical[7] = curveId;
+        canonical[8] = 0x00;
+        canonical[9] = 0x01;
+        canonical[10] = (byte)(publicKey.Length >> 8);
+        canonical[11] = (byte)publicKey.Length;
+        publicKey.CopyTo(canonical, 12);
+        return canonical;
+    }
+
+    [Fact]
     public void RetiredDomainSelectorPrefixIsRejected()
     {
         var canonical = AccountAddress

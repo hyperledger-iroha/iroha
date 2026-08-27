@@ -4,7 +4,10 @@
 //! IP and limits the number of simultaneous circuits each remote IP may
 //! establish. It is intentionally conservative; production operators should
 //! tune the limits via configuration once traffic characteristics are known.
-use crate::config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, CongestionConfig};
+use crate::{
+    canonical_remote_ip,
+    config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, CongestionConfig},
+};
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
@@ -35,14 +38,6 @@ struct CongestionInner {
     cooldown: Duration,
     state: Mutex<CongestionState>,
     unavailable: AtomicBool,
-}
-fn normalized_client_ip(remote: SocketAddr) -> IpAddr {
-    match remote.ip() {
-        IpAddr::V6(address) => address
-            .to_ipv4_mapped()
-            .map_or(IpAddr::V6(address), IpAddr::V4),
-        address => address,
-    }
 }
 impl CongestionInner {
     fn new(mut config: CongestionConfig) -> Self {
@@ -86,22 +81,25 @@ impl CongestionInner {
                 limit: self.limits.max_active_circuits,
             });
         }
-        let client = normalized_client_ip(remote);
+        let client = canonical_remote_ip(remote);
         if !guard.clients.contains_key(&client) {
             if guard.clients.len() >= self.limits.max_active_circuits {
-                let cooldown = self.cooldown;
-                guard.clients.retain(|_, state| {
-                    state.active > 0
-                        || now
-                            .checked_duration_since(state.last_attempt)
-                            .unwrap_or_default()
-                            < cooldown
-                });
-                if guard.clients.len() >= self.limits.max_active_circuits {
+                // Cooldown history must not consume the entire live circuit
+                // corridor. Evict the oldest inactive tombstone (expired or
+                // otherwise) while protecting every live reservation.
+                let oldest_inactive = guard
+                    .clients
+                    .iter()
+                    .filter(|(_, state)| state.active == 0)
+                    .min_by_key(|(_, state)| state.last_attempt)
+                    .map(|(ip, _)| *ip);
+                let Some(oldest_inactive) = oldest_inactive else {
                     return Err(CongestionError::GlobalCircuitCapacity {
                         limit: self.limits.max_active_circuits,
                     });
-                }
+                };
+                let removed = guard.clients.remove(&oldest_inactive);
+                debug_assert!(removed.is_some(), "selected tombstone must remain present");
             }
             guard
                 .clients
@@ -164,7 +162,7 @@ impl CongestionInner {
                 error.into_inner()
             }
         };
-        let client = normalized_client_ip(remote);
+        let client = canonical_remote_ip(remote);
         let released = if let Some(entry) = guard.clients.get_mut(&client) {
             let released = entry.active > 0;
             if entry.active > 0 {
@@ -309,23 +307,46 @@ mod tests {
             assert!(!state.clients.contains_key(&overflow.ip()));
         }
         drop(first_reservation);
-        assert!(matches!(
-            controller.reserve(overflow, now),
-            Err(CongestionError::GlobalCircuitCapacity { limit: 2 })
-        ));
-        {
-            let state = controller.inner.state.lock().expect("congestion state");
-            assert_eq!(state.active_circuits, 1);
-            assert_eq!(state.clients.len(), 2);
-            assert_eq!(state.clients[&first.ip()].active, 0);
-        }
         let _replacement = controller
-            .reserve(overflow, now + Duration::from_millis(1))
-            .expect("released capacity is reusable after its cooldown expires");
+            .reserve(overflow, now)
+            .expect("inactive cooldown history must not consume live capacity");
         let state = controller.inner.state.lock().expect("congestion state");
         assert_eq!(state.active_circuits, 2);
         assert_eq!(state.clients.len(), 2);
         assert!(state.clients.contains_key(&overflow.ip()));
+    }
+    #[test]
+    fn inactive_cooldown_saturation_admits_an_unseen_client() {
+        let controller = controller(2);
+        let now = Instant::now();
+        let first = SocketAddr::new(IpAddr::from([192, 0, 2, 1]), 10_030);
+        let second = SocketAddr::new(IpAddr::from([192, 0, 2, 2]), 10_031);
+        let unseen = SocketAddr::new(IpAddr::from([192, 0, 2, 3]), 10_032);
+
+        drop(controller.reserve(first, now).expect("first tombstone"));
+        drop(
+            controller
+                .reserve(second, now + Duration::from_nanos(1))
+                .expect("second tombstone"),
+        );
+        let _reservation = controller
+            .reserve(unseen, now + Duration::from_nanos(2))
+            .expect("bounded cooldown history must not deny all unseen clients");
+
+        let state = controller.inner.state.lock().expect("congestion state");
+        assert_eq!(state.active_circuits, 1);
+        assert_eq!(state.clients.len(), 2);
+        assert!(!state.clients.contains_key(&first.ip()));
+        assert!(state.clients.contains_key(&second.ip()));
+        assert!(state.clients.contains_key(&unseen.ip()));
+        assert_eq!(
+            state
+                .clients
+                .values()
+                .filter(|client| client.active == 0)
+                .count(),
+            1
+        );
     }
     #[test]
     fn released_reservation_retains_bounded_cooldown_state() {

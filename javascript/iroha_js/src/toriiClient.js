@@ -27,6 +27,7 @@ import {
   curveIdToAlgorithm,
   ensureCurveIdEnabled,
   normalizeBytes,
+  parseCanonicalI105AccountLiteral,
   validatePublicKeyForCurve,
 } from "./address.js";
 import {
@@ -219,6 +220,8 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
   import.meta.url,
 ).href;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const FEE_QUOTE_JSON_MAX_BYTES = 64 * 1024;
+const FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES = 64 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
 const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
 const SORAFS_REPUTATION_JSON_MAX_BYTES = 4 * 1024 * 1024;
@@ -524,8 +527,96 @@ const EVIDENCE_BASE_FIELDS = Object.freeze([
 ]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
-const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
+const KAIGI_EVENT_KIND_VALUES = new Set([
+  "registration",
+  "unregistration",
+  "health",
+]);
 const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
+const KAIGI_CALL_SIGNALS_CURSOR_MAX_BYTES = 1024;
+const KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS = new Set([
+  "relay_id",
+  "domain",
+  "bandwidth_class",
+  "hpke_fingerprint_hex",
+]);
+const KAIGI_RELAY_SUMMARY_FIELDS = new Set([
+  ...KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS,
+  "status",
+  "reported_at_ms",
+]);
+const KAIGI_RELAY_DETAIL_REQUIRED_FIELDS = new Set([
+  "relay",
+  "hpke_public_key_b64",
+]);
+const KAIGI_RELAY_DETAIL_FIELDS = new Set([
+  ...KAIGI_RELAY_DETAIL_REQUIRED_FIELDS,
+  "reported_call",
+  "reported_by",
+  "notes",
+  "metrics",
+]);
+const KAIGI_RELAY_DOMAIN_METRICS_FIELDS = new Set([
+  "domain",
+  "registrations_total",
+  "manifest_updates_total",
+  "failovers_total",
+  "health_reports_total",
+]);
+const KAIGI_RELAY_HEALTH_SNAPSHOT_FIELDS = new Set([
+  "healthy_total",
+  "degraded_total",
+  "unavailable_total",
+  "reports_total",
+  "registrations_total",
+  "failovers_total",
+  "domains",
+]);
+const KAIGI_CALL_VIEW_REQUIRED_FIELDS = new Set([
+  "call_id",
+  "domain",
+  "call_name",
+  "gas_rate_per_minute",
+  "metadata",
+  "privacy_mode",
+  "room_policy",
+  "roster_root_hex",
+  "commitment_count",
+  "nullifier_count",
+  "usage_commitment_count",
+  "status",
+  "created_at_ms",
+  "total_duration_ms",
+  "total_billed_gas",
+  "segments_recorded",
+]);
+const KAIGI_CALL_VIEW_FIELDS = new Set([
+  ...KAIGI_CALL_VIEW_REQUIRED_FIELDS,
+  "host_account_id",
+  "billing_account_id",
+  "title",
+  "description",
+  "max_participants",
+  "scheduled_start_ms",
+  "relay_manifest",
+  "participant_count",
+  "ended_at_ms",
+]);
+const KAIGI_CALL_SIGNAL_REQUIRED_FIELDS = new Set([
+  "entrypoint_hash",
+  "timestamp_ms",
+  "call_id",
+  "signal_kind",
+  "created_at_ms",
+  "metadata",
+]);
+const KAIGI_CALL_SIGNAL_FIELDS = new Set([
+  ...KAIGI_CALL_SIGNAL_REQUIRED_FIELDS,
+  "authority",
+  "host_account_id",
+  "participant_account_id",
+]);
+const KAIGI_SIGNAL_SCHEMA_V1 = "iroha-demo-kaigi-chain-signal/v1";
 
 function ownDataMethod(target, name) {
   if (target === null || (typeof target !== "object" && typeof target !== "function")) {
@@ -1592,6 +1683,7 @@ export class ToriiClient {
       "Kagemusha operation reference response",
     );
     const location = this._getHeader(response, "location");
+    const retryAfter = this._getHeader(response, "retry-after");
     const payload = await this._maybeJson(response);
     if (!payload) {
       throw new TypeError("Kagemusha operation reference response must contain JSON");
@@ -1600,6 +1692,7 @@ export class ToriiClient {
       expectedOperationId: normalized.operationId,
       expectedKind: kind,
       location,
+      retryAfter,
     });
   }
   /**
@@ -2969,17 +3062,32 @@ export class ToriiClient {
       signal,
       canonicalAuth,
     });
-    if (response.status === 404) {
+    await this._expectStatus(response, [200, 404], {
+      signal,
+      maximumBodyBytes: FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES,
+      responseLabel: "fee sponsor program",
+    });
+    if (responseStatusWithoutUserGetter(response) === 404) {
+      await this._readBoundedResponseBytes(
+        response,
+        FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES,
+        "fee sponsor program response",
+        { signal },
+      );
       return null;
     }
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("fee sponsor program endpoint returned no payload");
-    }
+    const body = await this._readBoundedLosslessIntegerJson(
+      response,
+      FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES,
+      "fee sponsor program response",
+      { signal },
+    );
     const program = normalizeFeeSponsorProgramResponse(body, "fee sponsor program response");
     if (
-      program.id.sponsor !== normalizedProgramId.sponsor ||
+      !feeQuoteAccountIdsHaveSameIdentity(
+        program.id.sponsor,
+        normalizedProgramId.sponsor,
+      ) ||
       program.id.name !== normalizedProgramId.name
     ) {
       throw new TypeError(
@@ -2991,7 +3099,9 @@ export class ToriiClient {
 
   /**
    * Quote the exact unsigned payload that will subsequently be signed.
-   * The account in `canonicalAuth` must equal the payload authority.
+   * The account in `canonicalAuth` must identify the payload authority. Exact
+   * aliases are resolved and enforced by Torii; I105 literals are compared by
+   * their domainless controller identity before the request is sent.
    */
   async quoteFees(payloadOrDraft, options = {}) {
     const candidate = payloadOrDraft?.payload ?? payloadOrDraft;
@@ -3000,16 +3110,13 @@ export class ToriiClient {
       options,
       "quoteFees",
     );
-    const authority = ensureCanonicalAccountId(
-      payload.authority,
-      "quoteFees payload.authority",
-    );
-    if (payload.authority !== authority) {
-      throw new TypeError("quoteFees payload.authority must be an exact canonical I105 account id");
-    }
-    if (canonicalAuth.accountId !== authority) {
+    const draft = normalizeFeeQuoteDraft(payload, "quoteFees payload");
+    if (
+      !canonicalAuth.accountId.includes("@")
+      && !feeQuoteAccountIdsHaveSameIdentity(canonicalAuth.accountId, draft.authority)
+    ) {
       throw new TypeError(
-        "quoteFees canonicalAuth.accountId must equal the exact payload authority",
+        "quoteFees canonicalAuth.accountId must identify the payload authority",
       );
     }
     const response = await this._request("POST", "/v1/fees/quote", {
@@ -3018,12 +3125,18 @@ export class ToriiClient {
       signal,
       canonicalAuth,
     });
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("fee quote endpoint returned no payload");
-    }
-    return normalizeFeeQuoteResponse(body, "fee quote response");
+    await this._expectStatus(response, [200], {
+      signal,
+      maximumBodyBytes: FEE_QUOTE_JSON_MAX_BYTES,
+      responseLabel: "fee quote",
+    });
+    const body = await this._readBoundedLosslessIntegerJson(
+      response,
+      FEE_QUOTE_JSON_MAX_BYTES,
+      "fee quote response",
+      { signal, plainObjects: true },
+    );
+    return validateFeeQuoteForDraft(payload, body, "fee quote response");
   }
 
   /**
@@ -8347,7 +8460,7 @@ export class ToriiClient {
    * @returns {Promise<KaigiCallView | null>}
    */
   async getKaigiCall(callId, options = {}) {
-    const normalizedCallId = requireNonEmptyString(callId, "callId");
+    const normalizedCallId = requireExactNonEmptyString(callId, "callId");
     const { signal } = normalizeSignalOnlyOption(options, "getKaigiCall");
     const response = await this._request(
       "GET",
@@ -8358,11 +8471,13 @@ export class ToriiClient {
       return null;
     }
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("kaigi call endpoint returned no payload");
-    }
-    return normalizeKaigiCallView(payload);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "kaigi call endpoint",
+      { signal },
+    );
+    return normalizeKaigiCallView(payload, normalizedCallId);
   }
 
   /**
@@ -8372,7 +8487,7 @@ export class ToriiClient {
    * @returns {Promise<KaigiCallSignalsList>}
    */
   async listKaigiCallSignals(callId, options = {}) {
-    const normalizedCallId = requireNonEmptyString(callId, "callId");
+    const normalizedCallId = requireExactNonEmptyString(callId, "callId");
     const {
       signal,
       params,
@@ -8402,8 +8517,13 @@ export class ToriiClient {
       },
     );
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeKaigiCallSignalsList(payload);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "kaigi call signals endpoint",
+      { signal },
+    );
+    return normalizeKaigiCallSignalsList(payload, normalizedCallId);
   }
 
   /**
@@ -8413,7 +8533,7 @@ export class ToriiClient {
    * @returns {AsyncGenerator<SseEvent<KaigiCallEventPayload>, void, unknown>}
    */
   streamKaigiCallEvents(callId, options) {
-    const normalizedCallId = requireNonEmptyString(callId, "callId");
+    const normalizedCallId = requireExactNonEmptyString(callId, "callId");
     const { signal, lastEventId } = normalizeEventStreamOptions(
       options,
       "streamKaigiCallEvents",
@@ -8430,7 +8550,10 @@ export class ToriiClient {
     );
     return (async function* mapEvents() {
       for await (const event of iterator) {
-        const data = normalizeKaigiCallEventData(event.data);
+        const data = normalizeKaigiCallEventData(
+          parseKaigiSseEventPayload(event, "kaigi call event"),
+          normalizedCallId,
+        );
         yield {
           ...event,
           data,
@@ -8452,7 +8575,12 @@ export class ToriiClient {
       operatorSigningContext: requireOperatorSigningContext(this._operatorSigningContext, "listKaigiRelays"),
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "kaigi relay list endpoint",
+      { signal },
+    );
     return normalizeKaigiRelaySummaryList(payload);
   }
 
@@ -8478,10 +8606,12 @@ export class ToriiClient {
       return null;
     }
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("kaigi relay detail endpoint returned no payload");
-    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "kaigi relay detail endpoint",
+      { signal },
+    );
     return normalizeKaigiRelayDetail(payload);
   }
 
@@ -8498,7 +8628,12 @@ export class ToriiClient {
       operatorSigningContext: requireOperatorSigningContext(this._operatorSigningContext, "getKaigiRelaysHealth"),
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "kaigi relay health endpoint",
+      { signal },
+    );
     return normalizeKaigiRelayHealthSnapshot(payload);
   }
 
@@ -8521,7 +8656,9 @@ export class ToriiClient {
     });
     return (async function* mapEvents() {
       for await (const event of iterator) {
-        const data = normalizeKaigiRelayEventData(event.data);
+        const data = normalizeKaigiRelayEventData(
+          parseKaigiSseEventPayload(event, "kaigi relay event"),
+        );
         yield {
           ...event,
           data,
@@ -11513,7 +11650,7 @@ export class ToriiClient {
     response,
     maxBytes,
     context,
-    { signal } = {},
+    { signal, plainObjects = false } = {},
   ) {
     let contentType;
     try {
@@ -11551,7 +11688,7 @@ export class ToriiClient {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);
         throw bodyReadAbortError(signal, context);
       }
-      return parsed;
+      return plainObjects ? JSON.parse(text) : parsed;
     } catch (error) {
       if (signalIsAborted(signal) || error?.name === "AbortError") {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);
@@ -12345,6 +12482,14 @@ export class ToriiClient {
 
   static _requireAssetDefinitionId(assetDefinitionId) {
     return ToriiClient._requireNonEmptyString(assetDefinitionId, "assetDefinitionId");
+  }
+
+  static _validateFeeQuoteForDraft(
+    payloadOrDraft,
+    quote,
+    context = "fee quote response",
+  ) {
+    return validateFeeQuoteForDraft(payloadOrDraft, quote, context);
   }
 
   static _requireDomainId(domainId, context = "domainId") {
@@ -19589,6 +19734,7 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
   for (const [snakeName, camelName] of [
     ["validation_fee_policy_version", "validationFeePolicyVersion"],
     ["validation_fee_policy_hash", "validationFeePolicyHash"],
+    ["validation_fee_hijiri_fee_quote_hash", "validationFeeHijiriFeeQuoteHash"],
     ["validation_fee_instruction_index", "validationFeeInstructionIndex"],
     ["validation_fee_transfer_entry_index", "validationFeeTransferEntryIndex"],
   ]) {
@@ -22739,12 +22885,16 @@ function normalizeMultisigProposeRequest(input) {
   );
   const validationFeePolicyVersion = record.validationFeePolicyVersion;
   const validationFeePolicyHash = record.validationFeePolicyHash;
+  const validationFeeHijiriFeeQuoteHash = record.validationFeeHijiriFeeQuoteHash;
   const validationFeeInstructionIndex = record.validationFeeInstructionIndex;
   const validationFeeTransferEntryIndex = record.validationFeeTransferEntryIndex;
   const hasPolicyVersion =
     validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
   const hasPolicyHash =
     validationFeePolicyHash !== undefined && validationFeePolicyHash !== null;
+  const hasHijiriFeeQuoteHash =
+    validationFeeHijiriFeeQuoteHash !== undefined &&
+    validationFeeHijiriFeeQuoteHash !== null;
   const hasInstructionIndex =
     validationFeeInstructionIndex !== undefined && validationFeeInstructionIndex !== null;
   const hasTransferEntryIndex =
@@ -22754,6 +22904,13 @@ function normalizeMultisigProposeRequest(input) {
       ValidationErrorCode.INVALID_OBJECT,
       "proposeMultisig request validation fee policy version and hash must be provided together",
       "proposeMultisig.request.validation_fee_policy",
+    );
+  }
+  if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "proposeMultisig request Hijiri fee quote hash requires policy metadata",
+      "proposeMultisig.request.validation_fee_hijiri_fee_quote_hash",
     );
   }
   if (!hasPolicyVersion && hasInstructionIndex) {
@@ -22789,6 +22946,12 @@ function normalizeMultisigProposeRequest(input) {
       validationFeePolicyHash,
       "proposeMultisig request.validation_fee_policy_hash",
     );
+    if (hasHijiriFeeQuoteHash) {
+      payload.validation_fee_hijiri_fee_quote_hash = normalizeHex32String(
+        validationFeeHijiriFeeQuoteHash,
+        "proposeMultisig request.validation_fee_hijiri_fee_quote_hash",
+      );
+    }
     if (hasInstructionIndex) {
       payload.validation_fee_instruction_index = String(
         ToriiClient._normalizeUnsignedInteger(
@@ -23644,20 +23807,34 @@ function normalizeFeeSponsorProgramResponse(
   if (payoutAccount !== record.payout_account) {
     throw new TypeError(`${context}.payout_account must be a canonical I105 account id`);
   }
-  normalizeTaggedUnit(
+  const lifecycle = normalizeTaggedUnit(
     record.lifecycle,
     "state",
     new Set(["staged", "paused", "active", "closing", "closed"]),
     `${context}.lifecycle`,
   );
+  const normalized = {
+    id: { sponsor, name: id.name },
+    payout_account: payoutAccount,
+    lifecycle: { state: lifecycle, value: null },
+  };
   for (const field of ["active_revision", "staged_revision"]) {
-    if (record[field] !== undefined && record[field] !== null) {
-      ToriiClient._normalizeUnsignedInteger(record[field], `${context}.${field}`, {
-        allowZero: false,
-      });
+    if (Object.prototype.hasOwnProperty.call(record, field)) {
+      if (record[field] === null || record[field] === undefined) {
+        throw new TypeError(`${context}.${field} must be omitted or a positive integer`);
+      }
+      normalized[field] = normalizeFeeSponsorPositiveU64(
+        record[field],
+        `${context}.${field}`,
+      );
     }
   }
-  if (record.scheduled_activation !== undefined && record.scheduled_activation !== null) {
+  if (Object.prototype.hasOwnProperty.call(record, "scheduled_activation")) {
+    if (record.scheduled_activation === null || record.scheduled_activation === undefined) {
+      throw new TypeError(
+        `${context}.scheduled_activation must be omitted or an exact object`,
+      );
+    }
     const activation = ensureRecord(
       record.scheduled_activation,
       `${context}.scheduled_activation`,
@@ -23667,18 +23844,28 @@ function normalizeFeeSponsorProgramResponse(
       new Set(["revision", "activate_at_height"]),
       `${context}.scheduled_activation`,
     );
-    ToriiClient._normalizeUnsignedInteger(
+    const revision = normalizeFeeSponsorPositiveU64(
       activation.revision,
       `${context}.scheduled_activation.revision`,
-      { allowZero: false },
     );
-    ToriiClient._normalizeUnsignedInteger(
+    const activateAtHeight = normalizeFeeSponsorPositiveU64(
       activation.activate_at_height,
       `${context}.scheduled_activation.activate_at_height`,
-      { allowZero: true },
     );
+    normalized.scheduled_activation = {
+      revision,
+      activate_at_height: activateAtHeight,
+    };
   }
-  return record;
+  return normalized;
+}
+
+function normalizeFeeSponsorPositiveU64(value, context) {
+  const normalized = normalizeKaigiU64(value, context);
+  if (BigInt(normalized) === 0n) {
+    throw new TypeError(`${context} must be a positive unsigned integer`);
+  }
+  return normalized;
 }
 
 function rejectRetiredFeeSelectionFields(
@@ -23707,33 +23894,52 @@ function rejectRetiredFeeSelectionFields(
   }
 }
 
+function requireExactFeeQuoteObject(value, expectedFields, context) {
+  const record = ensureRecord(value, context);
+  assertSupportedOptionKeys(record, expectedFields, context);
+  const missing = [...expectedFields].filter(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  if (missing.length !== 0) {
+    throw new TypeError(
+      `${context} is missing required fields: ${missing.join(", ")}`,
+    );
+  }
+  return record;
+}
+
 function normalizeFeePaymentIntentValue(
   intent,
   context,
   { requireGasLimit = false } = {},
 ) {
-  const record = ensureRecord(intent, context);
-  assertSupportedOptionKeys(record, new Set(["payer", "value"]), context);
+  const record = requireExactFeeQuoteObject(
+    intent,
+    new Set(["payer", "value"]),
+    context,
+  );
   const payer = requireExactNonEmptyString(record.payer, `${context}.payer`);
   if (payer !== "authority" && payer !== "sponsor") {
     throw new TypeError(`${context}.payer must be authority or sponsor`);
   }
-  const value = ensureRecord(record.value, `${context}.value`);
-  const allowed = new Set(["charge_limits", "gas_limit"]);
+  const valueFields = new Set(["charge_limits", "gas_limit"]);
   if (payer === "sponsor") {
-    allowed.add("program_id");
-    allowed.add("program_revision");
+    valueFields.add("program_id");
+    valueFields.add("program_revision");
   }
-  assertSupportedOptionKeys(value, allowed, `${context}.value`);
+  const value = requireExactFeeQuoteObject(
+    record.value,
+    valueFields,
+    `${context}.value`,
+  );
   const normalizedValue = {};
   if (payer === "sponsor") {
-    const programId = ensureRecord(value.program_id, `${context}.value.program_id`);
-    assertSupportedOptionKeys(
-      programId,
+    const programId = requireExactFeeQuoteObject(
+      value.program_id,
       new Set(["sponsor", "name"]),
       `${context}.value.program_id`,
     );
-    const sponsor = ToriiClient._requireAccountId(
+    const sponsor = ensureCanonicalAccountId(
       programId.sponsor,
       `${context}.value.program_id.sponsor`,
     );
@@ -23759,14 +23965,18 @@ function normalizeFeePaymentIntentValue(
     `${context}.value.charge_limits`,
   ).map((limit, index) => {
     const limitContext = `${context}.value.charge_limits[${index}]`;
-    const item = ensureRecord(limit, limitContext);
-    assertSupportedOptionKeys(
-      item,
+    const item = requireExactFeeQuoteObject(
+      limit,
       new Set(["kind", "asset_definition_id", "max_amount"]),
       limitContext,
     );
-    const kind = normalizeTaggedUnit(
+    const taggedKind = requireExactFeeQuoteObject(
       item.kind,
+      new Set(["kind", "value"]),
+      `${limitContext}.kind`,
+    );
+    const kind = normalizeTaggedUnit(
+      taggedKind,
       "kind",
       new Set(["nexus", "pipeline_gas"]),
       `${limitContext}.kind`,
@@ -23778,25 +23988,33 @@ function normalizeFeePaymentIntentValue(
       );
     }
     previousKind = kindIndex;
+    const assetDefinitionId = normalizeAssetDefinitionId(
+      item.asset_definition_id,
+      `${limitContext}.asset_definition_id`,
+    );
+    if (assetDefinitionId !== item.asset_definition_id) {
+      throw new TypeError(
+        `${limitContext}.asset_definition_id must be an exact canonical asset definition id`,
+      );
+    }
+    const maxAmount = requireCanonicalQuantity(
+      item.max_amount,
+      `${limitContext}.max_amount`,
+    );
+    if (NumericV1.decodeQuantityJson(maxAmount).mantissa === 0n) {
+      throw new TypeError(`${limitContext}.max_amount must be greater than zero`);
+    }
     return {
       kind: { kind, value: null },
-      asset_definition_id: normalizeAssetDefinitionId(
-        item.asset_definition_id,
-        `${limitContext}.asset_definition_id`,
-      ),
-      max_amount: requireCanonicalQuantity(
-        item.max_amount,
-        `${limitContext}.max_amount`,
-      ),
+      asset_definition_id: assetDefinitionId,
+      max_amount: maxAmount,
     };
   });
-  if (value.gas_limit !== undefined && value.gas_limit !== null) {
+  if (value.gas_limit !== null) {
     normalizedValue.gas_limit = ToriiClient._normalizeUnsignedInteger(
       value.gas_limit,
       `${context}.value.gas_limit`,
-      {
-        allowZero: false,
-      },
+      { allowZero: false },
     );
   } else {
     normalizedValue.gas_limit = null;
@@ -23815,13 +24033,271 @@ function normalizeFeePaymentIntentResponse(intent, context) {
   return normalizeFeePaymentIntentValue(intent, context);
 }
 
-function normalizeFeeQuoteResponse(payload, context = "fee quote response") {
-  const record = ensureRecord(payload ?? {}, context);
-  assertSupportedOptionKeys(record, FEE_QUOTE_RESPONSE_KEYS, context);
-  normalizeFeePaymentIntentResponse(record.intent, `${context}.intent`);
-  const observation = ensureRecord(record.observation, `${context}.observation`);
-  assertSupportedOptionKeys(
-    observation,
+function normalizeFeeQuoteDraft(payload, context) {
+  const record = ensureRecord(payload, context);
+  const authority = ensureCanonicalAccountId(
+    record.authority,
+    `${context}.authority`,
+  );
+  if (record.authority !== authority) {
+    throw new TypeError(`${context}.authority must be an exact canonical I105 account id`);
+  }
+  return {
+    authority,
+    intent: normalizeFeePaymentIntentValue(
+      record.fee_payment,
+      `${context}.fee_payment`,
+    ),
+  };
+}
+
+function feeQuoteSelectionsMatch(quotedIntent, draftIntent) {
+  if (
+    quotedIntent.payer !== draftIntent.payer
+    || quotedIntent.value.gas_limit !== draftIntent.value.gas_limit
+  ) {
+    return false;
+  }
+  if (quotedIntent.payer === "authority") {
+    return true;
+  }
+  return (
+    quotedIntent.value.program_revision === draftIntent.value.program_revision
+    && feeQuoteAccountIdsHaveSameIdentity(
+      quotedIntent.value.program_id.sponsor,
+      draftIntent.value.program_id.sponsor,
+    )
+    && quotedIntent.value.program_id.name === draftIntent.value.program_id.name
+  );
+}
+
+function feeQuoteAccountIdsHaveSameIdentity(left, right) {
+  try {
+    return (
+      parseCanonicalI105AccountLiteral(left).canonicalHex
+      === parseCanonicalI105AccountLiteral(right).canonicalHex
+    );
+  } catch {
+    return false;
+  }
+}
+
+function parseFeeQuoteQuantity(value, context) {
+  return NumericV1.decodeQuantityJson(requireCanonicalQuantity(value, context));
+}
+
+function addFeeQuoteQuantities(left, right, context) {
+  const scale = Math.max(left.scale, right.scale);
+  const leftMantissa = left.mantissa * 10n ** BigInt(scale - left.scale);
+  const rightMantissa = right.mantissa * 10n ** BigInt(scale - right.scale);
+  try {
+    return new KotodamaQuantity(leftMantissa + rightMantissa, scale);
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw new TypeError(`${context} is outside the exact Quantity domain (${error.code})`);
+  }
+}
+
+function compareFeeQuoteQuantities(left, right) {
+  const scale = Math.max(left.scale, right.scale);
+  const leftMantissa = left.mantissa * 10n ** BigInt(scale - left.scale);
+  const rightMantissa = right.mantissa * 10n ** BigInt(scale - right.scale);
+  return leftMantissa < rightMantissa ? -1 : leftMantissa > rightMantissa ? 1 : 0;
+}
+
+function normalizeFeeQuoteComponent(value, context) {
+  const item = requireExactFeeQuoteObject(
+    value,
+    new Set(["kind", "asset_definition_id", "max_amount"]),
+    context,
+  );
+  const taggedKind = requireExactFeeQuoteObject(
+    item.kind,
+    new Set(["kind", "value"]),
+    `${context}.kind`,
+  );
+  const kind = normalizeTaggedUnit(
+    taggedKind,
+    "kind",
+    new Set(["nexus", "pipeline_gas"]),
+    `${context}.kind`,
+  );
+  const assetDefinitionId = normalizeAssetDefinitionId(
+    item.asset_definition_id,
+    `${context}.asset_definition_id`,
+  );
+  if (assetDefinitionId !== item.asset_definition_id) {
+    throw new TypeError(
+      `${context}.asset_definition_id must be an exact canonical asset definition id`,
+    );
+  }
+  const maxAmount = requireCanonicalQuantity(
+    item.max_amount,
+    `${context}.max_amount`,
+  );
+  if (NumericV1.decodeQuantityJson(maxAmount).mantissa === 0n) {
+    throw new TypeError(`${context}.max_amount must be greater than zero`);
+  }
+  return { kind, assetDefinitionId, maxAmount };
+}
+
+function normalizeFeeQuoteCapacity(value, context) {
+  const item = requireExactFeeQuoteObject(
+    value,
+    new Set([
+      "asset_definition_id",
+      "vault_balance",
+      "reserve_floor",
+      "block_remaining",
+      "program_epoch_remaining",
+      "beneficiary_epoch_remaining",
+    ]),
+    context,
+  );
+  const assetDefinitionId = normalizeAssetDefinitionId(
+    item.asset_definition_id,
+    `${context}.asset_definition_id`,
+  );
+  if (assetDefinitionId !== item.asset_definition_id) {
+    throw new TypeError(
+      `${context}.asset_definition_id must be an exact canonical asset definition id`,
+    );
+  }
+  return {
+    assetDefinitionId,
+    vaultBalance: parseFeeQuoteQuantity(item.vault_balance, `${context}.vault_balance`),
+    reserveFloor: parseFeeQuoteQuantity(item.reserve_floor, `${context}.reserve_floor`),
+    blockRemaining: parseFeeQuoteQuantity(item.block_remaining, `${context}.block_remaining`),
+    programEpochRemaining: parseFeeQuoteQuantity(
+      item.program_epoch_remaining,
+      `${context}.program_epoch_remaining`,
+    ),
+    beneficiaryEpochRemaining: parseFeeQuoteQuantity(
+      item.beneficiary_epoch_remaining,
+      `${context}.beneficiary_epoch_remaining`,
+    ),
+  };
+}
+
+function normalizeFeeQuoteDecision(value, context) {
+  const decision = requireExactFeeQuoteObject(
+    value,
+    new Set(["status", "value"]),
+    context,
+  );
+  if (decision.status !== "accepted") {
+    throw new TypeError(`${context}.status must be accepted`);
+  }
+  const decisionValue = requireExactFeeQuoteObject(
+    decision.value,
+    new Set(["debit_source", "program_revision"]),
+    `${context}.value`,
+  );
+  const debitSource = requireExactFeeQuoteObject(
+    decisionValue.debit_source,
+    new Set(["kind", "value"]),
+    `${context}.value.debit_source`,
+  );
+  const kind = requireExactNonEmptyString(
+    debitSource.kind,
+    `${context}.value.debit_source.kind`,
+  );
+  if (kind !== "account" && kind !== "sponsor_program") {
+    throw new TypeError(`${context}.value.debit_source.kind is unsupported`);
+  }
+  return {
+    kind,
+    value: debitSource.value,
+    programRevision: decisionValue.program_revision,
+  };
+}
+
+function validateSponsorFeeQuoteCapacities(components, capacities, context) {
+  if ((components.length === 0) !== (capacities.length === 0)) {
+    throw new TypeError(
+      `${context}.capacities must be empty exactly when sponsored components are empty`,
+    );
+  }
+  const aggregateByAsset = new Map();
+  for (const component of components) {
+    const quantity = NumericV1.decodeQuantityJson(component.maxAmount);
+    const current = aggregateByAsset.get(component.assetDefinitionId);
+    aggregateByAsset.set(
+      component.assetDefinitionId,
+      current === undefined
+        ? quantity
+        : addFeeQuoteQuantities(
+            current,
+            quantity,
+            `${context}.components aggregate for ${component.assetDefinitionId}`,
+          ),
+    );
+  }
+  // Canonical asset-definition addresses encode the same fixed 21-byte width.
+  // Standard Base58 alphabet order therefore matches byte order and JS code-unit order.
+  const assetDefinitionIds = [...aggregateByAsset.keys()].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  if (capacities.length !== assetDefinitionIds.length) {
+    throw new TypeError(
+      `${context}.capacities must contain exactly one entry per component asset`,
+    );
+  }
+  capacities.forEach((capacity, index) => {
+    const assetDefinitionId = assetDefinitionIds[index];
+    if (capacity.assetDefinitionId !== assetDefinitionId) {
+      throw new TypeError(
+        `${context}.capacities are duplicated, unrelated, or not in canonical asset order`,
+      );
+    }
+    const aggregate = aggregateByAsset.get(assetDefinitionId);
+    const requiredVaultBalance = addFeeQuoteQuantities(
+      capacity.reserveFloor,
+      aggregate,
+      `${context}.capacities[${index}] required vault balance`,
+    );
+    if (compareFeeQuoteQuantities(capacity.vaultBalance, requiredVaultBalance) < 0) {
+      throw new TypeError(
+        `${context}.capacities[${index}].vault_balance does not cover reserve_floor plus the aggregate charge`,
+      );
+    }
+    for (const [field, remaining] of [
+      ["block_remaining", capacity.blockRemaining],
+      ["program_epoch_remaining", capacity.programEpochRemaining],
+      ["beneficiary_epoch_remaining", capacity.beneficiaryEpochRemaining],
+    ]) {
+      if (compareFeeQuoteQuantities(remaining, aggregate) < 0) {
+        throw new TypeError(
+          `${context}.capacities[${index}].${field} does not cover the aggregate charge`,
+        );
+      }
+    }
+  });
+}
+
+function validateFeeQuoteForDraft(
+  payloadOrDraft,
+  quote,
+  context = "fee quote response",
+) {
+  const candidate = payloadOrDraft?.payload ?? payloadOrDraft;
+  const draft = normalizeFeeQuoteDraft(candidate, "fee quote draft payload");
+  const record = requireExactFeeQuoteObject(
+    quote,
+    FEE_QUOTE_RESPONSE_KEYS,
+    context,
+  );
+  const intent = normalizeFeePaymentIntentResponse(
+    record.intent,
+    `${context}.intent`,
+  );
+  if (!feeQuoteSelectionsMatch(intent, draft.intent)) {
+    throw new TypeError(
+      `${context}.intent changed the draft payer, sponsor revision, or gas bound`,
+    );
+  }
+  const observation = requireExactFeeQuoteObject(
+    record.observation,
     new Set(["ledger_time_ms", "next_block_height", "route_dataspace_id"]),
     `${context}.observation`,
   );
@@ -23835,74 +24311,89 @@ function normalizeFeeQuoteResponse(payload, context = "fee quote response") {
     `${context}.observation.next_block_height`,
     { allowZero: false },
   );
-  if (observation.route_dataspace_id !== undefined && observation.route_dataspace_id !== null) {
-    ToriiClient._normalizeUnsignedInteger(
-      observation.route_dataspace_id,
-      `${context}.observation.route_dataspace_id`,
-      { allowZero: true },
-    );
+  ToriiClient._normalizeUnsignedInteger(
+    observation.route_dataspace_id,
+    `${context}.observation.route_dataspace_id`,
+    { allowZero: true },
+  );
+  const components = requireDenseArray(
+    record.components,
+    `${context}.components`,
+  ).map((component, index) =>
+    normalizeFeeQuoteComponent(component, `${context}.components[${index}]`),
+  );
+  if (components.length !== intent.value.charge_limits.length) {
+    throw new TypeError(`${context}.components differ from the quoted intent`);
   }
-  requireDenseArray(record.components, `${context}.components`).forEach((component, index) => {
-    const item = ensureRecord(component, `${context}.components[${index}]`);
-    assertSupportedOptionKeys(
-      item,
-      new Set(["kind", "asset_definition_id", "max_amount"]),
-      `${context}.components[${index}]`,
-    );
-    normalizeTaggedUnit(
-      item.kind,
-      "kind",
-      new Set(["nexus", "pipeline_gas"]),
-      `${context}.components[${index}].kind`,
-    );
-    normalizeAssetDefinitionId(
-      item.asset_definition_id,
-      `${context}.components[${index}].asset_definition_id`,
-    );
-    requireCanonicalQuantity(item.max_amount, `${context}.components[${index}].max_amount`);
-  });
-  requireDenseArray(record.capacities, `${context}.capacities`).forEach((capacity, index) => {
-    const item = ensureRecord(capacity, `${context}.capacities[${index}]`);
-    const fields = [
-      "asset_definition_id",
-      "vault_balance",
-      "reserve_floor",
-      "block_remaining",
-      "program_epoch_remaining",
-      "beneficiary_epoch_remaining",
-    ];
-    assertSupportedOptionKeys(item, new Set(fields), `${context}.capacities[${index}]`);
-    normalizeAssetDefinitionId(
-      item.asset_definition_id,
-      `${context}.capacities[${index}].asset_definition_id`,
-    );
-    for (const field of fields.slice(1)) {
-      requireCanonicalQuantity(item[field], `${context}.capacities[${index}].${field}`);
+  components.forEach((component, index) => {
+    const limit = intent.value.charge_limits[index];
+    if (
+      component.kind !== limit.kind.kind
+      || component.assetDefinitionId !== limit.asset_definition_id
+      || component.maxAmount !== limit.max_amount
+    ) {
+      throw new TypeError(`${context}.components differ from the quoted intent`);
     }
   });
-  const decision = ensureRecord(record.decision, `${context}.decision`);
-  assertSupportedOptionKeys(decision, new Set(["status", "value"]), `${context}.decision`);
-  if (decision.status !== "accepted") {
-    throw new TypeError(`${context}.decision.status must be accepted`);
+  const capacities = requireDenseArray(
+    record.capacities,
+    `${context}.capacities`,
+  ).map((capacity, index) =>
+    normalizeFeeQuoteCapacity(capacity, `${context}.capacities[${index}]`),
+  );
+  const decision = normalizeFeeQuoteDecision(record.decision, `${context}.decision`);
+  if (intent.payer === "authority") {
+    if (decision.kind !== "account" || decision.programRevision !== null) {
+      throw new TypeError(`${context}.decision is inconsistent with authority payment`);
+    }
+    const account = ensureCanonicalAccountId(
+      decision.value,
+      `${context}.decision.value.debit_source.value`,
+    );
+    if (
+      decision.value !== account
+      || !feeQuoteAccountIdsHaveSameIdentity(account, draft.authority)
+    ) {
+      throw new TypeError(`${context}.decision is inconsistent with authority payment`);
+    }
+    if (capacities.length !== 0) {
+      throw new TypeError(`${context}.capacities must be empty for authority payment`);
+    }
+    return record;
   }
-  const decisionValue = ensureRecord(decision.value, `${context}.decision.value`);
-  assertSupportedOptionKeys(
-    decisionValue,
-    new Set(["debit_source", "program_revision"]),
-    `${context}.decision.value`,
-  );
-  const debitSource = ensureRecord(
-    decisionValue.debit_source,
-    `${context}.decision.value.debit_source`,
-  );
-  assertSupportedOptionKeys(
-    debitSource,
-    new Set(["kind", "value"]),
-    `${context}.decision.value.debit_source`,
-  );
-  if (debitSource.kind !== "account" && debitSource.kind !== "sponsor_program") {
-    throw new TypeError(`${context}.decision.value.debit_source.kind is unsupported`);
+  if (decision.kind !== "sponsor_program") {
+    throw new TypeError(`${context}.decision is inconsistent with sponsor payment`);
   }
+  const decisionProgramId = requireExactFeeQuoteObject(
+    decision.value,
+    new Set(["sponsor", "name"]),
+    `${context}.decision.value.debit_source.value`,
+  );
+  const decisionSponsor = ensureCanonicalAccountId(
+    decisionProgramId.sponsor,
+    `${context}.decision.value.debit_source.value.sponsor`,
+  );
+  const decisionName = requireCanonicalIrohaName(
+    decisionProgramId.name,
+    `${context}.decision.value.debit_source.value.name`,
+  );
+  const decisionRevision = ToriiClient._normalizeUnsignedInteger(
+    decision.programRevision,
+    `${context}.decision.value.program_revision`,
+    { allowZero: false },
+  );
+  if (
+    decisionSponsor !== decisionProgramId.sponsor
+    || !feeQuoteAccountIdsHaveSameIdentity(
+      decisionSponsor,
+      intent.value.program_id.sponsor,
+    )
+    || decisionName !== intent.value.program_id.name
+    || decisionRevision !== intent.value.program_revision
+  ) {
+    throw new TypeError(`${context}.decision is inconsistent with sponsor payment`);
+  }
+  validateSponsorFeeQuoteCapacities(components, capacities, context);
   return record;
 }
 
@@ -23933,7 +24424,36 @@ function requireCanonicalSortedStringSet(value, context) {
 
 function requireCanonicalIrohaName(value, context) {
   const name = requireExactNonEmptyString(value, context);
-  if (/\s|[@#$]/u.test(name) || name.normalize("NFC") !== name) {
+  let hasUnpairedSurrogate = false;
+  for (let index = 0; index < name.length; index += 1) {
+    const codeUnit = name.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = name.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        hasUnpairedSurrogate = true;
+        break;
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      hasUnpairedSurrogate = true;
+      break;
+    }
+  }
+  const hasBidiControl = Array.from(name).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint === 0x061c
+      || codePoint === 0x200e
+      || codePoint === 0x200f
+      || (codePoint >= 0x202a && codePoint <= 0x202e)
+      || (codePoint >= 0x2066 && codePoint <= 0x2069);
+  });
+  if (
+    hasUnpairedSurrogate
+    || Buffer.byteLength(name, "utf8") > 255
+    || /[\p{Cc}\p{White_Space}@#$\/]/u.test(name)
+    || hasBidiControl
+    || name.normalize("NFC") !== name
+  ) {
     throw new TypeError(`${context} must be a canonical Iroha Name`);
   }
   return name;
@@ -29619,11 +30139,78 @@ function requireFiniteNumber(value, context) {
   return value;
 }
 
+function requireKaigiResponseObject(
+  value,
+  requiredFields,
+  allowedFields,
+  context,
+) {
+  const record = ensureRecord(value, context);
+  const missing = [...requiredFields].filter(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  const extra = Object.keys(record).filter((field) => !allowedFields.has(field));
+  if (missing.length !== 0 || extra.length !== 0) {
+    throw new TypeError(
+      `${context} fields are not canonical; missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`,
+    );
+  }
+  return record;
+}
+
+function normalizeKaigiU64(value, context) {
+  let integer;
+  if (
+    typeof value === "number"
+    && Number.isSafeInteger(value)
+    && !Object.is(value, -0)
+  ) {
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else {
+    throw new TypeError(`${context} must be a canonical unsigned integer`);
+  }
+  if (integer < 0n || integer > MAX_UINT64_BIGINT) {
+    throw new RangeError(`${context} must be between 0 and ${MAX_UINT64_BIGINT}`);
+  }
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
+}
+
+function normalizeKaigiBoundedUnsignedInteger(value, context, maximum) {
+  const normalized = normalizeKaigiU64(value, context);
+  if (BigInt(normalized) > BigInt(maximum)) {
+    throw new RangeError(`${context} must be between 0 and ${maximum}`);
+  }
+  return Number(normalized);
+}
+
+function requireKaigiMarkedHash(value, context) {
+  const literal = requireExactLowerHex32String(value, context);
+  if ((Number.parseInt(literal.slice(-2), 16) & 1) !== 1) {
+    throw new TypeError(`${context} must set the Iroha Hash marker bit`);
+  }
+  return literal;
+}
+
+function parseKaigiSseEventPayload(event, context) {
+  if (typeof event?.raw !== "string" || event.raw.length === 0) {
+    throw new TypeError(`${context}.data must be a JSON object`);
+  }
+  return parseStrictLosslessIntegerJson(event.raw, `${context}.data`);
+}
+
 function normalizeKaigiRelaySummaryList(payload) {
-  const record = ensureRecord(payload ?? {}, "kaigi relay summary response");
+  const context = "kaigi relay summary response";
+  const record = requireKaigiResponseObject(
+    payload,
+    new Set(["total", "items"]),
+    new Set(["total", "items"]),
+    context,
+  );
   const rawItems = requireDenseArray(
     record.items,
-    "kaigi relay summary response.items",
+    `${context}.items`,
   );
   if (rawItems.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
     throw new RangeError(
@@ -29631,45 +30218,58 @@ function normalizeKaigiRelaySummaryList(payload) {
     );
   }
   const items = rawItems.map((entry, index) =>
-    normalizeKaigiRelaySummary(entry, `kaigi relay summary response.items[${index}]`),
+    normalizeKaigiRelaySummary(entry, `${context}.items[${index}]`),
   );
+  const total = normalizeKaigiU64(record.total, `${context}.total`);
+  if (BigInt(total) !== BigInt(items.length)) {
+    throw new RangeError(`${context}.total must equal items.length`);
+  }
+  const relayIds = new Set(items.map((item) => item.relay_id));
+  if (relayIds.size !== items.length) {
+    throw new TypeError(`${context}.items must contain unique relay_id values`);
+  }
   return {
-    total: ToriiClient._normalizeUnsignedInteger(
-      record.total,
-      "kaigiRelay.total",
-      { allowZero: true },
-    ),
+    total,
     items,
   };
 }
 
 function normalizeKaigiRelaySummary(payload, context) {
-  const record = ensureRecord(payload, context);
-  const relayId = requireNonEmptyString(record.relay_id, `${context}.relay_id`);
-  const domain = requireNonEmptyString(record.domain, `${context}.domain`);
+  const record = requireKaigiResponseObject(
+    payload,
+    KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS,
+    KAIGI_RELAY_SUMMARY_FIELDS,
+    context,
+  );
+  const relayId = requireExactAccountId(record.relay_id, `${context}.relay_id`);
+  const domain = requireExactNonEmptyString(record.domain, `${context}.domain`);
   const bandwidthClass = normalizeKaigiBandwidthClass(
     record.bandwidth_class,
     `${context}.bandwidth_class`,
   );
   const hpkeFingerprintContext = `${context}.hpke_fingerprint_hex`;
-  const hpkeFingerprint = normalizeHex32String(
-    requireExactNonEmptyString(record.hpke_fingerprint_hex, hpkeFingerprintContext),
+  const hpkeFingerprint = requireKaigiMarkedHash(
+    record.hpke_fingerprint_hex,
     hpkeFingerprintContext,
   );
+  const hasStatus = Object.prototype.hasOwnProperty.call(record, "status");
+  const hasReportedAt = Object.prototype.hasOwnProperty.call(record, "reported_at_ms");
+  if (hasStatus !== hasReportedAt) {
+    throw new TypeError(`${context}.status and reported_at_ms must be present together`);
+  }
   let status = null;
-  if (record.status !== undefined && record.status !== null) {
-    const value = requireNonEmptyString(record.status, `${context}.status`).toLowerCase();
+  if (hasStatus) {
+    const value = requireExactNonEmptyString(record.status, `${context}.status`);
     if (!KAIGI_HEALTH_STATUS_VALUES.has(value)) {
-      throw new TypeError(`${context}.status must be healthy, degraded, or unavailable`);
+      throw new TypeError(`${context}.status must be exact lowercase healthy, degraded, or unavailable`);
     }
     status = value;
   }
   let reportedAtMs = null;
-  if (record.reported_at_ms !== undefined && record.reported_at_ms !== null) {
-    reportedAtMs = ToriiClient._normalizeUnsignedInteger(
+  if (hasReportedAt) {
+    reportedAtMs = normalizeKaigiU64(
       record.reported_at_ms,
       `${context}.reported_at_ms`,
-      { allowZero: true },
     );
   }
   return {
@@ -29683,54 +30283,88 @@ function normalizeKaigiRelaySummary(payload, context) {
 }
 
 function normalizeKaigiBandwidthClass(value, context) {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new TypeError(`${context} must be an integer`);
-  }
-  if (value < 1 || value > 0xff) {
+  const normalized = normalizeKaigiBoundedUnsignedInteger(value, context, 0xff);
+  if (normalized === 0) {
     throw new RangeError(`${context} must be between 1 and 255`);
   }
-  return value;
+  return normalized;
 }
 
 function normalizeKaigiRelayDetail(payload) {
-  const record = ensureRecord(payload ?? {}, "kaigi relay detail");
+  const context = "kaigi relay detail";
+  const record = requireKaigiResponseObject(
+    payload,
+    KAIGI_RELAY_DETAIL_REQUIRED_FIELDS,
+    KAIGI_RELAY_DETAIL_FIELDS,
+    context,
+  );
   const relaySummary = normalizeKaigiRelaySummary(record.relay, "kaigi relay detail.relay");
   const hpkePublicKeyContext = "kaigi relay detail.hpke_public_key_b64";
   const hpkePublicKey = normalizeRequiredExactBase64Payload(
     requireExactNonEmptyString(record.hpke_public_key_b64, hpkePublicKeyContext),
     hpkePublicKeyContext,
   );
+  const hpkePublicKeyBytes = Buffer.from(strictDecodeBase64(hpkePublicKey));
+  const expectedFingerprint = Buffer.from(blake2b256(hpkePublicKeyBytes));
+  expectedFingerprint[expectedFingerprint.length - 1] |= 1;
+  if (relaySummary.hpke_fingerprint_hex !== expectedFingerprint.toString("hex")) {
+    throw new TypeError(
+      "kaigi relay detail.relay.hpke_fingerprint_hex must match the marked HPKE public-key fingerprint",
+    );
+  }
+  const hasReportedCall = Object.prototype.hasOwnProperty.call(record, "reported_call");
+  const hasReportedBy = Object.prototype.hasOwnProperty.call(record, "reported_by");
+  const hasNotes = Object.prototype.hasOwnProperty.call(record, "notes");
+  const hasFeedback = relaySummary.status !== null;
+  if (
+    hasReportedCall !== hasFeedback
+    || hasReportedBy !== hasFeedback
+    || (hasNotes && !hasFeedback)
+  ) {
+    throw new TypeError(
+      "kaigi relay detail feedback fields must agree with relay status and reported_at_ms",
+    );
+  }
   let reportedCall = null;
-  if (record.reported_call !== undefined && record.reported_call !== null) {
-    const callRecord = ensureRecord(record.reported_call, "kaigi relay detail.reported_call");
+  if (hasReportedCall) {
+    const callContext = "kaigi relay detail.reported_call";
+    const callRecord = requireKaigiResponseObject(
+      record.reported_call,
+      new Set(["domain_id", "call_name"]),
+      new Set(["domain_id", "call_name"]),
+      callContext,
+    );
     reportedCall = {
-      domain_id: requireNonEmptyString(
+      domain_id: requireExactNonEmptyString(
         callRecord.domain_id,
-        "kaigi relay detail.reported_call.domain_id",
+        `${callContext}.domain_id`,
       ),
-      call_name: requireNonEmptyString(
+      call_name: requireExactNonEmptyString(
         callRecord.call_name,
-        "kaigi relay detail.reported_call.call_name",
+        `${callContext}.call_name`,
       ),
     };
   }
   let reportedBy = null;
-  if (record.reported_by !== undefined && record.reported_by !== null) {
-    reportedBy = requireNonEmptyString(
+  if (hasReportedBy) {
+    reportedBy = requireExactAccountId(
       record.reported_by,
       "kaigi relay detail.reported_by",
     );
   }
   let notes = null;
-  if (record.notes !== undefined && record.notes !== null) {
+  if (hasNotes) {
     if (typeof record.notes !== "string") {
       throw new TypeError("kaigi relay detail.notes must be a string");
     }
     notes = record.notes;
   }
   let metrics = null;
-  if (record.metrics !== undefined && record.metrics !== null) {
+  if (Object.prototype.hasOwnProperty.call(record, "metrics")) {
     metrics = normalizeKaigiRelayDomainMetrics(record.metrics, "kaigi relay detail.metrics");
+    if (metrics.domain !== relaySummary.domain) {
+      throw new TypeError("kaigi relay detail.metrics.domain must match relay.domain");
+    }
   }
   return {
     relay: relaySummary,
@@ -29743,37 +30377,44 @@ function normalizeKaigiRelayDetail(payload) {
 }
 
 function normalizeKaigiRelayDomainMetrics(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
+  const record = requireKaigiResponseObject(
+    payload,
+    KAIGI_RELAY_DOMAIN_METRICS_FIELDS,
+    KAIGI_RELAY_DOMAIN_METRICS_FIELDS,
+    context,
+  );
   return {
-    domain: requireNonEmptyString(
+    domain: requireExactNonEmptyString(
       record.domain,
       `${context}.domain`,
     ),
-    registrations_total: ToriiClient._normalizeUnsignedInteger(
+    registrations_total: normalizeKaigiU64(
       record.registrations_total,
       `${context}.registrations_total`,
-      { allowZero: true },
     ),
-    manifest_updates_total: ToriiClient._normalizeUnsignedInteger(
+    manifest_updates_total: normalizeKaigiU64(
       record.manifest_updates_total,
       `${context}.manifest_updates_total`,
-      { allowZero: true },
     ),
-    failovers_total: ToriiClient._normalizeUnsignedInteger(
+    failovers_total: normalizeKaigiU64(
       record.failovers_total,
       `${context}.failovers_total`,
-      { allowZero: true },
     ),
-    health_reports_total: ToriiClient._normalizeUnsignedInteger(
+    health_reports_total: normalizeKaigiU64(
       record.health_reports_total,
       `${context}.health_reports_total`,
-      { allowZero: true },
     ),
   };
 }
 
 function normalizeKaigiRelayHealthSnapshot(payload) {
-  const record = ensureRecord(payload ?? {}, "kaigi relay health snapshot");
+  const context = "kaigi relay health snapshot";
+  const record = requireKaigiResponseObject(
+    payload,
+    KAIGI_RELAY_HEALTH_SNAPSHOT_FIELDS,
+    KAIGI_RELAY_HEALTH_SNAPSHOT_FIELDS,
+    context,
+  );
   const rawDomains = requireDenseArray(
     record.domains,
     "kaigi relay health snapshot.domains",
@@ -29786,289 +30427,460 @@ function normalizeKaigiRelayHealthSnapshot(payload) {
   const domains = rawDomains.map((entry, index) =>
     normalizeKaigiRelayDomainMetrics(entry, `kaigi relay health snapshot.domains[${index}]`),
   );
-  return {
-    healthy_total: ToriiClient._normalizeUnsignedInteger(
+  for (let index = 1; index < domains.length; index += 1) {
+    if (domains[index - 1].domain >= domains[index].domain) {
+      throw new TypeError(`${context}.domains must be sorted with unique domain values`);
+    }
+  }
+  const snapshot = {
+    healthy_total: normalizeKaigiU64(
       record.healthy_total,
-      "kaigi relay health snapshot.healthy_total",
-      { allowZero: true },
+      `${context}.healthy_total`,
     ),
-    degraded_total: ToriiClient._normalizeUnsignedInteger(
+    degraded_total: normalizeKaigiU64(
       record.degraded_total,
-      "kaigi relay health snapshot.degraded_total",
-      { allowZero: true },
+      `${context}.degraded_total`,
     ),
-    unavailable_total: ToriiClient._normalizeUnsignedInteger(
+    unavailable_total: normalizeKaigiU64(
       record.unavailable_total,
-      "kaigi relay health snapshot.unavailable_total",
-      { allowZero: true },
+      `${context}.unavailable_total`,
     ),
-    reports_total: ToriiClient._normalizeUnsignedInteger(
+    reports_total: normalizeKaigiU64(
       record.reports_total,
-      "kaigi relay health snapshot.reports_total",
-      { allowZero: true },
+      `${context}.reports_total`,
     ),
-    registrations_total: ToriiClient._normalizeUnsignedInteger(
+    registrations_total: normalizeKaigiU64(
       record.registrations_total,
-      "kaigi relay health snapshot.registrations_total",
-      { allowZero: true },
+      `${context}.registrations_total`,
     ),
-    failovers_total: ToriiClient._normalizeUnsignedInteger(
+    failovers_total: normalizeKaigiU64(
       record.failovers_total,
-      "kaigi relay health snapshot.failovers_total",
-      { allowZero: true },
+      `${context}.failovers_total`,
     ),
     domains,
   };
+  if (
+    BigInt(snapshot.healthy_total)
+      + BigInt(snapshot.degraded_total)
+      + BigInt(snapshot.unavailable_total)
+    > BigInt(KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS)
+  ) {
+    throw new RangeError(
+      `${context} current status totals must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS}`,
+    );
+  }
+  const aggregateFields = [
+    ["reports_total", "health_reports_total"],
+    ["registrations_total", "registrations_total"],
+    ["failovers_total", "failovers_total"],
+  ];
+  for (const [totalField, domainField] of aggregateFields) {
+    let expected = 0n;
+    for (const domain of domains) {
+      expected += BigInt(domain[domainField]);
+      if (expected > MAX_UINT64_BIGINT) expected = MAX_UINT64_BIGINT;
+    }
+    if (BigInt(snapshot[totalField]) !== expected) {
+      throw new RangeError(`${context}.${totalField} must equal the saturated domain sum`);
+    }
+  }
+  return snapshot;
 }
 
-function normalizeKaigiCallEventRef(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    call_id: requireNonEmptyString(record.call_id, `${context}.call_id`),
-    domain: requireNonEmptyString(record.domain, `${context}.domain`),
-    call_name: requireNonEmptyString(record.call_name, `${context}.call_name`),
-  };
+function requireKaigiEnum(value, allowedValues, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  if (!allowedValues.has(literal)) {
+    throw new TypeError(`${context} is not a supported exact lowercase value`);
+  }
+  return literal;
 }
 
-function normalizeKaigiCallView(payload) {
-  const record = ensureRecord(payload ?? {}, "kaigi call");
-  const metadata = ensureRecord(record.metadata ?? {}, "kaigi call.metadata");
-  const relayManifest =
-    record.relay_manifest === null || record.relay_manifest === undefined
-      ? undefined
-      : ensureRecord(record.relay_manifest, "kaigi call.relay_manifest");
+function normalizeKaigiCallIdentityFields(record, context, expectedCallId) {
+  const callId = requireExactNonEmptyString(record.call_id, `${context}.call_id`);
+  const domain = requireExactNonEmptyString(record.domain, `${context}.domain`);
+  const callName = requireExactNonEmptyString(record.call_name, `${context}.call_name`);
+  if (callId !== `${domain}:${callName}`) {
+    throw new TypeError(`${context}.call_id must match domain and call_name`);
+  }
+  if (expectedCallId !== undefined && callId !== expectedCallId) {
+    throw new TypeError(`${context}.call_id must match the requested call id`);
+  }
+  return { call_id: callId, domain, call_name: callName };
+}
+
+function normalizeKaigiCallEventRef(payload, context, expectedCallId) {
+  const fields = new Set(["call_id", "domain", "call_name"]);
+  const record = requireKaigiResponseObject(payload, fields, fields, context);
+  return normalizeKaigiCallIdentityFields(record, context, expectedCallId);
+}
+
+function normalizeKaigiCallView(payload, expectedCallId) {
+  const context = "kaigi call";
+  const record = requireKaigiResponseObject(
+    payload,
+    KAIGI_CALL_VIEW_REQUIRED_FIELDS,
+    KAIGI_CALL_VIEW_FIELDS,
+    context,
+  );
+  const identity = normalizeKaigiCallIdentityFields(record, context, expectedCallId);
+  const metadata = ensureRecord(record.metadata, `${context}.metadata`);
+  const hasRelayManifest = Object.prototype.hasOwnProperty.call(record, "relay_manifest");
+  const relayManifest = hasRelayManifest
+    ? ensureRecord(record.relay_manifest, `${context}.relay_manifest`)
+    : undefined;
+  const privacyMode = requireKaigiEnum(
+    record.privacy_mode,
+    new Set(["transparent", "private"]),
+    `${context}.privacy_mode`,
+  );
+  const roomPolicy = requireKaigiEnum(
+    record.room_policy,
+    new Set(["public", "authenticated"]),
+    `${context}.room_policy`,
+  );
+  const status = requireKaigiEnum(
+    record.status,
+    new Set(["active", "ended"]),
+    `${context}.status`,
+  );
+  const hasHost = Object.prototype.hasOwnProperty.call(record, "host_account_id");
+  const hasBilling = Object.prototype.hasOwnProperty.call(record, "billing_account_id");
+  const hasParticipantCount = Object.prototype.hasOwnProperty.call(record, "participant_count");
+  if (
+    (privacyMode === "transparent" && (!hasHost || !hasParticipantCount))
+    || (privacyMode === "private" && (hasHost || hasBilling || hasParticipantCount))
+  ) {
+    throw new TypeError(
+      `${context} authority and participant fields must agree with privacy_mode`,
+    );
+  }
+  const hasEndedAt = Object.prototype.hasOwnProperty.call(record, "ended_at_ms");
+  if (hasEndedAt !== (status === "ended")) {
+    throw new TypeError(`${context}.ended_at_ms must be present exactly when status is ended`);
+  }
+  const maxParticipants = Object.prototype.hasOwnProperty.call(record, "max_participants")
+    ? normalizeKaigiBoundedUnsignedInteger(
+          record.max_participants,
+          `${context}.max_participants`,
+          0xffff_ffff,
+        )
+    : undefined;
+  if (maxParticipants === 0) {
+    throw new RangeError(`${context}.max_participants must be between 1 and 4294967295`);
+  }
+  const createdAtMs = normalizeKaigiU64(
+    record.created_at_ms,
+    "kaigi call.created_at_ms",
+  );
+  const endedAtMs = hasEndedAt
+    ? normalizeKaigiU64(
+          record.ended_at_ms,
+          "kaigi call.ended_at_ms",
+        )
+    : undefined;
+  if (endedAtMs !== undefined && BigInt(endedAtMs) < BigInt(createdAtMs)) {
+    throw new RangeError(`${context}.ended_at_ms must not precede created_at_ms`);
+  }
   return {
-    call_id: requireNonEmptyString(record.call_id, "kaigi call.call_id"),
-    domain: requireNonEmptyString(record.domain, "kaigi call.domain"),
-    call_name: requireNonEmptyString(record.call_name, "kaigi call.call_name"),
-    host_account_id:
-      record.host_account_id === null || record.host_account_id === undefined
-        ? undefined
-        : requireNonEmptyString(record.host_account_id, "kaigi call.host_account_id"),
-    billing_account_id:
-      record.billing_account_id === null || record.billing_account_id === undefined
-        ? undefined
-        : requireNonEmptyString(
+    ...identity,
+    host_account_id: hasHost
+      ? requireExactAccountId(record.host_account_id, `${context}.host_account_id`)
+      : undefined,
+    billing_account_id: hasBilling
+      ? requireExactAccountId(
             record.billing_account_id,
-            "kaigi call.billing_account_id",
-          ),
-    title:
-      record.title === null || record.title === undefined
-        ? undefined
-        : String(record.title),
-    description:
-      record.description === null || record.description === undefined
-        ? undefined
-        : String(record.description),
-    max_participants:
-      record.max_participants === null || record.max_participants === undefined
-        ? undefined
-        : ToriiClient._normalizeUnsignedInteger(
-            record.max_participants,
-            "kaigi call.max_participants",
-            { allowZero: true },
-          ),
-    gas_rate_per_minute: ToriiClient._normalizeUnsignedInteger(
-      record.gas_rate_per_minute ?? 0,
-      "kaigi call.gas_rate_per_minute",
-      { allowZero: true },
+            `${context}.billing_account_id`,
+          )
+      : undefined,
+    title: Object.prototype.hasOwnProperty.call(record, "title")
+      ? requireExactString(record.title, `${context}.title`)
+      : undefined,
+    description: Object.prototype.hasOwnProperty.call(record, "description")
+      ? requireExactString(record.description, `${context}.description`)
+      : undefined,
+    max_participants: maxParticipants,
+    gas_rate_per_minute: normalizeKaigiU64(
+      record.gas_rate_per_minute,
+      `${context}.gas_rate_per_minute`,
     ),
     metadata,
-    scheduled_start_ms:
-      record.scheduled_start_ms === null || record.scheduled_start_ms === undefined
-        ? undefined
-        : ToriiClient._normalizeUnsignedInteger(
+    scheduled_start_ms: Object.prototype.hasOwnProperty.call(record, "scheduled_start_ms")
+      ? normalizeKaigiU64(
             record.scheduled_start_ms,
-            "kaigi call.scheduled_start_ms",
-            { allowZero: true },
-          ),
-    privacy_mode: requireNonEmptyString(
-      record.privacy_mode,
-      "kaigi call.privacy_mode",
-    ).toLowerCase(),
-    room_policy: requireNonEmptyString(
-      record.room_policy,
-      "kaigi call.room_policy",
-    ).toLowerCase(),
+            `${context}.scheduled_start_ms`,
+          )
+      : undefined,
+    privacy_mode: privacyMode,
+    room_policy: roomPolicy,
     relay_manifest: relayManifest,
-    roster_root_hex: normalizeHex32String(
+    roster_root_hex: requireKaigiMarkedHash(
       record.roster_root_hex,
       "kaigi call.roster_root_hex",
     ),
-    participant_count: normalizeOptionalUnsignedInteger(
-      record.participant_count,
-      "kaigi call.participant_count",
-    ),
-    commitment_count: ToriiClient._normalizeUnsignedInteger(
-      record.commitment_count ?? 0,
+    participant_count: hasParticipantCount
+      ? normalizeKaigiBoundedUnsignedInteger(
+            record.participant_count,
+            `${context}.participant_count`,
+            0xffff_ffff,
+          )
+      : undefined,
+    commitment_count: normalizeKaigiBoundedUnsignedInteger(
+      record.commitment_count,
       "kaigi call.commitment_count",
-      { allowZero: true },
+      0xffff_ffff,
     ),
-    nullifier_count: ToriiClient._normalizeUnsignedInteger(
-      record.nullifier_count ?? 0,
+    nullifier_count: normalizeKaigiBoundedUnsignedInteger(
+      record.nullifier_count,
       "kaigi call.nullifier_count",
-      { allowZero: true },
+      0xffff_ffff,
     ),
-    usage_commitment_count: ToriiClient._normalizeUnsignedInteger(
-      record.usage_commitment_count ?? 0,
+    usage_commitment_count: normalizeKaigiBoundedUnsignedInteger(
+      record.usage_commitment_count,
       "kaigi call.usage_commitment_count",
-      { allowZero: true },
+      0xffff_ffff,
     ),
-    status: requireNonEmptyString(record.status, "kaigi call.status").toLowerCase(),
-    created_at_ms: ToriiClient._normalizeUnsignedInteger(
-      record.created_at_ms ?? 0,
-      "kaigi call.created_at_ms",
-      { allowZero: true },
-    ),
-    ended_at_ms:
-      record.ended_at_ms === null || record.ended_at_ms === undefined
-        ? undefined
-        : ToriiClient._normalizeUnsignedInteger(
-            record.ended_at_ms,
-            "kaigi call.ended_at_ms",
-            { allowZero: true },
-          ),
-    total_duration_ms: ToriiClient._normalizeUnsignedInteger(
-      record.total_duration_ms ?? 0,
+    status,
+    created_at_ms: createdAtMs,
+    ended_at_ms: endedAtMs,
+    total_duration_ms: normalizeKaigiU64(
+      record.total_duration_ms,
       "kaigi call.total_duration_ms",
-      { allowZero: true },
     ),
-    total_billed_gas: ToriiClient._normalizeUnsignedInteger(
-      record.total_billed_gas ?? 0,
+    total_billed_gas: normalizeKaigiU64(
+      record.total_billed_gas,
       "kaigi call.total_billed_gas",
-      { allowZero: true },
     ),
-    segments_recorded: ToriiClient._normalizeUnsignedInteger(
-      record.segments_recorded ?? 0,
+    segments_recorded: normalizeKaigiBoundedUnsignedInteger(
+      record.segments_recorded,
       "kaigi call.segments_recorded",
-      { allowZero: true },
+      0xffff_ffff,
     ),
   };
 }
 
-function normalizeKaigiCallSignal(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
+function normalizeKaigiCallSignal(payload, context, expectedCallId) {
+  const record = requireKaigiResponseObject(
+    payload,
+    KAIGI_CALL_SIGNAL_REQUIRED_FIELDS,
+    KAIGI_CALL_SIGNAL_FIELDS,
+    context,
+  );
+  const callId = requireExactNonEmptyString(record.call_id, `${context}.call_id`);
+  if (callId !== expectedCallId) {
+    throw new TypeError(`${context}.call_id must match the requested call id`);
+  }
+  if (typeof record.signal_kind !== "string") {
+    throw new TypeError(`${context}.signal_kind must be a string`);
+  }
+  const signalKind = record.signal_kind;
+  if (signalKind.length === 0) {
+    throw new TypeError(`${context}.signal_kind must not be empty`);
+  }
+  if (/^\p{White_Space}|\p{White_Space}$/u.test(signalKind)) {
+    throw new TypeError(`${context}.signal_kind must not contain surrounding Unicode whitespace`);
+  }
+  if (/[A-Z]/u.test(signalKind)) {
+    throw new TypeError(`${context}.signal_kind must not contain uppercase ASCII characters`);
+  }
+  const timestampMs = normalizeKaigiU64(record.timestamp_ms, `${context}.timestamp_ms`);
+  const createdAtMs = normalizeKaigiU64(record.created_at_ms, `${context}.created_at_ms`);
+  if (BigInt(createdAtMs) > BigInt(timestampMs)) {
+    throw new RangeError(`${context}.created_at_ms must not exceed timestamp_ms`);
+  }
+  const metadata = ensureRecord(record.metadata, `${context}.metadata`);
+  if (metadata.schema !== KAIGI_SIGNAL_SCHEMA_V1) {
+    throw new TypeError(
+      `${context}.metadata.schema must be ${KAIGI_SIGNAL_SCHEMA_V1}`,
+    );
+  }
   return {
-    entrypoint_hash: requireNonEmptyString(
+    entrypoint_hash: requireKaigiMarkedHash(
       record.entrypoint_hash,
       `${context}.entrypoint_hash`,
     ),
-    authority:
-      record.authority === null || record.authority === undefined
-        ? undefined
-        : requireNonEmptyString(record.authority, `${context}.authority`),
-    timestamp_ms:
-      record.timestamp_ms === null || record.timestamp_ms === undefined
-        ? undefined
-        : ToriiClient._normalizeUnsignedInteger(
-            record.timestamp_ms,
-            `${context}.timestamp_ms`,
-            { allowZero: true },
-          ),
-    call_id: requireNonEmptyString(record.call_id, `${context}.call_id`),
-    signal_kind: requireNonEmptyString(
-      record.signal_kind,
-      `${context}.signal_kind`,
-    ).toLowerCase(),
-    host_account_id:
-      record.host_account_id === null || record.host_account_id === undefined
-        ? undefined
-        : requireNonEmptyString(record.host_account_id, `${context}.host_account_id`),
-    participant_account_id:
-      record.participant_account_id === null || record.participant_account_id === undefined
-        ? undefined
-        : requireNonEmptyString(
+    authority: Object.prototype.hasOwnProperty.call(record, "authority")
+      ? requireExactAccountId(record.authority, `${context}.authority`)
+      : undefined,
+    timestamp_ms: timestampMs,
+    call_id: callId,
+    signal_kind: signalKind,
+    host_account_id: Object.prototype.hasOwnProperty.call(record, "host_account_id")
+      ? requireExactNonEmptyString(record.host_account_id, `${context}.host_account_id`)
+      : undefined,
+    participant_account_id: Object.prototype.hasOwnProperty.call(
+      record,
+      "participant_account_id",
+    )
+      ? requireExactNonEmptyString(
             record.participant_account_id,
             `${context}.participant_account_id`,
-          ),
-    created_at_ms: ToriiClient._normalizeUnsignedInteger(
-      record.created_at_ms,
-      `${context}.created_at_ms`,
-      { allowZero: true },
-    ),
-    metadata: ensureRecord(record.metadata, `${context}.metadata`),
+          )
+      : undefined,
+    created_at_ms: createdAtMs,
+    metadata,
   };
 }
 
-function normalizeKaigiCallSignalsList(payload) {
-  const record = ensureRecord(payload ?? {}, "kaigi call signals");
-  const rawItems = requireDenseArray(record.items, "kaigi call signals.items");
+function normalizeKaigiCallSignalsList(payload, expectedCallId) {
+  const context = "kaigi call signals";
+  const requiredFields = new Set(["has_more", "items"]);
+  const allowedFields = new Set([...requiredFields, "next_cursor"]);
+  const record = requireKaigiResponseObject(
+    payload,
+    requiredFields,
+    allowedFields,
+    context,
+  );
+  const rawItems = requireDenseArray(record.items, `${context}.items`);
+  if (rawItems.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
+    throw new RangeError(
+      `${context}.items must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
+    );
+  }
+  const items = rawItems.map((entry, index) =>
+    normalizeKaigiCallSignal(entry, `${context}.items[${index}]`, expectedCallId),
+  );
+  if (new Set(items.map((item) => item.entrypoint_hash)).size !== items.length) {
+    throw new TypeError(`${context}.items must contain unique entrypoint_hash values`);
+  }
+  if (typeof record.has_more !== "boolean") {
+    throw new TypeError(`${context}.has_more must be a boolean`);
+  }
+  const hasCursor = Object.prototype.hasOwnProperty.call(record, "next_cursor");
+  if (record.has_more !== hasCursor) {
+    throw new TypeError(
+      `${context}.next_cursor must be present exactly when has_more is true`,
+    );
+  }
+  const nextCursor = hasCursor
+    ? normalizeKaigiCallSignalsCursor(
+        record.next_cursor,
+        `${context}.next_cursor`,
+      )
+    : undefined;
   return {
-    total: ToriiClient._normalizeUnsignedInteger(
-      record.total,
-      "kaigi call signals.total",
-      { allowZero: true },
-    ),
-    items: rawItems.map((entry, index) =>
-      normalizeKaigiCallSignal(entry, `kaigi call signals.items[${index}]`),
-    ),
+    has_more: record.has_more,
+    next_cursor: nextCursor,
+    items,
   };
 }
 
-function normalizeKaigiCallEventData(payload) {
-  const record = ensureRecord(payload, "kaigi call event");
-  const kind = requireNonEmptyString(record.kind, "kaigi call event.kind").toLowerCase();
+function normalizeKaigiCallSignalsCursor(value, context) {
+  const cursor = requireExactNonEmptyString(value, context);
+  if (
+    cursor.length > KAIGI_CALL_SIGNALS_CURSOR_MAX_BYTES
+    || cursor.length % 4 === 1
+    || !/^[A-Za-z0-9_-]+$/u.test(cursor)
+  ) {
+    throw new TypeError(`${context} must be a canonical bounded base64url value`);
+  }
+  return cursor;
+}
+
+function normalizeKaigiCallEventData(payload, expectedCallId) {
+  const context = "kaigi call event";
+  const baseRecord = ensureRecord(payload, context);
+  const kind = requireExactNonEmptyString(baseRecord.kind, `${context}.kind`);
   if (!KAIGI_CALL_EVENT_KIND_VALUES.has(kind)) {
     throw new TypeError("kaigi call event.kind must be roster_updated or ended");
   }
-  const call = normalizeKaigiCallEventRef(record.call, "kaigi call event.call");
+  const requiredFields = kind === "ended"
+    ? new Set(["kind", "call", "status", "ended_at_ms"])
+    : new Set(["kind", "call", "privacy_mode", "commitment_count", "nullifier_count"]);
+  const allowedFields = kind === "ended"
+    ? requiredFields
+    : new Set([...requiredFields, "participant_count", "roster_root_hex"]);
+  const record = requireKaigiResponseObject(
+    baseRecord,
+    requiredFields,
+    allowedFields,
+    context,
+  );
+  const call = normalizeKaigiCallEventRef(
+    record.call,
+    `${context}.call`,
+    expectedCallId,
+  );
   if (kind === "ended") {
+    if (record.status !== "ended") {
+      throw new TypeError(`${context}.status must be ended`);
+    }
     return {
       kind,
       call,
-      status: requireNonEmptyString(record.status, "kaigi call event.status").toLowerCase(),
-      ended_at_ms: ToriiClient._normalizeUnsignedInteger(
+      status: "ended",
+      ended_at_ms: normalizeKaigiU64(
         record.ended_at_ms,
         "kaigi call event.ended_at_ms",
-        { allowZero: true },
       ),
     };
+  }
+  const privacyMode = requireKaigiEnum(
+    record.privacy_mode,
+    new Set(["transparent", "private"]),
+    `${context}.privacy_mode`,
+  );
+  const hasParticipantCount = Object.prototype.hasOwnProperty.call(record, "participant_count");
+  const hasRosterRoot = Object.prototype.hasOwnProperty.call(record, "roster_root_hex");
+  if (
+    (privacyMode === "transparent" && (!hasParticipantCount || hasRosterRoot))
+    || (privacyMode === "private" && (hasParticipantCount || !hasRosterRoot))
+  ) {
+    throw new TypeError(`${context} roster fields must agree with privacy_mode`);
   }
   return {
     kind,
     call,
-    privacy_mode: requireNonEmptyString(
-      record.privacy_mode,
-      "kaigi call event.privacy_mode",
-    ).toLowerCase(),
-    participant_count: normalizeOptionalUnsignedInteger(
-      record.participant_count,
-      "kaigi call event.participant_count",
-    ),
-    commitment_count: ToriiClient._normalizeUnsignedInteger(
+    privacy_mode: privacyMode,
+    participant_count: hasParticipantCount
+      ? normalizeKaigiBoundedUnsignedInteger(
+            record.participant_count,
+            `${context}.participant_count`,
+            0xffff_ffff,
+          )
+      : undefined,
+    commitment_count: normalizeKaigiBoundedUnsignedInteger(
       record.commitment_count,
       "kaigi call event.commitment_count",
-      { allowZero: true },
+      0xffff_ffff,
     ),
-    nullifier_count: ToriiClient._normalizeUnsignedInteger(
+    nullifier_count: normalizeKaigiBoundedUnsignedInteger(
       record.nullifier_count,
       "kaigi call event.nullifier_count",
-      { allowZero: true },
+      0xffff_ffff,
     ),
-    roster_root_hex:
-      record.roster_root_hex === null || record.roster_root_hex === undefined
-        ? undefined
-        : normalizeHex32String(
+    roster_root_hex: hasRosterRoot
+      ? requireKaigiMarkedHash(
             record.roster_root_hex,
             "kaigi call event.roster_root_hex",
-          ),
+          )
+      : undefined,
   };
 }
 
 function normalizeKaigiRelayEventData(payload) {
-  const record = ensureRecord(payload, "kaigi relay event");
-  const kind = requireNonEmptyString(record.kind, "kaigi relay event.kind").toLowerCase();
-  const domain = requireNonEmptyString(
+  const context = "kaigi relay event";
+  const baseRecord = ensureRecord(payload, context);
+  const kind = requireExactNonEmptyString(baseRecord.kind, `${context}.kind`);
+  if (!KAIGI_EVENT_KIND_VALUES.has(kind)) {
+    throw new TypeError(
+      "kaigi relay event.kind must be exact lowercase registration, unregistration, or health",
+    );
+  }
+  const fields = kind === "registration"
+    ? new Set(["kind", "domain", "relay_id", "bandwidth_class", "hpke_fingerprint_hex"])
+    : kind === "unregistration"
+      ? new Set(["kind", "domain", "relay_id"])
+      : new Set(["kind", "domain", "relay_id", "status", "reported_at_ms", "call"]);
+  const record = requireKaigiResponseObject(baseRecord, fields, fields, context);
+  const domain = requireExactNonEmptyString(
     record.domain,
     "kaigi relay event.domain",
   );
-  const relayId = requireNonEmptyString(
+  const relayId = requireExactAccountId(
     record.relay_id,
     "kaigi relay event.relay_id",
   );
-  if (!KAIGI_EVENT_KIND_VALUES.has(kind)) {
-    throw new TypeError("kaigi relay event.kind must be registration or health");
-  }
   if (kind === "registration") {
     return {
       kind,
@@ -30078,37 +30890,53 @@ function normalizeKaigiRelayEventData(payload) {
         record.bandwidth_class,
         "kaigi relay event.bandwidth_class",
       ),
-      hpke_fingerprint_hex: normalizeHex32String(
+      hpke_fingerprint_hex: requireKaigiMarkedHash(
         record.hpke_fingerprint_hex,
         "kaigi relay event.hpke_fingerprint_hex",
       ),
     };
   }
-  const statusValue = requireNonEmptyString(
+  if (kind === "unregistration") {
+    return {
+      kind,
+      domain,
+      relay_id: relayId,
+    };
+  }
+  const statusValue = requireExactNonEmptyString(
     record.status,
     "kaigi relay event.status",
-  ).toLowerCase();
+  );
   if (!KAIGI_HEALTH_STATUS_VALUES.has(statusValue)) {
-    throw new TypeError("kaigi relay event.status must be healthy, degraded, or unavailable");
+    throw new TypeError(
+      "kaigi relay event.status must be exact lowercase healthy, degraded, or unavailable",
+    );
   }
-  const callRecord = ensureRecord(record.call, "kaigi relay event.call");
-  const callDomain = requireNonEmptyString(
+  const callRecord = requireKaigiResponseObject(
+    record.call,
+    new Set(["domain", "name"]),
+    new Set(["domain", "name"]),
+    "kaigi relay event.call",
+  );
+  const callDomain = requireExactNonEmptyString(
     callRecord.domain,
     "kaigi relay event.call.domain",
   );
-  const callName = requireNonEmptyString(
+  const callName = requireExactNonEmptyString(
     callRecord.name,
     "kaigi relay event.call.name",
   );
+  if (callDomain !== domain) {
+    throw new TypeError("kaigi relay event.call.domain must match event.domain");
+  }
   return {
     kind,
     domain,
     relay_id: relayId,
     status: statusValue,
-    reported_at_ms: ToriiClient._normalizeUnsignedInteger(
+    reported_at_ms: normalizeKaigiU64(
       record.reported_at_ms,
       "kaigi relay event.reported_at_ms",
-      { allowZero: true },
     ),
     call: {
       domain: callDomain,
@@ -30145,7 +30973,9 @@ function buildKaigiRelayEventParams(options = {}) {
     for (const entry of values) {
       const token = requireNonEmptyString(entry, "kaigiRelayEvents.kind").toLowerCase();
       if (!KAIGI_EVENT_KIND_VALUES.has(token)) {
-        throw new TypeError("kaigiRelayEvents.kind must be registration or health");
+        throw new TypeError(
+          "kaigiRelayEvents.kind must be registration, unregistration, or health",
+        );
       }
       normalized.push(token);
     }
@@ -30170,7 +31000,7 @@ function buildKaigiCallSignalsQuery(options = {}) {
         "afterTimestampMs",
         "after_timestamp_ms",
         "limit",
-        "offset",
+        "cursor",
         "signal",
         "canonicalAuth",
       ]),
@@ -30198,11 +31028,10 @@ function buildKaigiCallSignalsQuery(options = {}) {
       { allowZero: false },
     );
   }
-  if (source.offset !== undefined && source.offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      source.offset,
-      "kaigiCallSignals.offset",
-      { allowZero: true },
+  if (source.cursor !== undefined && source.cursor !== null) {
+    params.cursor = normalizeKaigiCallSignalsCursor(
+      source.cursor,
+      "kaigiCallSignals.cursor",
     );
   }
   return {

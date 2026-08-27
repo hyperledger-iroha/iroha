@@ -6641,6 +6641,7 @@ fn parse_world(
         peers,
         domains,
         domains_by_owner: Storage::default(),
+        kaigi_relay_registry: Storage::default(),
         accounts,
         uaid_accounts: Storage::default(),
         account_aliases,
@@ -7131,6 +7132,12 @@ fn parse_world(
             field: "account_rekey_records".into(),
             message,
         })?;
+    crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut world).map_err(
+        |message| json::Error::InvalidField {
+            field: "kaigi_relay_registry".into(),
+            message,
+        },
+    )?;
     world
         .rebuild_asset_definition_alias_indexes()
         .map_err(|message| json::Error::InvalidField {

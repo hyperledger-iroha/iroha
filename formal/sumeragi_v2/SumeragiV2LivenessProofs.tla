@@ -923,9 +923,10 @@ FetchCertifiedBody, StoreBody, and ValidateBody into BeginLockCommit.
 The response hash binds the exact signed request and PrepareQC.  Physical
 request routing is only a liveness mechanism: an authenticated archive which
 learns the same signed request through reconnect or relay need not belong to
-the original route set.  Archive signature ownership and the cited frozen-QC
-signer remain separate roles.  The outer response source is only a transport
-relay and is deliberately absent from the recovery predicate.
+the original route set.  The current archive responder signs with its current
+authenticated peer identity; the frozen QC authenticates the subject without
+assigning that peer a historical signer index.  The outer response source is
+only a transport relay and is deliberately absent from the recovery predicate.
 ***************************************************************************)
 HistoricalCertifiedResponseRecoveryEvidence(node, qc, evidence) ==
   /\ evidence \in AsyncNetworkItems
@@ -937,8 +938,8 @@ HistoricalCertifiedResponseRecoveryEvidence(node, qc, evidence) ==
   /\ evidence.envelope.requestHash =
        AsyncCertifiedRequestHashOf(node, qc, 0)
   /\ evidence.envelope.signatureOwner =
-       evidence.envelope.archiveServer
-  /\ evidence.envelope.citedResponder \in qc.signers
+       evidence.envelope.responder
+  /\ evidence.envelope.responder \in AsyncArchiveServerIds
   /\ CertifiedResponseAuthenticatedOccurrence(evidence)
 
 HistoricalBeginLockRecoveryEvidence(node, qc, evidence) ==
@@ -968,8 +969,8 @@ THEOREM HistoricalCertifiedResponseRecoveryEvidenceBindsExactIdentities ==
          /\ evidence.envelope.requestHash =
               AsyncCertifiedRequestHashOf(node, qc, 0)
          /\ evidence.envelope.signatureOwner =
-              evidence.envelope.archiveServer
-         /\ evidence.envelope.citedResponder \in qc.signers
+              evidence.envelope.responder
+         /\ evidence.envelope.responder \in AsyncArchiveServerIds
          /\ CertifiedResponseAuthenticatedOccurrence(evidence)
 BY DEF HistoricalCertifiedResponseRecoveryEvidence
 

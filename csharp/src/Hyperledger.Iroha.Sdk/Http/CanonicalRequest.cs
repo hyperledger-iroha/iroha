@@ -322,7 +322,7 @@ public static partial class CanonicalRequest
         ReadOnlySpan<byte> privateKeySeed,
         string accountParamName)
     {
-        if (!TryParseCanonicalI105Account(accountId, out _))
+        if (!TryParseCanonicalI105Account(accountId, out var account))
         {
             // An alias is resolved to its controller by Torii; the SDK cannot
             // prove that state-dependent binding before sending the request.
@@ -330,10 +330,10 @@ public static partial class CanonicalRequest
         }
 
         var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
-        var expectedAccountId = AccountAddress.FromPublicKey(publicKey, "ed25519")
-            .ToI105(AccountAddress.DefaultChainDiscriminant);
-        if (!string.Equals(expectedAccountId, accountId, StringComparison.Ordinal))
+        var expectedAccount = AccountAddress.FromPublicKey(publicKey, "ed25519");
+        if (!account!.ControllerBytes().AsSpan().SequenceEqual(expectedAccount.ControllerBytes()))
         {
+            var expectedAccountId = expectedAccount.ToI105(AccountAddress.DefaultChainDiscriminant);
             throw new ArgumentException(
                 $"accountId must match the account derived from privateKeySeed: {expectedAccountId}.",
                 accountParamName);
@@ -351,7 +351,7 @@ public static partial class CanonicalRequest
     {
         try
         {
-            address = AccountAddress.Parse(value, AccountAddress.DefaultChainDiscriminant);
+            address = AccountAddress.Parse(value);
             return true;
         }
         catch (AccountAddressException)
@@ -361,7 +361,7 @@ public static partial class CanonicalRequest
         }
     }
 
-    private static bool IsCanonicalAsciiAccountAlias(string value)
+    internal static bool IsCanonicalAsciiAccountAlias(string value)
     {
         var separator = value.IndexOf('@');
         if (value.Length > MaxAliasLiteralBytesV1

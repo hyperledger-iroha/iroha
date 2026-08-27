@@ -82,6 +82,12 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
     retired `X-Iroha-Iso-Profile` header is rejected
   - message definition version and business service checks
   - real-XML parser binding for all observed message-definition declarations:
+    production routes call the real-XML-only entry point; the internal
+    `<ISO20022>` and key/value formats remain developer/test APIs and cannot
+    reach Torii admission. Parsing has deterministic limits for nesting depth,
+    elements, per-element and total attributes, normalized path bytes, and
+    materialized fields. Budget exhaustion fails before unbounded traversal or
+    allocation.
     BAH/body `MsgDefIdr` values plus `Document` and immediate payload-root XSD
     namespaces must resolve through the current XML namespace scope and agree on
     the exact concrete MDR version. Valid default or prefixed ISO namespaces are
@@ -105,7 +111,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
     parsing: well-formed comments and processing instructions are skipped
     deliberately, while malformed comments/processing instructions, CDATA,
     `DOCTYPE`, and other declarations fail closed. Exact versioned parser
-    requests reject drift, and supported element, attribute,
+    requests reject drift. `AppHdr` and `Document` establish exact semantic
+    namespaces which every ordinary descendant must retain; transparent wrapper
+    names, descendant namespace resets/rebinding, and multiple XML paths that
+    collapse to one canonical bridge field are rejected. Supported element, attribute,
     namespace-declaration, and processing-instruction QNames are validated before
     local-name matching, so malformed names such as doubled namespace separators
     or digit-leading element names cannot satisfy `Document` or payload-root
@@ -147,7 +156,11 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
     target that strictly encloses the verified signature carrier, with an
     enveloped-signature transform first, at most one final
     supported C14N transform that controls digest canonicalization, and SHA-256
-    digest method. One optional XAdES `SignedProperties` Reference may target a
+    digest method. Real-XML parsing records the source SHA-256 and the owning
+    source range for every materialized semantic field. Verification requires
+    the exact submitted payload and requires every such field to lie inside the
+    verified payload Reference, preventing a correctly signed inner subtree
+    from authorizing unsigned header or sibling semantics. One optional XAdES `SignedProperties` Reference may target a
     local `#id` with the XAdES `SignedProperties` Type URI, exactly one supported
     C14N transform, and a SHA-256 digest; its enclosing `QualifyingProperties`
     target must bind to the enclosing `Signature` `Id`. Certificate-backed XAdES
@@ -211,6 +224,21 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   payload hash, profile metadata, UETR, transaction hash, status history, reason
   codes, context, reference snapshot id, and a deterministic `record_sha256`
   digest that binds the persisted JSON body.
+- Serialized local admission, replay-index mutation, pruning, compaction, and
+  persistence ordering under one re-entrant state lock. Concurrent admissions
+  cannot both reserve the same payload digest, business message id, or UETR,
+  and a retry of a definitely rejected identifier must retain the exact original
+  metadata tuple. The exact signed transaction hash is bound before queue
+  dispatch. When `store_dir` is configured, its record is written through a
+  synced owner-only temporary file and atomic rename, and a known write failure
+  prevents dispatch. An indeterminate plan-journal result remains pending and
+  retention-pinned for exact-hash reconciliation instead of being marked
+  rejected and retried as a replacement transfer.
+- Lifecycle updates now require the same non-empty profile id, business service,
+  and compatible message family as the referenced original. Missing or
+  cross-profile evidence fails closed, in-flight originals are not mutated, and
+  settled or rejected originals are terminal. Direct status mutators enforce
+  the same terminal monotonicity.
 - The exact append-only `status_history` is bounded in V1 to 256 entries and
   256 KiB of canonical compact JSON. Live lifecycle updates build a bounded
   candidate and reject the whole transition before changing memory, indexes, or
@@ -234,7 +262,14 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   newest bounded set before building replay indexes. Compaction removes expired
   or oldest overflow records, clears replay indexes, deletes the corresponding
   `store_dir/messages/*.json` files, and regenerates the audit index from
-  survivors without cloning the full record store.
+  survivors without cloning the full record store. Records with a prepared
+  transaction hash and unknown queue outcome are not removed by TTL, age, or
+  count compaction; admission fails closed when only such pinned records remain.
+- The bounded durable cache is still node-local and optional, so it is not a
+  permanent network-wide replay guarantee. Complete idempotency requires an
+  on-ledger/consensus claim over the ISO message id, payload digest, business
+  message id, UETR, and exact signed transaction hash, committed atomically with
+  the resulting transfer.
 - Added `audit_export_dir`, an operator-configured external audit spool. When
   durable persistence regenerates the audit index, Torii mirrors
   `messages.index.json` into that directory and writes a digest-addressed

@@ -853,6 +853,7 @@ fn certified_pipeline_replay_evidence_for_test(
     manifest: &wire::PayloadManifest,
     receipt: &DurableBodyReceipt,
     validate_pending: &PendingRuntimeEffectBinding,
+    responder: &PeerId,
 ) -> Option<(
     CertifiedStoreReplayEvidenceV1,
     CertifiedValidateReplayEvidenceV1,
@@ -864,6 +865,7 @@ fn certified_pipeline_replay_evidence_for_test(
         receipt,
         validate_pending,
         certificate,
+        responder,
     )
 }
 #[cfg(test)]
@@ -873,6 +875,7 @@ fn certified_pipeline_replay_evidence_with_certificate_for_test(
     receipt: &DurableBodyReceipt,
     validate_pending: &PendingRuntimeEffectBinding,
     certificate: wire::QuorumCertificate,
+    responder: &PeerId,
 ) -> Option<(
     CertifiedStoreReplayEvidenceV1,
     CertifiedValidateReplayEvidenceV1,
@@ -891,7 +894,7 @@ fn certified_pipeline_replay_evidence_with_certificate_for_test(
         )),
         manifest: manifest.clone(),
         body: vec![0xC2],
-        responder: 0,
+        responder: responder.clone(),
         signature: vec![0xC3],
     };
     let fetch = CertifiedFetchReplayEvidenceV1::from_signed_response_for_test(

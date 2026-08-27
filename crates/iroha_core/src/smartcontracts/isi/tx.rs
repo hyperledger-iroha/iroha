@@ -1,10 +1,15 @@
 //! Implementations for transaction queries.
-use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+use crate::{
+    kura::{KaigiSignalCandidateIndexError, KaigiSignalCandidatePosition},
+    smartcontracts::ValidQuery,
+    state::StateReadOnly,
+};
 use eyre::Result;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
     AccountId,
     block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock},
+    kaigi::KaigiId,
     merge::MergeLedgerEntry,
     prelude::*,
     query::{
@@ -16,6 +21,7 @@ use iroha_data_model::{
 use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
 use norito::json::Value;
+use norito::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroUsize,
@@ -751,6 +757,630 @@ fn block_committed_transactions_with_merge(
     }
     committed
 }
+
+/// Immutable canonical prefix bound to a Kaigi signal-history cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub struct KaigiSignalHistoryAnchor {
+    height: u64,
+    tip_hash: Option<HashOf<BlockHeader>>,
+}
+
+impl KaigiSignalHistoryAnchor {
+    /// Construct a structurally valid canonical-prefix anchor.
+    #[must_use]
+    pub fn new(height: u64, tip_hash: Option<HashOf<BlockHeader>>) -> Option<Self> {
+        ((height == 0) == tip_hash.is_none()).then_some(Self { height, tip_hash })
+    }
+
+    fn capture(state_ro: &impl StateReadOnly) -> Result<Self, QueryExecutionFail> {
+        Ok(Self {
+            height: u64::try_from(state_ro.height()).map_err(|_| {
+                QueryExecutionFail::Conversion("Kaigi signal history height exceeds u64".to_owned())
+            })?,
+            tip_hash: state_ro.latest_block_hash(),
+        })
+    }
+
+    fn validate(self, state_ro: &impl StateReadOnly) -> Result<(), QueryExecutionFail> {
+        let height = usize::try_from(self.height).map_err(|_| QueryExecutionFail::Expired)?;
+        let observed_tip = height
+            .checked_sub(1)
+            .and_then(|index| state_ro.block_hashes().get(index))
+            .copied();
+        if observed_tip != self.tip_hash {
+            return Err(QueryExecutionFail::Expired);
+        }
+        Ok(())
+    }
+
+    /// Return the anchored canonical height.
+    #[must_use]
+    pub const fn height(self) -> u64 {
+        self.height
+    }
+
+    /// Return the canonical hash at the anchored height, if non-empty.
+    #[must_use]
+    pub const fn tip_hash(self) -> Option<HashOf<BlockHeader>> {
+        self.tip_hash
+    }
+}
+
+/// Revalidated committed transaction selected by the Kaigi signal index.
+#[derive(Debug, Clone)]
+pub struct IndexedKaigiSignalCandidate {
+    position: KaigiSignalCandidatePosition,
+    authority: AccountId,
+    carrier_timestamp_ms: u64,
+    transaction: CommittedTransaction,
+}
+
+impl IndexedKaigiSignalCandidate {
+    /// Return the stable structural position used by exclusive cursors.
+    #[must_use]
+    pub const fn position(&self) -> KaigiSignalCandidatePosition {
+        self.position
+    }
+
+    /// Return the transaction authority bound into the index locator.
+    #[must_use]
+    pub fn authority(&self) -> &AccountId {
+        &self.authority
+    }
+
+    /// Return the canonical carrier-block timestamp.
+    #[must_use]
+    pub const fn carrier_timestamp_ms(&self) -> u64 {
+        self.carrier_timestamp_ms
+    }
+
+    /// Borrow the revalidated committed transaction.
+    #[must_use]
+    pub const fn transaction(&self) -> &CommittedTransaction {
+        &self.transaction
+    }
+
+    /// Consume the candidate and return its committed transaction.
+    #[must_use]
+    pub fn into_transaction(self) -> CommittedTransaction {
+        self.transaction
+    }
+}
+
+/// Bounded chronological page returned by the Kaigi signal index.
+#[derive(Debug, Clone)]
+pub struct IndexedKaigiSignalCandidatePage {
+    anchor: KaigiSignalHistoryAnchor,
+    candidates: Vec<IndexedKaigiSignalCandidate>,
+    has_more: bool,
+}
+
+const KAIGI_SIGNAL_CARRIER_BYTES_PER_WORK_UNIT: u64 = 64 * 1024;
+const KAIGI_SIGNAL_MAX_CARRIER_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Independent hard limits for one indexed Kaigi signal-history page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KaigiSignalCandidateWorkLimits {
+    max_candidates: u64,
+    max_carrier_bytes: u64,
+    max_projected_transactions: u64,
+    max_merge_work: u64,
+}
+
+impl KaigiSignalCandidateWorkLimits {
+    /// Derive balanced limits from the configured query work cap.
+    #[must_use]
+    pub fn from_work_cap(work_cap: u64) -> Option<Self> {
+        if work_cap == 0 || work_cap > iroha_data_model::query::parameters::MAX_FETCH_SIZE.get() {
+            return None;
+        }
+        Some(Self {
+            max_candidates: work_cap,
+            max_carrier_bytes: work_cap
+                .saturating_mul(KAIGI_SIGNAL_CARRIER_BYTES_PER_WORK_UNIT)
+                .min(KAIGI_SIGNAL_MAX_CARRIER_BYTES),
+            max_projected_transactions: work_cap,
+            max_merge_work: work_cap,
+        })
+    }
+
+    #[cfg(test)]
+    const fn new_for_test(
+        max_candidates: u64,
+        max_carrier_bytes: u64,
+        max_projected_transactions: u64,
+        max_merge_work: u64,
+    ) -> Self {
+        Self {
+            max_candidates,
+            max_carrier_bytes,
+            max_projected_transactions,
+            max_merge_work,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct KaigiSignalCandidateWork {
+    carrier_bytes: u64,
+    projected_transactions: u64,
+    merge_work: u64,
+}
+
+impl KaigiSignalCandidateWork {
+    fn try_charge(
+        &mut self,
+        limits: KaigiSignalCandidateWorkLimits,
+        carrier_bytes: u64,
+        projected_transactions: u64,
+        merge_work: u64,
+    ) -> bool {
+        let Some(next_carrier_bytes) = self.carrier_bytes.checked_add(carrier_bytes) else {
+            return false;
+        };
+        let Some(next_projected_transactions) = self
+            .projected_transactions
+            .checked_add(projected_transactions)
+        else {
+            return false;
+        };
+        let Some(next_merge_work) = self.merge_work.checked_add(merge_work) else {
+            return false;
+        };
+        if next_carrier_bytes > limits.max_carrier_bytes
+            || next_projected_transactions > limits.max_projected_transactions
+            || next_merge_work > limits.max_merge_work
+        {
+            return false;
+        }
+        self.carrier_bytes = next_carrier_bytes;
+        self.projected_transactions = next_projected_transactions;
+        self.merge_work = next_merge_work;
+        true
+    }
+}
+
+impl IndexedKaigiSignalCandidatePage {
+    /// Return the immutable canonical prefix shared by every continuation.
+    #[must_use]
+    pub const fn anchor(&self) -> KaigiSignalHistoryAnchor {
+        self.anchor
+    }
+
+    /// Borrow the revalidated candidates in chronological structural order.
+    #[must_use]
+    pub fn candidates(&self) -> &[IndexedKaigiSignalCandidate] {
+        &self.candidates
+    }
+
+    /// Consume the page and return its revalidated candidates.
+    #[must_use]
+    pub fn into_candidates(self) -> Vec<IndexedKaigiSignalCandidate> {
+        self.candidates
+    }
+
+    /// Return whether another anchored raw candidate follows this page.
+    #[must_use]
+    pub const fn has_more(&self) -> bool {
+        self.has_more
+    }
+}
+
+fn kaigi_signal_index_error(error: KaigiSignalCandidateIndexError) -> QueryExecutionFail {
+    match error {
+        KaigiSignalCandidateIndexError::Unavailable => QueryExecutionFail::Conversion(
+            "Kaigi signal history index is unavailable or incomplete".to_owned(),
+        ),
+        KaigiSignalCandidateIndexError::CursorMismatch => QueryExecutionFail::CursorMismatch,
+    }
+}
+
+fn ordinary_committed_transaction_at(
+    block: &SignedBlock,
+    transaction_index: usize,
+) -> Result<CommittedTransaction, QueryExecutionFail> {
+    let proof_index =
+        u32::try_from(transaction_index).map_err(|_| QueryExecutionFail::CursorMismatch)?;
+    let entrypoint = block
+        .entrypoint_cloned_at(transaction_index)
+        .ok_or(QueryExecutionFail::CursorMismatch)?;
+    let result = block
+        .results()
+        .nth(transaction_index)
+        .cloned()
+        .ok_or(QueryExecutionFail::CursorMismatch)?;
+    let entrypoint_proof = block
+        .entrypoint_proof(proof_index)
+        .ok_or(QueryExecutionFail::CursorMismatch)?;
+    let result_proof = block
+        .result_proof(proof_index)
+        .ok_or(QueryExecutionFail::CursorMismatch)?;
+    Ok(CommittedTransaction {
+        block_hash: block.hash(),
+        entrypoint_hash: entrypoint.hash(),
+        entrypoint_proof,
+        entrypoint,
+        result_hash: result.hash(),
+        result_proof,
+        result,
+        merge_inclusion: None,
+    })
+}
+
+struct CertifiedMergeProjectionContext {
+    carrier_hash: HashOf<BlockHeader>,
+    entry: MergeLedgerEntry,
+    entrypoint_hashes: Vec<HashOf<TransactionEntrypoint>>,
+    result_hashes: Vec<HashOf<TransactionResult>>,
+    entrypoint_tree: MerkleTree<TransactionEntrypoint>,
+    result_tree: MerkleTree<TransactionResult>,
+    inclusion: CertifiedMergeTransactionInclusion,
+}
+
+impl CertifiedMergeProjectionContext {
+    fn transaction_at(
+        &self,
+        transaction_index: usize,
+    ) -> Result<CommittedTransaction, QueryExecutionFail> {
+        if transaction_index >= self.entrypoint_hashes.len() {
+            return Err(QueryExecutionFail::CursorMismatch);
+        }
+        let mut remaining = transaction_index;
+        let mut target = None;
+        for execution in self
+            .entry
+            .execution_batch
+            .as_ref()
+            .expect("validated merge context has an execution batch")
+            .lanes
+            .iter()
+        {
+            if remaining < execution.entrypoints.len() {
+                target = Some((
+                    execution.entrypoints[remaining].clone(),
+                    execution.results[remaining].clone(),
+                ));
+                break;
+            }
+            remaining = remaining.saturating_sub(execution.entrypoints.len());
+        }
+        let (entrypoint, result) = target.ok_or(QueryExecutionFail::CursorMismatch)?;
+        let proof_index = u32::try_from(transaction_index)
+            .map_err(|_| merge_query_corruption("Merkle proof index exceeds u32"))?;
+        let entrypoint_proof = self.entrypoint_tree.get_proof(proof_index).ok_or_else(|| {
+            merge_query_corruption("entrypoint Merkle tree did not yield a required proof")
+        })?;
+        let result_proof = self.result_tree.get_proof(proof_index).ok_or_else(|| {
+            merge_query_corruption("result Merkle tree did not yield a required proof")
+        })?;
+        Ok(CommittedTransaction {
+            block_hash: self.carrier_hash,
+            entrypoint_hash: self.entrypoint_hashes[transaction_index],
+            entrypoint_proof,
+            entrypoint,
+            result_hash: self.result_hashes[transaction_index],
+            result_proof,
+            result,
+            merge_inclusion: Some(self.inclusion.clone()),
+        })
+    }
+}
+
+fn certified_merge_projection_context(
+    carrier_hash: HashOf<BlockHeader>,
+    reference: CertifiedMergeLedgerReference,
+    entry: MergeLedgerEntry,
+) -> Result<CertifiedMergeProjectionContext, QueryExecutionFail> {
+    if !reference.matches_entry(&entry) {
+        return Err(merge_query_corruption(
+            "carrier compact reference does not identify its full sidecar",
+        ));
+    }
+    let batch = entry.execution_batch.as_ref().ok_or_else(|| {
+        merge_query_corruption("execution carrier references an entry without an execution batch")
+    })?;
+    if batch.version != 1 || !crate::merge::merge_execution_batch_commitments_match(batch) {
+        return Err(merge_query_corruption(
+            "merge execution batch commitments are not canonical",
+        ));
+    }
+    let entrypoint_count = usize::try_from(batch.entrypoint_count)
+        .map_err(|_| merge_query_corruption("entrypoint count does not fit this platform"))?;
+    if entrypoint_count == 0 || u32::try_from(entrypoint_count).is_err() {
+        return Err(merge_query_corruption(
+            "entrypoint count is outside the supported Merkle proof range",
+        ));
+    }
+
+    let mut observed_count = 0_usize;
+    let mut entrypoint_hashes = Vec::with_capacity(entrypoint_count);
+    let mut result_hashes = Vec::with_capacity(entrypoint_count);
+    for execution in &batch.lanes {
+        let lane_len = execution.entrypoints.len();
+        if lane_len == 0
+            || execution.entrypoint_hashes.len() != lane_len
+            || execution.results.len() != lane_len
+            || execution.result_hashes.len() != lane_len
+        {
+            return Err(merge_query_corruption(
+                "lane transcript arrays are empty or not aligned",
+            ));
+        }
+        for (entrypoint, (expected_entrypoint_hash, (result, expected_result_hash))) in
+            execution.entrypoints.iter().zip(
+                execution
+                    .entrypoint_hashes
+                    .iter()
+                    .zip(execution.results.iter().zip(&execution.result_hashes)),
+            )
+        {
+            let entrypoint_hash = entrypoint.hash();
+            let result_hash = result.hash();
+            if Hash::from(entrypoint_hash) != *expected_entrypoint_hash
+                || Hash::from(result_hash) != *expected_result_hash
+            {
+                return Err(merge_query_corruption(
+                    "lane transcript content differs from its authenticated hashes",
+                ));
+            }
+            entrypoint_hashes.push(entrypoint_hash);
+            result_hashes.push(result_hash);
+            observed_count = observed_count.saturating_add(1);
+        }
+    }
+    if observed_count != entrypoint_count {
+        return Err(merge_query_corruption(
+            "flattened lane transcript differs from the certified entrypoint count",
+        ));
+    }
+    let entrypoint_tree = entrypoint_hashes
+        .iter()
+        .copied()
+        .collect::<MerkleTree<TransactionEntrypoint>>();
+    let result_tree = result_hashes
+        .iter()
+        .copied()
+        .collect::<MerkleTree<TransactionResult>>();
+    if entrypoint_tree.root() != Some(batch.entrypoint_merkle_root)
+        || result_tree.root() != Some(batch.result_merkle_root)
+    {
+        return Err(merge_query_corruption(
+            "reconstructed transaction proof roots differ from the certified batch",
+        ));
+    }
+    let inclusion = CertifiedMergeTransactionInclusion {
+        version: 1,
+        merge_entry_hash: entry.canonical_hash(),
+        merge_epoch_id: entry.epoch_id,
+        execution_batch_hash: batch.batch_hash,
+        entrypoint_count: batch.entrypoint_count,
+        entrypoint_merkle_root: batch.entrypoint_merkle_root,
+        result_merkle_root: batch.result_merkle_root,
+    };
+    Ok(CertifiedMergeProjectionContext {
+        carrier_hash,
+        entry,
+        entrypoint_hashes,
+        result_hashes,
+        entrypoint_tree,
+        result_tree,
+        inclusion,
+    })
+}
+
+#[cfg(test)]
+fn certified_merge_committed_transaction_at(
+    carrier_hash: HashOf<BlockHeader>,
+    reference: &CertifiedMergeLedgerReference,
+    entry: &MergeLedgerEntry,
+    transaction_index: usize,
+) -> Result<CommittedTransaction, QueryExecutionFail> {
+    certified_merge_projection_context(carrier_hash, reference.clone(), entry.clone())?
+        .transaction_at(transaction_index)
+}
+
+/// Read a bounded, anchored page of exact-schema Kaigi signal candidates.
+///
+/// This path never falls back to a full transaction-history walk. Every
+/// locator is rehydrated from the immutable canonical snapshot and checked
+/// against its block hash, entrypoint hash, successful result, call id, and
+/// transaction authority before it is returned.
+///
+/// # Errors
+///
+/// Returns `Expired` when the anchored canonical prefix changed,
+/// `CursorMismatch` when the exclusive position is not an exact candidate for
+/// this call, or a fail-closed conversion/history error when the index or
+/// authenticated carrier evidence is unavailable.
+pub fn indexed_kaigi_signal_candidates_page(
+    state_ro: &impl StateReadOnly,
+    call_id: &KaigiId,
+    anchor: Option<KaigiSignalHistoryAnchor>,
+    after: Option<KaigiSignalCandidatePosition>,
+    limits: KaigiSignalCandidateWorkLimits,
+) -> Result<IndexedKaigiSignalCandidatePage, QueryExecutionFail> {
+    if limits.max_candidates == 0
+        || limits.max_candidates > iroha_data_model::query::parameters::MAX_FETCH_SIZE.get()
+        || limits.max_carrier_bytes == 0
+        || limits.max_projected_transactions == 0
+        || limits.max_merge_work == 0
+    {
+        return Err(QueryExecutionFail::FetchSizeTooBig);
+    }
+    if anchor.is_none() && after.is_some() {
+        return Err(QueryExecutionFail::CursorMismatch);
+    }
+    let anchor = match anchor {
+        Some(anchor) => {
+            anchor.validate(state_ro)?;
+            anchor
+        }
+        None => KaigiSignalHistoryAnchor::capture(state_ro)?,
+    };
+    let anchor_height = usize::try_from(anchor.height).map_err(|_| QueryExecutionFail::Expired)?;
+    let limit = usize::try_from(limits.max_candidates)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .ok_or(QueryExecutionFail::FetchSizeTooBig)?;
+    let locator_page = state_ro
+        .kura()
+        .get_kaigi_signal_candidate_locators(call_id, anchor_height, after, limit)
+        .map_err(kaigi_signal_index_error)?;
+    let mut candidates = Vec::new();
+    candidates
+        .try_reserve(locator_page.candidates.len())
+        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+    let locator_has_more = locator_page.has_more;
+    let locator_count = locator_page.candidates.len();
+    let mut processed_locators = 0_usize;
+    let mut work = KaigiSignalCandidateWork::default();
+    let mut cached_carrier: Option<(
+        u64,
+        u64,
+        std::sync::Arc<SignedBlock>,
+        Option<CertifiedMergeProjectionContext>,
+    )> = None;
+    for locator in locator_page.candidates {
+        let position = locator.position;
+        if cached_carrier.as_ref().map(|cached| cached.0) != Some(position.block_height()) {
+            let height = usize::try_from(position.block_height())
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .ok_or(QueryExecutionFail::CursorMismatch)?;
+            let (_, block_wire_bytes) = state_ro
+                .kura()
+                .durable_block_payload_len_by_hash(position.block_hash())
+                .ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "indexed Kaigi signal carrier has no exact durable byte bound".to_owned(),
+                    )
+                })?;
+            let block = state_ro
+                .canonical_block_by_height(height)
+                .map_err(QueryExecutionFail::CanonicalHistory)?;
+            if block.hash() != position.block_hash() {
+                return Err(QueryExecutionFail::Expired);
+            }
+            let carrier_timestamp_ms = u64::try_from(block.header().creation_time().as_millis())
+                .map_err(|_| {
+                    QueryExecutionFail::Conversion(
+                        "Kaigi signal carrier timestamp exceeds u64 milliseconds".to_owned(),
+                    )
+                })?;
+            let ordinary_count = u64::try_from(block.entrypoint_hashes().len())
+                .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+            let merge_reference = block
+                .execution_context()
+                .and_then(|context| context.merge_entry.as_ref())
+                .cloned();
+            let declared_merge_work = merge_reference
+                .as_ref()
+                .and_then(|reference| reference.entrypoint_count)
+                .unwrap_or(0);
+            let merge_sidecar_bytes = merge_reference
+                .as_ref()
+                .map_or(0, |reference| reference.encoded_len);
+            let declared_carrier_bytes = block_wire_bytes
+                .checked_add(merge_sidecar_bytes)
+                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            let declared_projected_transactions = ordinary_count
+                .checked_add(declared_merge_work)
+                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            let mut declared_charge = work;
+            if !declared_charge.try_charge(
+                limits,
+                declared_carrier_bytes,
+                declared_projected_transactions,
+                declared_merge_work,
+            ) {
+                if candidates.is_empty() {
+                    return Err(QueryExecutionFail::GasBudgetExceeded);
+                }
+                break;
+            }
+            let merge = match merge_reference {
+                None => None,
+                Some(reference) => {
+                    let entry = state_ro
+                        .kura()
+                        .merge_entry_for_carrier(position.block_height(), block.hash())
+                        .map_err(merge_query_corruption)?
+                        .ok_or_else(|| {
+                            merge_query_corruption(format!(
+                                "indexed carrier block {} has no matching durable merge entry",
+                                position.block_height()
+                            ))
+                        })?;
+                    let actual_merge_work = u64::try_from(certified_merge_projection_work(&entry))
+                        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+                    let actual_projected_transactions = ordinary_count
+                        .checked_add(actual_merge_work)
+                        .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                    let mut actual_charge = work;
+                    if !actual_charge.try_charge(
+                        limits,
+                        declared_carrier_bytes,
+                        actual_projected_transactions,
+                        actual_merge_work,
+                    ) {
+                        if candidates.is_empty() {
+                            return Err(QueryExecutionFail::GasBudgetExceeded);
+                        }
+                        break;
+                    }
+                    work = actual_charge;
+                    Some(certified_merge_projection_context(
+                        block.hash(),
+                        reference,
+                        entry,
+                    )?)
+                }
+            };
+            if merge.is_none() {
+                work = declared_charge;
+            }
+            cached_carrier = Some((position.block_height(), carrier_timestamp_ms, block, merge));
+        }
+        let (_, carrier_timestamp_ms, block, merge) = cached_carrier
+            .as_ref()
+            .expect("Kaigi signal carrier was populated above");
+        let transaction_index = usize::try_from(position.transaction_index())
+            .map_err(|_| QueryExecutionFail::CursorMismatch)?;
+        let transaction = match position.execution_phase() {
+            0 => merge
+                .as_ref()
+                .ok_or(QueryExecutionFail::CursorMismatch)?
+                .transaction_at(transaction_index)?,
+            1 => ordinary_committed_transaction_at(block, transaction_index)?,
+            _ => return Err(QueryExecutionFail::CursorMismatch),
+        };
+        if transaction.block_hash() != &position.block_hash()
+            || transaction.entrypoint_hash() != &position.entrypoint_hash()
+            || crate::kura::Kura::kaigi_signal_candidate_identity(
+                transaction.entrypoint(),
+                transaction.result(),
+            ) != Some((call_id.clone(), locator.authority.clone()))
+        {
+            return Err(QueryExecutionFail::Conversion(
+                "Kaigi signal index locator does not match canonical transaction evidence"
+                    .to_owned(),
+            ));
+        }
+        candidates.push(IndexedKaigiSignalCandidate {
+            position,
+            authority: locator.authority,
+            carrier_timestamp_ms: *carrier_timestamp_ms,
+            transaction,
+        });
+        processed_locators = processed_locators.saturating_add(1);
+    }
+    anchor.validate(state_ro)?;
+    Ok(IndexedKaigiSignalCandidatePage {
+        anchor,
+        candidates,
+        has_more: locator_has_more || processed_locators < locator_count,
+    })
+}
 /// Immutable upper bound for a replayed transaction-history scan.
 ///
 /// Exact stored queries retain this compact chain anchor instead of retaining
@@ -992,6 +1622,53 @@ pub fn visit_committed_transactions_bounded(
         |transaction, matches, _| visitor(transaction, matches),
     )
 }
+/// Visit committed transactions with both per-carrier and cumulative physical-work bounds.
+///
+/// Every touched carrier consumes at least one unit even when it contains no
+/// transactions. Declared and reconciled merge work consumes its actual unit
+/// count. This variant is intended for endpoints whose predicate cannot use a
+/// positive Kura index and whose visitor must otherwise inspect the complete
+/// selected history.
+///
+/// # Errors
+///
+/// Returns [`QueryExecutionFail::GasBudgetExceeded`] before resolving a carrier
+/// that exceeds either work bound, [`QueryExecutionFail::FetchSizeTooBig`] for
+/// zero or non-canonical limits, or propagates durable history failures.
+pub fn visit_committed_transactions_with_work_budget(
+    state_ro: &impl StateReadOnly,
+    filter: CompoundPredicate<CommittedTransaction>,
+    max_carrier_projection_work: u64,
+    max_total_projection_work: u64,
+    mut visitor: impl FnMut(CommittedTransaction, bool) -> Result<ControlFlow<()>, QueryExecutionFail>,
+) -> Result<bool, QueryExecutionFail> {
+    let canonical_max = iroha_data_model::query::parameters::MAX_FETCH_SIZE.get();
+    if max_carrier_projection_work == 0
+        || max_carrier_projection_work > canonical_max
+        || max_total_projection_work == 0
+        || max_total_projection_work > canonical_max
+    {
+        return Err(QueryExecutionFail::FetchSizeTooBig);
+    }
+    let mut total_projection_work = 0_u64;
+    visit_committed_transactions(
+        state_ro,
+        &filter,
+        TransactionHistoryAnchor::capture(state_ro),
+        None,
+        |work| {
+            if work > max_carrier_projection_work {
+                return Err(QueryExecutionFail::GasBudgetExceeded);
+            }
+            total_projection_work = total_projection_work
+                .checked_add(work.max(1))
+                .filter(|total| *total <= max_total_projection_work)
+                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            Ok(())
+        },
+        |transaction, matches, _| visitor(transaction, matches),
+    )
+}
 /// Collect a small committed-transaction snapshot within explicit retention bounds.
 ///
 /// Carrier work is bounded independently before sidecar resolution. Transactions are visited
@@ -1173,6 +1850,55 @@ pub(crate) mod tests {
         },
         transaction::error::TransactionRejectionReason,
     };
+    use iroha_primitives::json::Json;
+
+    #[test]
+    fn kaigi_signal_history_anchor_constructor_rejects_inconsistent_empty_prefixes() {
+        let tip =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x71; Hash::LENGTH]));
+        assert!(KaigiSignalHistoryAnchor::new(0, None).is_some());
+        assert!(KaigiSignalHistoryAnchor::new(1, Some(tip)).is_some());
+        assert!(KaigiSignalHistoryAnchor::new(0, Some(tip)).is_none());
+        assert!(KaigiSignalHistoryAnchor::new(1, None).is_none());
+    }
+
+    #[test]
+    fn kaigi_signal_candidate_identity_requires_exact_call_and_success() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"kaigi-index-test")),
+        );
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            "kaigi_signal".parse().expect("metadata key"),
+            Json::new(norito::json!({
+                "schema": "iroha-demo-kaigi-chain-signal/v1",
+                "callId": "kaigi.universal:indexed",
+                "call_id": "kaigi.universal:indexed",
+            })),
+        );
+        let entrypoint = TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                network_id,
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_metadata(metadata)
+            .with_instructions::<InstructionBox>([])
+            .sign(key_pair.private_key()),
+        );
+        let success = TransactionResult::from(Ok(DataTriggerSequence::default()));
+        let (call_id, indexed_authority) =
+            crate::kura::Kura::kaigi_signal_candidate_identity(&entrypoint, &success)
+                .expect("exact successful signal");
+        assert_eq!(call_id.to_string(), "kaigi.universal:indexed");
+        assert_eq!(indexed_authority, authority);
+        let failed = TransactionResult::from(Err(TransactionRejectionReason::Validation(
+            ValidationFail::InternalError("rejected".to_owned()),
+        )));
+        assert!(crate::kura::Kura::kaigi_signal_candidate_identity(&entrypoint, &failed).is_none());
+    }
     use std::{
         collections::BTreeMap,
         num::{NonZeroU64, NonZeroUsize},
@@ -1653,6 +2379,37 @@ pub(crate) mod tests {
                 .is_err()
         );
     }
+    #[test]
+    fn certified_merge_exact_projection_returns_only_requested_canonical_entry() {
+        let entry = sample_certified_merge_execution_entry(2, true);
+        let reference = CertifiedMergeLedgerReference::new(&entry);
+        let carrier_hash = HashOf::from_untyped_unchecked(Hash::new(b"exact-merge-carrier"));
+        let full = certified_merge_committed_transactions(carrier_hash, &reference, &entry)
+            .expect("full canonical merge projection");
+        let exact = certified_merge_committed_transaction_at(carrier_hash, &reference, &entry, 0)
+            .expect("exact canonical merge projection");
+        assert_eq!(exact, full[1]);
+        assert_eq!(exact.entrypoint_proof.leaf_index(), 0);
+        assert!(exact.verify_certified_merge_inclusion(&reference));
+        assert!(matches!(
+            certified_merge_committed_transaction_at(carrier_hash, &reference, &entry, 2),
+            Err(QueryExecutionFail::CursorMismatch)
+        ));
+    }
+
+    #[test]
+    fn kaigi_signal_candidate_work_charges_all_dimensions_cumulatively() {
+        let limits = KaigiSignalCandidateWorkLimits::new_for_test(4, 100, 6, 3);
+        let mut work = KaigiSignalCandidateWork::default();
+        assert!(work.try_charge(limits, 40, 2, 1));
+        assert!(work.try_charge(limits, 60, 4, 2));
+        assert!(!work.try_charge(limits, 1, 0, 0));
+        assert!(!work.try_charge(limits, 0, 1, 0));
+        assert!(!work.try_charge(limits, 0, 0, 1));
+        assert_eq!(work.carrier_bytes, 100);
+        assert_eq!(work.projected_transactions, 6);
+        assert_eq!(work.merge_work, 3);
+    }
     /// Build an empty canonical block for transaction-query fixtures.
     pub(crate) fn empty_query_block(previous: Option<&SignedBlock>) -> SignedBlock {
         let mut block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
@@ -2096,6 +2853,67 @@ pub(crate) mod tests {
             .expect("each carrier fits independently within the projection bound");
         assert!(exhausted);
         assert!(visited > 2, "the scan crossed multiple bounded carriers");
+    }
+    #[test]
+    fn cumulative_transaction_visitor_bounds_chain_age_and_projection_work() {
+        let fixture = merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        state_view.kura().reset_merge_query_read_counters_for_test();
+        let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
+            prototype.equals("field_that_does_not_exist", true)
+        });
+        let mut visited = 0_usize;
+        let error = visit_committed_transactions_with_work_budget(
+            &state_view,
+            false_filter,
+            2,
+            3,
+            |_, matches| {
+                assert!(!matches);
+                visited = visited.saturating_add(1);
+                Ok(ControlFlow::Continue(()))
+            },
+        )
+        .expect_err("a second two-entry carrier must exceed cumulative work three");
+        assert_eq!(error, QueryExecutionFail::GasBudgetExceeded);
+        assert_eq!(visited, 2, "only the first carrier may be projected");
+        assert_eq!(
+            state_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 1),
+            "the over-budget carrier must be rejected before sidecar resolution",
+        );
+    }
+    #[test]
+    fn cumulative_transaction_visitor_charges_empty_carriers() {
+        let mut sandbox = Sandbox::default();
+        let genesis = Arc::new(empty_query_block(None));
+        sandbox
+            .state
+            .kura()
+            .store_block(Arc::clone(&genesis))
+            .expect("store empty query genesis");
+        sandbox.state.push_block_hash_for_testing(genesis.hash());
+        let mut previous = genesis;
+        for _ in 0..3 {
+            let carrier = Arc::new(empty_query_block(Some(previous.as_ref())));
+            sandbox
+                .state
+                .kura()
+                .store_block(Arc::clone(&carrier))
+                .expect("store empty query carrier");
+            sandbox.state.push_block_hash_for_testing(carrier.hash());
+            previous = carrier;
+        }
+        let state_view = sandbox.state.view();
+        let error = visit_committed_transactions_with_work_budget(
+            &state_view,
+            CompoundPredicate::PASS,
+            1,
+            2,
+            |_, _| panic!("empty carriers must not project transactions"),
+        )
+        .expect_err("three empty carriers must exceed cumulative work two");
+        assert_eq!(error, QueryExecutionFail::GasBudgetExceeded);
     }
     #[test]
     fn transaction_budget_rejects_large_sidecar_before_resolve_or_decode() {

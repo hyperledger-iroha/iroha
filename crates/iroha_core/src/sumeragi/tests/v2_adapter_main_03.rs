@@ -1486,6 +1486,7 @@ fn recovered_wal_test_fixture_publishes_status_last_and_owner_factory_stays_clos
         !owner_factory.contains("restart-closed Decision Apply publication is not implemented")
     );
     assert!(!owner_factory.contains("V2BodyStore::open_with_policy("));
+    assert!(!owner_factory.contains("V2BodyStore::open_with_policy_and_capacity("));
     assert!(!owner_factory.contains("body_root:"));
     let quarantine = body_store_source
         .split_once("impl QuarantinedV2BodyStore {")

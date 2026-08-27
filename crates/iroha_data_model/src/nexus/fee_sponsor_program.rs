@@ -87,7 +87,12 @@ impl FeeSponsorProgramRevisionKey {
 /// Consensus-visible lifecycle of a fee sponsor program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "state", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "state",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum FeeSponsorProgramLifecycle {
     /// Program is being provisioned and has never sponsored transactions.
     Staged,
@@ -911,6 +916,25 @@ mod tests {
         assert!(
             norito::json::from_value::<FeeSponsorProgram>(value).is_err(),
             "the first-release program wire must not default an omitted payout account"
+        );
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn program_json_rejects_unknown_lifecycle_fields() {
+        let id = program_id();
+        let program = FeeSponsorProgram::new(id.clone(), id.sponsor);
+        let mut value = norito::json::to_value(&program).expect("serialize sponsor program");
+        value
+            .as_object_mut()
+            .expect("sponsor program object")
+            .get_mut("lifecycle")
+            .expect("lifecycle is encoded")
+            .as_object_mut()
+            .expect("lifecycle envelope")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<FeeSponsorProgram>(value).is_err(),
+            "unknown lifecycle-envelope fields must fail closed"
         );
     }
     #[test]

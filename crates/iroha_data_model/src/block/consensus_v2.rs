@@ -2215,8 +2215,12 @@ pub struct CertifiedBodyResponse {
     pub manifest: PayloadManifest,
     /// Canonical full payload bytes.
     pub body: Vec<u8>,
-    /// Responder index in the height context roster.
-    pub responder: ValidatorIndex,
+    /// Current authenticated network identity of the archive responder.
+    ///
+    /// This identity is deliberately not an index into the historical height
+    /// context. Validators may rotate their network keys after the certified
+    /// height while retaining the exact historical block in durable storage.
+    pub responder: PeerId,
     /// Responder signature over the request hash, manifest, and body hash.
     pub signature: Vec<u8>,
 }
@@ -2232,7 +2236,7 @@ impl CertifiedBodyResponse {
             request_hash: self.request_hash,
             manifest: self.manifest.clone(),
             body_hash: Hash::new(&self.body),
-            responder: self.responder,
+            responder: self.responder.clone(),
         };
         signature_preimage(
             b"iroha:sumeragi:v2:certified-body-response",
@@ -2247,8 +2251,7 @@ impl CertifiedBodyResponse {
     ///
     /// Returns a structural validation error when the manifest is invalid,
     /// the body hash or length differs from the manifest, the responder is
-    /// outside the frozen roster, or the response signature is missing or
-    /// oversized.
+    /// malformed, or the response signature is missing or oversized.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         self.manifest.validate(context)?;
         if Hash::new(&self.body) != self.manifest.subject.payload_hash {
@@ -2257,7 +2260,6 @@ impl CertifiedBodyResponse {
         if u64::try_from(self.body.len()).ok() != Some(self.manifest.payload_size_bytes) {
             return Err(ValidationError::PayloadSizeMismatch);
         }
-        validate_validator_index(self.responder, context)?;
         require_signature(&self.signature)
     }
     /// Validate this response against the exact outstanding request and the
@@ -2266,14 +2268,14 @@ impl CertifiedBodyResponse {
     /// # Errors
     ///
     /// Returns an error when the response is replayed across requests, changes
-    /// round/subject, or the claimed frozen-roster responder differs from the
+    /// round/subject, or the claimed current responder differs from the
     /// authenticated transport sender.
     ///
     /// The responder need not be one of the request QC signers. Historical
     /// archive service is safe because the exact request carries the verified
     /// QC while the response body and manifest are hash-bound to that QC's
-    /// subject. The serving path additionally proves that the frozen-roster
-    /// peer has the canonical applied block in durable storage.
+    /// subject. The serving path additionally proves that the responder has
+    /// the canonical applied block in durable storage.
     pub fn validate_against(
         &self,
         context: &HeightContext,
@@ -2288,11 +2290,7 @@ impl CertifiedBodyResponse {
         {
             return Err(ValidationError::CertifiedBodyRequestMismatch);
         }
-        let responder = context
-            .roster
-            .get(usize::try_from(self.responder).map_err(|_| ValidationError::SignerOutOfRange)?)
-            .ok_or(ValidationError::SignerOutOfRange)?;
-        if &responder.validator != authenticated_sender {
+        if &self.responder != authenticated_sender {
             return Err(ValidationError::ResponderIdentityMismatch);
         }
         Ok(())
@@ -2311,8 +2309,8 @@ pub struct CertifiedBodyResponseSignaturePayload {
     pub manifest: PayloadManifest,
     /// Hash of the returned canonical body bytes.
     pub body_hash: Hash,
-    /// Responder index in the frozen roster.
-    pub responder: ValidatorIndex,
+    /// Current authenticated network identity of the responder.
+    pub responder: PeerId,
 }
 /// Authenticated request for the durable `CommitQC` of one exact height context.
 ///

@@ -4,6 +4,7 @@ import json
 from typing import Any, Mapping
 
 import pytest
+import requests
 
 from iroha_python import GovernanceLockCustody
 from iroha_python.address import AccountAddress
@@ -199,6 +200,50 @@ def test_proposal_backed_legacy_governance_surfaces_are_absent() -> None:
         "governance_enact_proposal",
     ):
         assert not hasattr(ToriiClient, method)
+
+
+def test_high_level_parliament_request_preserves_credential_free_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        requests.sessions,
+        "get_netrc_auth",
+        lambda _url: ("ambient-user", "ambient-password"),
+    )
+    session = RecordingSession(StubResponse(payload={}))
+    client = _governance_client(session)
+
+    with pytest.raises(TypeError, match="governance capabilities response"):
+        client.get_governance_capabilities_v1(canonical_auth=GOVERNANCE_AUTH)
+
+    assert len(session.calls) == 1
+    assert "Authorization" not in session.calls[0]["headers"]
+
+
+@pytest.mark.parametrize(
+    "credential_kind",
+    ["auth_token", "api_token", "session_auth", "session_cookie", "proxy_auth"],
+)
+def test_high_level_parliament_request_rejects_ambient_credentials(
+    credential_kind: str,
+) -> None:
+    session = RecordingSession(StubResponse(payload={}))
+    client = _governance_client(session)
+    if credential_kind == "auth_token":
+        client.set_auth_token("ambient-bearer")
+    elif credential_kind == "api_token":
+        client.set_api_token("ambient-api-token")
+    elif credential_kind == "session_auth":
+        session.auth = ("ambient-user", "ambient-password")
+    elif credential_kind == "session_cookie":
+        session.cookies.set("session", "ambient-cookie")
+    else:
+        session.proxies["http"] = "http://ambient-user:ambient-password@proxy.test:8080"
+
+    with pytest.raises(ValueError, match=r"(?:credential|ambient|proxy)"):
+        client.get_governance_capabilities_v1(canonical_auth=GOVERNANCE_AUTH)
+
+    assert session.calls == []
 
 
 def test_governance_ballot_rejects_foreign_network_and_retired_identity_before_dispatch() -> None:

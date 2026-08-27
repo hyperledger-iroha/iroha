@@ -375,8 +375,8 @@ THEOREM ResponseLineageBindsExactRestartIdentities ==
          /\ item.envelope.requestHash =
               AsyncCertifiedRequestHashOf(node, qc, 0)
          /\ item.envelope.signatureOwner =
-              item.envelope.archiveServer
-         /\ item.envelope.citedResponder \in qc.signers
+              item.envelope.responder
+         /\ item.envelope.responder \in AsyncArchiveServerIds
          /\ CertifiedResponseAuthenticatedOccurrence(item)
          /\ CertifiedResponseCapabilityAuthorized(item)
 BY HistoricalCertifiedResponseRecoveryEvidenceBindsExactIdentities, Isa

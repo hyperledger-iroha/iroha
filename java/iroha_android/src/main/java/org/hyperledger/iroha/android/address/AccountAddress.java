@@ -10,6 +10,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
 
 public final class AccountAddress {
   public static final int DEFAULT_I105_DISCRIMINANT = 753;
@@ -17,6 +18,9 @@ public final class AccountAddress {
   private static final int I105_DISCRIMINANT_MAX = 0xFFFF;
   private static final int I105_CHECKSUM_LEN = 6;
   private static final int BECH32M_CONST = 0x2bc830a3;
+  private static final int CONTROLLER_SINGLE_KEY_TAG = 0x00;
+  private static final int CONTROLLER_MULTISIG_TAG = 0x01;
+  private static final int CONTROLLER_SINGLE_KEY_EXTENDED_TAG = 0x02;
   private static final String I105_SENTINEL_SORA = "sora";
   private static final String I105_SENTINEL_TEST = "test";
   private static final String I105_SENTINEL_DEV = "dev";
@@ -138,7 +142,9 @@ public final class AccountAddress {
   public static AccountAddress fromAccount(
       final byte[] publicKey,
       final String algorithm) throws AccountAddressException {
-    if (publicKey.length > 0xFF) {
+    final int curveId = curveIdForAlgorithm(algorithm) & 0xFF;
+    validateControllerPublicKey(curveId, publicKey);
+    if (publicKey.length > 0xFFFF) {
       throw new AccountAddressException(
           AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG, "key payload too long: " + publicKey.length);
     }
@@ -146,10 +152,16 @@ public final class AccountAddress {
 
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(header);
-
-    out.write(0x00);
-    out.write(curveIdForAlgorithm(algorithm));
-    out.write(publicKey.length);
+    if (publicKey.length <= 0xFF) {
+      out.write(CONTROLLER_SINGLE_KEY_TAG);
+      out.write(curveId);
+      out.write(publicKey.length);
+    } else {
+      out.write(CONTROLLER_SINGLE_KEY_EXTENDED_TAG);
+      out.write(curveId);
+      out.write((publicKey.length >>> 8) & 0xFF);
+      out.write(publicKey.length & 0xFF);
+    }
     out.write(publicKey, 0, publicKey.length);
 
     return fromCanonicalBytes(out.toByteArray());
@@ -186,11 +198,13 @@ public final class AccountAddress {
             AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: weight too large");
       }
       ensureCurveEnabled(member.curveId(), "curve id " + member.curveId());
-      if (member.publicKey().length == 0) {
+      final byte[] memberPublicKey = member.publicKey();
+      validateControllerPublicKey(member.curveId(), memberPublicKey);
+      if (memberPublicKey.length == 0) {
         throw new AccountAddressException(
             AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: invalid key length");
       }
-      if (member.publicKey().length > 0xFFFF) {
+      if (memberPublicKey.length > 0xFFFF) {
         throw new AccountAddressException(
             AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: key too long");
       }
@@ -206,11 +220,11 @@ public final class AccountAddress {
           "InvalidMultisigPolicy: threshold exceeds total weight");
     }
 
-    final byte header = encodeHeader((byte) 0, (byte) 0, (byte) 1);
+    final byte header = encodeHeader((byte) 0, (byte) 1, (byte) 1);
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(header);
 
-    out.write(0x01); // multisig controller tag
+    out.write(CONTROLLER_MULTISIG_TAG);
     out.write(policy.version() & 0xFF);
     out.write((policy.threshold() >> 8) & 0xFF);
     out.write(policy.threshold() & 0xFF);
@@ -476,15 +490,23 @@ public final class AccountAddress {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
     }
     final byte header = canonical[0];
-    decodeHeader(header);
+    final int addressClass = decodeHeader(header);
     int cursor = 1;
 
     if (cursor >= canonical.length) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
     }
     final byte controllerTag = canonical[cursor++];
+    if (((controllerTag == CONTROLLER_SINGLE_KEY_TAG
+                || controllerTag == CONTROLLER_SINGLE_KEY_EXTENDED_TAG)
+            && addressClass != 0)
+        || (controllerTag == CONTROLLER_MULTISIG_TAG && addressClass != 1)) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          "address class does not match controller tag: " + controllerTag);
+    }
     switch (controllerTag) {
-      case 0x00: {
+      case CONTROLLER_SINGLE_KEY_TAG: {
         if (cursor + 2 > canonical.length) {
           throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
         }
@@ -504,7 +526,34 @@ public final class AccountAddress {
         }
         break;
       }
-      case 0x01: {
+      case CONTROLLER_SINGLE_KEY_EXTENDED_TAG: {
+        if (cursor + 3 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        final int curveId = canonical[cursor++] & 0xFF;
+        if (!ignoreCurveSupport) {
+          ensureCurveEnabled(curveId, "curve id " + curveId);
+        }
+        final int keyLen =
+            ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
+        cursor += 2;
+        if (keyLen <= 0xFF) {
+          throw new AccountAddressException(
+              AccountAddressErrorCode.INVALID_LENGTH,
+              "extended single-key length must exceed 255 bytes");
+        }
+        final int end = cursor + keyLen;
+        if (end > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        validateControllerPublicKey(curveId, Arrays.copyOfRange(canonical, cursor, end));
+        if (end != canonical.length) {
+          throw new AccountAddressException(
+              AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES, "unexpected trailing bytes in canonical payload");
+        }
+        break;
+      }
+      case CONTROLLER_MULTISIG_TAG: {
         if (cursor + 5 > canonical.length) {
           throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
         }
@@ -539,6 +588,7 @@ public final class AccountAddress {
               ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
           cursor += 2;
           if (keyLen <= 0) {
+            validateControllerPublicKey(curveId, new byte[0]);
             throw new AccountAddressException(
                 AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: invalid key length");
           }
@@ -580,6 +630,11 @@ public final class AccountAddress {
           AccountAddressErrorCode.INVALID_PUBLIC_KEY,
           "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup");
     }
+    if (curveId == 0x02 && !MlDsaPublicKeyAdmission.isValid(publicKey)) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+          "invalid ML-DSA-65 public key: expected 1952 bytes with nonzero material");
+    }
   }
 
   private static Optional<SingleKeyPayload> extractSingleKeyPayload(
@@ -595,17 +650,31 @@ public final class AccountAddress {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
     }
     final byte controllerTag = canonical[cursor++];
-    if (controllerTag != 0x00) {
+    if (controllerTag != CONTROLLER_SINGLE_KEY_TAG
+        && controllerTag != CONTROLLER_SINGLE_KEY_EXTENDED_TAG) {
       return Optional.empty();
     }
-    if (cursor + 2 > canonical.length) {
+    final int lengthBytes =
+        controllerTag == CONTROLLER_SINGLE_KEY_EXTENDED_TAG ? 2 : 1;
+    if (cursor + 1 + lengthBytes > canonical.length) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
     }
     final int curveId = canonical[cursor++] & 0xFF;
     if (!ignoreCurveSupport) {
       ensureCurveEnabled(curveId, "curve id " + curveId);
     }
-    final int keyLen = canonical[cursor++] & 0xFF;
+    final int keyLen;
+    if (controllerTag == CONTROLLER_SINGLE_KEY_EXTENDED_TAG) {
+      keyLen = ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
+      cursor += 2;
+      if (keyLen <= 0xFF) {
+        throw new AccountAddressException(
+            AccountAddressErrorCode.INVALID_LENGTH,
+            "extended single-key length must exceed 255 bytes");
+      }
+    } else {
+      keyLen = canonical[cursor++] & 0xFF;
+    }
     final int end = cursor + keyLen;
     if (end > canonical.length) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
@@ -673,6 +742,7 @@ public final class AccountAddress {
       }
       final byte[] key = Arrays.copyOfRange(canonical, cursor, cursor + keyLen);
       cursor += keyLen;
+      validateControllerPublicKey(curveId, key);
       members.add(new MultisigMemberPayload(curveId, weight, key));
     }
     if (cursor != canonical.length) {
@@ -698,7 +768,7 @@ public final class AccountAddress {
     return (byte) (((version & 0b111) << 5) | ((classId & 0b11) << 3) | ((normVersion & 0b11) << 1));
   }
 
-  private static void decodeHeader(final byte header) throws AccountAddressException {
+  private static int decodeHeader(final byte header) throws AccountAddressException {
     final int classBits = (header >> 3) & 0b11;
     final int extFlag = header & 0x01;
     if (extFlag != 0) {
@@ -709,6 +779,7 @@ public final class AccountAddress {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNKNOWN_ADDRESS_CLASS, "unknown address class: " + classBits);
     }
+    return classBits;
   }
 
   // -- Encoding helpers --
@@ -730,6 +801,10 @@ public final class AccountAddress {
       case "ml-dsa":
       case "mldsa":
       case "ml_dsa":
+      case "mldsa65":
+      case "ml-dsa-65":
+      case "ml_dsa_65":
+      case "ml_dsa-65":
         curveId = 0x02;
         break;
       case "bls_normal":

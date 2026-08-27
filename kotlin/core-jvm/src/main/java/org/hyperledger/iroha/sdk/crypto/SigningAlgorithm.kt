@@ -32,9 +32,7 @@ enum class SigningAlgorithm(
                     || normalized == "secp"
                     || normalized == "secpk1" -> SECP256K1
                 normalized == "mldsa"
-                    || normalized == "mldsa65"
-                    || normalized == "mldsa44"
-                    || normalized == "mldsa87" -> ML_DSA
+                    || normalized == "mldsa65" -> ML_DSA
                 normalized == "blsnormal"
                     || normalized == "bls12381g1" -> BLS_NORMAL
                 normalized == "blssmall"
@@ -60,18 +58,22 @@ enum class SigningAlgorithm(
                 ?: throw IllegalArgumentException("Unsupported signing algorithm code: $code")
 
         private fun normalize(name: String?): String {
-            if (name == null || name.trim().isEmpty()) {
+            if (name == null || name.isEmpty()) {
                 throw IllegalArgumentException("signing algorithm must be a non-empty string")
             }
-            require(name.trim() == name) {
-                "signing algorithm must not contain surrounding whitespace"
+            val hasValidCharacters = name.all { ch ->
+                ch in 'A'..'Z' ||
+                    ch in 'a'..'z' ||
+                    ch in '0'..'9' ||
+                    ch == '-' ||
+                    ch == '_'
+            }
+            if (!hasValidCharacters) {
+                throw IllegalArgumentException("Unsupported signing algorithm: $name")
             }
             return buildString(name.length) {
                 for (ch in name) {
-                    if (ch.code < 0x20 || ch.code == 0x7F || ch.code > 0x7F) {
-                        throw IllegalArgumentException("Unsupported signing algorithm: $name")
-                    }
-                    if (ch.isLetterOrDigit()) {
+                    if (ch != '-' && ch != '_') {
                         append(ch.lowercaseChar())
                     }
                 }

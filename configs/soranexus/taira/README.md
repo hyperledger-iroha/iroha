@@ -268,16 +268,6 @@ offline introspection surfaces: they never open or consume the inherited
 runtime-signer descriptor. Every node-starting invocation still requires the
 exact descriptor and compiled Taira profile.
 
-Use already-built binaries when iterating on orchestration:
-
-```bash
-python3 scripts/taira_devnet.py up \
-  --no-build \
-  --bin-dir "$PWD/target/local-release"
-```
-
-The directory needs the three default binaries above.
-
 The output directory is owner-only and contains private keys and runtime
 tokens. Never commit, print, upload, or archive it. On failure the command
 attempts bounded teardown, keeps the bounded peer logs in place, and exits
@@ -309,6 +299,14 @@ SHA-256 covered by the signed authorization binds this complete request before
 admission, so neither an operator nor a resumed controller can substitute the
 account, alias, or permissions during prepare. Preflight rejects a missing,
 noncanonical, mismatched, or permission-bearing request.
+
+The inventory must also contain `faucet_policy` with the exact canonical
+single-signatory faucet `authority`, resolved Base58 `asset_definition_id`, and
+positive fixed `amount` from the rendered Taira configuration. The signed
+authorization repeats and binds this policy. Prepared faucet envelopes are
+accepted only when their signer, transfer asset, amount, fee closure, and
+instruction bytes all match these independently admitted values; no value is
+learned from the envelope being authenticated.
 
 `iroha taira public-reset preflight` performs local fail-closed admission;
 `iroha taira public-reset apply` is the live mutating operation. Apply requires
@@ -364,11 +362,11 @@ preflight cannot become a lost update. Process, config, and secret generations
 use checked monotonic increments; an exhausted counter fails closed and never
 wraps or saturates into a replayable token.
 
-An upgrade cannot supersede an active rollout or change the service execution
-plane, container runtime, or route identity. The admitted candidate becomes the
-current revision while the required, distinct baseline remains active for the
-complement of the canary traffic split; promotion or rollback must finish that
-rollout before another upgrade begins.
+An Inrou upgrade is an atomic 100% revision replacement. It cannot supersede an
+active rollout or change the service execution plane, container runtime, or
+route identity. The admitted revision becomes the sole current revision; no
+baseline, split-traffic, rollback-serving, or other compatibility revision is
+kept active.
 
 After the explicit mutation, convergence requires the exact current/latest
 version, both staged manifest hashes, four placements, and a positive process
@@ -392,6 +390,9 @@ one child and one of `--prepare-envelope`, `--submit-prepared-envelope-fd`, or
 Applied predecessor envelope. Do not invoke it manually unless implementing or
 auditing that coordinator protocol. Keep the populated example client config
 and owner-only onboarding-token file in the admitted runtime workspace.
+The faucet child additionally requires `--faucet-authority`,
+`--faucet-asset-id`, and `--faucet-amount`; these must come from the signed
+inventory and never from a prepared response.
 
 Do not persist signing keys, onboarding tokens, bearer tokens, or forwarded
 authorization headers in this repository.

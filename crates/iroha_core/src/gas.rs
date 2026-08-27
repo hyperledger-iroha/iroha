@@ -50,6 +50,14 @@ const BASE_KAIGI_JOIN: u64 = 180;
 const BASE_KAIGI_LEAVE: u64 = 150;
 const BASE_KAIGI_END: u64 = 220;
 const BASE_KAIGI_USAGE: u64 = 240;
+const BASE_KAIGI_RELAY_MANIFEST: u64 = 220;
+/// Conservative per-row charge for bounded, fail-closed indexed registry validation.
+const PER_KAIGI_RELAY_REGISTRY_ENTRY_SCAN: u64 = 32;
+const BASE_KAIGI_RELAY_REGISTER: u64 = BASE_REGISTER
+    + (iroha_data_model::kaigi::KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 as u64)
+        * PER_KAIGI_RELAY_REGISTRY_ENTRY_SCAN;
+const BASE_KAIGI_RELAY_UNREGISTER: u64 = BASE_UNREGISTER;
+const BASE_KAIGI_RELAY_HEALTH: u64 = 180;
 const BASE_KAIGI_JOIN_ZK: u64 = 1_520;
 const BASE_KAIGI_LEAVE_ZK: u64 = 1_520;
 const BASE_KAIGI_USAGE_ZK: u64 = 1_180;
@@ -85,6 +93,8 @@ const FIELD_ELEMENT_BYTES: usize = 32;
 const PER_BYTE_JSON: u64 = 1; // charge per JSON byte
 const PER_BYTE_PIN_MANIFEST: u64 = 1;
 const PER_BYTE_SEALED_COMMITMENT: u64 = 1;
+const PER_BYTE_KAIGI_RELAY_DESCRIPTOR: u64 = 1;
+const PER_KAIGI_RELAY_HOP: u64 = 16;
 static ZK_GAS_BASE_VERIFY: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_BASE_VERIFY);
 static ZK_GAS_PER_PUBLIC_INPUT: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PUBLIC_INPUT);
 static ZK_GAS_PER_PROOF_BYTE: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PROOF_BYTE);
@@ -426,7 +436,14 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             .proof
             .as_deref()
             .map_or(0, |proof| gas_for_kaigi_proof_verification(proof, 6, 1, 1));
-        return BASE_KAIGI_CREATE.saturating_add(proof_gas);
+        let relay_gas = create
+            .call
+            .relay_manifest
+            .as_ref()
+            .map_or(0, kaigi_relay_manifest_payload_gas);
+        return BASE_KAIGI_CREATE
+            .saturating_add(proof_gas)
+            .saturating_add(relay_gas);
     }
     // Private roster transitions remain fail-closed in production and do not dispatch a verifier;
     // retain their calibrated payload bases while sourcing the byte price from governance.
@@ -478,6 +495,31 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         }
         return BASE_KAIGI_USAGE;
     }
+    if let Some(update) = any.downcast_ref::<dm_isi::kaigi::SetKaigiRelayManifest>() {
+        let payload_gas = update
+            .relay_manifest
+            .as_ref()
+            .map_or(0, kaigi_relay_manifest_payload_gas);
+        return BASE_KAIGI_RELAY_MANIFEST.saturating_add(payload_gas);
+    }
+    if let Some(register) = any.downcast_ref::<dm_isi::kaigi::RegisterKaigiRelay>() {
+        let key_bytes = u64::try_from(register.relay.hpke_public_key.len()).unwrap_or(u64::MAX);
+        return BASE_KAIGI_RELAY_REGISTER
+            .saturating_add(PER_BYTE_KAIGI_RELAY_DESCRIPTOR.saturating_mul(key_bytes));
+    }
+    if any
+        .downcast_ref::<dm_isi::kaigi::UnregisterKaigiRelay>()
+        .is_some()
+    {
+        return BASE_KAIGI_RELAY_UNREGISTER;
+    }
+    if let Some(report) = any.downcast_ref::<dm_isi::kaigi::ReportKaigiRelayHealth>() {
+        let notes_bytes = report
+            .notes
+            .as_ref()
+            .map_or(0, |notes| u64::try_from(notes.len()).unwrap_or(u64::MAX));
+        return BASE_KAIGI_RELAY_HEALTH.saturating_add(PER_BYTE_JSON.saturating_mul(notes_bytes));
+    }
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
     }
@@ -516,6 +558,14 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     // the full instruction here: the retired per-byte factor was zero, so that
     // allocation and traversal could not affect the charged gas.
     BASE_CUSTOM
+}
+fn kaigi_relay_manifest_payload_gas(manifest: &iroha_data_model::kaigi::KaigiRelayManifest) -> u64 {
+    manifest.hops.iter().fold(0_u64, |total, hop| {
+        let key_bytes = u64::try_from(hop.hpke_public_key.len()).unwrap_or(u64::MAX);
+        total
+            .saturating_add(PER_KAIGI_RELAY_HOP)
+            .saturating_add(PER_BYTE_KAIGI_RELAY_DESCRIPTOR.saturating_mul(key_bytes))
+    })
 }
 /// Compute gas for a sequence of instructions.
 pub fn meter_instructions(is: &[InstructionBox]) -> u64 {
@@ -1130,6 +1180,68 @@ mod tests {
         assert_eq!(confidential_gas_cost(&proofless_create), 0);
 
         super::configure_confidential_gas(super::ConfidentialGasSchedule::default());
+    }
+    #[test]
+    fn kaigi_relay_gas_scales_with_bounded_descriptor_payloads() {
+        use iroha_data_model::{
+            isi::kaigi::{
+                RegisterKaigiRelay, ReportKaigiRelayHealth, SetKaigiRelayManifest,
+                UnregisterKaigiRelay,
+            },
+            kaigi::{
+                KaigiId, KaigiRelayHealthStatus, KaigiRelayHop, KaigiRelayManifest,
+                KaigiRelayRegistration,
+            },
+        };
+
+        let relay = sample_account();
+        let call_id = KaigiId::new(
+            DomainId::try_new("kaigi-relay-gas", "universal").expect("valid domain id"),
+            "relay-call".parse().expect("valid call name"),
+        );
+        let manifest = KaigiRelayManifest {
+            hops: vec![KaigiRelayHop {
+                relay_id: relay.clone(),
+                hpke_public_key: vec![1, 2, 3],
+                weight: 1,
+            }],
+            expiry_ms: 1,
+        };
+        let set: InstructionBox = SetKaigiRelayManifest {
+            call_id: call_id.clone(),
+            relay_manifest: Some(manifest),
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&set),
+            BASE_KAIGI_RELAY_MANIFEST + PER_KAIGI_RELAY_HOP + 3
+        );
+
+        let register: InstructionBox = RegisterKaigiRelay {
+            relay: KaigiRelayRegistration {
+                relay_id: relay.clone(),
+                hpke_public_key: vec![1, 2, 3],
+                bandwidth_class: 1,
+            },
+        }
+        .into();
+        assert_eq!(meter_instruction(&register), BASE_KAIGI_RELAY_REGISTER + 3);
+
+        let unregister: InstructionBox = UnregisterKaigiRelay {
+            relay_id: relay.clone(),
+        }
+        .into();
+        assert_eq!(meter_instruction(&unregister), BASE_KAIGI_RELAY_UNREGISTER);
+
+        let health: InstructionBox = ReportKaigiRelayHealth {
+            call_id,
+            relay_id: relay,
+            status: KaigiRelayHealthStatus::Healthy,
+            reported_at_ms: 0,
+            notes: Some("abc".to_owned()),
+        }
+        .into();
+        assert_eq!(meter_instruction(&health), BASE_KAIGI_RELAY_HEALTH + 3);
     }
     #[test]
     fn proof_public_input_gas_rejects_alternate_norito_layout() {

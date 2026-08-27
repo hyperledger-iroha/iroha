@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from blake3 import blake3
+
 HEADER_VERSION_V1 = 0
 HEADER_NORM_VERSION_V1 = 1
 I105_SENTINEL_SORA = "sora"
@@ -82,6 +84,46 @@ I105_BASE = len(I105_ALPHABET)
 I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
 
 
+def require_canonical_asset_definition_id(value: object, context: str) -> str:
+    """Return one exact V1 asset-definition address or raise ``ValueError``."""
+
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.strip() != value
+        or any(character.isspace() for character in value)
+    ):
+        raise ValueError(
+            f"{context} must be an exact canonical asset definition address"
+        )
+    alphabet_index = {character: index for index, character in enumerate(BASE58_ALPHABET)}
+    try:
+        payload = decode_base_n(
+            [alphabet_index[character] for character in value],
+            len(BASE58_ALPHABET),
+        )
+    except (KeyError, AccountAddressError) as error:
+        raise ValueError(
+            f"{context} must be an exact canonical asset definition address"
+        ) from error
+    canonical = "".join(
+        BASE58_ALPHABET[digit]
+        for digit in encode_base_n(payload, len(BASE58_ALPHABET))
+    )
+    if (
+        canonical != value
+        or len(payload) != 21
+        or payload[0] != 1
+        or payload[7] >> 4 != 0b0100
+        or payload[9] & 0b11000000 != 0b10000000
+        or blake3(bytes(payload[:17])).digest()[:4] != bytes(payload[17:])
+    ):
+        raise ValueError(
+            f"{context} must be an exact canonical asset definition address"
+        )
+    return value
+
+
 class AccountAddressError(ValueError):
     """Raised when an address cannot be parsed or encoded."""
 
@@ -145,15 +187,22 @@ class CurveId(IntEnum):
             raise AccountAddressError("signing algorithm must be a non-empty string")
         if algorithm.strip() != algorithm:
             raise AccountAddressError("signing algorithm must not contain surrounding whitespace")
-        normalized = algorithm.lower()
-        if any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in normalized):
+        if not all(
+            ch.isascii() and (ch.isalnum() or ch in "-_")
+            for ch in algorithm
+        ):
             raise AccountAddressError(f"unsupported signing algorithm: {algorithm}")
+        normalized = algorithm.lower()
         mapping = {
             "ed25519": cls.ED25519,
             "ed": cls.ED25519,
             "mldsa": cls.MLDSA,
             "ml-dsa": cls.MLDSA,
             "ml_dsa": cls.MLDSA,
+            "mldsa65": cls.MLDSA,
+            "ml-dsa-65": cls.MLDSA,
+            "ml_dsa_65": cls.MLDSA,
+            "ml_dsa-65": cls.MLDSA,
             "gost256a": cls.GOST_256_A,
             "gost-256-a": cls.GOST_256_A,
             "gost256b": cls.GOST_256_B,
@@ -185,20 +234,51 @@ class ControllerPayload:
     public_key: bytes
 
     CONTROLLER_SINGLE_KEY_TAG = 0x00
+    CONTROLLER_SINGLE_KEY_EXTENDED_TAG = 0x02
+    ML_DSA_65_PUBLIC_KEY_LENGTH = 1_952
+
+    @classmethod
+    def _validate_public_key(cls, curve: CurveId, public_key: bytes) -> None:
+        if curve == CurveId.MLDSA and (
+            len(public_key) != cls.ML_DSA_65_PUBLIC_KEY_LENGTH
+            or not any(public_key)
+        ):
+            raise AccountAddressError(
+                "invalid ML-DSA public key: expected a nonzero 1952-byte ML-DSA-65 key"
+            )
 
     @classmethod
     def single_key(cls, public_key: bytes, algorithm: str) -> "ControllerPayload":
         curve = CurveId.from_algorithm(algorithm)
-        if len(public_key) > 0xFF:
+        if len(public_key) > 0xFFFF:
             raise AccountAddressError(f"key payload too long: {len(public_key)} bytes")
-        return cls(tag=cls.CONTROLLER_SINGLE_KEY_TAG, curve=curve, public_key=bytes(public_key))
+        cls._validate_public_key(curve, public_key)
+        tag = (
+            cls.CONTROLLER_SINGLE_KEY_TAG
+            if len(public_key) <= 0xFF
+            else cls.CONTROLLER_SINGLE_KEY_EXTENDED_TAG
+        )
+        return cls(tag=tag, curve=curve, public_key=bytes(public_key))
 
     def encode_into(self, out: bytearray) -> None:
-        if self.tag != self.CONTROLLER_SINGLE_KEY_TAG:
+        if self.tag not in (
+            self.CONTROLLER_SINGLE_KEY_TAG,
+            self.CONTROLLER_SINGLE_KEY_EXTENDED_TAG,
+        ):
             raise AccountAddressError("unsupported controller payload variant")
+        self._validate_public_key(self.curve, self.public_key)
         out.append(self.tag)
         out.append(int(self.curve))
-        out.append(len(self.public_key))
+        if self.tag == self.CONTROLLER_SINGLE_KEY_TAG:
+            if len(self.public_key) > 0xFF:
+                raise AccountAddressError("extended public key must use controller tag 2")
+            out.append(len(self.public_key))
+        else:
+            if len(self.public_key) <= 0xFF or len(self.public_key) > 0xFFFF:
+                raise AccountAddressError(
+                    "extended controller public key length must be between 256 and 65535 bytes"
+                )
+            out.extend(len(self.public_key).to_bytes(2, byteorder="big"))
         out.extend(self.public_key)
 
     @classmethod
@@ -207,20 +287,34 @@ class ControllerPayload:
             raise AccountAddressError("invalid length for address payload")
         tag = data[cursor]
         cursor += 1
-        if tag != cls.CONTROLLER_SINGLE_KEY_TAG:
+        if tag not in (
+            cls.CONTROLLER_SINGLE_KEY_TAG,
+            cls.CONTROLLER_SINGLE_KEY_EXTENDED_TAG,
+        ):
             raise AccountAddressError(f"unknown controller payload tag: {tag}")
         if cursor >= len(data):
             raise AccountAddressError("invalid length for address payload")
         curve = CurveId.from_byte(data[cursor])
         cursor += 1
-        if cursor >= len(data):
-            raise AccountAddressError("invalid length for address payload")
-        length = data[cursor]
-        cursor += 1
+        if tag == cls.CONTROLLER_SINGLE_KEY_TAG:
+            if cursor >= len(data):
+                raise AccountAddressError("invalid length for address payload")
+            length = data[cursor]
+            cursor += 1
+        else:
+            if cursor + 1 >= len(data):
+                raise AccountAddressError("invalid length for address payload")
+            length = int.from_bytes(data[cursor : cursor + 2], byteorder="big")
+            cursor += 2
+            if length <= 0xFF:
+                raise AccountAddressError(
+                    "short public keys must use the compact controller tag"
+                )
         end = cursor + length
         if end > len(data):
             raise AccountAddressError("invalid length for address payload")
         public_key = data[cursor:end]
+        cls._validate_public_key(curve, public_key)
         return cls(tag=tag, curve=curve, public_key=public_key), end
 
 

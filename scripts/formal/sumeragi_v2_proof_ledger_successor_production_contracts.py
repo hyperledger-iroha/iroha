@@ -2555,7 +2555,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
         preledger_validator = _require_rust_item(
             lifecycle_selector_path,
             lifecycle_selector_source,
-            "certified_fetch_preledger_productive_ingress_token",
+            "certified_fetch_preledger_ingress_mode",
             errors,
         )
         if preledger_validator is not None:
@@ -2568,11 +2568,14 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                     "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership",
                     "certified_fetch_ingress_ownership_is_exact(inbound, ownership)",
                     "CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership",
-                    "ownership.leader_wire_token()",
-                    "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken",
                     "ownership.leader_wire_runtime_receipt().is_some()",
                     "CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound",
-                    "Ok(token)",
+                    "ownership.leader_wire_token().cloned()",
+                    "!ownership.request_bound_non_roster_completion()",
+                    "CertifiedFetchPreLedgerIngressModeV1::DurableLeaderWire(token)",
+                    "ownership.request_bound_non_roster_completion()",
+                    "CertifiedFetchPreLedgerIngressModeV1::RequestBoundArchive",
+                    "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken",
                 ),
             )
         postdequeue_validator = _require_rust_item(
@@ -2598,6 +2601,30 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                     "receipt.owner().admission_ordinal() != expected_token.scheduler_ordinal()",
                     "CertifiedFetchPostDequeueRuntimeHandoffErrorV1::MismatchedRuntimeReceipt",
                     "Ok(receipt.clone())",
+                ),
+            )
+        postdequeue_handoff = _require_rust_item(
+            lifecycle_selector_path,
+            lifecycle_selector_source,
+            "certified_fetch_postdequeue_ingress_handoff",
+            errors,
+        )
+        if postdequeue_handoff is not None:
+            require_order(
+                lifecycle_selector_path,
+                "certified Fetch post-dequeue ingress-mode handoff",
+                postdequeue_handoff.source,
+                (
+                    "match expected",
+                    "CertifiedFetchPreLedgerIngressModeV1::DurableLeaderWire(token)",
+                    "certified_fetch_postdequeue_runtime_receipt(inbound, token).map(Some)",
+                    "CertifiedFetchPreLedgerIngressModeV1::RequestBoundArchive",
+                    "inbound.ingress_ownership()",
+                    "certified_fetch_ingress_ownership_is_exact(inbound, ownership)",
+                    "!ownership.request_bound_non_roster_completion()",
+                    "ownership.leader_wire_token().is_some()",
+                    "ownership.leader_wire_runtime_receipt().is_some()",
+                    "Ok(None)",
                 ),
             )
         preledger_test_wrapper = _require_qualified_rust_item(
@@ -2654,7 +2681,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "output_guard.close_admission_for_restart()",
                 "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
                 "failure: $failure",
-                "certified_fetch_preledger_productive_ingress_token(family.inbound.as_ref())",
+                "certified_fetch_preledger_ingress_mode(family.inbound.as_ref())",
                 "Err(error)",
                 "durable_registry.abort_before_dequeue()",
                 "restart_invalid_leader_wire!(error, receipt)",
@@ -2662,17 +2689,18 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "let Some(operation) = output_guard.begin_fail_stop_operation()",
                 "persist_exact_staged_successor()",
                 "exact_dequeue.commit(ingress)",
-                "let runtime_receipt = certified_fetch_postdequeue_runtime_receipt(",
+                "let runtime_receipt = certified_fetch_postdequeue_ingress_handoff(",
                 "dequeued.inbound()",
-                "&selected_leader_wire_token",
+                "&selected_ingress_mode",
                 "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(",
                 "durable_registry.commit_after_exact_dequeue(dequeued)",
                 "PreparedCertifiedFetchReadyTransition::Mutation(ready) => ready.commit()",
                 "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
                 "service_prepared.commit(operation.permit())",
                 "work_ack.commit()",
+                "if let Some(runtime_receipt) = runtime_receipt",
                 "mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)",
-                "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(error)",
+                "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(",
                 "operation.complete()",
             ),
         )
@@ -2690,7 +2718,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 lifecycle_selector_path,
                 "certified Fetch pre-dequeue productive-owner validation",
                 pre_dequeue,
-                "certified_fetch_preledger_productive_ingress_token(family.inbound.as_ref())",
+                "certified_fetch_preledger_ingress_mode(family.inbound.as_ref())",
                 1,
             )
             require_token_count(
@@ -2716,7 +2744,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 lifecycle_selector_path,
                 "certified Fetch post-dequeue Runtime receipt extraction",
                 post_dequeue,
-                "certified_fetch_postdequeue_runtime_receipt",
+                "certified_fetch_postdequeue_ingress_handoff",
                 1,
             )
             require_token_count(

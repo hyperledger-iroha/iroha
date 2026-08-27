@@ -34,7 +34,7 @@ use norito::codec::{Decode, Encode};
 use std::{error::Error as StdError, fmt, fmt::Write as _};
 mod policy;
 /// Maximum executable-image bytes admitted by IVM code memory.
-pub const MAX_CONTRACT_IMAGE_BYTES: u64 = 0x0010_0000;
+pub const MAX_CONTRACT_IMAGE_BYTES: u64 = ivm_abi::metadata::MAX_PROGRAM_IMAGE_BYTES_V1 as u64;
 /// One fixed-width decoded instruction in the executable stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DecodedOp {

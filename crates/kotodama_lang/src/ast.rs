@@ -1102,6 +1102,353 @@ pub(crate) fn rebase_program_source(program: &mut Program, source: crate::source
 pub(crate) fn strip_program_provenance(program: &mut Program) {
     transform_program_provenance(program, ProvenanceAction::Strip);
 }
+/// Return the first source range whose expression path exceeds `max_depth`.
+///
+/// The traversal is iterative so an adversarially deep parser result cannot
+/// exhaust the caller's stack while it is being validated. Source and resolved
+/// provenance wrappers do not consume depth. The enclosing source-unit and
+/// block braces do consume depth, matching the combined V1 nesting budget used
+/// by the token preflight.
+fn expression_depth_violation_impl(
+    program: Option<&Program>,
+    expression_root: Option<(&Expr, usize)>,
+    max_depth: usize,
+    expression_syntax_depths: &[usize],
+) -> Option<TextRange> {
+    enum Pending<'a> {
+        Block {
+            block: &'a Block,
+            depth: usize,
+        },
+        Statement {
+            statement: &'a Statement,
+            block_depth: usize,
+        },
+        Expr {
+            expression: &'a Expr,
+            depth: usize,
+            range: Option<TextRange>,
+        },
+    }
+
+    fn push_block<'a>(block: &'a Block, depth: usize, pending: &mut Vec<Pending<'a>>) {
+        pending.push(Pending::Block { block, depth });
+    }
+
+    fn push_expression<'a>(expression: &'a Expr, depth: usize, pending: &mut Vec<Pending<'a>>) {
+        pending.push(Pending::Expr {
+            expression,
+            depth,
+            range: None,
+        });
+    }
+
+    let mut pending = Vec::new();
+    if let Some(program) = program {
+        // Every parsed program is enclosed by its `seiyaku` or `module` braces.
+        const SOURCE_UNIT_DEPTH: usize = 1;
+        for item in &program.items {
+            match item {
+                Item::Function(function) => push_block(
+                    &function.body,
+                    SOURCE_UNIT_DEPTH.saturating_add(1),
+                    &mut pending,
+                ),
+                Item::Const(declaration) => {
+                    push_expression(&declaration.value, SOURCE_UNIT_DEPTH, &mut pending)
+                }
+                Item::Trigger(declaration) => {
+                    // Metadata values sit inside both the trigger and metadata braces.
+                    let metadata_depth = SOURCE_UNIT_DEPTH.saturating_add(2);
+                    for entry in &declaration.metadata {
+                        push_expression(&entry.value, metadata_depth, &mut pending);
+                    }
+                }
+                Item::Struct(_) | Item::ErrorEnum(_) | Item::State(_) => {}
+            }
+        }
+        // Fixture arguments sit inside the fixture braces and action parentheses.
+        let fixture_depth = SOURCE_UNIT_DEPTH.saturating_add(2);
+        for fixture in &program.fixtures {
+            for action in &fixture.actions {
+                for argument in &action.args {
+                    push_expression(argument, fixture_depth, &mut pending);
+                }
+            }
+        }
+    }
+    if let Some((expression, depth)) = expression_root {
+        push_expression(expression, depth, &mut pending);
+    }
+
+    while let Some(node) = pending.pop() {
+        match node {
+            Pending::Block { block, depth } => {
+                for statement in &block.statements {
+                    pending.push(Pending::Statement {
+                        statement,
+                        block_depth: depth,
+                    });
+                }
+                if let Some(tail) = &block.tail {
+                    push_expression(tail, depth, &mut pending);
+                }
+            }
+            Pending::Statement {
+                statement,
+                block_depth,
+            } => match statement {
+                Statement::Source {
+                    node, statement, ..
+                } => {
+                    pending.push(Pending::Statement {
+                        statement,
+                        block_depth: block_depth.saturating_add(
+                            expression_syntax_depths
+                                .get(node.index())
+                                .copied()
+                                .unwrap_or(0),
+                        ),
+                    });
+                }
+                Statement::Resolved { statement, .. } => {
+                    pending.push(Pending::Statement {
+                        statement,
+                        block_depth,
+                    });
+                }
+                Statement::Let { value, .. }
+                | Statement::Assign { value, .. }
+                | Statement::Expr(value) => {
+                    push_expression(value, block_depth, &mut pending);
+                }
+                Statement::AssignExpr { target, value, .. } => {
+                    push_expression(target, block_depth, &mut pending);
+                    push_expression(value, block_depth, &mut pending);
+                }
+                Statement::Return(value) => {
+                    if let Some(value) = value {
+                        push_expression(value, block_depth, &mut pending);
+                    }
+                }
+                Statement::If {
+                    cond,
+                    then_branch,
+                    else_branch,
+                } => {
+                    push_expression(cond, block_depth, &mut pending);
+                    let nested_depth = block_depth.saturating_add(1);
+                    push_block(then_branch, nested_depth, &mut pending);
+                    if let Some(block) = else_branch {
+                        push_block(block, nested_depth, &mut pending);
+                    }
+                }
+                Statement::IfLet {
+                    value,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    push_expression(value, block_depth, &mut pending);
+                    let nested_depth = block_depth.saturating_add(1);
+                    push_block(then_branch, nested_depth, &mut pending);
+                    if let Some(block) = else_branch {
+                        push_block(block, nested_depth, &mut pending);
+                    }
+                }
+                Statement::While { cond, body } => {
+                    push_expression(cond, block_depth, &mut pending);
+                    push_block(body, block_depth.saturating_add(1), &mut pending);
+                }
+                Statement::For {
+                    init,
+                    cond,
+                    step,
+                    body,
+                    ..
+                } => {
+                    if let Some(init) = init {
+                        pending.push(Pending::Statement {
+                            statement: init,
+                            block_depth,
+                        });
+                    }
+                    if let Some(cond) = cond {
+                        push_expression(cond, block_depth, &mut pending);
+                    }
+                    if let Some(step) = step {
+                        pending.push(Pending::Statement {
+                            statement: step,
+                            block_depth,
+                        });
+                    }
+                    push_block(body, block_depth.saturating_add(1), &mut pending);
+                }
+                Statement::ForEachMap { map, body, .. } => {
+                    push_expression(map, block_depth, &mut pending);
+                    push_block(body, block_depth.saturating_add(1), &mut pending);
+                }
+                Statement::Break | Statement::Continue => {}
+            },
+            Pending::Expr {
+                expression,
+                depth,
+                range,
+            } => match expression {
+                Expr::Source {
+                    node,
+                    source,
+                    expression,
+                } => pending.push(Pending::Expr {
+                    expression,
+                    depth: depth.saturating_add(
+                        expression_syntax_depths
+                            .get(node.index())
+                            .copied()
+                            .unwrap_or(0),
+                    ),
+                    range: Some(source.range),
+                }),
+                Expr::Resolved {
+                    source, expression, ..
+                } => pending.push(Pending::Expr {
+                    expression,
+                    depth,
+                    range: source.map(|source| source.range).or(range),
+                }),
+                _ if depth > max_depth => {
+                    return Some(range.unwrap_or(TextRange::new(0, 0)));
+                }
+                Expr::Binary { left, right, .. }
+                | Expr::Index {
+                    target: left,
+                    index: right,
+                } => {
+                    let child_depth = depth.saturating_add(1);
+                    push_expression(left, child_depth, &mut pending);
+                    push_expression(right, child_depth, &mut pending);
+                }
+                Expr::Unary { expr, .. }
+                | Expr::Member { object: expr, .. }
+                | Expr::OptionSome(expr)
+                | Expr::ResultOk(expr)
+                | Expr::ResultErr(expr)
+                | Expr::Propagate(expr) => {
+                    push_expression(expr, depth.saturating_add(1), &mut pending);
+                }
+                Expr::Conditional {
+                    cond,
+                    then_expr,
+                    else_expr,
+                } => {
+                    let child_depth = depth.saturating_add(1);
+                    push_expression(cond, child_depth, &mut pending);
+                    push_expression(then_expr, child_depth, &mut pending);
+                    push_expression(else_expr, child_depth, &mut pending);
+                }
+                Expr::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    let child_depth = depth.saturating_add(1);
+                    push_expression(condition, child_depth, &mut pending);
+                    push_block(then_branch, child_depth, &mut pending);
+                    if let Some(block) = else_branch {
+                        push_block(block, child_depth, &mut pending);
+                    }
+                }
+                Expr::IfLet {
+                    value,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    let child_depth = depth.saturating_add(1);
+                    push_expression(value, child_depth, &mut pending);
+                    push_block(then_branch, child_depth, &mut pending);
+                    if let Some(block) = else_branch {
+                        push_block(block, child_depth, &mut pending);
+                    }
+                }
+                Expr::Match { value, arms } => {
+                    let child_depth = depth.saturating_add(1);
+                    push_expression(value, child_depth, &mut pending);
+                    for arm in arms {
+                        push_block(&arm.body, child_depth, &mut pending);
+                    }
+                }
+                Expr::Call { args, .. } | Expr::Tuple(args) | Expr::List(args) => {
+                    let child_depth = depth.saturating_add(1);
+                    for argument in args {
+                        push_expression(argument, child_depth, &mut pending);
+                    }
+                }
+                Expr::JsonObject(entries) => {
+                    let child_depth = depth.saturating_add(1);
+                    for entry in entries {
+                        push_expression(&entry.value, child_depth, &mut pending);
+                    }
+                }
+                Expr::JsonArray(elements) => {
+                    let child_depth = depth.saturating_add(1);
+                    for element in elements {
+                        push_expression(element, child_depth, &mut pending);
+                    }
+                }
+                Expr::ListComprehension {
+                    expression,
+                    source,
+                    condition,
+                    ..
+                } => {
+                    let child_depth = depth.saturating_add(1);
+                    push_expression(expression, child_depth, &mut pending);
+                    push_expression(source, child_depth, &mut pending);
+                    if let Some(condition) = condition {
+                        push_expression(condition, child_depth, &mut pending);
+                    }
+                }
+                Expr::StructLiteral { fields, .. } => {
+                    let child_depth = depth.saturating_add(1);
+                    for field in fields {
+                        push_expression(&field.value, child_depth, &mut pending);
+                    }
+                }
+                Expr::IntLiteral(_)
+                | Expr::DecimalLiteral(_)
+                | Expr::OptionNone
+                | Expr::Bool(_)
+                | Expr::String(_)
+                | Expr::Bytes(_)
+                | Expr::Ident(_) => {}
+            },
+        }
+    }
+    None
+}
+/// Return the first parsed-program expression path that exceeds `max_depth`.
+pub(crate) fn expression_depth_violation(
+    program: &Program,
+    max_depth: usize,
+    expression_syntax_depths: &[usize],
+) -> Option<TextRange> {
+    expression_depth_violation_impl(Some(program), None, max_depth, expression_syntax_depths)
+}
+/// Return the first path in one parser-owned expression that exceeds `max_depth`.
+pub(crate) fn expression_depth_violation_in_expression(
+    expression: &Expr,
+    root_depth: usize,
+    max_depth: usize,
+    expression_syntax_depths: &[usize],
+) -> Option<TextRange> {
+    expression_depth_violation_impl(
+        None,
+        Some((expression, root_depth)),
+        max_depth,
+        expression_syntax_depths,
+    )
+}
 /// Destroy a parsed program without recursively dropping adversarially deep
 /// expression, statement, or type trees.
 ///
@@ -1338,6 +1685,66 @@ pub(crate) fn drop_program_iterative(program: Program) {
             },
         }
     }
+}
+/// Destroy one parser-owned expression through the program's iterative drain.
+///
+/// This is used on syntax-error and resource-limit paths before an expression
+/// has been committed to a complete [`Program`].
+pub(crate) fn drop_expression_iterative(expression: Expr) {
+    drop_program_iterative(Program {
+        unit: SourceUnit {
+            kind: SourceUnitKind::Module,
+            name: String::new(),
+        },
+        items: vec![Item::Const(ConstDecl {
+            name: String::new(),
+            ty: None,
+            value: expression,
+        })],
+        test_target: None,
+        fixtures: Vec::new(),
+    });
+}
+/// Destroy one parser-owned type through an explicit work list.
+///
+/// Syntax recovery can retain a complete boundary-depth type before a later
+/// token fails. Draining it here avoids recursive derived drop glue while the
+/// type has not yet been committed to a complete [`Program`].
+pub(crate) fn drop_type_iterative(ty: TypeExpr) {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        match ty {
+            TypeExpr::Source { ty, .. } | TypeExpr::Resolved { ty, .. } => {
+                pending.push(*ty);
+            }
+            TypeExpr::Generic { args, .. } | TypeExpr::Tuple(args) => {
+                pending.extend(args);
+            }
+            TypeExpr::Path(_) | TypeExpr::Const(_) => {}
+        }
+    }
+}
+/// Destroy one parser-owned block through the program's iterative drain.
+///
+/// Parser recovery uses this while a function body is still incomplete, so a
+/// missing closing brace cannot recursively drop already-accepted expressions.
+pub(crate) fn drop_block_iterative(block: Block) {
+    drop_program_iterative(Program {
+        unit: SourceUnit {
+            kind: SourceUnitKind::Module,
+            name: String::new(),
+        },
+        items: vec![Item::Function(Function {
+            name: String::new(),
+            params: Vec::new(),
+            ret_ty: None,
+            body: block,
+            modifiers: FunctionModifiers::default(),
+            location: SourceLocation { line: 0, column: 0 },
+        })],
+        test_target: None,
+        fixtures: Vec::new(),
+    });
 }
 #[cfg(test)]
 mod provenance_tests {

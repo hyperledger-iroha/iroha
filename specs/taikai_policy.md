@@ -158,8 +158,9 @@ boundaries. All three commitments must be non-zero:
 3. For every entry, feed its one-byte kind (`D` or `F`), the little-endian
    `u64` byte length of its canonical path, and the path bytes.
 4. For a file, additionally feed its little-endian `u64` byte length followed
-   by the exact file bytes. Reject special files, non-UTF-8 paths, or files that
-   change length while being read.
+   by the exact file bytes. Reject special files, non-UTF-8 paths, files whose
+   identity, length, or modification metadata changes while being read, and
+   directories whose identity or membership metadata changes during traversal.
 
 A single archive is encoded as one `F` record whose canonical path is its base
 name. Both `iroha app taikai rpt-attest` and `cargo xtask taikai-rpt-verify`
@@ -174,6 +175,10 @@ implement this same framing.
    event/stream scope, computes the canonical bundle hash, and writes:
    - `taikai_rpt_<timestamp>.to` — Norito-encoded RPT.
    - `taikai_rpt_<timestamp>.json` — human summary.
+   Binary and JSON outputs publish as one preflighted transaction. Existing
+   outputs are snapshotted up to a 4 MiB rollback limit without following
+   links, replacements preserve their modes, and each committed rename syncs
+   its immediate parent directory on Unix.
 3. `cargo xtask taikai-rpt-verify --envelope <path> --gar <path>
    --cek-receipt <path> --bundle <path>` requires every evidence input,
    recomputes all three digests, validates the CEK receipt scope, and prints the
@@ -181,8 +186,11 @@ implement this same framing.
    signature check. The verifier rejects symlinked file inputs and publishes a
    requested JSON report through a synced staged atomic replacement, preserving
    permissions when replacing an existing report and syncing its directory on
-   Unix. RPT and CEK receipt documents are each capped at 1 MiB before decoding;
-   GAR and distribution bundle contents remain streaming inputs.
+   Unix. The report parent must already exist as a direct directory; verification
+   never creates missing directories through an unchecked path. RPT and CEK
+   receipt documents are each capped at 1 MiB before decoding; GAR and
+   distribution bundle contents remain streaming inputs, with stable file and
+   directory metadata required across each hash operation.
 4. Torii stores the latest valid RPT digest under `/v1/config/taikai.rpt.digest`
    so relays and gateways can assert that the operational surface matches the
    attested policy.

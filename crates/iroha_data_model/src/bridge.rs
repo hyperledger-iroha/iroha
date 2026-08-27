@@ -12,12 +12,17 @@ pub mod sccp;
 mod sccp_registry;
 pub use sccp::{
     SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1, SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
-    SCCP_SOLANA_TESTNET_GENESIS_HASH_V1, SccpEvmSourceEmitterV1, SccpInboundAnchorHighWaterKeyV1,
+    SCCP_SOLANA_TESTNET_GENESIS_HASH_V1, SCCP_TON_BASECHAIN_WORKCHAIN_V1,
+    SCCP_TON_MAINNET_GLOBAL_ID_V1, SCCP_TON_MAINNET_ZERO_STATE_FILE_HASH_V1,
+    SCCP_TON_MAINNET_ZERO_STATE_ROOT_HASH_V1, SCCP_TON_MASTERCHAIN_SHARD_V1,
+    SCCP_TON_MASTERCHAIN_WORKCHAIN_V1, SCCP_TON_TESTNET_GLOBAL_ID_V1,
+    SCCP_TON_TESTNET_ZERO_STATE_FILE_HASH_V1, SCCP_TON_TESTNET_ZERO_STATE_ROOT_HASH_V1,
+    SCCP_TON_ZERO_STATE_SEQNO_V1, SccpEvmSourceEmitterV1, SccpInboundAnchorHighWaterKeyV1,
     SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
     SccpOutboundMessageContextV1, SccpOutboundMessageDescriptorV1, SccpOutboundMessageIndexKeyV1,
     SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpOutboundPendingUsageV1,
     SccpOutboundProofRecordV1, SccpSolanaSourceEmitterV1, SccpSourceEmitterV1,
-    SccpSourceIdentityV1, SccpTronSourceEmitterV1,
+    SccpSourceIdentityV1, SccpTonAddressV1, SccpTonSourceEmitterV1, SccpTronSourceEmitterV1,
 };
 pub use sccp_registry::{
     SCCP_V1_MAX_GOVERNED_LANES, SCCP_V1_MAX_KEY_BYTES, SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
@@ -25,27 +30,34 @@ pub use sccp_registry::{
     SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE, SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE,
     SCCP_V1_MAX_SORA_OUTBOUND_GAS_LIMIT, SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS,
     SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
-    SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1,
-    SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1,
-    SccpGovernedLaneV1, SccpGovernedRouteV1, SccpGroth16Bn254IcV1,
-    SccpGroth16Bn254SemanticCircuitV1, SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1,
-    SccpOutboundProofPolicyV1, SccpPortableVerifyingKeyRefV1, SccpRegistryV1,
-    SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteValidationError, SccpSemanticProofProfileV1,
-    SccpSolanaDestinationDeploymentV1, SccpSoraFinalityAnchorV1, SccpSoraOutboundExecutionPolicyV1,
-    SccpSoraSettlementV1, SccpTronDestinationDeploymentV1,
+    SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER, SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID,
+    SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
+    SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpGovernedLaneV1,
+    SccpGovernedRouteV1, SccpGroth16Bls12381IcV1, SccpGroth16Bls12381SemanticCircuitV1,
+    SccpGroth16Bls12381VerifyingKeyV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
+    SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1, SccpOutboundProofPolicyV1,
+    SccpPortableVerifyingKeyRefV1, SccpRegistryV1, SccpRouteActivationV1, SccpRouteKeyV1,
+    SccpRouteValidationError, SccpSemanticProofProfileV1, SccpSolanaDestinationDeploymentV1,
+    SccpSoraFinalityAnchorV1, SccpSoraOutboundExecutionPolicyV1, SccpSoraSettlementV1,
+    SccpTonDestinationDeploymentV1, SccpTronDestinationDeploymentV1,
+    canonical_sccp_groth16_bls12381_public_signal_schema_bytes_v1,
+    canonical_sccp_groth16_bls12381_verifying_key_bytes_v1,
     canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1,
     canonical_sccp_groth16_bn254_verifying_key_bytes_v1, canonical_sccp_lane_id_bytes_v1,
     canonical_sccp_network_bytes_v1, canonical_sccp_semantic_proof_profile_bytes_v1,
     canonical_sccp_sora_finality_anchor_bytes_v1, canonical_sccp_source_emitter_bytes_v1,
-    canonical_sccp_source_identity_bytes_v1, sccp_evm_destination_binding_hash_v1,
-    sccp_exact_evm_xor_route_config_hash_v1, sccp_exact_solana_xor_route_config_hash_v1,
-    sccp_exact_tron_xor_route_config_hash_v1, sccp_groth16_bn254_public_signal_schema_hash_v1,
+    canonical_sccp_source_identity_bytes_v1, canonical_sccp_ton_raw_address_bytes_v1,
+    sccp_evm_destination_binding_hash_v1, sccp_exact_evm_xor_route_config_hash_v1,
+    sccp_exact_solana_xor_route_config_hash_v1, sccp_exact_ton_xor_route_config_hash_v1,
+    sccp_exact_tron_xor_route_config_hash_v1, sccp_groth16_bls12381_public_signal_schema_hash_v1,
+    sccp_groth16_bls12381_verifying_key_hash_v1, sccp_groth16_bn254_public_signal_schema_hash_v1,
     sccp_groth16_bn254_verifying_key_hash_v1, sccp_lane_id_hash_v1, sccp_network_identity_hash_v1,
     sccp_network_tag_v1, sccp_route_escrow_account_id_v1, sccp_semantic_proof_profile_hash_v1,
     sccp_solana_destination_binding_hash_v1, sccp_solana_native_verifier_config_hash_v1,
     sccp_sora_finality_anchor_hash_v1, sccp_sora_taira_chain_id_hash_v1,
     sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
-    sccp_tron_destination_binding_hash_v1, sccp_v1_taira_xor_asset_definition_id,
+    sccp_ton_destination_binding_hash_v1, sccp_tron_destination_binding_hash_v1,
+    sccp_v1_taira_xor_asset_definition_id,
 };
 /// Definition metadata for a wrapped asset originating from another chain.
 ///
@@ -184,6 +196,10 @@ pub enum BridgeNativeProofBackendV1 {
     #[codec(index = 3)]
     #[norito(rename = "solana_agave_v1")]
     SolanaAgave,
+    /// TON proof using authenticated masterchain finality and account/message inclusion.
+    #[codec(index = 4)]
+    #[norito(rename = "ton_masterchain_v1")]
+    TonMasterchain,
 }
 impl BridgeNativeProofBackendV1 {
     /// Return the stable, unambiguous bridge backend label.
@@ -194,12 +210,13 @@ impl BridgeNativeProofBackendV1 {
             Self::BscParlia => "bridge/sccp/native/bsc-parlia-v1",
             Self::TronDpos => "bridge/sccp/native/tron-dpos-v1",
             Self::SolanaAgave => "bridge/sccp/native/solana-agave-v1",
+            Self::TonMasterchain => "bridge/sccp/native/ton-masterchain-v1",
         }
     }
     /// Return whether V1 admits this backend for the exact source-network profile.
     ///
-    /// The closed first-release inventory contains only the three verifier
-    /// families with complete value-moving implementations.
+    /// The closed first-release inventory contains only verifier families
+    /// with exact value-moving implementations.
     #[must_use]
     pub const fn supports_source_network(self, source: SccpNetworkV1) -> bool {
         matches!(
@@ -214,6 +231,10 @@ impl BridgeNativeProofBackendV1 {
                 Self::TronDpos,
                 SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
             ) | (Self::SolanaAgave, SccpNetworkV1::SolanaTestnet)
+                | (
+                    Self::TonMasterchain,
+                    SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
+                )
         )
     }
 }
@@ -311,6 +332,10 @@ pub enum BridgeSccpDestinationProofBackendV1 {
     #[codec(index = 2)]
     #[norito(rename = "solana_groth16_bn254_v1")]
     SolanaGroth16Bn254,
+    /// TON Groth16 verifier over BLS12-381 wrapping the governed Taira statement.
+    #[codec(index = 3)]
+    #[norito(rename = "ton_groth16_bls12381_v1")]
+    TonGroth16Bls12381,
 }
 impl BridgeSccpDestinationProofBackendV1 {
     /// Return the stable production verifier label used in proof diagnostics.
@@ -320,6 +345,7 @@ impl BridgeSccpDestinationProofBackendV1 {
             Self::EvmGroth16Bn254 => "evm-groth16-bn254-v1",
             Self::TronGroth16Bn254 => "tron-groth16-bn254-v1",
             Self::SolanaGroth16Bn254 => "solana-groth16-bn254-v1",
+            Self::TonGroth16Bls12381 => "ton-groth16-bls12381-v1",
         }
     }
     /// Return whether this closed verifier backend belongs to an exact
@@ -338,6 +364,10 @@ impl BridgeSccpDestinationProofBackendV1 {
                 Self::TronGroth16Bn254,
                 SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
             ) | (Self::SolanaGroth16Bn254, SccpNetworkV1::SolanaTestnet)
+                | (
+                    Self::TonGroth16Bls12381,
+                    SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
+                )
         )
     }
 }
@@ -1718,6 +1748,10 @@ mod tests {
                 BridgeNativeProofBackendV1::SolanaAgave,
                 "bridge/sccp/native/solana-agave-v1",
             ),
+            (
+                BridgeNativeProofBackendV1::TonMasterchain,
+                "bridge/sccp/native/ton-masterchain-v1",
+            ),
         ];
         for &(backend, expected_label) in &backends {
             assert_eq!(backend.backend_label(), expected_label);
@@ -1735,6 +1769,8 @@ mod tests {
             SccpNetworkV1::TronNile,
             SccpNetworkV1::TronShasta,
             SccpNetworkV1::SolanaTestnet,
+            SccpNetworkV1::TonMainnet,
+            SccpNetworkV1::TonTestnet,
         ];
         for &(backend, _) in &backends {
             for source in external_profiles {
@@ -1754,13 +1790,16 @@ mod tests {
                     ) | (
                         BridgeNativeProofBackendV1::SolanaAgave,
                         SccpNetworkV1::SolanaTestnet
+                    ) | (
+                        BridgeNativeProofBackendV1::TonMasterchain,
+                        SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
                     )
                 );
                 assert_eq!(backend.supports_source_network(source), expected);
             }
             assert!(!backend.supports_source_network(SccpNetworkV1::SoraTaira));
         }
-        for unknown_tag in [4_u32, u32::MAX] {
+        for unknown_tag in [5_u32, u32::MAX] {
             let encoded = unknown_tag.encode();
             assert!(
                 BridgeNativeProofBackendV1::decode_all(&mut encoded.as_slice()).is_err(),
@@ -1842,6 +1881,10 @@ mod tests {
                 BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
                 "solana-groth16-bn254-v1",
             ),
+            (
+                BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
+                "ton-groth16-bls12381-v1",
+            ),
         ] {
             assert_eq!(backend.backend_label(), label);
             let encoded = backend.encode();
@@ -1855,6 +1898,7 @@ mod tests {
             BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
             BridgeSccpDestinationProofBackendV1::TronGroth16Bn254,
             BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
+            BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
         ] {
             for network in [
                 SccpNetworkV1::SoraTaira,
@@ -1866,6 +1910,8 @@ mod tests {
                 SccpNetworkV1::TronNile,
                 SccpNetworkV1::TronShasta,
                 SccpNetworkV1::SolanaTestnet,
+                SccpNetworkV1::TonMainnet,
+                SccpNetworkV1::TonTestnet,
             ] {
                 let expected = matches!(
                     (backend, network),
@@ -1883,12 +1929,15 @@ mod tests {
                     ) | (
                         BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
                         SccpNetworkV1::SolanaTestnet
+                    ) | (
+                        BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
+                        SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
                     )
                 );
                 assert_eq!(backend.supports_destination_network(network), expected);
             }
         }
-        let unknown_backend = 3_u32.encode();
+        let unknown_backend = 4_u32.encode();
         assert!(
             BridgeSccpDestinationProofBackendV1::decode_all(&mut unknown_backend.as_slice())
                 .is_err()

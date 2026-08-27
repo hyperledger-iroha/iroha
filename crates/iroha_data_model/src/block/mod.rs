@@ -3633,6 +3633,54 @@ mod tests {
     }
     #[cfg(feature = "transparent_api")]
     #[test]
+    fn entrypoint_cloned_at_crosses_external_time_trigger_boundary() {
+        use crate::{
+            account::AccountId,
+            transaction::{
+                ExecutionStep,
+                signed::{TransactionBuilder, TransactionEntrypoint, TransactionResultInner},
+            },
+            trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
+        };
+        use iroha_primitives::const_vec::ConstVec;
+        use std::num::NonZeroU64;
+
+        let keypair = checked_random_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            test_network_id(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
+        let time_trigger = TimeTriggerEntrypoint {
+            id: "entrypoint-boundary".parse().expect("trigger id"),
+            instructions: ExecutionStep(ConstVec::new_empty()),
+            authority,
+        };
+        let expected_external = TransactionEntrypoint::from(transaction.clone());
+        let expected_time = TransactionEntrypoint::from(time_trigger.clone());
+        let entrypoint_hashes = [expected_external.hash(), expected_time.hash()];
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let signature = checked_block_signature(0, &keypair, &header);
+        let mut block = SignedBlock::presigned(signature, header, vec![transaction]);
+        block
+            .set_transaction_results(
+                vec![time_trigger],
+                &entrypoint_hashes,
+                vec![
+                    TransactionResultInner::Ok(DataTriggerSequence::default()),
+                    TransactionResultInner::Ok(DataTriggerSequence::default()),
+                ],
+            )
+            .expect("entrypoint hashes should match payload");
+
+        assert_eq!(block.entrypoint_cloned_at(0), Some(expected_external));
+        assert_eq!(block.entrypoint_cloned_at(1), Some(expected_time));
+        assert_eq!(block.entrypoint_cloned_at(2), None);
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
     fn set_transaction_results_rejects_too_short_external_hash_prefix() {
         use crate::{
             account::AccountId, transaction::signed::TransactionBuilder,

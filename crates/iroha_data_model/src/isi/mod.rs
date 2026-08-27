@@ -173,6 +173,7 @@ impl_direct_instruction_box!(crate::isi::kaigi::EndKaigi);
 impl_direct_instruction_box!(crate::isi::kaigi::RecordKaigiUsage);
 impl_direct_instruction_box!(crate::isi::kaigi::SetKaigiRelayManifest);
 impl_direct_instruction_box!(crate::isi::kaigi::RegisterKaigiRelay);
+impl_direct_instruction_box!(crate::isi::kaigi::UnregisterKaigiRelay);
 impl_direct_instruction_box!(crate::isi::kaigi::ReportKaigiRelayHealth);
 impl_direct_instruction_box!(crate::isi::nexus::SetLaneRelayEmergencyValidators);
 impl_direct_instruction_box!(crate::isi::nexus::RegisterVerifiedLaneRelay);

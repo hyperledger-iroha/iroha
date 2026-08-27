@@ -44,6 +44,16 @@ PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1 = (
 PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1 = (
     "iroha.governance.parliament.transition.submit.v1"
 )
+_PARLIAMENT_INSTRUCTION_TYPE_NAME_BY_WIRE_ID_V1 = {
+    PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1: (
+        "iroha_data_model::isi::governance::parliament::"
+        "CreateParliamentGovernanceAttemptV1"
+    ),
+    PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1: (
+        "iroha_data_model::isi::governance::parliament::"
+        "SubmitParliamentLifecycleTransitionV1"
+    ),
+}
 PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1 = (
     "iroha.torii.v1.parliament.timed_ovn_casting_proof.request"
 )
@@ -720,10 +730,17 @@ def _instruction(
     wire_id = _text(record["wire_id"], f"{context}[0].wire_id")
     if wire_id != expected_wire_id:
         raise ValueError(f"{context}[0].wire_id is not the canonical Parliament instruction")
+    try:
+        expected_type_name = _PARLIAMENT_INSTRUCTION_TYPE_NAME_BY_WIRE_ID_V1[
+            expected_wire_id
+        ]
+    except KeyError as exc:
+        raise ValueError(f"{context}[0].wire_id has no exact first-release schema") from exc
     payload_hex = _lower_hex(record["payload_hex"], f"{context}[0].payload_hex")
-    validate_opaque_norito_frame(
+    validate_norito_frame(
         bytes.fromhex(payload_hex),
         context=f"{context}[0].payload_hex",
+        expected_type_name=expected_type_name,
     )
     return ParliamentInstructionDraftV1(wire_id=wire_id, payload_hex=payload_hex)
 

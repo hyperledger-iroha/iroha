@@ -847,10 +847,10 @@ int32_t connect_norito_kagemusha_recursive_spend_topup_v4(
 // recipient insertion paths, optional sender-change opening and insertion
 // paths, active transfer verifier binding, operation id, and block height.
 // Parent provenance is mandatory, canonicalized under one exact authenticated
-// roster, and fully verified before proving. Secrets are zeroized before return. The entrypoint
-// remains unavailable until recursive append can atomically return both the
-// split result and proof-output-bound recipient/change membership witnesses;
-// a bundle without those witnesses is not spendable cash.
+// roster, and fully verified before proving. Secrets are zeroized before return.
+// The returned split result atomically carries the proof-output-bound recipient
+// witness and, when change exists, the change witness needed to spend either
+// resulting branch.
 int32_t connect_norito_kagemusha_recursive_spend_append_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
@@ -887,9 +887,9 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4(
 // the owned opening, exact membership/dummy paths, exact scaled public amount,
 // optional private change opening plus mandatory change insertion paths, and
 // active unshield-v3 verifier binding. Native derives the unshield proof
-// attachment and redemption intent; callers cannot supply either. This
-// remains unavailable until partial redemption can atomically return the
-// proof-bound offline-change membership witness.
+// attachment and redemption intent; callers cannot supply either. A partial
+// redemption atomically returns its proof-bound offline-change bundle and
+// membership witness; a full redemption returns no private change state.
 int32_t connect_norito_kagemusha_recursive_spend_redeem_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,

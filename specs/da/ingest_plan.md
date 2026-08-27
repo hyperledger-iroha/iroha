@@ -37,6 +37,7 @@ Payload is a Norito-encoded `DaIngestRequest`. Responses use
 | 409 Conflict | Duplicate `client_blob_id` with mismatched metadata. |
 | 413 Payload Too Large | Exceeds configured blob length limit. |
 | 429 Too Many Requests | Rate limit hit. |
+| 503 Service Unavailable | Bounded ingest compute capacity is saturated; retry later. |
 | 500 Internal Error | Unexpected failure (logged + alert). |
 
 ```
@@ -248,7 +249,8 @@ hashing, chunking, and verifying optional manifests.
 ### Validation Checklist
 
 1. Verify request Norito header matches `DaIngestRequest`.
-2. Before decompression, reject zero or greater-than-64-MiB `total_size` claims.
+2. Before decompression, reject zero or greater-than-64-MiB `total_size` claims
+   and reject `sequence = u64::MAX`, which cannot have a monotonic successor.
 3. Enforce power-of-two `chunk_size` in the inclusive 1 KiB–2 MiB range and
    at most 1,024 source chunks.
 4. Require 1–64 data shards, 2–64 parity shards, and at most 64 row-parity
@@ -261,7 +263,9 @@ hashing, chunking, and verifying optional manifests.
    `torii.da_ingest.max_concurrent_compute_jobs` (default `1`). The owned
    semaphore permit remains inside the physical worker, so cancelling an HTTP
    request cannot admit replacement work while its detached computation is
-   still running.
+   still running. Admission is fail-fast: a request that reaches a saturated
+   compute boundary receives `503` instead of retaining its decoded payload in
+   an unbounded semaphore wait queue.
 5. `retention_policy.required_replica_count` must respect governance baseline.
 6. Require the exact genesis-derived `NetworkId`, bind `owner` to the
    authenticated account, and verify the canonical witness set against the
@@ -269,8 +273,10 @@ hashing, chunking, and verifying optional manifests.
    controller key; multisig accounts require committed-member weights meeting
    the committed threshold.
 7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.
-8. When `norito_manifest` provided, verify schema + hash matches recalculated
-   manifest after chunking; otherwise node generates manifest and stores it.
+8. When `norito_manifest` is provided, verify every chunk field—including
+   `role` and `group_id`—exactly matches the canonical chunk vector before
+   accepting its IPA commitment; otherwise the node generates and stores the
+   manifest.
 9. Enforce the configured replication policy: Torii rewrites the submitted
    `RetentionPolicy` with `torii.da_ingest.replication_policy` (see
    `replication_policy.md`) and rejects pre-built manifests whose retention
@@ -303,6 +309,43 @@ enclosing lane/epoch/sequence tuple, exact network, signatures, payload charge,
 account existence, and the committed single-key or weighted-multisig controller
 before any quota accounting. Rust, JavaScript, and Swift builders share a
 golden digest vector.
+
+### Governed producer and epoch admission
+
+The consensus-visible custom parameter
+`iroha:da_ingest_admission_policy_v1` is the only authority for DA producers
+and replay epochs. Each canonical lane entry binds an exact active lane
+incarnation, a sorted producer-account set, one current epoch, and at most the
+immediately preceding grace epoch. The V1 payload is bounded to 1,024 lane
+records, 4,096 producer identities, and 1,024 admitted `(lane, epoch)` windows.
+An absent or malformed policy disables non-empty DA ingest; it is never
+interpreted as an open policy.
+
+Policy revision one has no predecessor. Every later revision increments by
+exactly one and commits the exact predecessor policy hash. Existing lane
+records may not be dropped. Changing a producer set, disabling a lane, or
+changing its incarnation must advance the current epoch; grace may carry only
+the predecessor's current epoch and may not cross an incarnation change. An
+empty producer set is a durable lane tombstone: it admits and retains no
+window, while preserving the epoch floor. A later reactivation remains in the
+same permanent lane record and must advance that floor, so a retired lane
+identifier cannot make an old signed request valid after reuse.
+
+Torii captures the committed policy and active incarnation from one state view
+at the next proposal height before compute, then repeats that check under the
+replay-lifecycle fence before reservation and durable receipt commit. A policy
+transition during queued spool work cancels or retires the stale receipt.
+Validators independently apply the same owner/lane/incarnation/epoch decision
+to every header-committed `DaPinIntent`, so node-local configuration cannot
+create a second admission path.
+
+When a policy revision retires a window, Torii first hard-links every excluded
+receipt into the durable retired-receipt archive and syncs that directory. It
+then removes the active receipt names, syncs the spool root, checkpoints and
+truncates the replay cursor journal, removes receipt-index heads, and finally
+clears matching replay-cache state. The ordering is retryable after any crash:
+old receipt evidence cannot repopulate a cursor on restart, and a cursor is not
+forgotten while its active receipt name can still be rediscovered.
 
 ### Chunking & Replication Flow
 

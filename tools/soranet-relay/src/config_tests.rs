@@ -20,11 +20,11 @@ macro_rules! config_fixture {
         )
     };
 }
-fn write_config(json: &str) -> PathBuf {
+fn write_config(json: &str) -> NamedTempFile {
     let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
         .expect("create temp file");
     std::fs::write(file.path(), json).expect("write config");
-    file.into_temp_path().keep().expect("persist temp file")
+    file
 }
 fn write_manifest(json: &str) -> NamedTempFile {
     let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
@@ -888,8 +888,16 @@ fn load_minimal_structural_config_in_test_build() {
     );
 }
 fn assert_vpn_config_error(config_json: &str, expected: &str) {
-    let path = write_config(config_json);
-    let error = RelayConfig::load(path).expect_err("incomplete VPN trust must fail closed");
+    let mut config: RelayConfig =
+        norito::json::from_str(config_json).expect("parse incomplete VPN trust fixture");
+    // These cases exercise relay-level VPN trust requirements. Keep the VPN
+    // component itself valid so newly mandatory backend custody fields do not
+    // mask the cross-field error under test.
+    let (vpn, _credentials) = vpn_config_with_credentials(0xAB);
+    config.vpn = Some(vpn);
+    let error = config
+        .validate()
+        .expect_err("incomplete VPN trust must fail closed");
     assert!(
         matches!(error, ConfigError::Vpn(ref message) if message.contains(expected)),
         "expected VPN error containing {expected:?}, got {error:?}"
@@ -1109,6 +1117,31 @@ fn constant_rate_capability_rejects_future_versions() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+#[test]
+fn constant_rate_capability_rejects_strict_mode_without_silent_downgrade() {
+    let strict = ConstantRateCapabilityConfig {
+        enabled: true,
+        version: 1,
+        strict: true,
+    };
+    let error = strict
+        .validate()
+        .expect_err("strict mode must fail until payload uses the fixed-rate scheduler");
+    assert!(
+        matches!(error, ConfigError::ConstantRateCapability(ref message) if message.contains("strict mode is unavailable") && message.contains("DATAGRAM failures")),
+        "unexpected error: {error:?}"
+    );
+
+    let best_effort = ConstantRateCapabilityConfig {
+        enabled: true,
+        version: 1,
+        strict: false,
+    };
+    best_effort
+        .validate()
+        .expect("best-effort cover traffic remains available");
+    assert_eq!(best_effort.capability().mode, ConstantRateMode::BestEffort);
 }
 #[test]
 fn constant_rate_capability_returns_none_when_disabled() {
@@ -1407,7 +1440,7 @@ fn quotas_for_mode_honours_overrides() {
         quotas: QuotaConfig {
             per_remote_burst: 100,
             per_remote_window_secs: 45,
-            per_descriptor_burst: 80,
+            per_descriptor_burst: 0,
             per_descriptor_window_secs: 35,
             cooldown_secs: 15,
             max_entries: 2048,
@@ -1425,7 +1458,7 @@ fn quotas_for_mode_honours_overrides() {
             exit: Some(QuotaConfig {
                 per_remote_burst: 70,
                 per_remote_window_secs: 0,
-                per_descriptor_burst: 20,
+                per_descriptor_burst: 0,
                 per_descriptor_window_secs: 0,
                 cooldown_secs: 0,
                 max_entries: 0,
@@ -1457,7 +1490,42 @@ fn quotas_for_mode_honours_overrides() {
     );
     assert_eq!(exit.cooldown_secs, QuotaConfig::default_cooldown_secs());
     assert_eq!(exit.max_entries, QuotaConfig::default_max_entries());
-    assert_eq!(exit.per_descriptor_burst, 20);
+    assert_eq!(exit.per_descriptor_burst, 0);
+}
+#[test]
+fn relay_static_descriptor_quotas_are_rejected() {
+    let mut base = PowConfig {
+        quotas: QuotaConfig {
+            per_descriptor_burst: 1,
+            ..QuotaConfig::default()
+        },
+        ..PowConfig::default()
+    };
+    let error = base
+        .apply_defaults()
+        .expect_err("base descriptor quota must fail");
+    assert!(
+        matches!(error, ConfigError::Quota(ref message) if message.contains("quotas.per_descriptor_burst") && message.contains("relay-static")),
+        "unexpected error: {error:?}"
+    );
+
+    let mut override_config = PowConfig {
+        quotas_per_mode: Some(HopQuotaOverrides {
+            exit: Some(QuotaConfig {
+                per_descriptor_burst: 1,
+                ..QuotaConfig::default()
+            }),
+            ..HopQuotaOverrides::default()
+        }),
+        ..PowConfig::default()
+    };
+    let error = override_config
+        .apply_defaults()
+        .expect_err("per-mode descriptor quota must fail");
+    assert!(
+        matches!(error, ConfigError::Quota(ref message) if message.contains("quotas_per_mode.exit.per_descriptor_burst") && message.contains("relay-static")),
+        "unexpected error: {error:?}"
+    );
 }
 #[test]
 fn quota_tracker_capacity_accepts_exact_limit_and_rejects_plus_one() {
@@ -1495,6 +1563,49 @@ fn quota_tracker_capacity_accepts_exact_limit_and_rejects_plus_one() {
         .expect_err("per-mode tracker limit + 1 must fail");
     assert!(
         matches!(error, ConfigError::Quota(ref message) if message.contains("quotas_per_mode.middle.max_entries")),
+        "unexpected error: {error:?}"
+    );
+}
+#[test]
+fn quota_duration_horizon_accepts_boundary_and_rejects_overflow() {
+    let exact = QuotaConfig {
+        per_remote_window_secs: u64::MAX - 20,
+        cooldown_secs: 20,
+        ..QuotaConfig::default()
+    };
+    exact
+        .validate()
+        .expect("an exactly representable quota horizon must validate");
+
+    let overflow = QuotaConfig {
+        per_remote_window_secs: u64::MAX,
+        cooldown_secs: 1,
+        ..QuotaConfig::default()
+    };
+    let error = overflow
+        .validate()
+        .expect_err("an overflowing quota horizon must fail validation");
+    assert!(
+        matches!(error, ConfigError::Quota(ref message) if message.contains("quotas.per_remote_window_secs") && message.contains("overflow")),
+        "unexpected error: {error:?}"
+    );
+
+    let mut per_mode = PowConfig {
+        quotas_per_mode: Some(HopQuotaOverrides {
+            entry: Some(QuotaConfig {
+                per_remote_window_secs: u64::MAX,
+                cooldown_secs: 1,
+                ..QuotaConfig::default()
+            }),
+            ..HopQuotaOverrides::default()
+        }),
+        ..PowConfig::default()
+    };
+    let error = per_mode
+        .apply_defaults()
+        .expect_err("an overflowing per-mode quota horizon must fail validation");
+    assert!(
+        matches!(error, ConfigError::Quota(ref message) if message.contains("quotas_per_mode.entry.per_remote_window_secs") && message.contains("overflow")),
         "unexpected error: {error:?}"
     );
 }
@@ -1568,7 +1679,7 @@ fn puzzle_config_builds_parameters() {
 #[test]
 fn replay_filter_defaults_and_rounds_parameters() {
     let mut cfg = ReplayFilterConfig {
-        enabled: true,
+        enabled: false,
         bits: 1_000,
         hash_functions: 0,
         ttl_secs: 0,
@@ -1580,11 +1691,20 @@ fn replay_filter_defaults_and_rounds_parameters() {
         ReplayFilterConfig::default_hash_functions()
     );
     assert_eq!(cfg.ttl_secs, ReplayFilterConfig::default_ttl_secs());
+    assert_eq!(cfg.bits_usize(), 1_024);
+    assert_eq!(
+        cfg.hash_count(),
+        ReplayFilterConfig::default_hash_functions()
+    );
+    assert_eq!(
+        cfg.ttl(),
+        Duration::from_secs(ReplayFilterConfig::default_ttl_secs())
+    );
 }
 #[test]
 fn replay_filter_rejects_invalid_parameters() {
     let mut too_many_bits = ReplayFilterConfig {
-        enabled: true,
+        enabled: false,
         bits: (1 << 24) + 1,
         hash_functions: 4,
         ttl_secs: 10,
@@ -1597,7 +1717,7 @@ fn replay_filter_rejects_invalid_parameters() {
         "unexpected error: {err:?}"
     );
     let mut overflowing_bits = ReplayFilterConfig {
-        enabled: true,
+        enabled: false,
         bits: u32::MAX,
         hash_functions: 4,
         ttl_secs: 10,
@@ -1610,7 +1730,7 @@ fn replay_filter_rejects_invalid_parameters() {
         "unexpected error: {err:?}"
     );
     let mut too_many_hashes = ReplayFilterConfig {
-        enabled: true,
+        enabled: false,
         bits: 256,
         hash_functions: 17,
         ttl_secs: 10,
@@ -1624,15 +1744,14 @@ fn replay_filter_rejects_invalid_parameters() {
     );
 }
 #[test]
-fn relay_config_loads_replay_filter_settings() {
+fn relay_config_rejects_retired_descriptor_replay_filter() {
     let json = config_fixture!("replay_filter.json");
     let path = write_config(json);
-    let cfg = RelayConfig::load(path).expect("load config");
-    let filter = cfg.pow_config().replay_filter();
-    assert!(filter.is_enabled());
-    assert_eq!(filter.bits_usize(), 4_096);
-    assert_eq!(filter.hash_count(), 3);
-    assert_eq!(filter.ttl().as_secs(), 45);
+    let error = RelayConfig::load(path).expect_err("unsafe static-descriptor filter must fail");
+    assert!(
+        matches!(error, ConfigError::ReplayFilter(ref message) if message.contains("relay-static") && message.contains("durable replay stores")),
+        "unexpected error: {error:?}"
+    );
 }
 #[test]
 fn rejects_partial_tls_paths() {
@@ -1912,7 +2031,9 @@ fn compliance_salt_rejects_permissions_symlinks_and_noncanonical_encoding() {
     std::fs::set_permissions(salt_file.path(), std::fs::Permissions::from_mode(0o600))
         .expect("restore private salt permissions");
 
-    let link_path = salt_file.path().with_extension("link");
+    let link_directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create salt symlink directory");
+    let link_path = link_directory.path().join("salt-link");
     symlink(salt_file.path(), &link_path).expect("create salt symlink");
     config.hash_salt_path = Some(link_path);
     assert!(config.hash_salt_bytes().is_err());
@@ -2192,7 +2313,11 @@ fn deployment_samples_materialize_direct_config_and_persist_audit_state() {
             "systemd deployment sample is missing `{required}`"
         );
     }
-    for forbidden in ["ExecReload=", "CAP_NET_BIND_SERVICE", "AmbientCapabilities="] {
+    for forbidden in [
+        "ExecReload=",
+        "CAP_NET_BIND_SERVICE",
+        "AmbientCapabilities=",
+    ] {
         assert!(
             !systemd.contains(forbidden),
             "systemd deployment sample must not contain `{forbidden}`"

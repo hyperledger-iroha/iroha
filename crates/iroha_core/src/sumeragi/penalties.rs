@@ -450,7 +450,7 @@ mod tests {
             consensus_v2::{
                 BlockSubject, ConsensusMode as V2ConsensusMode, ConsensusRound,
                 DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
-                HeightContext, HeightContextId, PayloadEncoding, QuorumCertificate, ValidatorPower,
+                HeightContext, PayloadEncoding, QuorumCertificate, ValidatorPower,
                 finality::V2FinalityArtifact,
             },
         },

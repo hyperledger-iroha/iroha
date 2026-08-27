@@ -1,4 +1,5 @@
 // Collective evaluated-key tests included from the parent module.
+use super::super::gadget_decompose;
 use super::*;
 use crate::vega::MaskedRelaxedRandomErrorV1;
 use std::{cell::Cell, collections::BTreeSet};
@@ -565,6 +566,35 @@ fn exact_compact_digits(
             (b, a)
         })
         .collect()
+}
+fn apply_test_compact_switch_streamed(
+    profile: &BgvProfile,
+    base_constant: &RnsPolynomial,
+    base_linear: &RnsPolynomial,
+    switched: &RnsPolynomial,
+    digits: &[(RnsPolynomial, RnsPolynomial)],
+) -> Result<(RnsPolynomial, RnsPolynomial), ZkAmsMkheErrorV1> {
+    if digits.len() != profile.gadget_digits {
+        return Err(ZkAmsMkheErrorV1::MissingEvaluatedKey);
+    }
+    apply_compact_switch_streamed_core(
+        profile,
+        clone_rns_exact(profile, base_constant)?,
+        clone_rns_exact(profile, base_linear)?,
+        switched,
+        |digit_index, limb_index, output| {
+            let (stored_b, _) = digits
+                .get(digit_index)
+                .ok_or(ZkAmsMkheErrorV1::MissingEvaluatedKey)?;
+            fill_test_limb(profile, stored_b, limb_index, output)
+        },
+        |digit_index, limb_index, output| {
+            let (_, seeded_a) = digits
+                .get(digit_index)
+                .ok_or(ZkAmsMkheErrorV1::MissingEvaluatedKey)?;
+            fill_test_limb(profile, seeded_a, limb_index, output)
+        },
+    )
 }
 #[test]
 fn all_38_streamed_digits_match_full_balanced_reference_at_boundaries() {
@@ -1885,7 +1915,7 @@ fn canonical_seekable_layout_rejects_truncation_extension_gap_overlap_and_alias(
 }
 #[test]
 fn compact_relinearization_matches_direct_tiny_decryption_with_balanced_digits() {
-    let profile = test_profile();
+    let profile = hybrid_test_profile();
     profile.validate().unwrap();
     let secret = signed(&profile, &[-1, 0, 1, 1, 0, -1, 1, 0]);
     let constant = signed(&profile, &[4, -7, 9, 0, -3, 12, 1, -5]);
@@ -1894,7 +1924,8 @@ fn compact_relinearization_matches_direct_tiny_decryption_with_balanced_digits()
     let secret_squared = secret.mul(&secret, &profile).unwrap();
     let digits = exact_compact_digits(&profile, &secret, &secret_squared);
     let (switched_constant, switched_linear) =
-        apply_compact_switch(&profile, &constant, &linear, &quadratic, &digits).unwrap();
+        apply_test_compact_switch_streamed(&profile, &constant, &linear, &quadratic, &digits)
+            .unwrap();
     let observed = switched_constant
         .add(&switched_linear.mul(&secret, &profile).unwrap(), &profile)
         .unwrap();
@@ -1905,7 +1936,7 @@ fn compact_relinearization_matches_direct_tiny_decryption_with_balanced_digits()
         .unwrap();
     assert_eq!(observed, expected);
     assert_eq!(
-        apply_compact_switch(
+        apply_test_compact_switch_streamed(
             &profile,
             &constant,
             &linear,
@@ -1917,7 +1948,7 @@ fn compact_relinearization_matches_direct_tiny_decryption_with_balanced_digits()
 }
 #[test]
 fn compact_galois_switch_matches_direct_decryption_for_every_tiny_automorphism() {
-    let profile = test_profile();
+    let profile = hybrid_test_profile();
     let secret = signed(&profile, &[-1, 1, 0, 1, -1, 0, 0, 1]);
     let constant = signed(&profile, &[11, -13, 17, 19, -23, 29, -31, 37]);
     let linear = signed(&profile, &[-41, 43, 47, -53, 59, 61, -67, 71]);
@@ -1929,7 +1960,7 @@ fn compact_galois_switch_matches_direct_decryption_for_every_tiny_automorphism()
         let transformed_constant = constant.automorphism(exponent, &profile).unwrap();
         let transformed_linear = linear.automorphism(exponent, &profile).unwrap();
         let digits = exact_compact_digits(&profile, &secret, &transformed_secret);
-        let (switched_constant, switched_linear) = apply_compact_switch(
+        let (switched_constant, switched_linear) = apply_test_compact_switch_streamed(
             &profile,
             &transformed_constant,
             &RnsPolynomial::zero(&profile),

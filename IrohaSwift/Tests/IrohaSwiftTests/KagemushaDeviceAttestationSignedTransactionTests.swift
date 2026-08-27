@@ -662,7 +662,9 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
     }
 
     private func alternateAuthority() throws -> String {
-        let key = Data(repeating: 0x55, count: 32)
+        let key = try Keypair(
+            privateKeyBytes: Data(repeating: 0x55, count: 32)
+        ).publicKey
         return try AccountAddress.fromAccount(publicKey: key).toI105(
             networkPrefix: SccpV1.tairaI105DiscriminantV1
         )

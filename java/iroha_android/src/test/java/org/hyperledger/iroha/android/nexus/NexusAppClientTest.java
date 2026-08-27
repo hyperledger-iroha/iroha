@@ -16,10 +16,16 @@ import java.util.concurrent.CompletableFuture;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.alias.AccountFaucetClaimV1;
+import org.hyperledger.iroha.android.alias.AccountFaucetPolicyV1;
+import org.hyperledger.iroha.android.alias.AccountFaucetPreparedTransactionV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPlanReceiptV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPrepareResponseV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPreparedTransactionV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingProofRequiredPrepareResponseV1;
+import org.hyperledger.iroha.android.alias.PreparedTransactionSubmitResponseV1;
 import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.IrohaClient;
@@ -971,6 +977,28 @@ public final class NexusAppClientTest {
     }
 
     @Override
+    public CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
+        final AccountOnboardingPlanRequestV1 request,
+        final String onboardingToken,
+        final String expectedAuthority,
+        final NetworkId expectedNetworkId) {
+      throw new AssertionError("account onboarding is not used by this test fake");
+    }
+
+    @Override
+    public CompletableFuture<AccountOnboardingPrepareResponseV1>
+        prepareSponsoredAccountOnboarding(
+            final AccountOnboardingPlanRequestV1 request,
+            final AccountOnboardingPlanReceiptV1 receipt,
+            final TairaPublicResetMutationBindingV1 binding,
+            final FeePaymentIntent feePayment,
+            final String onboardingToken,
+            final String expectedAuthority,
+            final NetworkId expectedNetworkId) {
+      throw new AssertionError("account onboarding is not used by this test fake");
+    }
+
+    @Override
     public CompletableFuture<AccountOnboardingCurrentStateV1>
         verifyAccountOnboardingCurrentState(
             final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
@@ -981,6 +1009,39 @@ public final class NexusAppClientTest {
             final NetworkId expectedNetworkId,
             final ToriiCanonicalRequestAuth canonicalAuth) {
       throw new AssertionError("account onboarding is not used by this test fake");
+    }
+
+    @Override
+    public CompletableFuture<PreparedTransactionSubmitResponseV1>
+        submitPreparedAccountOnboarding(
+            final AccountOnboardingPlanRequestV1 request,
+            final AccountOnboardingPreparedTransactionV1 prepared,
+            final FeePaymentIntent expectedFeePayment,
+            final String onboardingToken,
+            final String expectedAuthority,
+            final NetworkId expectedNetworkId) {
+      throw new AssertionError("account onboarding is not used by this test fake");
+    }
+
+    @Override
+    public CompletableFuture<AccountFaucetPreparedTransactionV1>
+        prepareAccountFaucetTransaction(
+            final AccountFaucetClaimV1 claim,
+            final TairaPublicResetMutationBindingV1 binding,
+            final FeePaymentIntent feePayment,
+            final AccountFaucetPolicyV1 policy,
+            final NetworkId expectedNetworkId) {
+      throw new AssertionError("account faucet is not used by this test fake");
+    }
+
+    @Override
+    public CompletableFuture<PreparedTransactionSubmitResponseV1>
+        submitPreparedAccountFaucetTransaction(
+            final AccountFaucetPreparedTransactionV1 prepared,
+            final FeePaymentIntent expectedFeePayment,
+            final AccountFaucetPolicyV1 policy,
+            final NetworkId expectedNetworkId) {
+      throw new AssertionError("account faucet is not used by this test fake");
     }
 
     @Override

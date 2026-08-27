@@ -46,6 +46,10 @@ impl Checker {
         }
     }
     fn visit_function(&mut self, func: &TypedFunction) {
+        for parameter in &func.param_types {
+            let origin = format!("parameter `{}` of function `{}`", parameter.name, func.name);
+            self.visit_type(&parameter.ty, &origin);
+        }
         self.visit_block(&func.body, func.name.as_str());
         if let Some(ret_ty) = &func.ret_ty {
             let origin = format!("function `{}` return type", func.name);
@@ -243,6 +247,13 @@ impl Checker {
                 self.visit_type(key, origin);
                 self.visit_type(value, origin);
             }
+            Type::Secret(inner) | Type::Option(inner) | Type::List(inner, _) => {
+                self.visit_type(inner, origin);
+            }
+            Type::Result(ok, error) => {
+                self.visit_type(ok, origin);
+                self.visit_type(error, origin);
+            }
             Type::Tuple(elems) => {
                 for elem in elems {
                     self.visit_type(elem, origin);
@@ -317,6 +328,7 @@ mod tests {
         semantic::{ExprKind, Type, TypedExpr, TypedStatement},
         *,
     };
+    use crate::parser::parse_test_fragment as parse;
     #[test]
     fn map_key_violation_reports_origin() {
         let mut checker = Checker::default();
@@ -350,6 +362,37 @@ mod tests {
             Type::DataSpaceId,
         ] {
             assert!(is_allowed_map_key_type(&ty), "rejected {ty:?}");
+        }
+    }
+    #[test]
+    fn invalid_map_key_in_function_parameter_is_rejected() {
+        for parameter_type in ["StateMap<Json, int>", "Option<StateMap<Json, int>>"] {
+            let program = parse(&format!(
+                "module Demo {{ fn consume({parameter_type} value) {{ return; }} }}"
+            ))
+            .expect("parse private map parameter");
+            let typed =
+                semantic::analyze(&program).expect("semantic analysis permits ephemeral maps");
+            let errors = enforce_on_chain_profile(&typed)
+                .expect_err("the on-chain profile must inspect nested parameter types");
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0].message.contains("key type `Json`"));
+            assert!(errors[0].message.contains("parameter `value`"));
+        }
+    }
+    #[test]
+    fn wrapped_map_types_are_checked_recursively() {
+        let invalid_map = Type::StateMap(Box::new(Type::Json), Box::new(Type::Int));
+        let wrapped = [
+            Type::Secret(Box::new(invalid_map.clone())),
+            Type::Option(Box::new(invalid_map.clone())),
+            Type::Result(Box::new(Type::Int), Box::new(invalid_map.clone())),
+            Type::List(Box::new(invalid_map), 1),
+        ];
+        for ty in wrapped {
+            let mut checker = Checker::default();
+            checker.visit_type(&ty, "wrapped test type");
+            assert_eq!(checker.errors.len(), 1, "missed nested map in {ty:?}");
         }
     }
 }

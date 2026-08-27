@@ -10,7 +10,7 @@ Features:
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
 - One-shot pipeline submission helpers (POST `/v1/pipeline/transactions` plus hash-bound status polling)
-- Ed25519 signing with CryptoKit plus native-bridge secp256k1, ML-DSA, GOST R 34.10-2012, BLS normal/small, and SM2 support
+- Ed25519 signing with CryptoKit plus native-bridge secp256k1, ML-DSA-65, GOST R 34.10-2012, BLS normal/small, and SM2 support
 - Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
 - Verifying key registry read/mutation/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `registerVerifyingKey`, `updateVerifyingKey`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
@@ -234,6 +234,7 @@ let asset = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
 let walletToken = "<wallet-session-token>"
 let networkId = try NetworkId(literal: configuredNetworkIdLiteral)
+let feePayment = FeePaymentIntent.authority(chargeLimits: [], gasLimit: nil)
 let toriiAuth = try ToriiClientAuthentication.bearerToken(
     walletToken,
     accountId: accountId,
@@ -277,6 +278,7 @@ let onboardingPreparation = try await torii.prepareAccountOnboarding(
     onboardingReceipt,
     request: onboardingIntent,
     binding: onboardingBinding,
+    feePayment: feePayment,
     onboardingToken: routeToken,
     expectedAuthority: configuredOnboardingAuthority,
     expectedNetworkId: networkId
@@ -309,6 +311,7 @@ case let .prepared(envelope):
     )
     let outcome = try await torii.submitPreparedAccountOnboarding(
         retained,
+        expectedFeePayment: feePayment,
         request: onboardingIntent,
         onboardingToken: routeToken,
         expectedAuthority: configuredOnboardingAuthority,
@@ -322,9 +325,19 @@ case let .prepared(envelope):
 // onboarding is Applied. A ProofRequired result is nonterminal until one fresh
 // atomic account-and-alias observation matches; rerun it after reopening
 // durable state. Use a distinct `.faucet` binding/idempotency digest, persist
-// the returned `ToriiAccountFaucetPreparedTransactionV1`, then pass those same bytes to
-// `submitPreparedAccountFaucet(_:expectedAuthority:expectedNetworkId:)` with
-// the configured faucet authority and exact genesis-derived network trust pins.
+// the returned `ToriiAccountFaucetPreparedTransactionV1`, then pass those same
+// bytes and this independently configured policy to both prepare and submit.
+// A V1 claim always carries a positive direct PoW anchor height and nonempty
+// canonical lowercase nonce hex; neither field has a null/optional form.
+let faucetPolicy = try ToriiAccountFaucetPolicyV1(
+    faucetAuthority: configuredFaucetAuthority,
+    assetDefinitionId: configuredFaucetAssetDefinitionId,
+    amount: try KotodamaQuantity(configuredFaucetAmount)
+)
+// `prepareAccountFaucet(..., policy: faucetPolicy, expectedNetworkId: networkId)`
+// and `submitPreparedAccountFaucet(..., policy: faucetPolicy,
+// expectedNetworkId: networkId)` reject authority, asset, amount, or fee-intent
+// substitution before a retained envelope is submitted.
 
 // Operator alias setup is plan-only on Torii. The wallet verifies the plan
 // hash, its genesis-derived network identity, and byte-identical instruction

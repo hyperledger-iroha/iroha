@@ -1,3 +1,24 @@
+fn store_scanner_attachment(tenant_key: &str, body: &[u8], content_type: &str) -> String {
+    let id = attachment_body_id(body);
+    let meta = super::super::zk_attachments::AttachmentMeta {
+        id: id.clone(),
+        content_type: content_type.to_owned(),
+        size: body.len() as u64,
+        created_ms: now_ms(),
+        tenant: Some(tenant_key.to_owned()),
+        provenance: Some(fixture_attachment_provenance(body, content_type)),
+        zk1_tags: None,
+    };
+    ensure_tenant_dir(tenant_key);
+    fs::write(attachment_bin_path(tenant_key, &id), body).expect("write scanner attachment body");
+    fs::write(
+        attachment_meta_path(tenant_key, &id),
+        norito::json::to_json_pretty(&meta).expect("scanner attachment metadata JSON"),
+    )
+    .expect("write scanner attachment metadata");
+    id
+}
+
 #[test]
 fn scan_and_report_single_attachment() {
     configure_test_cfg(Vec::new());
@@ -36,6 +57,219 @@ fn scan_and_report_single_attachment() {
     assert_eq!(
         rep.latency_ms,
         rep.processed_ms.saturating_sub(rep.created_ms)
+    );
+}
+
+#[test]
+fn report_capacity_eviction_does_not_requeue_completed_attachment() {
+    configure_test_cfg(Vec::new());
+    let _env = TestDataDirGuard::new();
+    let tenant_key = anon_tenant_key();
+    let body = fixture_attachment_bytes();
+    let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
+
+    let first = block_on_scan();
+    assert_eq!(first.processed_reports, 1);
+    assert!(load_report(&id).expect("initial report").ok);
+    assert_eq!(
+        prover_processing_decision(&id, now_ms()),
+        ProverProcessingDecision::Suppress
+    );
+
+    let replacement = sample_report("f".repeat(ATTACHMENT_ID_HEX_LEN), true, None, "test", 1);
+    save_report_with_limits(
+        &replacement,
+        1,
+        iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES,
+    )
+    .expect("capacity-limited report store accepts replacement report");
+    assert!(
+        load_report(&id).is_none(),
+        "capacity enforcement must evict the original report"
+    );
+
+    let second = block_on_scan();
+    assert_eq!(
+        second.processed_reports, 0,
+        "a durable receipt must suppress verification after report eviction"
+    );
+    assert!(load_report(&id).is_none());
+}
+
+#[test]
+fn report_persistence_failure_leaves_a_retryable_provisional_receipt() {
+    configure_test_cfg(Vec::new());
+    let _env = TestDataDirGuard::new();
+    let tenant_key = anon_tenant_key();
+    let body = fixture_attachment_bytes();
+    let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
+    fs::create_dir_all(prover_dir()).expect("create prover directory");
+    fs::write(reports_dir(), b"not a directory").expect("block report-directory creation");
+
+    let report = process_attachment_once(&id).expect("verification attempt returns its report");
+    assert!(report.ok);
+    assert!(load_report(&id).is_none(), "report persistence must fail");
+    assert_eq!(
+        prover_processing_decision(&id, now_ms()),
+        ProverProcessingDecision::Suppress,
+        "the provisional receipt must bound immediate retries"
+    );
+    assert_eq!(
+        prover_processing_decision(&id, u64::MAX),
+        ProverProcessingDecision::Due { retry_count: 1 },
+        "a missing report must not be hidden behind a terminal receipt"
+    );
+}
+
+#[test]
+fn successful_report_finalizes_a_due_provisional_receipt_without_reverification() {
+    configure_test_cfg(Vec::new());
+    let _env = TestDataDirGuard::new();
+    let tenant_key = anon_tenant_key();
+    let body = fixture_attachment_bytes();
+    let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
+    assert_eq!(block_on_scan().processed_reports, 1);
+    let report = load_report(&id).expect("successful report");
+    assert!(report.ok);
+    assert!(
+        persist_prover_processing_receipt_if_referenced(&ProverProcessingReceipt {
+            version: ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: report.processed_ms,
+            terminal: false,
+            retry_not_before_ms: Some(0),
+            retry_count: 1,
+        })
+        .expect("replace terminal receipt with crash-window fixture")
+    );
+    let location = AttachmentLocation { tenant_key, id };
+
+    assert!(
+        !attachment_needs_processing(&location),
+        "a persisted successful report must finalize the receipt without verification"
+    );
+    assert_eq!(
+        prover_processing_decision(&location.id, now_ms()),
+        ProverProcessingDecision::Suppress
+    );
+}
+
+#[test]
+fn failed_legacy_report_without_disposition_is_retried() {
+    configure_test_cfg(Vec::new());
+    let _env = TestDataDirGuard::new();
+    let tenant_key = anon_tenant_key();
+    let body = fixture_attachment_bytes();
+    let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
+    let mut legacy = sample_report(
+        id.clone(),
+        false,
+        Some("legacy failure without retry disposition"),
+        "application/x-norito",
+        now_ms(),
+    );
+    legacy.processing = None;
+    save_report(&legacy).expect("persist legacy report fixture");
+
+    let scan = block_on_scan();
+    assert_eq!(
+        scan.processed_reports, 1,
+        "an undecidable legacy failure must not suppress a fresh attempt"
+    );
+    let repaired = load_report(&id).expect("retried report");
+    assert!(repaired.ok);
+    assert!(repaired.processing.is_some());
+}
+
+#[test]
+fn malformed_report_file_does_not_suppress_processing() {
+    configure_test_cfg(Vec::new());
+    let _env = TestDataDirGuard::new();
+    let tenant_key = anon_tenant_key();
+    let body = fixture_attachment_bytes();
+    let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
+    ensure_dirs();
+    fs::write(report_path_from_sanitized(&id), b"{not a report")
+        .expect("persist malformed report fixture");
+
+    assert_eq!(block_on_scan().processed_reports, 1);
+    assert!(load_report(&id).expect("replacement report").ok);
+}
+
+#[test]
+fn committed_terminal_failure_repairs_a_due_provisional_receipt() {
+    configure_test_cfg(Vec::new());
+    let _env = TestDataDirGuard::new();
+    let tenant_key = anon_tenant_key();
+    let body = fixture_attachment_bytes();
+    let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
+    let location = AttachmentLocation {
+        tenant_key,
+        id: id.clone(),
+    };
+    assert!(attachment_needs_processing(&location));
+    let terminal = sample_report(
+        id.clone(),
+        false,
+        Some("terminal verification failure"),
+        "application/x-norito",
+        now_ms(),
+    );
+    save_report(&terminal).expect("persist terminal report before simulated crash");
+    assert!(
+        persist_prover_processing_receipt_if_referenced(&ProverProcessingReceipt {
+            version: ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: terminal.processed_ms,
+            terminal: false,
+            retry_not_before_ms: Some(0),
+            retry_count: 1,
+        })
+        .expect("persist simulated pre-report provisional receipt")
+    );
+
+    assert!(
+        !attachment_needs_processing(&location),
+        "the committed terminal disposition must suppress repeat verification"
+    );
+    assert_eq!(
+        prover_processing_decision(&id, u64::MAX),
+        ProverProcessingDecision::Suppress
+    );
+}
+
+#[test]
+fn cross_tenant_duplicate_uses_one_receipt_even_without_a_report() {
+    configure_test_cfg(Vec::new());
+    let _env = TestDataDirGuard::new();
+    let first_tenant = anon_tenant_key();
+    let second_tenant = "4".repeat(TENANT_KEY_HEX_LEN);
+    let body = fixture_attachment_bytes();
+    let id = store_scanner_attachment(&first_tenant, &body, "application/x-norito");
+    assert_eq!(
+        store_scanner_attachment(&second_tenant, &body, "application/x-norito"),
+        id
+    );
+
+    let first = block_on_scan();
+    assert_eq!(
+        first.processed_reports, 1,
+        "content identity must deduplicate tenant-local copies"
+    );
+    assert_eq!(
+        prover_processing_decision(&id, now_ms()),
+        ProverProcessingDecision::Suppress
+    );
+    {
+        let _guard = report_summary_lock().lock();
+        delete_report_files_locked(&id).expect("remove evictable report files");
+    }
+    assert!(load_report(&id).is_none());
+
+    let second = block_on_scan();
+    assert_eq!(
+        second.processed_reports, 0,
+        "the shared content receipt must remain authoritative without a report"
     );
 }
 #[test]

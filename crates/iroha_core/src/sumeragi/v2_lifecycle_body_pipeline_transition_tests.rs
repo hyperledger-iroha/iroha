@@ -297,7 +297,7 @@ mod tests {
             )),
             manifest: manifest.clone(),
             body: vec![0x51],
-            responder: 0,
+            responder: context.roster[0].validator.clone(),
             signature: vec![0x52],
         };
         let fetch_owner = bind_adapter_effect_batch_ownership(

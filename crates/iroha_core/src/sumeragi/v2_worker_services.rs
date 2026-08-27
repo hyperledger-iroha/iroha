@@ -7,6 +7,8 @@ pub(crate) struct ProductionV2Services {
     local_validator: Option<wire::ValidatorIndex>,
     key_pair: KeyPair,
     network: IrohaNetwork,
+    /// Rotating start for bounded live-topology archive discovery.
+    archive_peer_cursor: AtomicUsize,
     kura: Arc<Kura>,
     chunk_root: PathBuf,
     io: Option<V2IoHandle>,

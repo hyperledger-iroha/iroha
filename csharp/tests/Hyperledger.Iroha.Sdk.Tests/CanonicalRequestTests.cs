@@ -297,6 +297,29 @@ public sealed class CanonicalRequestTests
     }
 
     [Fact]
+    public void CanonicalRequestCredentialsAcceptAnyCanonicalI105DiscriminantForTheSameController()
+    {
+        var address = AccountAddress.Parse(FixtureAccountId);
+        var alternate = address.ToI105(AccountAddress.TestChainDiscriminant);
+        Assert.NotEqual(FixtureAccountId, alternate);
+
+        var credentials = new CanonicalRequestCredentials(alternate, FixturePrivateKeySeed);
+        var headers = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
+            credentials.AccountId,
+            credentials.PrivateKeySeed,
+            "post",
+            "/v1/fees/quote",
+            body: Encoding.UTF8.GetBytes("{}"),
+            timestampMs: 1735000000123,
+            nonce: "alternate-discriminant-account");
+
+        Assert.Equal(alternate, credentials.AccountId);
+        Assert.Equal(alternate, headers.AccountId);
+        Assert.Equal(address.CanonicalHex, headers.ToDictionary()["X-Iroha-Account"]);
+    }
+
+    [Fact]
     public void CanonicalAccountAliasesEnforceSegmentAndStructuralBounds()
     {
         var longestLabel = new string('a', 63) + "@universal";

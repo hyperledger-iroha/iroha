@@ -101,6 +101,7 @@ const AddressClass = Object.freeze({
 
 const CONTROLLER_TAG_SINGLE = 0x00;
 const CONTROLLER_TAG_MULTISIG = 0x01;
+const CONTROLLER_TAG_SINGLE_EXTENDED = 0x02;
 const MULTISIG_MEMBER_MAX = 0xffff;
 const MULTISIG_POLICY_VERSION = 1;
 const HEX_BODY_RE = /^[0-9a-fA-F]+$/;
@@ -319,6 +320,13 @@ function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_PUBLIC_KEY,
       `invalid ${label} ${context}: expected ${expectedLength} bytes`,
+      { details: { curveId: entry.id, length: keyBytes.length, expectedLength } },
+    );
+  }
+  if (entry.id === CurveId.MLDSA && keyBytes.every((byte) => byte === 0)) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+      `invalid ${entry.algorithm} ${context}: public key must not be all-zero`,
       { details: { curveId: entry.id, length: keyBytes.length, expectedLength } },
     );
   }
@@ -577,24 +585,34 @@ function decodeHeader(byte) {
 }
 
 function encodeController(controller) {
-  if (controller.tag === CONTROLLER_TAG_SINGLE) {
+  if (
+    controller.tag === CONTROLLER_TAG_SINGLE ||
+    controller.tag === CONTROLLER_TAG_SINGLE_EXTENDED
+  ) {
     const keyBytes = normalizeControllerPublicKeyForCurve(
       controller.curve,
       controller.publicKey,
       "controller public key",
     );
-    if (keyBytes.length > 0xff) {
+    if (keyBytes.length > 0xffff) {
       throw new AccountAddressError(
         AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG,
         `key payload too long: ${keyBytes.length} bytes`,
         { details: { length: keyBytes.length } },
       );
     }
-    const out = new Uint8Array(3 + keyBytes.length);
-    out[0] = controller.tag;
+    const extended = keyBytes.length > 0xff;
+    const prefixLength = extended ? 4 : 3;
+    const out = new Uint8Array(prefixLength + keyBytes.length);
+    out[0] = extended ? CONTROLLER_TAG_SINGLE_EXTENDED : CONTROLLER_TAG_SINGLE;
     out[1] = controller.curve;
-    out[2] = keyBytes.length;
-    out.set(keyBytes, 3);
+    if (extended) {
+      out[2] = (keyBytes.length >> 8) & 0xff;
+      out[3] = keyBytes.length & 0xff;
+    } else {
+      out[2] = keyBytes.length;
+    }
+    out.set(keyBytes, prefixLength);
     return out;
   }
 
@@ -647,25 +665,41 @@ function decodeController(bytes, cursor) {
   }
   const tag = bytes[cursor];
   cursor += 1;
-  if (tag === CONTROLLER_TAG_SINGLE) {
+  if (tag === CONTROLLER_TAG_SINGLE || tag === CONTROLLER_TAG_SINGLE_EXTENDED) {
     if (cursor >= bytes.length) {
       throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     const curve = bytes[cursor];
     cursor += 1;
     const curveId = curveIdFromByte(curve);
-    if (cursor >= bytes.length) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
+    let length;
+    if (tag === CONTROLLER_TAG_SINGLE_EXTENDED) {
+      if (cursor + 1 >= bytes.length) {
+        throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
+      }
+      length = (bytes[cursor] << 8) | bytes[cursor + 1];
+      cursor += 2;
+      if (length <= 0xff) {
+        throw new AccountAddressError(
+          AccountAddressErrorCode.INVALID_LENGTH,
+          "extended single-key payload must exceed 255 bytes",
+          { details: { length } },
+        );
+      }
+    } else {
+      if (cursor >= bytes.length) {
+        throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
+      }
+      length = bytes[cursor];
+      cursor += 1;
     }
-    const length = bytes[cursor];
-    cursor += 1;
     const end = cursor + length;
     if (end > bytes.length) {
       throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     const publicKey = bytes.slice(cursor, end);
     validatePublicKeyForCurve(curveId, publicKey, "controller public key");
-    return [{ tag, curve: curveId, publicKey }, end];
+    return [{ tag: CONTROLLER_TAG_SINGLE, curve: curveId, publicKey }, end];
   }
 
   if (tag === CONTROLLER_TAG_MULTISIG) {

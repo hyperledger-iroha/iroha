@@ -225,7 +225,7 @@ fn build_required_exact_object_body<'a>(
     reject_unknown_arguments(body_object, allowed_fields, context)?;
     if let Some(field) = required_fields
         .iter()
-        .find(|field| !body_object.contains_key(**field))
+        .find(|field| body_object.get(**field).is_none_or(Value::is_null))
     {
         return Err(format!("`{field}` is required for {context}"));
     }
@@ -290,7 +290,7 @@ fn build_accounts_onboard_exact_body<'a>(
     }
     if let Some(field) = required_fields
         .iter()
-        .find(|field| !body_object.contains_key(**field))
+        .find(|field| body_object.get(**field).is_none_or(Value::is_null))
     {
         return Err(format!("`{field}` is required"));
     }
@@ -301,15 +301,15 @@ fn build_accounts_onboard_plan_body(arguments: &Map) -> Result<BorrowedMcpJson<'
     build_accounts_onboard_exact_body(
         arguments,
         &["version", "alias", "account_id", "permissions"],
-        &["version", "alias", "account_id"],
+        &["version", "alias", "account_id", "permissions"],
     )
 }
 
 fn build_accounts_onboard_prepare_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
     build_accounts_onboard_exact_body(
         arguments,
-        &["schema", "binding", "receipt"],
-        &["schema", "binding", "receipt"],
+        &["schema", "binding", "receipt", "fee_payment"],
+        &["schema", "binding", "receipt", "fee_payment"],
     )
 }
 
@@ -335,8 +335,8 @@ fn build_accounts_onboard_submit_body(arguments: &Map) -> Result<BorrowedMcpJson
 fn build_accounts_faucet_prepare_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
     build_accounts_onboard_exact_body(
         arguments,
-        &["schema", "binding", "claim"],
-        &["schema", "binding", "claim"],
+        &["schema", "binding", "claim", "fee_payment"],
+        &["schema", "binding", "claim", "fee_payment"],
     )
 }
 

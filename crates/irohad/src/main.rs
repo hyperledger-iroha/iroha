@@ -91,7 +91,7 @@ use iroha_core::{
     governance::manifest::{
         GovernanceGuardError, LaneManifestRegistry, LaneManifestRegistryHandle,
     },
-    kiso::KisoHandle,
+    kiso::{KisoHandle, SoranetHandshakeApplyRequest},
     kura::Kura,
     panic_hook,
     peers_gossiper::{PeersGossiper, PeersGossiperHandle},
@@ -113,7 +113,6 @@ use iroha_core::{
     },
 };
 use iroha_crypto::Algorithm;
-use iroha_data_model::query::{self as dm_query, ErasedIterQuery};
 use iroha_data_model::{
     isi::RegisterPeerWithPop,
     parameter::system::{
@@ -635,30 +634,6 @@ pub fn is_coloring_supported() -> bool {
 }
 fn default_terminal_colors_str() -> clap::builder::OsStr {
     is_coloring_supported().to_string().into()
-}
-/// Initialize the global query registry used to decode iterable queries.
-///
-/// Iroha transports iterable queries as type-erased `QueryBox` values. The
-/// receiving side needs a registry to deserialize them back into an erased
-/// representation carrying predicate/selector info. Register all supported
-/// iterable query item types here.
-fn init_query_registry() {
-    use iroha_data_model as dm;
-    dm_query::set_query_registry(dm::query_registry![
-        ErasedIterQuery<dm::domain::Domain>,
-        ErasedIterQuery<dm::account::Account>,
-        ErasedIterQuery<dm::asset::value::Asset>,
-        ErasedIterQuery<dm::asset::definition::AssetDefinition>,
-        ErasedIterQuery<dm::nft::Nft>,
-        ErasedIterQuery<dm::role::Role>,
-        ErasedIterQuery<dm::role::RoleId>,
-        ErasedIterQuery<dm::peer::PeerId>,
-        ErasedIterQuery<dm::trigger::TriggerId>,
-        ErasedIterQuery<dm::trigger::Trigger>,
-        ErasedIterQuery<dm_query::CommittedTransaction>,
-        ErasedIterQuery<dm::block::SignedBlock>,
-        ErasedIterQuery<dm::block::BlockHeader>,
-    ]);
 }
 #[cfg(feature = "telemetry")]
 fn init_global_metrics_handle(
@@ -5431,7 +5406,7 @@ mod network_relay_tests {
                 )),
                 manifest: sample_v2_manifest(),
                 body: b"body".to_vec(),
-                responder: 0,
+                responder: PeerId::new(KeyPair::random().public_key().clone()),
                 signature: vec![0x69],
             }),
         )))
@@ -7309,7 +7284,15 @@ impl Iroha {
         ),
         StartError,
     > {
+        let nts_params = iroha_core::time::Params::from(&config.nts);
         let emergency_fast = config.kura.init_mode == InitMode::Fast;
+        // A successful reservation publishes policy and ownership as one
+        // generation. Fast keeps the reservation without starting the sampler,
+        // so no concurrent in-process startup can replace its fallback policy.
+        let nts_reservation = iroha_core::time::reserve(nts_params).ok_or_else(|| {
+            Report::new(StartError::StartP2p)
+                .attach("network time service already has a process owner")
+        })?;
         if emergency_fast {
             iroha_logger::warn!(
                 "emergency Fast startup defers optional Kura-backed SoraFS runtimes and their archive qualification until a Strict restart"
@@ -9930,9 +9913,9 @@ impl Iroha {
         ensure_operator_node_key_allowlisted(&mut config);
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
-        // Normal startup subscribes before Torii exposes the configuration
+        // Normal startup registers runtime update channels before Torii exposes the configuration
         // update endpoint. Fast never exposes that endpoint, so it also leaves
-        // these mutable-runtime subscriptions and their relay task absent.
+        // these mutable-runtime channels and their relay task absent.
         let config_update_receivers = if emergency_fast {
             None
         } else {
@@ -9950,11 +9933,11 @@ impl Iroha {
                         ))
                     })?,
                 handshake: kiso
-                    .subscribe_on_soranet_handshake_updates()
+                    .register_soranet_handshake_runtime_applier()
                     .await
                     .map_err(|error| {
                         Report::new(StartError::StartTorii).attach(format!(
-                            "failed to subscribe to SoraNet handshake updates: {error}"
+                            "failed to register SoraNet handshake runtime applier: {error}"
                         ))
                     })?,
             })
@@ -10272,17 +10255,12 @@ impl Iroha {
             }
             .run(network_relay_shutdown),
         ));
-        // Fast is a bounded recovery surface; its network-time sampler is not
-        // needed while consensus and all mutable APIs remain offline.
-        if !emergency_fast {
-            iroha_core::time::start(network.clone(), iroha_core::time::Params::from(&config.nts));
-        }
         // Observer nodes are configured with `NodeRole::Observer`; Sumeragi suppresses
         // local consensus emissions in that case, so observers follow the chain and
         // serve queries without proposing or voting. Validators retain the full duties.
         if let Some(config_update_receivers) = config_update_receivers {
             let net_for_relay = network.clone();
-            // The relay retains `kiso`, so its watch senders cannot close through ordinary
+            // The relay retains `kiso`, so its update senders cannot close through ordinary
             // handle loss. Any pre-shutdown return means the supervised configuration
             // authority failed; restarting only this relay would preserve stale ACL or
             // handshake policy and is therefore deliberately not recoverable.
@@ -10321,6 +10299,21 @@ impl Iroha {
                 supervisor.monitor(child);
             }
         }
+        // Finalize NTS ownership only after every fallible startup preflight has
+        // succeeded. Otherwise an early return would detach a task and retain
+        // its process-singleton ownership across an in-process retry. Fast is a
+        // bounded recovery surface, so it holds policy ownership but leaves the
+        // sampler inert.
+        let nts_child = if emergency_fast {
+            iroha_core::time::hold_fallback_reserved(nts_reservation, supervisor.shutdown_signal())
+        } else {
+            iroha_core::time::start_reserved(
+                network.clone(),
+                nts_reservation,
+                supervisor.shutdown_signal(),
+            )
+        };
+        supervisor.monitor(nts_child);
         supervisor.shutdown_on_external_signal(shutdown_signal);
         Ok((
             Self {
@@ -10512,7 +10505,7 @@ async fn start_telemetry(
 struct ConfigUpdateReceivers {
     log_level: tokio::sync::watch::Receiver<iroha_config::parameters::actual::Logger>,
     acl: tokio::sync::watch::Receiver<iroha_config::client_api::NetworkAcl>,
-    handshake: tokio::sync::watch::Receiver<iroha_config::parameters::actual::SoranetHandshake>,
+    handshake: tokio::sync::mpsc::Receiver<SoranetHandshakeApplyRequest>,
 }
 #[allow(clippy::too_many_lines)]
 async fn config_updates_relay(
@@ -10535,11 +10528,8 @@ async fn config_updates_relay(
         let digest = ivm::gas::schedule_hash();
         metrics.set_ivm_gas_schedule_hash(digest.as_ref());
     }
-    // The network actor was constructed from this same current snapshot. Wait
-    // for an actual Kiso change before rebuilding the runtime handshake state;
-    // replaying the initial value would try to reopen its already-locked
-    // persistent ticket-revocation store. See https://github.com/tokio-rs/tokio/issues/5616 and
-    // https://github.com/rust-lang/rust-clippy/issues/10636
+    // Handshake proposals are acknowledged only after the network actor accepts
+    // the exact candidate. Kiso commits and publishes its snapshot afterward.
     #[cfg(feature = "telemetry")]
     #[allow(clippy::redundant_pub_crate)]
     loop {
@@ -10571,14 +10561,16 @@ async fn config_updates_relay(
                     break;
                 }
             },
-            result = handshake_update.changed() => {
-                if let Ok(()) = result {
-                    let value = handshake_update.borrow_and_update().clone();
-                    network.update_soranet_handshake(value);
-                } else {
+            request = handshake_update.recv() => {
+                let Some(request) = request else {
                     iroha_logger::debug!("Exiting config updates relay (handshake channel closed)");
                     break;
-                }
+                };
+                let result = network
+                    .update_soranet_handshake(request.handshake)
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = request.respond_to.send(result);
             },
         };
     }
@@ -10613,14 +10605,16 @@ async fn config_updates_relay(
                     break;
                 }
             },
-            result = handshake_update.changed() => {
-                if let Ok(()) = result {
-                    let value = handshake_update.borrow_and_update().clone();
-                    network.update_soranet_handshake(value);
-                } else {
+            request = handshake_update.recv() => {
+                let Some(request) = request else {
                     iroha_logger::debug!("Exiting config updates relay (handshake channel closed)");
                     break;
-                }
+                };
+                let result = network
+                    .update_soranet_handshake(request.handshake)
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = request.respond_to.send(result);
             },
         };
     }
@@ -13418,7 +13412,6 @@ fn run_main_with_config_guard(
     // read and decode the genesis block. Without this call, decoding the
     // embedded `InstructionBox` values would panic with "instruction registry is not initialized".
     init_genesis_instruction_registry();
-    init_query_registry();
     let (config, genesis, kagemusha_startup_sources) =
         read_config_and_genesis_with_kagemusha_sources(&args)
             .change_context(MainError::Config)
@@ -15564,6 +15557,31 @@ mod tests {
                 "if!emergency_fast{start_telemetry(&logger,&config,&mutsupervisor).await?;"
             )
         );
+        assert!(
+            compact_source
+                .contains("letnts_reservation=iroha_core::time::reserve(nts_params).ok_or_else(")
+        );
+        assert!(
+            compact_source.contains(
+                "letnts_child=ifemergency_fast{iroha_core::time::hold_fallback_reserved("
+            )
+        );
+        assert!(
+            compact_source.contains(
+                "}else{iroha_core::time::start_reserved(network.clone(),nts_reservation,"
+            )
+        );
+        let nts_start = compact_source
+            .find("iroha_core::time::start_reserved(network.clone()")
+            .expect("NTS start");
+        let os_signal_preflight = compact_source
+            .find("setup_shutdown_on_os_signals()")
+            .expect("OS signal preflight");
+        let publication_preflight = compact_source
+            .find("build_and_start_injected_musubi_publication_private_service_v1")
+            .expect("private publication preflight");
+        assert!(nts_start > os_signal_preflight);
+        assert!(nts_start > publication_preflight);
         assert!(compact_source.contains(
             "lettelemetry=ifemergency_fast{iroha_core::telemetry::Telemetry::from(state_telemetry.clone())}else{"
         ));
@@ -15599,9 +15617,6 @@ mod tests {
         ));
         assert!(compact_source.contains(
             "letmutacceleration=config.accel.clone();acceleration.enable_simd=false;acceleration.enable_metal=false;acceleration.enable_cuda=false;acceleration.max_gpus=Some(0);apply_ivm_acceleration_config(&acceleration);rs16::set_simd_enabled(false);"
-        ));
-        assert!(compact_source.contains(
-            "if!emergency_fast{iroha_core::time::start(network.clone(),iroha_core::time::Params::from(&config.nts));}"
         ));
         assert!(compact_source.contains(
             "if!emergency_fast{std::thread::spawn(||{loop{std::thread::sleep(Duration::from_secs(10));letdeadlocks=deadlock::check_deadlock();"

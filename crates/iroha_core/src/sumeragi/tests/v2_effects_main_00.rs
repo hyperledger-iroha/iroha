@@ -1692,7 +1692,7 @@ impl ProductionTransportFixture {
             ),
             iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES
                 .get(),
-            None,
+            Some(1),
         );
         let roster = self
             .context

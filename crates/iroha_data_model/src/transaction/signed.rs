@@ -77,7 +77,12 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+    #[norito(
+        tag = "kind",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )]
     pub enum FeeChargeKind {
         /// Nexus admission and execution fee.
         Nexus,
@@ -746,6 +751,21 @@ impl FeeChargeLimit {
             max_amount,
         }
     }
+    /// Return the fee component constrained by this limit.
+    #[must_use]
+    pub const fn kind(&self) -> FeeChargeKind {
+        self.kind
+    }
+    /// Return the exact asset definition selected for this component.
+    #[must_use]
+    pub const fn asset_definition_id(&self) -> &AssetDefinitionId {
+        &self.asset_definition_id
+    }
+    /// Return the maximum amount authorized for this component.
+    #[must_use]
+    pub const fn max_amount(&self) -> &Quantity {
+        &self.max_amount
+    }
 }
 impl FeePaymentIntent {
     /// Construct an authority-paid intent.
@@ -1126,6 +1146,11 @@ impl TransactionPayload {
         self.fee_payment
             .validate()
             .and_then(|()| FeePaymentIntent::validate_metadata(&self.metadata))
+    }
+    /// Return the exact signature-bound fee payment intent.
+    #[must_use]
+    pub const fn fee_payment_intent(&self) -> &FeePaymentIntent {
+        &self.fee_payment
     }
     /// Return the canonical privacy transaction-intent projection bytes.
     ///

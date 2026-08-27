@@ -1,0 +1,84 @@
+{
+  "schema": "iroha-python-kaigi-instruction-wire-v1",
+  "provenance": "Cross-checked byte-for-byte with javascript/iroha_js/src/norito.js in forced pure-codec mode; registry IDs and concrete type names come from crates/iroha_data_model/src/isi/mod.rs and isi/kaigi.rs.",
+  "outer_type_name": "(alloc::string::String, alloc::vec::Vec<u8>)",
+  "outer_schema_hash_hex": "862a7d77075d4d23ff6c1261db027811",
+  "call_id": {
+    "domain_id": "wonderland.sora",
+    "call_name": "weekly-sync"
+  },
+  "accounts": [
+    "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+    "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+    "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5"
+  ],
+  "vectors": [
+    {
+      "name": "CreateKaigi",
+      "wire_id": "iroha.instruction.v1::kaigi::CreateKaigi",
+      "inner_type_name": "iroha_data_model::isi::kaigi::CreateKaigi",
+      "inner_schema_hash_hex": "8c6eea2a5201bee243ea19cb08e50a08",
+      "instruction_box_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQD/AAAAAAAAAOP+vGFY1xM9AikoaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpDcmVhdGVLYWlnadMBywAAAAAAAABOUlQwAACMbuoqUgG+4kPqGcsI5QoIAKMAAAAAAAAADElmY1mqxaUCmQEgEgsKd29uZGVybGFuZAUEc29yYQwLd2Vla2x5LXN5bmNPAAAAAEohAAAAAAAAAAEAAc4BfwGkAWwBnQHOAX4BpAGxASUB4gHjAWsB2wFjAeoBMwEHAT4BdQGQAawBkgGBAWoB4QHoAWEBtwEEAYsBAwEAAQABAAgAAAAAAAAAAAgAAAAAAAAAAAEAAQAEAAAAAAQBAAAAAQABAAEAAQABAA=="
+    },
+    {
+      "name": "JoinKaigi",
+      "wire_id": "iroha.instruction.v1::kaigi::JoinKaigi",
+      "inner_type_name": "iroha_data_model::isi::kaigi::JoinKaigi",
+      "inner_schema_hash_hex": "783156d69daed85cb5bc75b90f8a5657",
+      "instruction_box_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQDTAAAAAAAAACJy71iC5o4LAicmaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpKb2luS2FpZ2mpAaEAAAAAAAAATlJUMAAAeDFW1p2u2Fy1vHW5D4pWVwB5AAAAAAAAAHF61b0b39FpAiASCwp3b25kZXJsYW5kBQRzb3JhDAt3ZWVrbHktc3luY08AAAAASiEAAAAAAAAAAQABzgF/AaQBbAGdAc4BfgGkAbEBJQHiAeMBawHbAWMB6gEzAQcBPgF1AZABrAGSAYEBagHhAegBYQG3AQQBiwEDAQABAAEAAQA="
+    },
+    {
+      "name": "LeaveKaigi",
+      "wire_id": "iroha.instruction.v1::kaigi::LeaveKaigi",
+      "inner_type_name": "iroha_data_model::isi::kaigi::LeaveKaigi",
+      "inner_schema_hash_hex": "be5cc959979a332405d134b7993b5fde",
+      "instruction_box_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQDUAAAAAAAAAHcHu0g25/aaAignaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpMZWF2ZUthaWdpqQGhAAAAAAAAAE5SVDAAAL5cyVmXmjMkBdE0t5k7X94AeQAAAAAAAABxetW9G9/RaQIgEgsKd29uZGVybGFuZAUEc29yYQwLd2Vla2x5LXN5bmNPAAAAAEohAAAAAAAAAAEAAc4BfwGkAWwBnQHOAX4BpAGxASUB4gHjAWsB2wFjAeoBMwEHAT4BdQGQAawBkgGBAWoB4QHoAWEBtwEEAYsBAwEAAQABAAEA"
+    },
+    {
+      "name": "EndKaigi",
+      "wire_id": "iroha.instruction.v1::kaigi::EndKaigi",
+      "inner_type_name": "iroha_data_model::isi::kaigi::EndKaigi",
+      "inner_schema_hash_hex": "c32489d53f4f0e463df6504dddce9b7b",
+      "instruction_box_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCDAAAAAAAAAFRxBhb5z9fdAiYlaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpFbmRLYWlnaVtTAAAAAAAAAE5SVDAAAMMkidU/Tw5GPfZQTd3Om3sAKwAAAAAAAABLpeGv33z4pQIgEgsKd29uZGVybGFuZAUEc29yYQwLd2Vla2x5LXN5bmMBAAEAAQABAAEA"
+    },
+    {
+      "name": "RecordKaigiUsage",
+      "wire_id": "iroha.instruction.v1::kaigi::RecordKaigiUsage",
+      "inner_type_name": "iroha_data_model::isi::kaigi::RecordKaigiUsage",
+      "inner_schema_hash_hex": "af1e75920a73e5cbca28e61607f591ff",
+      "instruction_box_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCXAAAAAAAAAJyCiGPxjGkdAi4taXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpSZWNvcmRLYWlnaVVzYWdlZ18AAAAAAAAATlJUMAAArx51kgpz5cvKKOYWB/WR/wA3AAAAAAAAAC1LKF6viVPDAiASCwp3b25kZXJsYW5kBQRzb3JhDAt3ZWVrbHktc3luYwgBAAAAAAAAAAgCAAAAAAAAAAEAAQA="
+    },
+    {
+      "name": "SetKaigiRelayManifest",
+      "wire_id": "iroha.instruction.v1::kaigi::SetKaigiRelayManifest",
+      "inner_type_name": "iroha_data_model::isi::kaigi::SetKaigiRelayManifest",
+      "inner_schema_hash_hex": "18892cb3a3e8da2e425239969e583cd6",
+      "instruction_box_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCIAAAAAAAAAPPZbrniDJB/AjMyaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpTZXRLYWlnaVJlbGF5TWFuaWZlc3RTSwAAAAAAAABOUlQwAAAYiSyzo+jaLkJSOZaeWDzWACMAAAAAAAAA+2midKkNUiACIBILCndvbmRlcmxhbmQFBHNvcmEMC3dlZWtseS1zeW5jAQA="
+    },
+    {
+      "name": "RegisterKaigiRelay",
+      "wire_id": "iroha.instruction.v1::kaigi::RegisterKaigiRelay",
+      "inner_type_name": "iroha_data_model::isi::kaigi::RegisterKaigiRelay",
+      "inner_schema_hash_hex": "b2a46ddb766ca24558c44bd0e7d07660",
+      "instruction_box_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQDCAAAAAAAAAGz4BoWm+gk7AjAvaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpSZWdpc3RlckthaWdpUmVsYXmPAYcAAAAAAAAATlJUMAAAsqRt23ZsokVYxEvQ59B2YABfAAAAAAAAAB97n+s0FJX3Al5PAAAAAEohAAAAAAAAAAEAAc4BfwGkAWwBnQHOAX4BpAGxASUB4gHjAWsB2wFjAeoBMwEHAT4BdQGQAawBkgGBAWoB4QHoAWEBtwEEAYsBAwsDAAAAAAAAAGtleQEB"
+    },
+    {
+      "name": "UnregisterKaigiRelay",
+      "wire_id": "iroha.instruction.v1::kaigi::UnregisterKaigiRelay",
+      "inner_type_name": "iroha_data_model::isi::kaigi::UnregisterKaigiRelay",
+      "inner_schema_hash_hex": "1fd543fd163a735c7d95807a6c1e2426",
+      "instruction_box_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQC1AAAAAAAAAEtHECTzWTaIAjIxaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpVbnJlZ2lzdGVyS2FpZ2lSZWxheYABeAAAAAAAAABOUlQwAAAf1UP9FjpzXH2VgHpsHiQmAFAAAAAAAAAAc1GwdgijPwYCTwAAAABKIQAAAAAAAAABAAHOAX8BpAFsAZ0BzgF+AaQBsQElAeIB4wFrAdsBYwHqATMBBwE+AXUBkAGsAZIBgQFqAeEB6AFhAbcBBAGLAQM="
+    },
+    {
+      "name": "ReportKaigiRelayHealth",
+      "wire_id": "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth",
+      "inner_type_name": "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth",
+      "inner_schema_hash_hex": "5e2e838e9710b3daa517d38e4f16c9bb",
+      "instruction_box_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQDoAAAAAAAAAMyqx2GM8C8dAjQzaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpSZXBvcnRLYWlnaVJlbGF5SGVhbHRosQGpAAAAAAAAAE5SVDAAAF4ug46XELPapRfTjk8WybsAgQAAAAAAAAB13+MsoXDDyQIgEgsKd29uZGVybGFuZAUEc29yYQwLd2Vla2x5LXN5bmNPAAAAAEohAAAAAAAAAAEAAc4BfwGkAWwBnQHOAX4BpAGxASUB4gHjAWsB2wFjAeoBMwEHAT4BdQGQAawBkgGBAWoB4QHoAWEBtwEEAYsBAwQAAAAACAMAAAAAAAAAAQA="
+    }
+  ],
+  "complex_create": {
+    "sha256_hex": "a6a606813b27e756dd65c58cd7ff852a24e74311e32d31277c758af1aab16959",
+    "instruction_box_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQBLAwAAAAAAAM9S5aO32cXLAikoaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpDcmVhdGVLYWlnaZ8GFwMAAAAAAABOUlQwAACMbuoqUgG+4kPqGcsI5QoIAO8CAAAAAAAAfXxB1jR9tlIC6QQgEgsKd29uZGVybGFuZAUEc29yYQwLd2Vla2x5LXN5bmNPAAAAAEohAAAAAAAAAAEAAc4BfwGkAWwBnQHOAX4BpAGxASUB4gHjAWsB2wFjAeoBMwEHAT4BdQGQAawBkgGBAWoB4QHoAWEBtwEEAYsBAw8BDQxSb2FkbWFwIPCfm7AIAQYFZXhhY3QGAQQHAAAACAEAAAAAACAANQIAAAAAAAAAGAIBYRQTEnsibmVzdGVkIjoidmFsdWUifRMCAXoPDg1bdHJ1ZSxudWxsLDddCgEIywT7cR8BAABRAU8AAAAASiEAAAAAAAAAAQABzgF/AaQBbAGdAc4BfgGkAbEBJQHiAeMBawHbAWMB6gEzAQcBPgF1AZABrAGSAYEBagHhAegBYQG3AQQBiwEDBAEAAAAEAAAAALACAa0CogIDAAAAAAAAAF1PAAAAAEohAAAAAAAAAAEAAc4BfwGkAWwBnQHOAX4BpAGxASUB4gHjAWsB2wFjAeoBMwEHAT4BdQGQAawBkgGBAWoB4QHoAWEBtwEEAYsBAwoCAAAAAAAAABAgAQFcTwAAAABKIQAAAAAAAAABAAHQAUoBsgEyAXQBKwG0AasBOgETAWgBvQFGARUB5AHmAdABIgFKAbcBGgEBAWsBrwGFASABowEyAckBdwGHATcJAQAAAAAAAAAwAQJeTwAAAABKIQAAAAAAAAABAAFkARIBlwEHAZMBVwEiAZ8BKQFZATgBpAG1AaMBMwHeATUBBgGbAfQBewGdAQcBBAHkAVgBBQFxAT0BEwHCAQELAwAAAAAAAABAUGAB/wgAAAAAAAAAgCUBIyBERERERERERERERERERERERERERERERERERERERERERQEALAEqIFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVCAAAAAAAAAAAIgEgZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmcNAQsDAAAAAAAAAAECAw=="
+  }
+}

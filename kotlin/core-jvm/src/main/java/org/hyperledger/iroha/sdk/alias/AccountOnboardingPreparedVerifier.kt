@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
@@ -43,6 +44,24 @@ object PreparedTransactionSignatureV1 {
         field(transcript, "account_id", result.accountId)
         field(transcript, "alias", result.alias)
         field(transcript, "disposition", result.disposition.wireValue)
+        return transcript.toByteArray()
+    }
+
+    /** Exact transcript authenticated by a faucet prepared envelope. */
+    @JvmStatic
+    fun faucetPrepared(envelope: AccountFaucetPreparedTransactionV1): ByteArray {
+        val transcript = base(envelope.schema, envelope.operation, envelope.binding)
+        field(transcript, "claim.account_id", envelope.claim.accountId)
+        field(transcript, "claim.pow_anchor_height", envelope.claim.powAnchorHeight.toString())
+        field(transcript, "claim.pow_nonce_hex", envelope.claim.powNonceHex)
+        field(transcript, "semantic_hash_hex", envelope.semanticHashHex)
+        field(transcript, "account_id", envelope.accountId)
+        field(transcript, "asset_definition_id", envelope.assetDefinitionId)
+        field(transcript, "asset_id", envelope.assetId)
+        field(transcript, "amount", envelope.amount.toString())
+        field(transcript, "transaction_hash_hex", envelope.transactionHashHex)
+        field(transcript, "signed_transaction_wire_sha256", envelope.signedTransactionWireSha256)
+        field(transcript, "signed_transaction_wire", decodeLowerHex(envelope.signedTransactionWireHex))
         return transcript.toByteArray()
     }
 
@@ -92,13 +111,14 @@ object PreparedTransactionSignatureV1 {
 
 /** Fail-closed verification for onboarding prepare and exact-submit responses. */
 object AccountOnboardingPreparedVerifier {
-    /** Authenticates and validates an exact prepared transaction for the original receipt/binding. */
+    /** Authenticates an exact prepared transaction for the original receipt, binding, and expected fee intent. */
     @JvmStatic
     fun requireValidPrepared(
         prepared: AccountOnboardingPreparedTransactionV1,
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
         binding: TairaPublicResetMutationBindingV1,
+        expectedFeePayment: FeePaymentIntent,
         expectedNetworkId: NetworkId,
         expectedAuthority: String,
     ): SignedTransaction {
@@ -110,6 +130,9 @@ object AccountOnboardingPreparedVerifier {
         )
         require(sameBinding(prepared.binding, binding) && sameReceipt(prepared.receipt, receipt)) {
             "prepared onboarding envelope differs from the exact receipt or binding"
+        }
+        require(expectedFeePayment.hasSamePayerAndGasBound(prepared.feePayment)) {
+            "prepared onboarding fee intent changed payer, sponsor revision, or gas bound"
         }
         val receiptHash = requireNotNull(AliasHashText.decode(receipt.planHash)) {
             "receipt plan hash is invalid"
@@ -223,13 +246,17 @@ object AccountOnboardingPreparedVerifier {
         return proofRequired
     }
 
-    /** Requires a submit response to reconcile only the exact submitted hash and binding. */
+    /** Reconciles only an independently fee-checked prepared envelope and its exact submit result. */
     @JvmStatic
     fun requireValidSubmitResponse(
         response: PreparedTransactionSubmitResponseV1,
         prepared: AccountOnboardingPreparedTransactionV1,
+        expectedFeePayment: FeePaymentIntent,
         httpStatus: Int,
     ): PreparedTransactionSubmitResponseV1 {
+        require(expectedFeePayment.hasSamePayerAndGasBound(prepared.feePayment)) {
+            "prepared onboarding fee intent changed payer, sponsor revision, or gas bound"
+        }
         require(httpStatus == 200 || httpStatus == 202) {
             "prepared onboarding submit requires HTTP 200 or 202"
         }

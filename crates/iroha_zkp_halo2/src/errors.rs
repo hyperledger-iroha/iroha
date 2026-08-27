@@ -11,8 +11,8 @@ pub enum Error {
         /// Actual dimension encountered.
         actual: usize,
     },
-    /// Parameter `n` must be a non-zero power of two.
-    #[error("invalid parameter: n must be a non-zero power of two; got n={0}")]
+    /// Parameter `n` must be a power of two greater than one.
+    #[error("invalid parameter: n must be a power of two greater than one; got n={0}")]
     InvalidN(usize),
     /// Attempted inversion of a zero field element.
     #[error("field inversion of zero")]

@@ -4,8 +4,11 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 class SetKaigiRelayManifestInstruction internal constructor(
     @JvmField val callId: KaigiInstructionUtils.CallId,
     @JvmField val relayManifest: KaigiInstructionUtils.RelayManifest?,
-    override val arguments: Map<String, String>,
+    arguments: Map<String, String>,
 ) : InstructionTemplate {
+
+    override val arguments: Map<String, String> =
+        KaigiInstructionUtils.immutableArguments(arguments)
 
     override val kind: InstructionKind get() = InstructionKind.CUSTOM
 
@@ -48,7 +51,14 @@ class SetKaigiRelayManifestInstruction internal constructor(
 
         fun addRelayManifestHop(relayId: String, hpkePublicKeyBase64: String, weight: Int) = apply {
             require(relayId.isNotBlank()) { "relayId must not be blank" }
-            val normalizedKey = KaigiInstructionUtils.requireBase64(hpkePublicKeyBase64, "hpkePublicKey")
+            require(relayManifestHops.size < KaigiInstructionUtils.KAIGI_RELAY_MANIFEST_MAX_HOPS_V1) {
+                "relay manifest must not contain more than " +
+                    "${KaigiInstructionUtils.KAIGI_RELAY_MANIFEST_MAX_HOPS_V1} hops"
+            }
+            val normalizedKey = KaigiInstructionUtils.requireHpkePublicKeyBase64(
+                hpkePublicKeyBase64,
+                "hpkePublicKey",
+            )
             require(weight in 1..0xFF) { "relay hop weight must be between 1 and 255" }
             relayManifestHops.add(
                 KaigiInstructionUtils.RelayManifestHop(relayId, normalizedKey, weight),
@@ -56,7 +66,11 @@ class SetKaigiRelayManifestInstruction internal constructor(
         }
 
         fun addRelayManifestHop(relayId: String, hpkePublicKey: ByteArray, weight: Int) = apply {
-            addRelayManifestHop(relayId, KaigiInstructionUtils.toBase64(hpkePublicKey), weight)
+            addRelayManifestHop(
+                relayId,
+                KaigiInstructionUtils.toHpkePublicKeyBase64(hpkePublicKey, "hpkePublicKey"),
+                weight,
+            )
         }
 
         fun setRelayManifest(manifest: KaigiInstructionUtils.RelayManifest?) = apply {
@@ -108,10 +122,25 @@ class SetKaigiRelayManifestInstruction internal constructor(
 
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): SetKaigiRelayManifestInstruction {
+            KaigiInstructionUtils.requireKnownArguments(
+                arguments,
+                SET_KAIGI_RELAY_MANIFEST_ARGUMENTS,
+                "relay_manifest.hop.",
+            )
             KaigiInstructionUtils.requireAction(arguments, ACTION)
             val callId = KaigiInstructionUtils.parseCallId(arguments, "call")
             val relayManifest = KaigiInstructionUtils.parseRelayManifest(arguments, "relay_manifest")
-            return SetKaigiRelayManifestInstruction(callId, relayManifest, LinkedHashMap(arguments))
+            return builder()
+                .setCallId(callId)
+                .setRelayManifest(relayManifest)
+                .build()
         }
+
+        private val SET_KAIGI_RELAY_MANIFEST_ARGUMENTS = setOf(
+            "action",
+            "call.domain_id",
+            "call.call_name",
+            "relay_manifest.expiry_ms",
+        )
     }
 }

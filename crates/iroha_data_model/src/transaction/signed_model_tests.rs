@@ -420,6 +420,17 @@ fn sample_fee_asset() -> AssetDefinitionId {
 #[cfg(feature = "json")]
 #[test]
 fn fee_payment_json_requires_explicit_nullable_gas_and_closed_objects() {
+    let mut unknown_kind =
+        norito::json::to_value(&FeeChargeKind::Nexus).expect("serialize fee charge kind");
+    unknown_kind
+        .as_object_mut()
+        .expect("fee charge kind JSON object")
+        .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<FeeChargeKind>(unknown_kind).is_err(),
+        "fee charge kind unknown fields must fail closed"
+    );
+
     let authority = AuthorityFeePayment {
         charge_limits: Vec::new(),
         gas_limit: None,
@@ -1743,6 +1754,9 @@ fn privacy_intent_is_independent_of_the_complete_signed_transaction_hash() {
 fn fee_payment_intent_requires_canonical_positive_component_limits() {
     let asset = sample_fee_asset();
     let nexus = FeeChargeLimit::new(FeeChargeKind::Nexus, asset.clone(), Quantity::from(10_u32));
+    assert_eq!(nexus.kind(), FeeChargeKind::Nexus);
+    assert_eq!(nexus.asset_definition_id(), &asset);
+    assert_eq!(nexus.max_amount(), &Quantity::from(10_u32));
     let pipeline = FeeChargeLimit::new(
         FeeChargeKind::PipelineGas,
         asset.clone(),
@@ -1869,6 +1883,10 @@ fn signed_transaction_exposes_signature_bound_fee_intent() {
     assert_eq!(
         transaction.fee_payment_intent(),
         &FeePaymentIntent::authority(Vec::new(), None)
+    );
+    assert_eq!(
+        transaction.payload().fee_payment_intent(),
+        transaction.fee_payment_intent()
     );
     transaction
         .verify_signature()

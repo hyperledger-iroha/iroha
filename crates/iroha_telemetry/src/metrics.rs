@@ -2170,6 +2170,8 @@ pub struct TaikaiIngestErrorCounter {
 const TAIKAI_INGEST_SNAPSHOT_CAP: usize = 256;
 /// Maximum distinct error reasons tracked per Taikai stream snapshot.
 const TAIKAI_INGEST_ERROR_REASON_CAP: usize = 32;
+/// Maximum number of Taikai alias-rotation snapshots and metric children.
+const TAIKAI_ALIAS_ROTATION_SNAPSHOT_CAP: usize = 256;
 #[derive(Clone, Debug, Default)]
 struct TaikaiIngestSnapshotInternal {
     last_latency_ms: Option<u32>,
@@ -2221,6 +2223,7 @@ struct TaikaiAliasRotationSnapshotInternal {
 }
 type TaikaiAliasRotationSnapshots =
     Arc<RwLock<BTreeMap<(String, String, String), TaikaiAliasRotationSnapshotInternal>>>;
+type TaikaiAliasRotationSnapshotOrder = Arc<RwLock<VecDeque<(String, String, String)>>>;
 #[derive(Clone, Copy)]
 struct TaikaiAliasRotationSnapshotArgs<'a> {
     cluster: &'a str,
@@ -2681,6 +2684,21 @@ mod tests {
                 .all(|snapshot| snapshot.stream != "stream-0"),
             "oldest stream should be evicted"
         );
+        let dump = metrics.try_to_string().expect("metrics text");
+        assert!(
+            dump.lines().all(|line| {
+                !line.starts_with("taikai_ingest_segment_latency_ms")
+                    || !line.contains("stream=\"stream-0\"")
+            }),
+            "snapshot eviction must remove the Prometheus child for the oldest stream"
+        );
+        assert_eq!(
+            dump.lines()
+                .filter(|line| line.starts_with("taikai_ingest_segment_latency_ms_count{"))
+                .count(),
+            TAIKAI_INGEST_SNAPSHOT_CAP,
+            "Prometheus latency stream cardinality must follow the snapshot cap"
+        );
     }
     #[test]
     fn taikai_ingest_error_reasons_are_capped() {
@@ -2711,6 +2729,25 @@ mod tests {
                 .iter()
                 .all(|entry| entry.reason != "reason-0"),
             "oldest reason should be evicted to enforce the cap"
+        );
+        let dump = metrics.try_to_string().expect("metrics text");
+        let error_lines = dump
+            .lines()
+            .filter(|line| {
+                line.starts_with("taikai_ingest_errors_total{")
+                    && line.contains("stream=\"stream-main\"")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            error_lines.len(),
+            TAIKAI_INGEST_ERROR_REASON_CAP,
+            "Prometheus error cardinality must follow the reason cap"
+        );
+        assert!(
+            error_lines
+                .iter()
+                .all(|line| !line.contains("reason=\"reason-0\"")),
+            "reason eviction must remove the Prometheus child"
         );
     }
     #[test]
@@ -2779,6 +2816,45 @@ mod tests {
         assert!(
             (observed - 2.0).abs() < f64::EPSILON,
             "expected counter to reflect total rotations"
+        );
+    }
+    #[test]
+    fn taikai_alias_rotation_snapshots_and_metrics_are_capped() {
+        let metrics = Metrics::default();
+        for idx in 0..=TAIKAI_ALIAS_ROTATION_SNAPSHOT_CAP {
+            let sequence = u64::try_from(idx).expect("test index fits u64");
+            metrics.record_taikai_alias_rotation(
+                "cluster-a",
+                &format!("event-{idx}"),
+                &format!("stream-{idx}"),
+                "sora",
+                "docs",
+                sequence,
+                sequence,
+                "deadbeef",
+            );
+        }
+        let snapshots = metrics.taikai_alias_rotation_status();
+        assert_eq!(snapshots.len(), TAIKAI_ALIAS_ROTATION_SNAPSHOT_CAP);
+        assert!(
+            snapshots.iter().all(|snapshot| snapshot.event != "event-0"),
+            "oldest alias-rotation snapshot must be evicted"
+        );
+        let dump = metrics.try_to_string().expect("metrics text");
+        let rotation_lines = dump
+            .lines()
+            .filter(|line| line.starts_with("taikai_trm_alias_rotations_total{"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rotation_lines.len(),
+            TAIKAI_ALIAS_ROTATION_SNAPSHOT_CAP,
+            "Prometheus alias-rotation cardinality must follow the snapshot cap"
+        );
+        assert!(
+            rotation_lines
+                .iter()
+                .all(|line| !line.contains("event=\"event-0\"")),
+            "snapshot eviction must remove the oldest Prometheus child"
         );
     }
     #[test]
@@ -6369,6 +6445,8 @@ fields {
     /// Millisecond UNIX timestamp when the latest rejected transaction batch was observed.
     last_rejection_at_ms: raw(StdAtomicU64);
     taikai_alias_rotation_snapshots: raw(TaikaiAliasRotationSnapshots);
+    /// Insertion order for Taikai alias-rotation snapshots (bounded).
+    taikai_alias_rotation_snapshot_order: raw(TaikaiAliasRotationSnapshotOrder);
     /// Alias service usage grouped by lane and event kind.
     pub alias_usage_total: int_counter_vec(&["lane", "event"]);
     /// PSP fraud: accepted assessments by tenant/band/lane/subnet
@@ -8337,6 +8415,11 @@ construct {
         )));
         let taikai_alias_rotation_snapshots: TaikaiAliasRotationSnapshots =
             Arc::new(RwLock::new(BTreeMap::new()));
+        let taikai_alias_rotation_snapshot_order: TaikaiAliasRotationSnapshotOrder = Arc::new(
+            RwLock::new(VecDeque::with_capacity(
+                TAIKAI_ALIAS_ROTATION_SNAPSHOT_CAP,
+            )),
+        );
         let da_receipt_metric_lanes: Arc<RwLock<BTreeMap<u32, DaReceiptMetricLane>>> =
             Arc::new(RwLock::new(BTreeMap::new()));
         let recent_rejection_events =
@@ -8945,7 +9028,8 @@ initialize (metrics) {
         governance_manifest_activations_total governance_bond_events_total
         governance_manifest_recent taikai_ingest_snapshots taikai_ingest_snapshot_order
         da_receipt_metric_lanes recent_rejection_events last_rejection_at_ms
-        taikai_alias_rotation_snapshots alias_usage_total iso_reference_status
+        taikai_alias_rotation_snapshots taikai_alias_rotation_snapshot_order
+        alias_usage_total iso_reference_status
         iso_reference_age_seconds iso_reference_records iso_reference_refresh_interval_secs
         fraud_psp_assessments_total fraud_psp_missing_assessment_total
         fraud_psp_invalid_metadata_total fraud_psp_attestation_total fraud_psp_latency_ms
@@ -9257,12 +9341,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 820;
-const METRIC_CATALOG_V2_REGISTERED: usize = 775;
-const METRIC_CATALOG_V2_BYTES: usize = 111_837;
+const METRIC_CATALOG_V2_ROWS: usize = 812;
+const METRIC_CATALOG_V2_REGISTERED: usize = 767;
+const METRIC_CATALOG_V2_BYTES: usize = 110_834;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "0a173076dc3807df415cb581daea66a5a748ef6f4e30195ee2e1524eae624423";
+    "1be62b26a5e9f1ddee730267ec5a5534cffe9a3826df65f14b7e15b3e2ee9a1e";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {
@@ -11643,15 +11727,18 @@ impl Metrics {
         F: FnOnce(&mut TaikaiIngestSnapshotInternal),
     {
         let key = (cluster.to_owned(), stream.to_owned());
-        if let (Ok(mut snapshots), Ok(mut order)) = (
+        let evicted = if let (Ok(mut snapshots), Ok(mut order)) = (
             self.taikai_ingest_snapshots.write(),
             self.taikai_ingest_snapshot_order.write(),
         ) {
+            let mut evicted = None;
             if !snapshots.contains_key(&key) {
                 if snapshots.len() >= TAIKAI_INGEST_SNAPSHOT_CAP
-                    && let Some(evicted) = order.pop_front()
+                    && let Some(evicted_key) = order.pop_front()
                 {
-                    snapshots.remove(&evicted);
+                    evicted = snapshots
+                        .remove(&evicted_key)
+                        .map(|snapshot| (evicted_key, snapshot));
                 }
                 order.push_back(key.clone());
             } else if let Some(position) = order.iter().position(|entry| entry == &key) {
@@ -11662,6 +11749,33 @@ impl Metrics {
                 .entry(key)
                 .or_insert_with(TaikaiIngestSnapshotInternal::default);
             update(entry);
+            evicted
+        } else {
+            None
+        };
+        if let Some(((cluster, stream), snapshot)) = evicted {
+            self.remove_taikai_ingest_metric_children(&cluster, &stream, &snapshot);
+        }
+    }
+    fn remove_taikai_ingest_metric_children(
+        &self,
+        cluster: &str,
+        stream: &str,
+        snapshot: &TaikaiIngestSnapshotInternal,
+    ) {
+        let _ = self
+            .taikai_ingest_segment_latency_ms
+            .remove_label_values(&[cluster, stream]);
+        let _ = self
+            .taikai_ingest_live_edge_drift_ms
+            .remove_label_values(&[cluster, stream]);
+        let _ = self
+            .taikai_ingest_live_edge_drift_signed_ms
+            .remove_label_values(&[cluster, stream]);
+        for reason in snapshot.error_totals.keys() {
+            let _ = self
+                .taikai_ingest_errors_total
+                .remove_label_values(&[cluster, stream, reason]);
         }
     }
     /// Record the latest encoder-to-ingest latency for the given stream.
@@ -11684,6 +11798,7 @@ impl Metrics {
     /// Record an ingest error for the given stream and reason.
     pub fn record_taikai_ingest_error_snapshot(&self, cluster: &str, stream: &str, reason: &str) {
         let reason = reason.to_owned();
+        let mut evicted_reason = None;
         self.update_taikai_snapshot(cluster, stream, |snapshot| {
             if snapshot.error_totals.contains_key(&reason)
                 || snapshot.error_totals.len() < TAIKAI_INGEST_ERROR_REASON_CAP
@@ -11692,20 +11807,61 @@ impl Metrics {
                 return;
             }
             // Evict the lexicographically earliest entry to bound memory usage.
-            if snapshot.error_totals.pop_first().is_some() {
+            if let Some((evicted, _)) = snapshot.error_totals.pop_first() {
+                evicted_reason = Some(evicted);
                 snapshot.error_totals.insert(reason, 1);
             }
         });
+        if let Some(reason) = evicted_reason {
+            let _ = self
+                .taikai_ingest_errors_total
+                .remove_label_values(&[cluster, stream, &reason]);
+        }
     }
     fn record_taikai_alias_rotation_snapshot(&self, snapshot: TaikaiAliasRotationSnapshotArgs<'_>) {
-        if let Ok(mut guard) = self.taikai_alias_rotation_snapshots.write() {
-            let entry = guard
-                .entry((
-                    snapshot.cluster.to_owned(),
-                    snapshot.event.to_owned(),
-                    snapshot.stream.to_owned(),
-                ))
+        let key = (
+            snapshot.cluster.to_owned(),
+            snapshot.event.to_owned(),
+            snapshot.stream.to_owned(),
+        );
+        let evicted_labels = if let (Ok(mut snapshots), Ok(mut order)) = (
+            self.taikai_alias_rotation_snapshots.write(),
+            self.taikai_alias_rotation_snapshot_order.write(),
+        ) {
+            let mut evicted_labels = None;
+            if !snapshots.contains_key(&key) {
+                if snapshots.len() >= TAIKAI_ALIAS_ROTATION_SNAPSHOT_CAP
+                    && let Some(evicted_key) = order.pop_front()
+                    && let Some(evicted) = snapshots.remove(&evicted_key)
+                {
+                    evicted_labels = Some((
+                        evicted_key.0,
+                        evicted_key.1,
+                        evicted_key.2,
+                        evicted.alias_namespace,
+                        evicted.alias_name,
+                    ));
+                }
+                order.push_back(key.clone());
+            } else if let Some(position) = order.iter().position(|entry| entry == &key) {
+                order.remove(position);
+                order.push_back(key.clone());
+            }
+            let entry = snapshots
+                .entry(key.clone())
                 .or_insert_with(TaikaiAliasRotationSnapshotInternal::default);
+            if entry.rotations_total > 0
+                && (entry.alias_namespace != snapshot.alias_namespace
+                    || entry.alias_name != snapshot.alias_name)
+            {
+                evicted_labels = Some((
+                    key.0,
+                    key.1,
+                    key.2,
+                    entry.alias_namespace.clone(),
+                    entry.alias_name.clone(),
+                ));
+            }
             snapshot
                 .alias_namespace
                 .clone_into(&mut entry.alias_namespace);
@@ -11720,6 +11876,18 @@ impl Metrics {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
+            evicted_labels
+        } else {
+            None
+        };
+        if let Some((cluster, event, stream, alias_namespace, alias_name)) = evicted_labels {
+            let _ = self.taikai_trm_alias_rotations_total.remove_label_values(&[
+                &cluster,
+                &event,
+                &stream,
+                &alias_namespace,
+                &alias_name,
+            ]);
         }
     }
     /// Snapshot the current Taikai ingest telemetry for status payloads
@@ -11748,7 +11916,8 @@ impl Metrics {
             })
             .unwrap_or_default()
     }
-    /// Snapshot the current alias rotation telemetry for status payloads.
+    /// Snapshot the current alias rotation telemetry for status payloads
+    /// (bounded by `TAIKAI_ALIAS_ROTATION_SNAPSHOT_CAP` entries).
     pub fn taikai_alias_rotation_status(&self) -> Vec<TaikaiAliasRotationStatus> {
         self.taikai_alias_rotation_snapshots
             .read()

@@ -3,15 +3,16 @@
 The ignored production bridge test can emit a deterministic, owner-private
 cryptographic acceptance bundle for the Android and iOS restart/no-network
 suites. Its proof generation, finality verification, native recursion, split,
-and acknowledgement execution are genuine. The release authorities and review
-artifacts in this deterministic test bundle are self-issued test fixtures,
-however; the bundle is not shipping-release provenance, a physical-device
-benchmark, or KeyMint/Secure Enclave qualification evidence. The bundle binds
+full and partial redemption, and acknowledgement execution are genuine. The
+release authorities and review artifacts in this deterministic test bundle are
+self-issued test fixtures, however; the bundle is not shipping-release
+provenance, a physical-device benchmark, or KeyMint/Secure Enclave
+qualification evidence. The bundle binds
 the exact genesis-derived Taira `NetworkId` and the exact Digital Shekel asset
 alias `ds#boi.is`, whose typed asset definition ID is
 `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`. Neither identity may be substituted.
 
-This degree-20 workflow is a production job, not an ordinary Rust test. Never
+This degree-17 workflow is a production job, not an ordinary Rust test. Never
 invoke the ignored test directly: its Eq/Ep Halo2 construction can consume
 workstation-scale memory before a late layout failure. The former `--report`
 launcher enforced process-tree RSS while treating Darwin physical footprint as
@@ -36,9 +37,15 @@ builds a genuine DS shield proof, authenticates its finalized anchor with the
 manifest-selected BLS roster and Commit QC, initializes recursive cash, splits
 `1000` atomic units into a `700`-unit receiver payment and `300`-unit sender
 change, terminally verifies both branches, and creates and verifies the
-receiver P-256 acknowledgement. The output directory and all children are
-created with owner-only permissions on Unix. Generation fails when the chosen
-directory already contains a file, preventing partial or mixed releases.
+receiver P-256 acknowledgement. It then uses the receiver's separate opening
+and the canonical unshield verifier to build and validate a full 700-unit
+redemption with no private change. Independently, it redeems 100 units from the
+sender's 300-unit branch, recursively proves the 200-unit private change, and
+validates that the returned opening, membership witness, provenance, and bundle
+form a spendable branch under the installed release. The output directory and
+all children are created with owner-only permissions on Unix. Generation fails
+when the chosen directory already contains a file, preventing partial or mixed
+releases.
 
 ## Root manifest
 
@@ -62,7 +69,8 @@ directory already contains a file, preventing partial or mixed releases.
   `public_inputs_schema_hash`, proof-size bound, and activation/withdrawal
   heights;
 - `amounts_atomic`, whose decimal-string fields are `topup`,
-  `reference_request`, `fresh_request`, and `sender_change`;
+  `reference_request`, `fresh_request`, `sender_change`, `partial_redeemed`,
+  `redemption_change`, and `redeemed`;
 - `requests`, containing both request IDs and digests as lowercase hex plus
   the issued and expiry times;
 - `sender_seed` with `wallet_state_version: 9`, `status: "READY"`, and paths
@@ -110,6 +118,7 @@ metadata files are the inventory root and therefore are not self-listed.
 | `receiver_device_private_scalar_p256` | `receiver/device-private-scalar-p256.bin` | yes |
 | `receiver_device_public_key_sec1_uncompressed` | `receiver/device-public-key-sec1-uncompressed.bin` | no |
 | `receiver_fresh_note_opening_v2` | `receiver/fresh-note-opening-v2.norito` | yes |
+| `recursive_redeem_local_v4` | `receiver/redeem-local-v4.norito` | yes |
 | `artifact_binding_v4` | `sender/artifact-binding-v4.norito` | no |
 | `sender_note_opening_v2` | `sender/topup-note-opening-v2.norito` | yes |
 | `topup_zero_frontier_v4` | `sender/topup-zero-frontier-v4.norito` | yes |
@@ -118,37 +127,44 @@ metadata files are the inventory root and therefore are not self-listed.
 | `topup_anchor_v4` | `sender/topup-anchor-v4.norito` | no |
 | `topup_finality_proof_v2` | `sender/topup-finality-proof-v2.norito` | no |
 | `recursive_init_local_v4` | `sender/init-local-v4.norito` | yes |
-| `recursive_init_result_v4` | `sender/init-result-v4.norito` | no |
+| `recursive_init_result_v4` | `sender/init-result-v4.norito` | yes |
 | `recursive_init_bundle_v4` | `sender/init-bundle-v4.norito` | no |
 | `recursive_init_membership_witness_v2` | `sender/init-membership-witness-v2.norito` | yes |
 | `recursive_init_topup_provenance_v4` | `sender/init-topup-provenance-v4.norito` | no |
 | `sender_change_opening_v2` | `sender/change-note-opening-v2.norito` | yes |
 | `recursive_append_output_membership_v4` | `sender/append-output-membership-v4.norito` | yes |
 | `recursive_append_local_v4` | `sender/append-local-v4.norito` | yes |
+| `recursive_partial_redeem_local_v4` | `sender/partial-redeem-local-v4.norito` | yes |
+| `recursive_partial_redeem_result_v4` | `sender/partial-redeem-result-v4.norito` | yes |
 
 The host acceptance suites persist the exact init result and branch material,
 destroy and recreate the sender and receiver storage/lifecycle objects, reload
 wallet-state version 9, and invoke the production append/verify boundaries with
 network access trapped. They prove durable encrypted archive recovery and the
-complete peer-payment state machine. Actual operating-system process death,
+complete peer-payment state machine. The producer fixture additionally invokes
+the native full- and partial-redemption boundaries before export. Actual
+operating-system process death,
 physical Android KeyMint, and physical iOS Secure Enclave behavior remain
 separate on-device release qualifications and must not be inferred from this
 deterministic host bundle.
 
 ## Assertion-only inventory
 
-The following outputs are reference assertions, never state seeds:
+The following outputs are reference assertions, never state seeds. Assertion
+archives that carry membership witnesses remain secret even though they must
+not be restored as wallet state.
 
-| Kind | Path |
-|---|---|
-| `recursive_verify_local_v4` | `expected/verify-local-v4.norito` |
-| `recursive_split_result_v4` | `expected/split-result-v4.norito` |
-| `recursive_peer_payment_v4` | `expected/peer-payment-v4.norito` |
-| `recursive_verify_result_v4` | `expected/verify-result-v4.norito` |
-| `receiver_acknowledgement_payload_v2` | `expected/acknowledgement-payload-v2.norito` |
-| `receiver_acknowledgement_signature_raw_p256` | `expected/acknowledgement-signature-raw-p256.bin` |
-| `receiver_acknowledgement_v2` | `expected/acknowledgement-v2.norito` |
-| `receiver_acknowledgement_verify_result_v2` | `expected/acknowledgement-verify-result-v2.norito` |
+| Kind | Path | Secret |
+|---|---|---:|
+| `recursive_verify_local_v4` | `expected/verify-local-v4.norito` | no |
+| `recursive_split_result_v4` | `expected/split-result-v4.norito` | yes |
+| `recursive_peer_payment_v4` | `expected/peer-payment-v4.norito` | yes |
+| `recursive_verify_result_v4` | `expected/verify-result-v4.norito` | no |
+| `recursive_redeem_build_result_v4` | `expected/redeem-build-result-v4.norito` | no |
+| `receiver_acknowledgement_payload_v2` | `expected/acknowledgement-payload-v2.norito` | no |
+| `receiver_acknowledgement_signature_raw_p256` | `expected/acknowledgement-signature-raw-p256.bin` | no |
+| `receiver_acknowledgement_v2` | `expected/acknowledgement-v2.norito` | no |
+| `receiver_acknowledgement_verify_result_v2` | `expected/acknowledgement-verify-result-v2.norito` | no |
 
 The Rust fixture's P-256 acknowledgement signature is deterministic, but a
 platform signer is not required to reproduce those signature bytes. Apple

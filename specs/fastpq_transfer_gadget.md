@@ -73,6 +73,17 @@ performing out-of-band queries. Public inputs (`dsid`, `slot`, roots,
 count bookkeeping. Missing, malformed, unpaired, or root-mismatched SMT
 witnesses are rejected before proof construction.
 
+V1 uses a 32-bit path for each full `asset/{asset}/{account}` balance key. For
+one `transfer_transcripts` vector, materialization and verification first sort
+the distinct full balance-key bytes lexicographically. Each key keeps the first
+four little-endian bytes of its domain-separated key hash when that path is
+free; a collision advances with wrapping `u32` linear probing to the first free
+path. The probe window is bounded by the number of distinct keys. The verifier
+reconstructs this allocation from the complete transcript vector and rejects a
+witness whose `path_bits` selects any other path. Consequently existing
+non-colliding roots remain unchanged, while colliding full keys receive distinct
+deterministic leaves on every peer.
+
 ## Gadget Layout
 
 1. **Balance Arithmetic Block**

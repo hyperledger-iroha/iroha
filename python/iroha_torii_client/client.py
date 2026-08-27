@@ -73,6 +73,9 @@ from .canonical_request_v1 import (
     validate_target as _validate_canonical_request_target,
 )
 from .canonical_transport import (
+    OPERATOR_FORBIDDEN_AUTH_HEADERS as _OPERATOR_FORBIDDEN_AUTH_HEADERS,
+)
+from .canonical_transport import (
     CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
 )
 from .canonical_transport import (
@@ -246,6 +249,7 @@ _SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
 _SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES = (
     _SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024
 )
+_KAIGI_RELAY_RESPONSE_MAX_BYTES = _SCCP_JSON_RESPONSE_MAX_BYTES
 _SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME = "iroha_sccp::TairaSccpMessageProofV1"
 _SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
     "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
@@ -285,6 +289,22 @@ _SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
 _SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155
 _QUANTITY_MAX_TEXT_LENGTH = 155
 _QUANTITY_MAX_MANTISSA = (1 << 511) - 1
+_FEE_QUOTE_U64_MAX = (1 << 64) - 1
+_FEE_QUOTE_RESPONSE_MAX_BYTES = 64 * 1024
+_FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES = 64 * 1024
+_FEE_SPONSOR_PROGRAM_NAME_MAX_BYTES = 255
+_APPLICATION_JSON_TOKEN_PATTERN = r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+"
+_APPLICATION_JSON_QUOTED_STRING_PATTERN = (
+    r'"(?:[ \t!#-\[\]-~\x80-\xff]|\\[ \t!-~\x80-\xff])*"'
+)
+_APPLICATION_JSON_MEDIA_TYPE_PATTERN = re.compile(
+    rf"[ \t]*application/json"
+    rf"(?:[ \t]*;[ \t]*{_APPLICATION_JSON_TOKEN_PATTERN}="
+    rf"(?:{_APPLICATION_JSON_TOKEN_PATTERN}|"
+    rf"{_APPLICATION_JSON_QUOTED_STRING_PATTERN}))*"
+    rf"[ \t]*",
+    re.IGNORECASE | re.ASCII,
+)
 _VPN_SESSION_ID_HEX_LENGTH = 16 * 2
 _VPN_HELPER_TICKET_BYTES = 788
 _VPN_HELPER_TICKET_HEX_LENGTH = _VPN_HELPER_TICKET_BYTES * 2
@@ -468,6 +488,44 @@ def _canonical_quantity(value: Any, context: str) -> str:
     return value
 
 
+def _fee_quote_quantity_parts(value: str) -> Tuple[int, int]:
+    """Return one already-canonical Quantity as an exact mantissa/scale pair."""
+
+    whole, separator, fraction = value.partition(".")
+    if not separator:
+        return int(whole), 0
+    return int(whole + fraction), len(fraction)
+
+
+def _fee_quote_add_quantity_parts(
+    left: Tuple[int, int],
+    right: Tuple[int, int],
+    context: str,
+) -> Tuple[int, int]:
+    """Add canonical quantities with the same exact bounded arithmetic as Rust."""
+
+    scale = max(left[1], right[1])
+    mantissa = left[0] * 10 ** (scale - left[1])
+    mantissa += right[0] * 10 ** (scale - right[1])
+    while scale and mantissa % 10 == 0:
+        mantissa //= 10
+        scale -= 1
+    if mantissa > _QUANTITY_MAX_MANTISSA:
+        raise RuntimeError(f"{context} exceeds the signed 512-bit quantity domain")
+    return mantissa, scale
+
+
+def _fee_quote_quantity_at_least(
+    available: Tuple[int, int], required: Tuple[int, int]
+) -> bool:
+    """Compare two exact Quantity pairs without decimal-context rounding."""
+
+    scale = max(available[1], required[1])
+    available_mantissa = available[0] * 10 ** (scale - available[1])
+    required_mantissa = required[0] * 10 ** (scale - required[1])
+    return available_mantissa >= required_mantissa
+
+
 _SORAFS_ORDERBOOK_STATUS_FIELDS = frozenset(
     {
         "open_orders",
@@ -612,6 +670,18 @@ def _decode_canonical_i105_string(encoded: str) -> bytes:
     return _account_id_codec.decode_canonical_i105_account_id(encoded)
 
 
+def _fee_quote_account_ids_have_same_identity(left: str, right: str) -> bool:
+    """Compare exact I105 displays by their universal account-controller bytes."""
+
+    try:
+        return secrets.compare_digest(
+            _decode_canonical_i105_string(left),
+            _decode_canonical_i105_string(right),
+        )
+    except ValueError:
+        return False
+
+
 @dataclass(frozen=True)
 class I105NetworkPrefix:
     """Network prefix decoded from a canonical I105 account/address literal."""
@@ -651,6 +721,7 @@ def inspect_i105_network_prefix(
 
 __all__ = [
     "ToriiClient",
+    "validate_fee_quote_response_for_draft",
     "SorafsOrderbookSubmissionAmbiguousError", "SorafsOrderbookSubmissionIdentity", "SorafsOrderbookSubmissionReceipt", "SorafsOrderbookSubmissionReceiptPayload",
     "decode_pdp_commitment_header",
     "inspect_i105_network_prefix",
@@ -930,25 +1001,6 @@ _KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS = frozenset(
     {"relay_id", "domain", "bandwidth_class", "hpke_fingerprint_hex"}
 )
 _KAIGI_RELAY_SUMMARY_OPTIONAL_FIELDS = frozenset({"status", "reported_at_ms"})
-_OPERATOR_FORBIDDEN_AUTH_HEADERS = frozenset(
-    {
-        "authorization",
-        "proxy-authorization",
-        "cookie",
-        "cookie2",
-        "x-api-token",
-        "x-iroha-account",
-        "x-iroha-signature",
-        "x-iroha-timestamp-ms",
-        "x-iroha-nonce",
-        "x-iroha-witness",
-        "x-iroha-operator-public-key",
-        "x-iroha-operator-timestamp-ms",
-        "x-iroha-operator-nonce",
-        "x-iroha-operator-signature",
-    }
-)
-
 def encode_identifier_resolution_receipt_payload(payload: Mapping[str, Any]) -> bytes:
     """Encode an identifier-resolution receipt payload with the shared canonical layout."""
 
@@ -1131,7 +1183,7 @@ def _read_bounded_sccp_response_body(
     maximum_body_bytes: int,
     context: str,
 ) -> bytes:
-    """Drain one SCCP response through a strict actual-byte bound and close it."""
+    """Drain one streamed response through a strict actual-byte bound and close it."""
 
     if (
         isinstance(maximum_body_bytes, bool)
@@ -1703,6 +1755,7 @@ class KagemushaTopUpRequestV4:
             self.norito,
             _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES,
             "KagemushaTopUpRequestV4.norito",
+            _OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
         )
         object.__setattr__(self, "norito", bytes(self.norito))
         object.__setattr__(self, "operation_id", _require_offline_operation_id(self.operation_id))
@@ -1720,6 +1773,7 @@ class KagemushaRedeemRequestV4:
             self.norito,
             _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES,
             "KagemushaRedeemRequestV4.norito",
+            _OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
         )
         object.__setattr__(self, "norito", bytes(self.norito))
         object.__setattr__(self, "operation_id", _require_offline_operation_id(self.operation_id))
@@ -1759,12 +1813,15 @@ _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
 _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 23
 _KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
+_OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request"
+_OFFLINE_REDEEM_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request"
 
 
 def _validate_kagemusha_norito_request(
     value: Any,
     maximum_bytes: int,
     context: str,
+    expected_type_name: str,
 ) -> None:
     if type(value) is not bytes:
         raise TypeError(f"{context} must be immutable bytes")
@@ -1774,6 +1831,13 @@ def _validate_kagemusha_norito_request(
         raise ValueError(
             f"{context} exceeds {maximum_bytes} bytes"
         )
+    validate_norito_frame(
+        value,
+        context=context,
+        expected_type_name=expected_type_name,
+        expected_padding_length=8,
+        expected_flags=0x02,
+    )
 
 
 def _offline_exact_string(value: Any, context: str, *, non_empty: bool = True) -> str:
@@ -1814,6 +1878,16 @@ def _offline_canonical_asset_definition_id(value: Any, context: str) -> str:
             f"{context} must be a canonical checksummed UUIDv4 asset definition id"
         )
     return asset_definition_id
+
+
+def _fee_quote_asset_sort_key(asset_definition_id: str) -> bytes:
+    """Return the UUID bytes used by Rust's ``AssetDefinitionId`` ordering."""
+
+    payload = _decode_base_n(
+        [BASE58_INDEX[symbol] for symbol in asset_definition_id],
+        len(BASE58_ALPHABET),
+    )
+    return payload[1:17]
 
 
 def _offline_required(mapping: Mapping[str, Any], field: str, context: str) -> Any:
@@ -2474,12 +2548,26 @@ def _offline_status_uri(operation_id: str) -> str:
     return f"{_OFFLINE_OPERATIONS_PATH}/{operation_id}"
 
 
+def _offline_retry_after(value: Any, context: str) -> int:
+    if (
+        not isinstance(value, str)
+        or len(value) > 20
+        or re.fullmatch(r"[0-9]+", value) is None
+    ):
+        raise RuntimeError(f"{context} must be a positive decimal number of seconds")
+    seconds = int(value)
+    if seconds == 0 or seconds > _OFFLINE_MAX_U64:
+        raise RuntimeError(f"{context} must be between 1 and {_OFFLINE_MAX_U64}")
+    return seconds
+
+
 def _offline_operation_reference(
     payload: Mapping[str, Any],
     *,
     expected_operation_id: str,
     expected_kind: Literal["top_up", "redeem"],
     location: Optional[str],
+    retry_after: Optional[str],
 ) -> OfflineOperationReference:
     context = "offline operation reference"
     record = _offline_mapping(payload, context)
@@ -2502,6 +2590,7 @@ def _offline_operation_reference(
         raise RuntimeError(f"{context}.status_uri must equal {expected_uri}")
     if location != expected_uri:
         raise RuntimeError(f"Location header must equal {expected_uri}")
+    _offline_retry_after(retry_after, "Retry-After header")
     return OfflineOperationReference(
         operation_id=operation_id,
         kind=kind,
@@ -2515,6 +2604,7 @@ def _offline_operation_reference(
             _offline_required(record, "submitted_at_ms", context),
             f"{context}.submitted_at_ms",
             _OFFLINE_MAX_U64,
+            positive=True,
         ),
     )
 
@@ -2629,6 +2719,10 @@ def _offline_error(value: Any, context: str) -> OfflineErrorEnvelope:
     message = _offline_exact_string(
         _offline_required(record, "message", context), f"{context}.message"
     )
+    if len(message) > 1024 or len(message.encode("utf-8")) > 4096:
+        raise RuntimeError(
+            f"{context}.message exceeds the canonical 1024-character/4096-byte bound"
+        )
     details = None
     if record.get("details") is not None:
         details = _offline_error_details(record["details"], f"{context}.details")
@@ -3888,6 +3982,7 @@ def _offline_operation_status(
                 _offline_required(value, "submitted_at_ms", value_context),
                 f"{value_context}.submitted_at_ms",
                 _OFFLINE_MAX_U64,
+                positive=True,
             ),
         )
     if state == "applied":
@@ -9637,6 +9732,46 @@ class ToriiClient(
         )
         return parser(body, context)
 
+    def _get_kaigi_relay_json_object(
+        self,
+        path: str,
+        *,
+        context: str,
+        allow_not_found: bool = False,
+    ) -> Optional[Mapping[str, Any]]:
+        """Read one exact-network Kaigi relay object through an actual-byte bound."""
+
+        response = self._operator_get(
+            path,
+            headers={"Accept": "application/json"},
+            stream=True,
+        )
+        expected_status = {200, 404} if allow_not_found else {200}
+        self._expect_status(
+            response,
+            expected_status,
+            maximum_body_bytes=_KAIGI_RELAY_RESPONSE_MAX_BYTES,
+            context=context,
+        )
+        if response.status_code == 404:
+            response.close()
+            return None
+        content_type = response.headers.get("Content-Type", "")
+        body = _read_bounded_sccp_response_body(
+            response,
+            _KAIGI_RELAY_RESPONSE_MAX_BYTES,
+            context,
+        )
+        if not body:
+            raise RuntimeError(f"{context} endpoint returned an empty success response")
+        if re.fullmatch(
+            r"application/json(?:\s*;.*)?",
+            content_type,
+            re.IGNORECASE,
+        ) is None:
+            raise TypeError(f"{context} response must use application/json content type")
+        return parse_sumeragi_json_object(body, context)
+
     def _get_sccp_typed_object(
         self,
         path: str,
@@ -10711,6 +10846,7 @@ class ToriiClient(
             expected_operation_id=operation_id,
             expected_kind=kind,
             location=response.headers.get("Location"),
+            retry_after=response.headers.get("Retry-After"),
         )
 
     @staticmethod
@@ -10910,6 +11046,280 @@ class ToriiClient(
     # Contract, governance, and council helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _fee_quote_exact_mapping(
+        value: Any,
+        expected_fields: frozenset[str],
+        context: str,
+    ) -> Mapping[str, Any]:
+        if not isinstance(value, Mapping):
+            raise TypeError(f"{context} must be an object")
+        if set(value) != expected_fields:
+            raise ValueError(
+                f"{context} must contain exactly {', '.join(sorted(expected_fields))}"
+            )
+        return value
+
+    @classmethod
+    def _validate_fee_quote_response_for_draft_inner(
+        cls,
+        unsigned_payload: Mapping[str, Any],
+        response: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        if not isinstance(unsigned_payload, Mapping):
+            raise TypeError("fee quote draft must be an object")
+        authority = cls._require_exact_i105_account_id(
+            unsigned_payload.get("authority"),
+            "fee quote draft.authority",
+        )
+        requested_intent = cls._normalize_fee_payment_intent(
+            unsigned_payload.get("fee_payment"),
+            context="fee quote draft.fee_payment",
+        )
+        record = cls._fee_quote_exact_mapping(
+            response,
+            frozenset({"intent", "observation", "components", "capacities", "decision"}),
+            "fee quote response",
+        )
+        quoted_intent = cls._normalize_fee_payment_intent(
+            record["intent"],
+            context="fee quote response.intent",
+        )
+
+        requested_value = requested_intent["value"]
+        quoted_value = quoted_intent["value"]
+        same_selection = (
+            requested_intent["payer"] == quoted_intent["payer"]
+            and requested_value["gas_limit"] == quoted_value["gas_limit"]
+        )
+        if same_selection and requested_intent["payer"] == "sponsor":
+            requested_program = requested_value["program_id"]
+            quoted_program = quoted_value["program_id"]
+            same_selection = (
+                requested_program["name"] == quoted_program["name"]
+                and _fee_quote_account_ids_have_same_identity(
+                    requested_program["sponsor"], quoted_program["sponsor"]
+                )
+                and requested_value["program_revision"]
+                == quoted_value["program_revision"]
+            )
+        if not same_selection:
+            raise RuntimeError(
+                "fee quote response changed the requested payer, sponsor revision, or gas bound"
+            )
+
+        observation = cls._fee_quote_exact_mapping(
+            record["observation"],
+            frozenset({"ledger_time_ms", "next_block_height", "route_dataspace_id"}),
+            "fee quote response.observation",
+        )
+        cls._normalize_fee_u64(
+            observation["ledger_time_ms"],
+            "fee quote response.observation.ledger_time_ms",
+            allow_zero=True,
+        )
+        cls._normalize_fee_u64(
+            observation["next_block_height"],
+            "fee quote response.observation.next_block_height",
+        )
+        cls._normalize_fee_u64(
+            observation["route_dataspace_id"],
+            "fee quote response.observation.route_dataspace_id",
+            allow_zero=True,
+        )
+
+        components = cls._normalize_fee_charge_limits(
+            record["components"],
+            "fee quote response.components",
+        )
+        if components != quoted_value["charge_limits"]:
+            raise RuntimeError(
+                "fee quote response components differ from the quoted intent"
+            )
+
+        capacities_value = record["capacities"]
+        if type(capacities_value) is not list:
+            raise TypeError("fee quote response.capacities must be an array")
+        capacities: List[Dict[str, Any]] = []
+        capacity_quantities: List[Dict[str, Tuple[int, int]]] = []
+        capacity_fields = frozenset(
+            {
+                "asset_definition_id",
+                "vault_balance",
+                "reserve_floor",
+                "block_remaining",
+                "program_epoch_remaining",
+                "beneficiary_epoch_remaining",
+            }
+        )
+        quantity_fields = (
+            "vault_balance",
+            "reserve_floor",
+            "block_remaining",
+            "program_epoch_remaining",
+            "beneficiary_epoch_remaining",
+        )
+        for index, raw_capacity in enumerate(capacities_value):
+            context = f"fee quote response.capacities[{index}]"
+            capacity = cls._fee_quote_exact_mapping(
+                raw_capacity,
+                capacity_fields,
+                context,
+            )
+            asset_definition_id = _offline_canonical_asset_definition_id(
+                capacity["asset_definition_id"],
+                f"{context}.asset_definition_id",
+            )
+            normalized_capacity: Dict[str, Any] = {
+                "asset_definition_id": asset_definition_id
+            }
+            exact_quantities: Dict[str, Tuple[int, int]] = {}
+            for field in quantity_fields:
+                quantity = _canonical_quantity(capacity[field], f"{context}.{field}")
+                normalized_capacity[field] = quantity
+                exact_quantities[field] = _fee_quote_quantity_parts(quantity)
+            capacities.append(normalized_capacity)
+            capacity_quantities.append(exact_quantities)
+
+        decision = cls._fee_quote_exact_mapping(
+            record["decision"],
+            frozenset({"status", "value"}),
+            "fee quote response.decision",
+        )
+        if decision["status"] != "accepted":
+            raise ValueError("fee quote response.decision.status must be accepted")
+        decision_value = cls._fee_quote_exact_mapping(
+            decision["value"],
+            frozenset({"debit_source", "program_revision"}),
+            "fee quote response.decision.value",
+        )
+        debit_source = cls._fee_quote_exact_mapping(
+            decision_value["debit_source"],
+            frozenset({"kind", "value"}),
+            "fee quote response.decision.value.debit_source",
+        )
+        debit_kind = debit_source["kind"]
+        if debit_kind == "account":
+            normalized_debit_value: Any = cls._require_exact_i105_account_id(
+                debit_source["value"],
+                "fee quote response.decision.value.debit_source.value",
+            )
+        elif debit_kind == "sponsor_program":
+            normalized_debit_value = cls._normalize_fee_sponsor_program_id(
+                debit_source["value"],
+                "fee quote response.decision.value.debit_source.value",
+            )
+        else:
+            raise ValueError(
+                "fee quote response.decision.value.debit_source.kind is unsupported"
+            )
+        decision_revision = decision_value["program_revision"]
+        if decision_revision is not None:
+            decision_revision = cls._normalize_fee_u64(
+                decision_revision,
+                "fee quote response.decision.value.program_revision",
+            )
+
+        if quoted_intent["payer"] == "authority":
+            if (
+                debit_kind != "account"
+                or not _fee_quote_account_ids_have_same_identity(
+                    normalized_debit_value, authority
+                )
+                or decision_revision is not None
+            ):
+                raise RuntimeError(
+                    "authority-paid fee quote has an inconsistent admission decision"
+                )
+            if capacities:
+                raise RuntimeError(
+                    "authority-paid fee quote must not contain capacities"
+                )
+            return dict(record)
+
+        expected_program_id = quoted_value["program_id"]
+        expected_revision = quoted_value["program_revision"]
+        if (
+            debit_kind != "sponsor_program"
+            or normalized_debit_value["name"] != expected_program_id["name"]
+            or not _fee_quote_account_ids_have_same_identity(
+                normalized_debit_value["sponsor"], expected_program_id["sponsor"]
+            )
+            or decision_revision != expected_revision
+        ):
+            raise RuntimeError(
+                "sponsored fee quote has an inconsistent admission decision"
+            )
+        if bool(capacities) != bool(components):
+            raise RuntimeError(
+                "sponsored fee quote capacities must be empty exactly when components are empty"
+            )
+
+        aggregate_by_asset: Dict[str, Tuple[int, int]] = {}
+        for component in components:
+            asset_definition_id = component["asset_definition_id"]
+            amount = _fee_quote_quantity_parts(component["max_amount"])
+            if asset_definition_id in aggregate_by_asset:
+                amount = _fee_quote_add_quantity_parts(
+                    aggregate_by_asset[asset_definition_id],
+                    amount,
+                    f"fee quote component aggregate for {asset_definition_id}",
+                )
+            aggregate_by_asset[asset_definition_id] = amount
+        ordered_assets = sorted(aggregate_by_asset, key=_fee_quote_asset_sort_key)
+        if len(capacities) != len(ordered_assets):
+            raise RuntimeError(
+                "sponsored fee quote must contain one capacity per component asset"
+            )
+
+        for capacity, exact, asset_definition_id in zip(
+            capacities,
+            capacity_quantities,
+            ordered_assets,
+        ):
+            if capacity["asset_definition_id"] != asset_definition_id:
+                raise RuntimeError(
+                    "sponsored fee quote capacities are duplicated, unrelated, or not in canonical asset order"
+                )
+            aggregate = aggregate_by_asset[asset_definition_id]
+            required_vault_balance = _fee_quote_add_quantity_parts(
+                exact["reserve_floor"],
+                aggregate,
+                f"fee quote required vault balance for {asset_definition_id}",
+            )
+            if not _fee_quote_quantity_at_least(
+                exact["vault_balance"], required_vault_balance
+            ):
+                raise RuntimeError(
+                    f"fee quote vault capacity for {asset_definition_id} does not cover its reserve and aggregate charge"
+                )
+            for window, field in (
+                ("block", "block_remaining"),
+                ("program epoch", "program_epoch_remaining"),
+                ("beneficiary epoch", "beneficiary_epoch_remaining"),
+            ):
+                if not _fee_quote_quantity_at_least(exact[field], aggregate):
+                    raise RuntimeError(
+                        f"fee quote {window} capacity for {asset_definition_id} does not cover its aggregate charge"
+                    )
+        return dict(record)
+
+    @classmethod
+    def _validate_fee_quote_response_for_draft(
+        cls,
+        unsigned_payload: Mapping[str, Any],
+        response: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        try:
+            return cls._validate_fee_quote_response_for_draft_inner(
+                unsigned_payload,
+                response,
+            )
+        except RuntimeError:
+            raise
+        except (TypeError, ValueError, KeyError) as exc:
+            raise RuntimeError(str(exc)) from exc
+
     def quote_fees(
         self,
         unsigned_payload: Mapping[str, Any],
@@ -10933,57 +11343,59 @@ class ToriiClient(
             canonical_auth,
             "quote_fees",
         )
-        if canonical_auth.account_id != authority:
+        auth_account = self._normalize_canonical_account_id(
+            canonical_auth.account_id,
+            "quote_fees.canonical_auth.account_id",
+        )
+        if (
+            "@" not in auth_account
+            and not _fee_quote_account_ids_have_same_identity(auth_account, authority)
+        ):
             raise ValueError(
-                "quote_fees.canonical_auth.account_id must equal the exact payload authority"
+                "quote_fees.canonical_auth.account_id must identify the payload authority"
             )
-        requested_intent = self._normalize_fee_payment_intent(
-            self._ensure_mapping(
-                unsigned_payload.get("fee_payment"),
-                "quote_fees.unsigned_payload.fee_payment",
-            ),
+        self._normalize_fee_payment_intent(
+            unsigned_payload.get("fee_payment"),
             context="quote_fees.unsigned_payload.fee_payment",
         )
-        payload = self._vpn_json_request(
-            "POST",
-            "/v1/fees/quote",
-            body_payload={
+        if urlsplit(self._base_url).scheme.lower() != "https":
+            raise RuntimeError("Sora VPN requests require an HTTPS Torii base URL")
+        data = self._encode_json_body(
+            {
                 "payload": self._clone_json_value(
                     unsigned_payload,
                     context="quote_fees.unsigned_payload",
                 )
-            },
-            canonical_auth=canonical_auth,
-            context="fee quote response",
-            expected_status=(200,),
+            }
         )
+        headers = self._canonical_request_headers(
+            "POST",
+            "/v1/fees/quote",
+            data,
+            canonical_auth=canonical_auth,
+            headers=None,
+            has_body=True,
+        )
+        response = self._request(
+            "POST",
+            "/v1/fees/quote",
+            headers=headers,
+            data=data,
+            stream=True,
+            allow_retry=False,
+            allow_redirects=False,
+        )
+        self._expect_status(
+            response,
+            (200,),
+            maximum_body_bytes=_FEE_QUOTE_RESPONSE_MAX_BYTES,
+            context="fee quote response",
+        )
+        payload = self._fee_quote_json_response(response)
         if payload is None:
             raise RuntimeError("fee quote endpoint returned no payload")
         response = dict(self._ensure_mapping(payload, "fee quote response"))
-        try:
-            quoted_intent = self._normalize_fee_payment_intent(
-                self._ensure_mapping(response.get("intent"), "fee quote response.intent"),
-                context="fee quote response.intent",
-            )
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("fee quote response.intent is not canonical") from exc
-        requested_value = requested_intent["value"]
-        quoted_value = quoted_intent["value"]
-        same_selection = (
-            requested_intent["payer"] == quoted_intent["payer"]
-            and requested_value["gas_limit"] == quoted_value["gas_limit"]
-        )
-        if same_selection and requested_intent["payer"] == "sponsor":
-            same_selection = (
-                requested_value["program_id"] == quoted_value["program_id"]
-                and requested_value["program_revision"]
-                == quoted_value["program_revision"]
-            )
-        if not same_selection:
-            raise RuntimeError(
-                "fee quote response changed the requested payer, sponsor revision, or gas bound"
-            )
-        return response
+        return self._validate_fee_quote_response_for_draft(unsigned_payload, response)
 
     def get_fee_sponsor_program(
         self,
@@ -11008,41 +11420,83 @@ class ToriiClient(
             raise ValueError(
                 "get_fee_sponsor_program.program_id must be an exact sponsor/program literal"
             )
-        self._require_exact_i105_account_id(
-            sponsor,
-            "get_fee_sponsor_program.program_id.sponsor",
-        )
-        payload = self._vpn_json_request(
+        try:
+            requested_id = self._normalize_fee_sponsor_program_id(
+                {"sponsor": sponsor, "name": name},
+                "get_fee_sponsor_program.program_id",
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "get_fee_sponsor_program.program_id must be canonical"
+            ) from exc
+        sponsor = requested_id["sponsor"]
+        name = requested_id["name"]
+        if urlsplit(self._base_url).scheme.lower() != "https":
+            raise RuntimeError("Sora VPN requests require an HTTPS Torii base URL")
+        path = "/v1/fee-sponsor-programs/by-id"
+        data = self._encode_json_body({"program_id": literal})
+        headers = self._canonical_request_headers(
             "POST",
-            "/v1/fee-sponsor-programs/by-id",
-            body_payload={"program_id": literal},
+            path,
+            data,
             canonical_auth=self._require_canonical_auth(
                 canonical_auth,
                 "get_fee_sponsor_program",
             ),
+            headers=None,
+            has_body=True,
+        )
+        raw_response = self._request(
+            "POST",
+            path,
+            headers=headers,
+            data=data,
+            stream=True,
+            allow_retry=False,
+            allow_redirects=False,
+        )
+        self._expect_status(
+            raw_response,
+            (200,),
+            maximum_body_bytes=_FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES,
             context="fee sponsor program response",
-            expected_status=(200,),
+        )
+        payload = self._bounded_strict_json_object_response(
+            raw_response,
+            _FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES,
+            "fee sponsor program response",
         )
         if payload is None:
             raise RuntimeError("fee sponsor program endpoint returned no payload")
         response = dict(self._ensure_mapping(payload, "fee sponsor program response"))
-        response_id = response.get("id")
-        if not isinstance(response_id, Mapping) or set(response_id) != {"sponsor", "name"}:
+        allowed_fields = {
+            "id",
+            "payout_account",
+            "lifecycle",
+            "active_revision",
+            "staged_revision",
+            "scheduled_activation",
+        }
+        if not {"id", "payout_account", "lifecycle"}.issubset(response) or not set(
+            response
+        ).issubset(allowed_fields):
             raise RuntimeError(
-                "fee sponsor program response.id must contain only sponsor and name"
+                "fee sponsor program response has missing, unknown, or retired fields"
             )
+        response_id = response.get("id")
         try:
-            response_sponsor = self._require_exact_i105_account_id(
-                response_id.get("sponsor"),
-                "fee sponsor program response.id.sponsor",
-            )
-            response_name = _require_exact_non_empty_string(
-                response_id.get("name"),
-                "fee sponsor program response.id.name",
+            normalized_response_id = self._normalize_fee_sponsor_program_id(
+                response_id,
+                "fee sponsor program response.id",
             )
         except (TypeError, ValueError) as exc:
             raise RuntimeError("fee sponsor program response.id is not canonical") from exc
-        if response_sponsor != sponsor or response_name != name:
+        if (
+            not _fee_quote_account_ids_have_same_identity(
+                normalized_response_id["sponsor"], sponsor
+            )
+            or normalized_response_id["name"] != name
+        ):
             raise RuntimeError(
                 "fee sponsor program response.id does not match the requested program"
             )
@@ -11055,6 +11509,48 @@ class ToriiClient(
             raise RuntimeError(
                 "fee sponsor program response.payout_account is not canonical"
             ) from exc
+        lifecycle = response.get("lifecycle")
+        if (
+            not isinstance(lifecycle, Mapping)
+            or set(lifecycle) != {"state", "value"}
+            or lifecycle.get("value") is not None
+            or lifecycle.get("state")
+            not in {"staged", "paused", "active", "closing", "closed"}
+        ):
+            raise RuntimeError(
+                "fee sponsor program response.lifecycle is not canonical"
+            )
+        for field in ("active_revision", "staged_revision"):
+            if field in response:
+                try:
+                    self._normalize_fee_u64(
+                        response[field],
+                        f"fee sponsor program response.{field}",
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"fee sponsor program response.{field} is not positive u64"
+                    ) from exc
+        if "scheduled_activation" in response:
+            activation = response["scheduled_activation"]
+            if not isinstance(activation, Mapping) or set(activation) != {
+                "revision",
+                "activate_at_height",
+            }:
+                raise RuntimeError(
+                    "fee sponsor program response.scheduled_activation is not canonical"
+                )
+            for field in ("revision", "activate_at_height"):
+                try:
+                    self._normalize_fee_u64(
+                        activation.get(field),
+                        f"fee sponsor program response.scheduled_activation.{field}",
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        "fee sponsor program response.scheduled_activation "
+                        "must contain positive u64 values"
+                    ) from exc
         return response
 
     def prepare_contract_call(
@@ -11134,6 +11630,11 @@ class ToriiClient(
         public_key_hex: Optional[str] = None,
         signature_b64: Optional[str] = None,
         creation_time_ms: Optional[int] = None,
+        validation_fee_policy_version: Optional[int] = None,
+        validation_fee_policy_hash: Optional[str] = None,
+        validation_fee_hijiri_fee_quote_hash: Optional[str] = None,
+        validation_fee_instruction_index: Optional[int] = None,
+        validation_fee_transfer_entry_index: Optional[int] = None,
     ) -> MultisigResponse:
         """Propose a generic multisig instruction batch via ``POST /v1/multisig/propose``.
 
@@ -11204,6 +11705,70 @@ class ToriiClient(
         )
         if normalized_creation_time is not None:
             request_payload["creation_time_ms"] = normalized_creation_time
+        has_validation_fee_policy_version = validation_fee_policy_version is not None
+        has_validation_fee_policy_hash = validation_fee_policy_hash is not None
+        has_hijiri_fee_quote_hash = validation_fee_hijiri_fee_quote_hash is not None
+        has_validation_fee_instruction_index = validation_fee_instruction_index is not None
+        has_validation_fee_transfer_entry_index = (
+            validation_fee_transfer_entry_index is not None
+        )
+        if has_validation_fee_policy_version != has_validation_fee_policy_hash:
+            raise ValueError(
+                "propose_multisig validation fee policy version and hash must be provided together"
+            )
+        if not has_validation_fee_policy_version and has_hijiri_fee_quote_hash:
+            raise ValueError(
+                "propose_multisig validation fee Hijiri quote hash requires policy metadata"
+            )
+        if not has_validation_fee_policy_version and has_validation_fee_instruction_index:
+            raise ValueError(
+                "propose_multisig validation fee instruction index requires policy metadata"
+            )
+        if not has_validation_fee_policy_version and has_validation_fee_transfer_entry_index:
+            raise ValueError(
+                "propose_multisig validation fee transfer entry index requires policy metadata"
+            )
+        if has_validation_fee_transfer_entry_index and not has_validation_fee_instruction_index:
+            raise ValueError(
+                "propose_multisig validation fee transfer entry index requires instruction index"
+            )
+        if has_validation_fee_policy_version:
+            normalized_policy_version = _require_u64(
+                validation_fee_policy_version,
+                "propose_multisig.validation_fee_policy_version",
+            )
+            request_payload["validation_fee_policy_version"] = str(
+                normalized_policy_version
+            )
+            request_payload["validation_fee_policy_hash"] = self._normalize_hex32_string(
+                validation_fee_policy_hash,
+                context="propose_multisig.validation_fee_policy_hash",
+            )
+            if has_hijiri_fee_quote_hash:
+                request_payload["validation_fee_hijiri_fee_quote_hash"] = (
+                    self._normalize_hex32_string(
+                        validation_fee_hijiri_fee_quote_hash,
+                        context=(
+                            "propose_multisig.validation_fee_hijiri_fee_quote_hash"
+                        ),
+                    )
+                )
+            if has_validation_fee_instruction_index:
+                normalized_instruction_index = _require_u64(
+                    validation_fee_instruction_index,
+                    "propose_multisig.validation_fee_instruction_index",
+                )
+                request_payload["validation_fee_instruction_index"] = str(
+                    normalized_instruction_index
+                )
+            if has_validation_fee_transfer_entry_index:
+                normalized_transfer_entry_index = _require_u64(
+                    validation_fee_transfer_entry_index,
+                    "propose_multisig.validation_fee_transfer_entry_index",
+                )
+                request_payload["validation_fee_transfer_entry_index"] = str(
+                    normalized_transfer_entry_index
+                )
         body = self._post_json(
             "/v1/multisig/propose",
             request_payload,
@@ -11663,6 +12228,8 @@ class ToriiClient(
             allow_redirects=False,
         )
         self._expect_status(response, expected_status)
+        if 200 <= response.status_code < 300:
+            self._require_application_json_media_type(response, context)
         payload = self._maybe_json(response)
         if payload is None:
             return None
@@ -13584,6 +14151,107 @@ class ToriiClient(
             )
         }
 
+    @staticmethod
+    def _normalize_fee_u64(
+        value: Any,
+        context: str,
+        *,
+        allow_zero: bool = False,
+    ) -> int:
+        if type(value) is not int:
+            raise TypeError(f"{context} must be an exact JSON integer")
+        if value < 0 or (value == 0 and not allow_zero):
+            qualifier = "non-negative" if allow_zero else "positive"
+            raise ValueError(f"{context} must be {qualifier}")
+        if value > _FEE_QUOTE_U64_MAX:
+            raise ValueError(f"{context} exceeds u64")
+        return value
+
+    @classmethod
+    def _normalize_fee_sponsor_program_id(
+        cls,
+        value: Any,
+        context: str,
+    ) -> Dict[str, str]:
+        if not isinstance(value, Mapping) or set(value) != {"sponsor", "name"}:
+            raise ValueError(f"{context} must contain only sponsor and name")
+        sponsor = cls._require_exact_i105_account_id(
+            value.get("sponsor"),
+            f"{context}.sponsor",
+        )
+        name = _require_exact_non_empty_string(value.get("name"), f"{context}.name")
+        if (
+            len(name.encode("utf-8")) > _FEE_SPONSOR_PROGRAM_NAME_MAX_BYTES
+            or unicodedata.normalize("NFC", name) != name
+            or any(
+                char.isspace()
+                or unicodedata.category(char) == "Cc"
+                or ord(char) in {0x061C, 0x200E, 0x200F}
+                or 0x202A <= ord(char) <= 0x202E
+                or 0x2066 <= ord(char) <= 0x2069
+                for char in name
+            )
+            or any(char in "@#$/" for char in name)
+        ):
+            raise ValueError(f"{context}.name must be canonical")
+        return {"sponsor": sponsor, "name": name}
+
+    @classmethod
+    def _normalize_fee_charge_limits(
+        cls,
+        value: Any,
+        context: str,
+    ) -> List[Dict[str, Any]]:
+        if type(value) is not list:
+            raise TypeError(f"{context} must be an array")
+        if len(value) > 2:
+            raise ValueError(f"{context} contains too many entries")
+        normalized_limits: List[Dict[str, Any]] = []
+        previous_kind = -1
+        for index, raw in enumerate(value):
+            item_context = f"{context}[{index}]"
+            if not isinstance(raw, Mapping):
+                raise TypeError(f"{item_context} must be an object")
+            if set(raw) != {"kind", "asset_definition_id", "max_amount"}:
+                raise ValueError(f"{item_context} has unsupported or missing fields")
+            tagged_kind = raw["kind"]
+            if (
+                not isinstance(tagged_kind, Mapping)
+                or set(tagged_kind) != {"kind", "value"}
+                or tagged_kind.get("value") is not None
+            ):
+                raise ValueError(f"{item_context}.kind must be a canonical tagged unit")
+            kind_literal = tagged_kind.get("kind")
+            kind = (
+                0
+                if kind_literal == "nexus"
+                else 1
+                if kind_literal == "pipeline_gas"
+                else -1
+            )
+            if kind < 0:
+                raise ValueError(f"{item_context}.kind is unsupported")
+            if kind <= previous_kind:
+                raise ValueError(
+                    f"{context} must be unique and canonically ordered"
+                )
+            previous_kind = kind
+            asset_definition_id = _offline_canonical_asset_definition_id(
+                raw["asset_definition_id"],
+                f"{item_context}.asset_definition_id",
+            )
+            max_amount = cls._quantity(raw["max_amount"], f"{item_context}.max_amount")
+            if max_amount == "0":
+                raise ValueError(f"{item_context}.max_amount must be positive")
+            normalized_limits.append(
+                {
+                    "kind": {"kind": kind_literal, "value": None},
+                    "asset_definition_id": asset_definition_id,
+                    "max_amount": max_amount,
+                }
+            )
+        return normalized_limits
+
     @classmethod
     def _normalize_fee_payment_intent(
         cls,
@@ -13605,58 +14273,17 @@ class ToriiClient(
         allowed = {"charge_limits", "gas_limit"}
         if payer == "sponsor":
             allowed.update({"program_id", "program_revision"})
-        if set(payment) - allowed:
-            raise ValueError(f"{context}.value contains unsupported fields")
-        if "charge_limits" not in payment:
-            raise ValueError(f"{context}.value.charge_limits is required")
-        charge_limits = payment["charge_limits"]
-        if isinstance(charge_limits, (str, bytes, bytearray, memoryview)) or not isinstance(
-            charge_limits, Sequence
-        ):
-            raise TypeError(f"{context}.value.charge_limits must be an array")
-        if len(charge_limits) > 2:
-            raise ValueError(f"{context}.value.charge_limits contains too many entries")
-        normalized_limits: List[Dict[str, Any]] = []
-        previous_kind = -1
-        for index, raw in enumerate(charge_limits):
-            item_context = f"{context}.value.charge_limits[{index}]"
-            if not isinstance(raw, Mapping):
-                raise TypeError(f"{item_context} must be an object")
-            if set(raw) != {"kind", "asset_definition_id", "max_amount"}:
-                raise ValueError(f"{item_context} has unsupported or missing fields")
-            tagged_kind = raw["kind"]
-            if (
-                not isinstance(tagged_kind, Mapping)
-                or set(tagged_kind) != {"kind", "value"}
-                or tagged_kind.get("value") is not None
-            ):
-                raise ValueError(f"{item_context}.kind must be a canonical tagged unit")
-            kind_literal = tagged_kind.get("kind")
-            kind = 0 if kind_literal == "nexus" else 1 if kind_literal == "pipeline_gas" else -1
-            if kind < 0:
-                raise ValueError(f"{item_context}.kind is unsupported")
-            if kind <= previous_kind:
-                raise ValueError(
-                    f"{context}.value.charge_limits must be unique and canonically ordered"
-                )
-            previous_kind = kind
-            asset_definition_id = _offline_canonical_asset_definition_id(
-                raw["asset_definition_id"],
-                f"{item_context}.asset_definition_id",
+        if set(payment) != allowed:
+            raise ValueError(
+                f"{context}.value must contain exactly {', '.join(sorted(allowed))}"
             )
-            max_amount = cls._quantity(raw["max_amount"], f"{item_context}.max_amount")
-            if max_amount == "0":
-                raise ValueError(f"{item_context}.max_amount must be positive")
-            normalized_limits.append(
-                {
-                    "kind": {"kind": kind_literal, "value": None},
-                    "asset_definition_id": asset_definition_id,
-                    "max_amount": max_amount,
-                }
-            )
+        normalized_limits = cls._normalize_fee_charge_limits(
+            payment["charge_limits"],
+            f"{context}.value.charge_limits",
+        )
         gas_limit = payment.get("gas_limit")
         if gas_limit is not None:
-            gas_limit = cls._normalize_optional_int(
+            gas_limit = cls._normalize_fee_u64(
                 gas_limit,
                 f"{context}.value.gas_limit",
                 allow_zero=False,
@@ -13668,33 +14295,18 @@ class ToriiClient(
             "gas_limit": gas_limit,
         }
         if payer == "sponsor":
-            program_id = payment.get("program_id")
-            if not isinstance(program_id, Mapping) or set(program_id) != {"sponsor", "name"}:
-                raise ValueError(f"{context}.value.program_id must contain sponsor and name")
-            sponsor = cls._require_exact_i105_account_id(
-                program_id.get("sponsor"),
-                f"{context}.value.program_id.sponsor",
+            program_id = cls._normalize_fee_sponsor_program_id(
+                payment["program_id"],
+                f"{context}.value.program_id",
             )
-            name = _require_exact_non_empty_string(
-                program_id.get("name"),
-                f"{context}.value.program_id.name",
-            )
-            if (
-                unicodedata.normalize("NFC", name) != name
-                or any(char.isspace() or ord(char) < 0x20 for char in name)
-                or any(char in "@#$/" for char in name)
-            ):
-                raise ValueError(f"{context}.value.program_id.name must be canonical")
-            revision = cls._normalize_optional_int(
-                payment.get("program_revision"),
+            revision = cls._normalize_fee_u64(
+                payment["program_revision"],
                 f"{context}.value.program_revision",
                 allow_zero=False,
             )
-            if revision is None:
-                raise ValueError(f"{context}.value.program_revision is required")
             normalized_value.update(
                 {
-                    "program_id": {"sponsor": sponsor, "name": name},
+                    "program_id": program_id,
                     "program_revision": revision,
                 }
             )
@@ -13791,6 +14403,91 @@ class ToriiClient(
             return response.json()
         except ValueError as exc:
             raise RuntimeError("response payload was not valid JSON") from exc
+
+    @staticmethod
+    def _require_application_json_media_type(
+        response: requests.Response,
+        context: str,
+    ) -> None:
+        values: Optional[Tuple[Any, ...]] = None
+        raw_headers = getattr(getattr(response, "raw", None), "headers", None)
+        if raw_headers is not None:
+            for getter_name in ("getlist", "get_all"):
+                getter = getattr(raw_headers, getter_name, None)
+                if callable(getter):
+                    try:
+                        raw_values = getter("Content-Type")
+                    except Exception:
+                        raw_values = ()
+                    if raw_values is None:
+                        raw_values = ()
+                    if isinstance(raw_values, (str, bytes)):
+                        raw_values = (raw_values,)
+                    try:
+                        values = tuple(raw_values)
+                    except TypeError:
+                        values = ()
+                    break
+        if values is None:
+            values = tuple(
+                value
+                for name, value in response.headers.items()
+                if isinstance(name, str) and name.lower() == "content-type"
+            )
+        content_type = values[0] if len(values) == 1 else ""
+        if (
+            not isinstance(content_type, str)
+            or "," in content_type
+            or _APPLICATION_JSON_MEDIA_TYPE_PATTERN.fullmatch(content_type) is None
+        ):
+            response.close()
+            raise RuntimeError(
+                f"{context} must use Content-Type application/json"
+            )
+
+    @staticmethod
+    def _fee_quote_json_response(
+        response: requests.Response,
+    ) -> Optional[Mapping[str, Any]]:
+        return ToriiClient._bounded_strict_json_object_response(
+            response,
+            _FEE_QUOTE_RESPONSE_MAX_BYTES,
+            "fee quote response",
+        )
+
+    @staticmethod
+    def _bounded_strict_json_object_response(
+        response: requests.Response,
+        maximum_body_bytes: int,
+        context: str,
+    ) -> Optional[Mapping[str, Any]]:
+        ToriiClient._require_application_json_media_type(response, context)
+        try:
+            body = _read_bounded_sccp_response_body(
+                response,
+                maximum_body_bytes,
+                context,
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(str(exc)) from exc
+        if not body:
+            return None
+        try:
+            text = body.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f"{context} must be valid UTF-8 JSON") from exc
+        try:
+            payload = json.loads(
+                text,
+                object_pairs_hook=_offline_json_object_without_duplicates,
+                parse_float=Decimal,
+                parse_constant=_offline_reject_json_constant,
+            )
+        except (ValueError, RecursionError) as exc:
+            raise RuntimeError(f"{context} contains invalid JSON: {exc}") from exc
+        if not isinstance(payload, Mapping):
+            raise RuntimeError(f"{context} must be a JSON object")
+        return payload
 
     def _get_json_object(
         self,
@@ -15692,6 +16389,8 @@ class ToriiClient(
             raise RuntimeError(
                 f"{context} must contain exactly 64 lowercase hex characters"
             )
+        if bytes.fromhex(literal)[-1] & 1 != 1:
+            raise RuntimeError(f"{context} must set the Iroha Hash marker bit")
         return literal
 
     @staticmethod
@@ -15993,6 +16692,8 @@ class ToriiClient(
         domain_ids = [entry.domain for entry in domains]
         if len(set(domain_ids)) != len(domain_ids):
             raise RuntimeError(f"{context}.domains contains duplicate domains")
+        if any(previous >= current for previous, current in zip(domain_ids, domain_ids[1:])):
+            raise RuntimeError(f"{context}.domains must be strictly sorted by domain")
 
         def required_counter(name: str) -> int:
             if name not in record:
@@ -16289,6 +16990,22 @@ class ToriiClient(
             bytes.fromhex(normalized)
         except ValueError as exc:
             raise RuntimeError(f"{context} must contain valid hexadecimal characters") from exc
+        return normalized
+
+    @classmethod
+    def _normalize_hex32_string(
+        cls,
+        value: Union[str, bytes, bytearray, memoryview],
+        *,
+        context: str,
+    ) -> str:
+        normalized = cls._normalize_hex_string(
+            value,
+            context=context,
+            expected_length=64,
+        )
+        if re.fullmatch(r"[0-9a-f]{64}", normalized) is None:
+            raise RuntimeError(f"{context} must contain exactly 64 hexadecimal characters")
         return normalized
 
     @staticmethod
@@ -17322,6 +18039,15 @@ class ToriiClient(
             raise RuntimeError(f"{context}.added_syscalls must be empty in the first release")
         if added_pointer_types:
             raise RuntimeError(f"{context}.added_pointer_types must be empty in the first release")
+
+
+def validate_fee_quote_response_for_draft(
+    unsigned_payload: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Validate an exact V1 fee quote against the unsigned request payload."""
+
+    return ToriiClient._validate_fee_quote_response_for_draft(unsigned_payload, response)
 
 
 class _StatusMetricsState:

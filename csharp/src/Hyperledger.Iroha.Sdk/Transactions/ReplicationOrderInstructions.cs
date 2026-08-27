@@ -75,7 +75,8 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
     /// <summary>Optional immutable Musubi archive purpose bound to this order.</summary>
     public string? MusubiArchiveId { get; }
 
-    internal override string WireId => TypeName;
+    internal override string WireId =>
+        "iroha.instruction.v1::sorafs::IssueReplicationOrder";
 
     internal override string TypeName =>
         "iroha_data_model::isi::sorafs::IssueReplicationOrder";
@@ -263,7 +264,8 @@ public sealed record class CompleteReplicationOrderInstruction : TransactionInst
 
     public ProviderIngestFinalizedAnchorV1 FinalizedAnchor { get; }
 
-    internal override string WireId => TypeName;
+    internal override string WireId =>
+        "iroha.instruction.v1::sorafs::CompleteReplicationOrder";
 
     internal override string TypeName =>
         "iroha_data_model::isi::sorafs::CompleteReplicationOrder";
@@ -300,7 +302,8 @@ public sealed record class ExpireReplicationOrderInstruction : TransactionInstru
 
     public ulong ExpirationEpoch { get; }
 
-    internal override string WireId => TypeName;
+    internal override string WireId =>
+        "iroha.instruction.v1::sorafs::ExpireReplicationOrder";
 
     internal override string TypeName =>
         "iroha_data_model::isi::sorafs::ExpireReplicationOrder";

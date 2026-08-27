@@ -1677,9 +1677,18 @@ async fn generic_transaction_proxy_rejects_ordinary_lifecycle_and_dedicated_rout
         .try_into_routing_plan()
         .expect("fixture routing plan");
     let app = mk_app_state_for_tests();
+    let parameters = app.state.world.view().parameters().clone();
+    let accepted_transaction = AcceptedTransaction::accept_entrypoint(
+        transaction.clone(),
+        &network_id,
+        parameters.sumeragi().max_clock_drift(),
+        parameters.transaction(),
+        app.state.crypto().as_ref(),
+    )
+    .expect("ordinary lifecycle fixture must pass canonical transaction admission");
     let generic_response = super::execute_torii_transaction_via_proxy(
         &app,
-        transaction.clone(),
+        accepted_transaction,
         routing_plan.clone(),
         None,
         false,

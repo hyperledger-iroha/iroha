@@ -299,7 +299,7 @@ fn transcript_final_projection_scalar<S: IpaScalar>(
 pub fn derive_ipa_verifier_transcript_binding<S: IpaScalar>(
     projection: &IpaVerifierTranscriptProjection<S>,
 ) -> Result<IpaVerifierTranscriptBinding<S>, Error> {
-    if projection.n == 0 || (projection.n & (projection.n - 1)) != 0 {
+    if projection.n < 2 || (projection.n & (projection.n - 1)) != 0 {
         return Err(Error::InvalidN(projection.n));
     }
     let expected_rounds = projection.n.trailing_zeros() as usize;
@@ -382,7 +382,7 @@ pub fn derive_ipa_verifier_transcript_projection<B: IpaBackend>(
     transcript: &mut Transcript,
     proof: &IpaProof<B>,
 ) -> Result<IpaVerifierTranscriptProjection<B::Scalar>, Error> {
-    if n == 0 || (n & (n - 1)) != 0 {
+    if n < 2 || (n & (n - 1)) != 0 {
         return Err(Error::InvalidN(n));
     }
     if proof.l_vec.len() != proof.r_vec.len() {
@@ -485,7 +485,7 @@ pub fn validate_ipa_verifier_transcript_projection<B: IpaBackend>(
 ///
 /// # Errors
 ///
-/// Returns an error if `b` is not a non-zero power-of-two vector, if the
+/// Returns an error if `b` is not a power-of-two vector of length at least two, if the
 /// challenge sequence has the wrong shape, if any round index is inconsistent,
 /// or if a supplied challenge/inverse pair is not multiplicative inverse.
 pub fn derive_ipa_verifier_b_vector_reduction<S: IpaScalar>(
@@ -493,7 +493,7 @@ pub fn derive_ipa_verifier_b_vector_reduction<S: IpaScalar>(
     round_challenges: &[IpaRoundChallenge<S>],
 ) -> Result<IpaVerifierBVectorReduction<S>, Error> {
     let n = b.len();
-    if n == 0 || (n & (n - 1)) != 0 {
+    if n < 2 || (n & (n - 1)) != 0 {
         return Err(Error::InvalidN(n));
     }
     let expected_rounds = n.trailing_zeros() as usize;

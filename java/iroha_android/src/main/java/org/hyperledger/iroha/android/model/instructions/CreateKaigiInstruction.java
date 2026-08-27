@@ -11,6 +11,29 @@ import java.util.Objects;
 public final class CreateKaigiInstruction implements InstructionTemplate {
 
   private static final String ACTION = "CreateKaigi";
+  private static final java.util.Set<String> ALLOWED_ARGUMENTS =
+      KaigiInstructionUtils.argumentSet(
+          "action",
+          "call.domain_id",
+          "call.call_name",
+          "host",
+          "title",
+          "description",
+          "max_participants",
+          "gas_rate_per_minute",
+          "scheduled_start_ms",
+          "billing_account",
+          "privacy.mode",
+          "privacy.state",
+          "room_policy.policy",
+          "room_policy.state",
+          "relay_manifest.expiry_ms",
+          "commitment.commitment",
+          "commitment.alias_tag",
+          "nullifier.digest",
+          "nullifier.issued_at_ms",
+          "roster_root",
+          "proof");
 
   private final KaigiInstructionUtils.CallId callId;
   private final String host;
@@ -143,6 +166,8 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
   }
 
   public static CreateKaigiInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireKnownArguments(
+        arguments, ALLOWED_ARGUMENTS, "metadata.", "relay_manifest.hop.");
     KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
@@ -182,7 +207,7 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     }
     final String commitmentValue = arguments.get("commitment.commitment");
     if (commitmentValue != null) {
-      builder.setCommitmentLiteral(commitmentValue);
+      builder.setCommitment(KaigiInstructionUtils.canonicalizeHash(commitmentValue));
     }
     final String nullifier = arguments.get("nullifier.digest");
     final Long nullifierIssuedAt =
@@ -196,13 +221,16 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
       throw new IllegalArgumentException("nullifier issuedAtMs requires nullifier digest");
     }
     if (nullifier != null) {
-      builder.setNullifierDigestLiteral(nullifier);
+      builder.setNullifierDigest(KaigiInstructionUtils.canonicalizeHash(nullifier));
       builder.setNullifierIssuedAtMs(nullifierIssuedAt);
     }
-    builder.setRosterRootLiteral(arguments.get("roster_root"));
+    final String rosterRoot = arguments.get("roster_root");
+    if (rosterRoot != null) {
+      builder.setRosterRoot(KaigiInstructionUtils.canonicalizeHash(rosterRoot));
+    }
     builder.setProofBase64(arguments.get("proof"));
 
-    return new CreateKaigiInstruction(builder, new LinkedHashMap<>(arguments));
+    return builder.build();
   }
 
   public static Builder builder() {
@@ -444,8 +472,15 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
       if (relayId == null || relayId.isBlank()) {
         throw new IllegalArgumentException("relayId must not be blank");
       }
+      if (relayManifestHops.size() >= KaigiInstructionUtils.KAIGI_RELAY_MANIFEST_MAX_HOPS_V1) {
+        throw new IllegalArgumentException(
+            "relay manifest must not contain more than "
+                + KaigiInstructionUtils.KAIGI_RELAY_MANIFEST_MAX_HOPS_V1
+                + " hops");
+      }
       final String normalizedKey =
-          KaigiInstructionUtils.requireBase64(hpkePublicKeyBase64, "hpkePublicKey");
+          KaigiInstructionUtils.requireHpkePublicKeyBase64(
+              hpkePublicKeyBase64, "hpkePublicKey");
       if (weight < 1 || weight > 0xFF) {
         throw new IllegalArgumentException("relay hop weight must be between 1 and 255");
       }
@@ -461,7 +496,9 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     public Builder addRelayManifestHop(
         final String relayId, final byte[] hpkePublicKey, final int weight) {
       return addRelayManifestHop(
-          relayId, KaigiInstructionUtils.toBase64(hpkePublicKey), weight);
+          relayId,
+          KaigiInstructionUtils.toHpkePublicKeyBase64(hpkePublicKey, "hpkePublicKey"),
+          weight);
     }
 
     public Builder setRelayManifest(final KaigiInstructionUtils.RelayManifest manifest) {

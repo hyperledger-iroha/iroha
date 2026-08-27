@@ -9,12 +9,19 @@ use crate::signature::{SignatureScheme, verify_signature};
 use core::fmt;
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_crypto::{Algorithm, EcdsaSecp256k1Sha256};
+use sha2::{Digest as _, Sha256};
 use std::{
     borrow::Cow,
     cell::RefCell,
     collections::{BTreeMap, HashMap},
     io::Write,
+    ops::Range,
 };
+#[derive(Clone, Copy, Debug)]
+struct XmlFieldSource {
+    start: usize,
+    end: usize,
+}
 /// Extremely small ISO 20022 message representation used for testing.
 #[derive(Clone, Default)]
 struct IsoMessage {
@@ -24,6 +31,10 @@ struct IsoMessage {
     fields: HashMap<String, Vec<u8>>,
     /// Counters for `MSG_ADD` to emulate repeating fields.
     repeats: HashMap<String, usize>,
+    /// Digest of the real XML source from which the fields were materialised.
+    xml_source_sha256: Option<[u8; 32]>,
+    /// Byte range in the original source which owns each materialised field.
+    xml_field_sources: HashMap<String, XmlFieldSource>,
 }
 thread_local! {
     /// Thread-local stack of ISO 20022 messages.  The most recently created
@@ -334,6 +345,8 @@ pub fn take_validation_error() -> Option<MsgError> {
 pub struct ParsedMessage {
     message_type: String,
     fields: BTreeMap<String, Vec<u8>>,
+    xml_source_sha256: Option<[u8; 32]>,
+    xml_field_sources: BTreeMap<String, XmlFieldSource>,
 }
 impl ParsedMessage {
     /// Return the ISO 20022 message code (e.g. `"pacs.008"`).
@@ -353,14 +366,31 @@ impl ParsedMessage {
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Vec<u8>)> {
         self.fields.iter()
     }
+    /// Return whether every materialised field came from `source` inside `range`.
+    ///
+    /// Messages parsed from the developer-only key/value or internal XML formats,
+    /// messages mutated after XML parsing, and incomplete provenance fail closed.
+    #[must_use]
+    pub fn fields_are_covered_by_xml_range(&self, source: &[u8], range: Range<usize>) -> bool {
+        if range.start > range.end || range.end > source.len() {
+            return false;
+        }
+        let Some(expected_digest) = self.xml_source_sha256 else {
+            return false;
+        };
+        let actual_digest: [u8; 32] = Sha256::digest(source).into();
+        expected_digest == actual_digest
+            && self.xml_field_sources.len() == self.fields.len()
+            && self.fields.keys().all(|field| {
+                self.xml_field_sources.get(field).is_some_and(|source| {
+                    source.start >= range.start
+                        && source.end <= range.end
+                        && source.start <= source.end
+                })
+            })
+    }
 }
-/// Parse, validate, and materialise an ISO 20022 message.
-///
-/// This helper wraps `msg_parse`/`msg_validate` and drains the temporary VM
-/// stack entry, returning an owned [`ParsedMessage`] on success.
-pub fn parse_message(message_type: &str, data: &[u8]) -> Result<ParsedMessage, MsgError> {
-    msg_parse(message_type, data)?;
-    let valid = msg_validate();
+fn materialise_current_message(valid: bool) -> Result<ParsedMessage, MsgError> {
     MESSAGE_STACK.with(|stack| {
         let mut stack = stack.borrow_mut();
         let maybe_msg = stack.pop();
@@ -369,6 +399,8 @@ pub fn parse_message(message_type: &str, data: &[u8]) -> Result<ParsedMessage, M
             (true, Some(msg)) => Ok(ParsedMessage {
                 message_type: msg.message_type,
                 fields: msg.fields.into_iter().collect(),
+                xml_source_sha256: msg.xml_source_sha256,
+                xml_field_sources: msg.xml_field_sources.into_iter().collect(),
             }),
             (false, _) => {
                 let err = take_validation_failure()
@@ -379,6 +411,36 @@ pub fn parse_message(message_type: &str, data: &[u8]) -> Result<ParsedMessage, M
             (true, None) => Err(MsgError::NoActiveMessage),
         }
     })
+}
+/// Parse, validate, and materialise an ISO 20022 message.
+///
+/// This helper wraps `msg_parse`/`msg_validate` and drains the temporary VM
+/// stack entry, returning an owned [`ParsedMessage`] on success.
+pub fn parse_message(message_type: &str, data: &[u8]) -> Result<ParsedMessage, MsgError> {
+    msg_parse(message_type, data)?;
+    materialise_current_message(msg_validate())
+}
+
+/// Parse, validate, and materialise a production ISO 20022 XML message.
+///
+/// Unlike [`parse_message`], this entry point rejects the developer-only
+/// key/value and internal `<ISO20022>` representations.
+pub fn parse_xml_message(message_type: &str, data: &[u8]) -> Result<ParsedMessage, MsgError> {
+    if !looks_like_xml(data) {
+        return Err(MsgError::InvalidFormat);
+    }
+    let text = core::str::from_utf8(data).map_err(|_| MsgError::InvalidFormat)?;
+    if text.trim_start().starts_with("<ISO20022") {
+        return Err(MsgError::InvalidFormat);
+    }
+    msg_create(message_type);
+    if let Err(error) = parse_real_iso20022(message_type, text) {
+        MESSAGE_STACK.with(|stack| {
+            stack.borrow_mut().pop();
+        });
+        return Err(error);
+    }
+    materialise_current_message(msg_validate())
 }
 /// Norito-friendly projections of the ISO 20022 settlement messages covered by
 /// this helper. These structs make it easy to encode/decode settlement payloads
@@ -1371,6 +1433,12 @@ fn proxy_fallback_match<'a>(
             .fields
             .get_key_value("CdtrAcct/Prxy/Id")
             .map(|(field, value)| (field, value, FieldKind::Text)),
+        "CreDtTm" if canonical_message_type(&message.message_type).as_ref() == "pacs.009" => {
+            message
+                .fields
+                .get_key_value("AppHdr/CreDt")
+                .map(|(field, value)| (field, value, FieldKind::DateTime))
+        }
         _ => None,
     }
 }
@@ -1648,19 +1716,13 @@ fn should_index(path: &str, repeating_bases: &[String]) -> bool {
     repeating_bases.iter().any(|base| path.ends_with(base))
 }
 const SIGNATURE_IGNORED_VALUE: &[u8] = b"signature-block-ignored";
-fn should_skip_element(name: &str) -> bool {
-    matches!(
-        local_name(name),
-        "Sgntr"
-            | "Signature"
-            | "SignedInfo"
-            | "KeyInfo"
-            | "Object"
-            | "QualifyingProperties"
-            | "SignatureValue"
-            | "SignedProperties"
-    )
-}
+const XMLDSIG_NAMESPACE: &str = "http://www.w3.org/2000/09/xmldsig#";
+const REAL_XML_MAX_DEPTH: usize = 64;
+const REAL_XML_MAX_ELEMENTS: usize = 16_384;
+const REAL_XML_MAX_ATTRIBUTES_PER_ELEMENT: usize = 64;
+const REAL_XML_MAX_ATTRIBUTES: usize = 65_536;
+const REAL_XML_MAX_PATH_BYTES: usize = 4_096;
+const REAL_XML_MAX_FIELDS: usize = 16_384;
 fn normalised_parts(stack: &[String]) -> Vec<String> {
     stack
         .iter()
@@ -1746,7 +1808,10 @@ fn supported_special_xml_markup_end(text: &str, start: usize) -> Result<Option<u
     }
     Ok(None)
 }
-fn parse_attributes(tag_body: &str) -> Result<Vec<(String, String)>, MsgError> {
+fn parse_attributes_limited(
+    tag_body: &str,
+    max_attributes: usize,
+) -> Result<Vec<(String, String)>, MsgError> {
     let mut attrs = Vec::new();
     let mut cursor = tag_body.trim();
     if let Some((_, rest)) = cursor.split_once(char::is_whitespace) {
@@ -1758,6 +1823,9 @@ fn parse_attributes(tag_body: &str) -> Result<Vec<(String, String)>, MsgError> {
         cursor = cursor.trim_end_matches('/').trim_end();
     }
     while !cursor.is_empty() {
+        if attrs.len() >= max_attributes {
+            return Err(MsgError::InvalidFormat);
+        }
         let name_end = cursor
             .find(|c: char| c.is_whitespace() || c == '=')
             .unwrap_or(cursor.len());
@@ -1795,6 +1863,9 @@ fn parse_attributes(tag_body: &str) -> Result<Vec<(String, String)>, MsgError> {
         cursor = remainder[consumed..].trim_start();
     }
     Ok(attrs)
+}
+fn parse_attributes(tag_body: &str) -> Result<Vec<(String, String)>, MsgError> {
+    parse_attributes_limited(tag_body, usize::MAX)
 }
 fn is_supported_xml_name(name: &str) -> bool {
     let mut bytes = name.bytes();
@@ -1925,11 +1996,58 @@ fn buffer_real_iso20022_text(
     let _ = stack;
     Ok(())
 }
+fn begin_real_xml_provenance(source: &[u8]) {
+    MESSAGE_STACK.with(|stack| {
+        if let Some(message) = stack.borrow_mut().last_mut() {
+            message.xml_source_sha256 = Some(Sha256::digest(source).into());
+            message.xml_field_sources.clear();
+        }
+    });
+}
+fn msg_set_xml(
+    field: &str,
+    value: &[u8],
+    source: Range<usize>,
+    fields_materialised: &mut usize,
+) -> Result<(), MsgError> {
+    MESSAGE_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        let message = stack.last_mut().ok_or(MsgError::NoActiveMessage)?;
+        let key = canonical_field_name(&message.message_type, field);
+        if let Some(existing) = message.fields.get(&key) {
+            if existing.as_slice() != value {
+                return Err(MsgError::InvalidFormat);
+            }
+            let existing_source = message
+                .xml_field_sources
+                .get_mut(&key)
+                .ok_or(MsgError::InvalidFormat)?;
+            existing_source.start = existing_source.start.min(source.start);
+            existing_source.end = existing_source.end.max(source.end);
+            return Ok(());
+        }
+        if *fields_materialised >= REAL_XML_MAX_FIELDS {
+            return Err(MsgError::InvalidFormat);
+        }
+        *fields_materialised += 1;
+        message.fields.insert(key.clone(), value.to_vec());
+        message.xml_field_sources.insert(
+            key,
+            XmlFieldSource {
+                start: source.start,
+                end: source.end,
+            },
+        );
+        Ok(())
+    })
+}
 fn flush_real_iso20022_text(
     stack: &[String],
     declared_message_type: &mut Option<String>,
     path: &str,
     text_buffers: &mut HashMap<String, String>,
+    source: Range<usize>,
+    fields_materialised: &mut usize,
 ) -> Result<(), MsgError> {
     let Some(value) = text_buffers.remove(path) else {
         return Ok(());
@@ -1944,8 +2062,7 @@ fn flush_real_iso20022_text(
     {
         observe_declared_message_type(declared_message_type, trimmed)?;
     }
-    msg_set(path, trimmed.as_bytes());
-    Ok(())
+    msg_set_xml(path, trimmed.as_bytes(), source, fields_materialised)
 }
 fn parsed_attr_value<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
     attrs
@@ -2031,10 +2148,13 @@ fn parse_key_values(message_type: &str, text: &str) {
     });
 }
 fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
+    begin_real_xml_provenance(text.as_bytes());
     let mut stack: Vec<String> = Vec::new();
     let mut qname_stack: Vec<String> = Vec::new();
     let mut skip_stack: Vec<bool> = Vec::new();
     let mut element_child_counts: Vec<usize> = Vec::new();
+    let mut element_starts: Vec<usize> = Vec::new();
+    let mut semantic_namespace_stack: Vec<Option<String>> = Vec::new();
     let mut skip_depth = 0usize;
     let repeating_bases = repeating_bases_for(message_type);
     let mut repeat_counters: HashMap<String, usize> = HashMap::new();
@@ -2043,6 +2163,9 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
     let mut top_level_root_seen = false;
     let mut namespace_scopes: Vec<Vec<(String, String)>> = Vec::new();
     let mut text_buffers: HashMap<String, String> = HashMap::new();
+    let mut element_count = 0usize;
+    let mut attribute_count = 0usize;
+    let mut fields_materialised = 0usize;
     let mut idx = 0usize;
     let bytes = text.as_bytes();
     let len = bytes.len();
@@ -2052,6 +2175,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             None => {
                 let tail = &text[idx..];
                 if skip_depth == 0
+                    && semantic_namespace_stack.last().is_some_and(Option::is_some)
                     && let Some(path) = current_path(&stack)
                 {
                     buffer_real_iso20022_text(
@@ -2061,7 +2185,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                         &element_child_counts,
                         &mut text_buffers,
                     )?;
-                } else if skip_depth == 0 && !tail.trim().is_empty() {
+                } else if skip_depth == 0 && stack.is_empty() && !tail.trim().is_empty() {
                     return Err(MsgError::InvalidFormat);
                 }
                 break;
@@ -2069,7 +2193,9 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         };
         if next_lt > idx && skip_depth == 0 {
             let body = &text[idx..next_lt];
-            if let Some(path) = current_path(&stack) {
+            if semantic_namespace_stack.last().is_some_and(Option::is_some)
+                && let Some(path) = current_path(&stack)
+            {
                 buffer_real_iso20022_text(
                     &stack,
                     &path,
@@ -2077,7 +2203,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                     &element_child_counts,
                     &mut text_buffers,
                 )?;
-            } else if !body.trim().is_empty() {
+            } else if stack.is_empty() && !body.trim().is_empty() {
                 return Err(MsgError::InvalidFormat);
             }
         }
@@ -2128,6 +2254,10 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             if opened != name_part {
                 return Err(MsgError::InvalidFormat);
             }
+            let source_start = element_starts
+                .last()
+                .copied()
+                .ok_or(MsgError::InvalidFormat)?;
             if let Some(skipped) = skip_stack.pop()
                 && skipped
                 && skip_depth > 0
@@ -2135,6 +2265,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                 skip_depth -= 1;
             }
             if skip_depth == 0
+                && semantic_namespace_stack.last().is_some_and(Option::is_some)
                 && let Some(path) = current_path(&stack)
             {
                 flush_real_iso20022_text(
@@ -2142,14 +2273,33 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                     &mut declared_message_type,
                     &path,
                     &mut text_buffers,
+                    source_start..idx,
+                    &mut fields_materialised,
                 )?;
             }
             stack.pop();
             element_child_counts.pop();
+            element_starts.pop();
+            semantic_namespace_stack.pop();
             namespace_scopes.pop();
             continue;
         }
-        let attrs = parse_attributes(tag_body)?;
+        element_count = element_count
+            .checked_add(1)
+            .ok_or(MsgError::InvalidFormat)?;
+        if element_count > REAL_XML_MAX_ELEMENTS || qname_stack.len() >= REAL_XML_MAX_DEPTH {
+            return Err(MsgError::InvalidFormat);
+        }
+        let remaining_attributes = REAL_XML_MAX_ATTRIBUTES
+            .checked_sub(attribute_count)
+            .ok_or(MsgError::InvalidFormat)?;
+        let attrs = parse_attributes_limited(
+            tag_body,
+            remaining_attributes.min(REAL_XML_MAX_ATTRIBUTES_PER_ELEMENT),
+        )?;
+        attribute_count = attribute_count
+            .checked_add(attrs.len())
+            .ok_or(MsgError::InvalidFormat)?;
         if skip_depth == 0 && stack.is_empty() {
             if top_level_root_seen {
                 return Err(MsgError::InvalidFormat);
@@ -2157,52 +2307,103 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             top_level_root_seen = true;
         }
         let current_namespace_bindings = namespace_bindings(&attrs);
+        let parent_namespace = semantic_namespace_stack.last().cloned().flatten();
         let parent_is_document = skip_depth == 0
             && stack
                 .last()
                 .is_some_and(|parent| local_name(parent) == "Document");
-        let is_skipped = should_skip_element(lname);
-        let element_namespace = if skip_depth == 0 && !is_skipped {
-            element_namespace_uri(name_part, &attrs, &namespace_scopes)?
+        let element_namespace = if skip_depth == 0 {
+            element_namespace_uri(name_part, &attrs, &namespace_scopes)?.map(ToOwned::to_owned)
         } else {
             None
         };
-        if skip_depth == 0 && lname == "Document" {
-            let Some(namespace) = element_namespace else {
-                return Err(MsgError::UnknownMessageType);
-            };
-            let Some(mt) = message_type_from_namespace(namespace) else {
-                return Err(MsgError::UnknownMessageType);
-            };
-            observe_declared_message_type(&mut declared_message_type, &mt)?;
+        let is_dsig_signature = skip_depth == 0
+            && lname == "Signature"
+            && element_namespace.as_deref() == Some(XMLDSIG_NAMESPACE);
+        if skip_depth == 0 && lname == "Signature" && !is_dsig_signature {
+            return Err(MsgError::InvalidFormat);
         }
-        if parent_is_document
-            && !should_skip_element(lname)
-            && let Some(matches) = document_root_matches_message(message_type, lname)
+        if skip_depth == 0
+            && parent_namespace.is_some()
+            && matches!(lname, "DataPDU" | "DataEnvelope" | "Body")
         {
-            let Some(namespace) = element_namespace else {
-                return Err(MsgError::UnknownMessageType);
-            };
-            let Some(mt) = message_type_from_namespace(namespace) else {
-                return Err(MsgError::UnknownMessageType);
-            };
-            observe_declared_message_type(&mut declared_message_type, &mt)?;
-            if !matches {
-                return Err(MsgError::UnknownMessageType);
-            }
-            if document_root_seen {
+            return Err(MsgError::InvalidFormat);
+        }
+        let semantic_namespace = if skip_depth > 0 {
+            parent_namespace.clone()
+        } else if lname == "AppHdr" {
+            if parent_namespace.is_some() {
                 return Err(MsgError::InvalidFormat);
             }
+            let namespace = element_namespace
+                .as_deref()
+                .ok_or(MsgError::UnknownMessageType)?;
+            let definition =
+                message_type_from_namespace(namespace).ok_or(MsgError::UnknownMessageType)?;
+            if canonical_message_type(&definition).as_ref() != "head.001"
+                || !is_versioned_message_definition_id(&definition)
+            {
+                return Err(MsgError::UnknownMessageType);
+            }
+            Some(namespace.to_owned())
+        } else if lname == "Document" {
+            if parent_namespace.is_some() {
+                return Err(MsgError::InvalidFormat);
+            }
+            let namespace = element_namespace
+                .as_deref()
+                .ok_or(MsgError::UnknownMessageType)?;
+            let definition =
+                message_type_from_namespace(namespace).ok_or(MsgError::UnknownMessageType)?;
+            observe_declared_message_type(&mut declared_message_type, &definition)?;
+            Some(namespace.to_owned())
+        } else if let Some(owner) = parent_namespace.as_deref() {
+            if !is_dsig_signature && element_namespace.as_deref() != Some(owner) {
+                return Err(MsgError::InvalidFormat);
+            }
+            Some(owner.to_owned())
+        } else {
+            None
+        };
+        let materialise_semantic = semantic_namespace.is_some();
+        let is_skipped = skip_depth == 0
+            && (is_dsig_signature
+                || (lname == "Sgntr"
+                    && parent_namespace.is_some()
+                    && element_namespace == parent_namespace));
+        if parent_is_document
+            && !is_skipped
+            && let Some(matches) = document_root_matches_message(message_type, lname)
+        {
+            let namespace = element_namespace
+                .as_deref()
+                .ok_or(MsgError::UnknownMessageType)?;
+            let definition =
+                message_type_from_namespace(namespace).ok_or(MsgError::UnknownMessageType)?;
+            observe_declared_message_type(&mut declared_message_type, &definition)?;
+            if !matches || document_root_seen {
+                return Err(if matches {
+                    MsgError::InvalidFormat
+                } else {
+                    MsgError::UnknownMessageType
+                });
+            }
             document_root_seen = true;
+        }
+        if lname.len() > REAL_XML_MAX_PATH_BYTES {
+            return Err(MsgError::InvalidFormat);
         }
         let mut parts = normalised_parts(&stack);
         parts.push(lname.to_owned());
         let base_path = parts.join("/");
+        if base_path.len() > REAL_XML_MAX_PATH_BYTES {
+            return Err(MsgError::InvalidFormat);
+        }
         let mut element_name = lname.to_owned();
         if should_index(&base_path, &repeating_bases) {
             let counter = repeat_counters.entry(base_path.clone()).or_insert(0);
             element_name = format!("{lname}[{counter}]");
-            *counter += 1;
+            *counter = counter.checked_add(1).ok_or(MsgError::InvalidFormat)?;
         }
         if skip_depth == 0
             && let Some(parent_path) = current_path(&stack)
@@ -2214,33 +2415,62 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                 return Err(MsgError::InvalidFormat);
             }
             if let Some(child_count) = element_child_counts.last_mut() {
-                *child_count += 1;
+                *child_count = child_count.checked_add(1).ok_or(MsgError::InvalidFormat)?;
             }
         }
-        stack.push(element_name.clone());
+        stack.push(element_name);
+        let path = current_path(&stack);
+        if path
+            .as_ref()
+            .is_some_and(|path| path.len() > REAL_XML_MAX_PATH_BYTES)
+        {
+            return Err(MsgError::InvalidFormat);
+        }
         qname_stack.push(name_part.to_owned());
         element_child_counts.push(0);
+        element_starts.push(next_lt);
+        semantic_namespace_stack.push(semantic_namespace);
         namespace_scopes.push(current_namespace_bindings);
-        if is_skipped && skip_depth == 0 {
-            // Track that a signature subtree was present while deliberately ignoring its contents.
-            if let Some(path) = current_path(&stack) {
-                let marker_path = format!("{path}/@ignored");
-                msg_set(&marker_path, SIGNATURE_IGNORED_VALUE);
+        if is_skipped && skip_depth == 0 && materialise_semantic {
+            let path = path.as_deref().ok_or(MsgError::InvalidFormat)?;
+            let marker_path = format!("{path}/@ignored");
+            if marker_path.len() > REAL_XML_MAX_PATH_BYTES {
+                return Err(MsgError::InvalidFormat);
             }
+            msg_set_xml(
+                &marker_path,
+                SIGNATURE_IGNORED_VALUE,
+                next_lt..idx,
+                &mut fields_materialised,
+            )?;
         }
         skip_stack.push(is_skipped);
         if is_skipped {
             skip_depth += 1;
         }
         if skip_depth == 0
-            && let Some(path) = current_path(&stack)
+            && materialise_semantic
+            && let Some(path) = path.as_deref()
         {
             for (attr_name, value) in &attrs {
-                if attr_name.starts_with("xmlns") {
+                if attr_name == "xmlns" || attr_name.starts_with("xmlns:") {
                     continue;
                 }
-                let attr_path = format!("{path}/@{}", local_name(attr_name));
-                msg_set(&attr_path, value.as_bytes());
+                if let Some((prefix, _)) = attr_name.split_once(':') {
+                    namespace_uri_for_prefix(prefix, &[], &namespace_scopes)
+                        .ok_or(MsgError::InvalidFormat)?;
+                    continue;
+                }
+                let attr_path = format!("{path}/@{attr_name}");
+                if attr_path.len() > REAL_XML_MAX_PATH_BYTES {
+                    return Err(MsgError::InvalidFormat);
+                }
+                msg_set_xml(
+                    &attr_path,
+                    value.as_bytes(),
+                    next_lt..idx,
+                    &mut fields_materialised,
+                )?;
             }
         }
         if self_closing {
@@ -2253,10 +2483,12 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             stack.pop();
             qname_stack.pop();
             element_child_counts.pop();
+            element_starts.pop();
+            semantic_namespace_stack.pop();
             namespace_scopes.pop();
         }
     }
-    if !qname_stack.is_empty() {
+    if !qname_stack.is_empty() || !text_buffers.is_empty() || !top_level_root_seen {
         return Err(MsgError::InvalidFormat);
     }
     if let Some(declared) = declared_message_type {
@@ -2484,6 +2716,8 @@ pub fn msg_set(field: &str, value: &[u8]) {
         if let Some(m) = stack.borrow_mut().last_mut() {
             let key = canonical_field_name(&m.message_type, field);
             m.fields.insert(key, value.to_vec());
+            m.xml_source_sha256 = None;
+            m.xml_field_sources.clear();
         }
     });
 }
@@ -2508,6 +2742,8 @@ pub fn msg_add(field: &str) {
             let key = format!("{}[{}]", base, *count);
             m.fields.entry(key).or_default();
             *count += 1;
+            m.xml_source_sha256 = None;
+            m.xml_field_sources.clear();
         }
     });
 }
@@ -2517,6 +2753,8 @@ pub fn msg_remove(field: &str) {
         if let Some(m) = stack.borrow_mut().last_mut() {
             let key = canonical_field_name(&m.message_type, field);
             m.fields.remove(&key);
+            m.xml_source_sha256 = None;
+            m.xml_field_sources.clear();
         }
     });
 }
@@ -2526,6 +2764,8 @@ pub fn msg_clear() {
         if let Some(m) = stack.borrow_mut().last_mut() {
             m.fields.clear();
             m.repeats.clear();
+            m.xml_source_sha256 = None;
+            m.xml_field_sources.clear();
         }
     });
 }
@@ -3375,6 +3615,47 @@ mod tests {
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
     #[test]
+    fn parse_xml_message_rejects_developer_formats() {
+        reset();
+        assert!(matches!(
+            parse_xml_message("pacs.008", b"MsgId=abc"),
+            Err(MsgError::InvalidFormat)
+        ));
+        assert!(matches!(
+            parse_xml_message(
+                "pacs.008",
+                br#"<ISO20022 message="pacs.008"><Field path="MsgId">abc</Field></ISO20022>"#,
+            ),
+            Err(MsgError::InvalidFormat)
+        ));
+        let parsed = parse_xml_message("pacs.008", SAMPLE_PACS008_XML.as_bytes())
+            .expect("real ISO XML remains accepted");
+        assert_eq!(parsed.field_text("MsgId"), Some("ISO-008-GRP"));
+    }
+    #[test]
+    fn real_xml_provenance_covers_only_the_signed_range() {
+        reset();
+        let parsed = parse_xml_message("pacs.008", SAMPLE_PACS008_XML.as_bytes())
+            .expect("sample XML parses");
+        assert!(parsed.fields_are_covered_by_xml_range(
+            SAMPLE_PACS008_XML.as_bytes(),
+            0..SAMPLE_PACS008_XML.len()
+        ));
+        let document_start = SAMPLE_PACS008_XML
+            .find("<Document")
+            .expect("Document start");
+        let document_end = SAMPLE_PACS008_XML
+            .find("</Document>")
+            .map(|offset| offset + "</Document>".len())
+            .expect("Document end");
+        assert!(!parsed.fields_are_covered_by_xml_range(
+            SAMPLE_PACS008_XML.as_bytes(),
+            document_start..document_end
+        ));
+        let changed = SAMPLE_PACS008_XML.replace("ISO-008-GRP", "ISO-008-ALT");
+        assert!(!parsed.fields_are_covered_by_xml_range(changed.as_bytes(), 0..changed.len()));
+    }
+    #[test]
     fn parse_message_validation_failure() {
         reset();
         let err = parse_message("pacs.008", b"MsgId=abc").unwrap_err();
@@ -3586,7 +3867,7 @@ mod tests {
         let xml = SAMPLE_PACS002_STATUS_XML
             .replace(
                 r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
-                r#"<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+                r#"<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10" xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
             )
             .replace("<FIToFIPmtStsRpt>", "<pacs:FIToFIPmtStsRpt>")
             .replace("</FIToFIPmtStsRpt>", "</pacs:FIToFIPmtStsRpt>")
@@ -3603,7 +3884,7 @@ mod tests {
         let xml = SAMPLE_PACS002_STATUS_XML
             .replace(
                 r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
-                r#"<pacs:Document xmlns:pacs="https://attacker.invalid/schema:pacs.002.001.10">"#,
+                r#"<pacs:Document xmlns:pacs="https://attacker.invalid/schema:pacs.002.001.10" xmlns="https://attacker.invalid/schema:pacs.002.001.10">"#,
             )
             .replace("<FIToFIPmtStsRpt>", "<pacs:FIToFIPmtStsRpt>")
             .replace("</FIToFIPmtStsRpt>", "</pacs:FIToFIPmtStsRpt>")
@@ -3624,8 +3905,87 @@ mod tests {
             .replace("</FIToFIPmtStsRpt>", "</evil:FIToFIPmtStsRpt>");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("Document payload root must resolve to the ISO XSD namespace");
-        assert!(matches!(err, MsgError::UnknownMessageType));
+        assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+    #[test]
+    fn parse_real_iso20022_rejects_conflicting_canonical_aliases() {
+        reset();
+        let xml =
+            SAMPLE_PACS002_STATUS_XML.replace("<GrpSts>ACSP</GrpSts>", "<GrpSts>RJCT</GrpSts>");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("canonical aliases may repeat only an identical value");
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+    #[test]
+    fn parse_real_iso20022_rejects_descendant_namespace_spoofing() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML
+            .replace(
+                "<MsgId>",
+                r#"<evil:MsgId xmlns:evil="https://attacker.invalid/iso">"#,
+            )
+            .replace("</MsgId>", "</evil:MsgId>");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("every semantic descendant must retain the Document namespace");
+        assert!(matches!(err, MsgError::InvalidFormat));
+    }
+    #[test]
+    fn parse_real_iso20022_ignores_fields_outside_semantic_namespaces() {
+        reset();
+        let xml = r#"<DataPDU xmlns:evil="https://attacker.invalid/iso">
+  <evil:Body>
+    <evil:MsgId>EVIL-MSG</evil:MsgId>
+    <evil:IntrBkSttlmAmt>10.00</evil:IntrBkSttlmAmt>
+    <evil:IntrBkSttlmCcy>USD</evil:IntrBkSttlmCcy>
+    <evil:IntrBkSttlmDt>2024-01-01</evil:IntrBkSttlmDt>
+    <evil:DbtrAcct>GB82WEST12345698765432</evil:DbtrAcct>
+    <evil:CdtrAcct>GB33BUKB20201555555555</evil:CdtrAcct>
+    <evil:DbtrAgt>DEUTDEFF</evil:DbtrAgt>
+    <evil:CdtrAgt>MARKDEFF</evil:CdtrAgt>
+  </evil:Body>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+    <FIToFICstmrCdtTrf/>
+  </Document>
+</DataPDU>"#;
+        let err = parse_xml_message("pacs.008", xml.as_bytes())
+            .expect_err("transport-wrapper fields must not satisfy the ISO schema");
+        assert!(matches!(err, MsgError::MissingField("MsgId")));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+    #[test]
+    fn parse_real_iso20022_rejects_transparent_wrappers_inside_document() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML
+            .replace("<GrpHdr>", "<Body><GrpHdr>")
+            .replace("</GrpHdr>", "</GrpHdr></Body>");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("transport wrappers must not erase semantic path components");
+        assert!(matches!(err, MsgError::InvalidFormat));
+    }
+    #[test]
+    fn parse_real_iso20022_enforces_depth_and_attribute_budgets() {
+        reset();
+        let nested = format!(
+            "{}{}",
+            "<X>".repeat(REAL_XML_MAX_DEPTH),
+            "</X>".repeat(REAL_XML_MAX_DEPTH)
+        );
+        let deep = SAMPLE_PACS002_STATUS_XML.replace("<GrpHdr>", &format!("<GrpHdr>{nested}"));
+        assert!(matches!(
+            parse_message("pacs.002", deep.as_bytes()),
+            Err(MsgError::InvalidFormat)
+        ));
+
+        let attributes = (0..=REAL_XML_MAX_ATTRIBUTES_PER_ELEMENT)
+            .map(|index| format!(" a{index}=\"x\""))
+            .collect::<String>();
+        let wide = SAMPLE_PACS002_STATUS_XML.replace("<MsgId>", &format!("<MsgId{attributes}>"));
+        assert!(matches!(
+            parse_message("pacs.002", wide.as_bytes()),
+            Err(MsgError::InvalidFormat)
+        ));
     }
     #[test]
     fn parse_real_iso20022_rejects_mismatched_closing_tag() {
@@ -3999,6 +4359,7 @@ mod tests {
             msg_get("BizMsgIdr").as_deref(),
             Some(b"PACS009-BIZ".as_ref())
         );
+        assert_eq!(msg_get("MsgId").as_deref(), Some(b"PACS009-GRP".as_ref()));
         assert_eq!(
             msg_get("MsgDefIdr").as_deref(),
             Some(b"pacs.009.001.10".as_ref())
@@ -4027,7 +4388,7 @@ mod tests {
             Some(b"pacs.009.001.10".as_ref())
         );
         assert_eq!(
-            msg_get("CreDtTm").as_deref(),
+            msg_get("AppHdr/CreDt").as_deref(),
             Some(b"2025-11-12T09:34:09Z".as_ref())
         );
         assert_eq!(msg_get("InstgAgt").as_deref(), Some(b"DEUTDEFF".as_ref()));

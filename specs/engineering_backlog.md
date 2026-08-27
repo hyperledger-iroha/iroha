@@ -6839,11 +6839,11 @@ redistributable schemas, and official trust/revocation bundles.
   relay capability advertisement and runtime GREASE append now check TLV payload
   lengths before writing the two-byte length field, and relay config validation
   rejects configured GREASE payloads that cannot fit that wire field;
-  relay
-  replay-filter bit counts are now bounded before power-of-two rounding, and
-  direct replay-filter construction plus `DoSControls::new` now propagate
-  oversized filter shapes as `ConfigError::ReplayFilter` instead of reaching
-  overflow-prone arithmetic; relay incentive uptime/scheduled-uptime and
+  relay descriptor replay filtering is retired because its input is relay-static;
+  `pow.replay_filter.enabled = true` now fails configuration explicitly while verified
+  credential replay remains in the bounded durable ticket/token stores; the same static
+  descriptor is no longer accepted as a pre-authentication quota key, and nonzero
+  `per_descriptor_burst` values fail configuration; relay incentive uptime/scheduled-uptime and
   verified-bandwidth epoch accumulators now saturate on overflow instead of
   panicking on extreme telemetry or proof totals; SoraNet relay admission now
   uses one static configured difficulty and rejects the retired `adaptive` key

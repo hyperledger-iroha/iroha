@@ -86,7 +86,7 @@ deterministic workflow. Pair this note with the reservation procedure
   `specs/sdk/android/telemetry_override_log.md` and reference the slot ID
   so governance can trace the drill.
 - Attestation regressions must be recorded in
-  `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md`
+  `specs/sdk/android/strongbox_attestation_harness_plan.md`
   with the failing device serials and the bundle paths recorded above.
 
 ## Reporting Checklist

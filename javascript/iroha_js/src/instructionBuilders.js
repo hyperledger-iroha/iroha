@@ -98,6 +98,10 @@ export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
 /** Maximum UTF-8 bytes accepted for an asset-transfer availability reason. */
 export const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
+/** Maximum relay hops accepted by a first-release Kaigi manifest. */
+export const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 = 8;
+/** Maximum decoded bytes accepted for a first-release Kaigi HPKE public key. */
+export const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 = 4_096;
 const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BASE64_CHARS_V1 =
   4 * Math.ceil(SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 / 3);
 function fail(code, message, path) {
@@ -108,6 +112,7 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
   for (const [snakeName, camelName] of [
     ["validation_fee_policy_version", "validationFeePolicyVersion"],
     ["validation_fee_policy_hash", "validationFeePolicyHash"],
+    ["validation_fee_hijiri_fee_quote_hash", "validationFeeHijiriFeeQuoteHash"],
     ["validation_fee_instruction_index", "validationFeeInstructionIndex"],
     ["validation_fee_transfer_entry_index", "validationFeeTransferEntryIndex"],
   ]) {
@@ -1763,6 +1768,28 @@ function normalizeOptionalBase64(value, name) {
   return normalizeBase64(value, name);
 }
 
+function normalizeKaigiHpkePublicKey(value, name) {
+  const key =
+    typeof value === "string"
+      ? decodeBase64Strict(value.trim(), name)
+      : toBinaryBuffer(value, name);
+  if (key.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a non-empty HPKE public key`,
+      name,
+    );
+  }
+  if (key.length > KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must not exceed ${KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1} decoded bytes`,
+      name,
+    );
+  }
+  return key.toString("base64");
+}
+
 function normalizeKaigiId(value, name) {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -1834,7 +1861,7 @@ function normalizeKaigiRelayHop(value, context) {
   const hpkeKey = hop.hpke_public_key ?? hop.hpkePublicKey;
   return {
     relay_id: normalizeAccountId(relayId, `${context}.relayId`),
-    hpke_public_key: normalizeBase64(
+    hpke_public_key: normalizeKaigiHpkePublicKey(
       hpkeKey,
       `${context}.hpkePublicKey`,
     ),
@@ -1860,6 +1887,13 @@ function normalizeKaigiRelayManifest(value, context) {
     fail(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
       `${context}.hops must include at least three relay hops`,
+      `${context}.hops`,
+    );
+  }
+  if (hopsValue.length > KAIGI_RELAY_MANIFEST_MAX_HOPS_V1) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.hops must not exceed ${KAIGI_RELAY_MANIFEST_MAX_HOPS_V1} relay hops`,
       `${context}.hops`,
     );
   }
@@ -2259,7 +2293,7 @@ function normalizeRegisterRelayInput(options) {
         relayId,
         "registerKaigiRelay.relayId",
       ),
-      hpke_public_key: normalizeBase64(
+      hpke_public_key: normalizeKaigiHpkePublicKey(
         hpkeKey,
         "registerKaigiRelay.hpkePublicKey",
       ),
@@ -2268,6 +2302,17 @@ function normalizeRegisterRelayInput(options) {
         "registerKaigiRelay.bandwidthClass",
       ),
     },
+  };
+}
+
+function normalizeUnregisterRelayInput(options) {
+  const source = assertPlainObject(options, "unregisterKaigiRelay");
+  const relayId = source.relay_id ?? source.relayId;
+  return {
+    relay_id: normalizeAccountId(
+      relayId,
+      "unregisterKaigiRelay.relayId",
+    ),
   };
 }
 
@@ -4802,12 +4847,16 @@ export function buildMultisigProposeRequest(options) {
   }
   const validationFeePolicyVersion = source.validationFeePolicyVersion;
   const validationFeePolicyHash = source.validationFeePolicyHash;
+  const validationFeeHijiriFeeQuoteHash = source.validationFeeHijiriFeeQuoteHash;
   const validationFeeInstructionIndex = source.validationFeeInstructionIndex;
   const validationFeeTransferEntryIndex = source.validationFeeTransferEntryIndex;
   const hasValidationFeePolicyVersion =
     validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
   const hasValidationFeePolicyHash =
     validationFeePolicyHash !== undefined && validationFeePolicyHash !== null;
+  const hasValidationFeeHijiriFeeQuoteHash =
+    validationFeeHijiriFeeQuoteHash !== undefined &&
+    validationFeeHijiriFeeQuoteHash !== null;
   const hasValidationFeeInstructionIndex =
     validationFeeInstructionIndex !== undefined && validationFeeInstructionIndex !== null;
   const hasValidationFeeTransferEntryIndex =
@@ -4817,6 +4866,13 @@ export function buildMultisigProposeRequest(options) {
       ValidationErrorCode.INVALID_OBJECT,
       "multisigPropose validation fee policy version and hash must be provided together",
       "multisigPropose.validationFeePolicy",
+    );
+  }
+  if (!hasValidationFeePolicyVersion && hasValidationFeeHijiriFeeQuoteHash) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "multisigPropose Hijiri fee quote hash requires policy metadata",
+      "multisigPropose.validationFeeHijiriFeeQuoteHash",
     );
   }
   if (!hasValidationFeePolicyVersion && hasValidationFeeInstructionIndex) {
@@ -4851,6 +4907,12 @@ export function buildMultisigProposeRequest(options) {
       validationFeePolicyHash,
       "multisigPropose.validationFeePolicyHash",
     );
+    if (hasValidationFeeHijiriFeeQuoteHash) {
+      payload.validation_fee_hijiri_fee_quote_hash = normalizeOptionalHexString(
+        validationFeeHijiriFeeQuoteHash,
+        "multisigPropose.validationFeeHijiriFeeQuoteHash",
+      );
+    }
     if (hasValidationFeeInstructionIndex) {
       payload.validation_fee_instruction_index = String(
         asNonNegativeInteger(
@@ -5155,6 +5217,20 @@ export function buildRegisterKaigiRelayInstruction(options) {
   return {
     Kaigi: {
       RegisterKaigiRelay: normalized,
+    },
+  };
+}
+
+/**
+ * Build a `Kaigi::UnregisterKaigiRelay` instruction payload.
+ * @param {object} options
+ * @returns {{Kaigi: {UnregisterKaigiRelay: {relay_id: string}}}}
+ */
+export function buildUnregisterKaigiRelayInstruction(options) {
+  const normalized = normalizeUnregisterRelayInput(options);
+  return {
+    Kaigi: {
+      UnregisterKaigiRelay: normalized,
     },
   };
 }

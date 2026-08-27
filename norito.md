@@ -297,10 +297,12 @@ Dynamic `InstructionBox` and erased `QueryBox` payloads carry a registry wire
 identifier plus the concrete Norito payload. First-release built-ins use
 explicit, frozen identifiers: instruction IDs are inventoried in
 `crates/iroha_data_model/src/isi/registry/wire_ids.rs`, and query IDs are pinned
-by `crates/iroha_data_model/tests/fixtures/query_wire_ids_v1.txt`. Encoders emit
-those identifiers rather than deriving new values from the current Rust module
-layout. The golden checks bind each built-in type label to its identifier, so
-swapping two otherwise valid identifiers is also a wire-contract failure.
+by `crates/iroha_data_model/tests/fixtures/query_wire_ids_v1.txt`. Iterable
+query IDs use the path-independent `iroha.query.v1::iterable::<domain>::<item>`
+namespace. Encoders emit those identifiers rather than deriving new values
+from the current Rust module layout. The golden checks bind each built-in type
+label to its identifier, so swapping two otherwise valid identifiers is also a
+wire-contract failure.
 Registries are direction-separated: concrete Rust type names are internal
 encoding keys, while decoders accept only the registered frozen wire IDs. There
 is no type-name decode alias and no unregistered type-name encoding fallback.

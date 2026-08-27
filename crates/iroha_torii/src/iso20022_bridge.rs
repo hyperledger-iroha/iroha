@@ -25,21 +25,27 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionPayload},
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
-use ivm::iso20022::{IdentifierKind, InvalidValueKind, MsgError, ParsedMessage, parse_message};
+use ivm::iso20022::{IdentifierKind, InvalidValueKind, MsgError, ParsedMessage};
+#[cfg(test)]
+use ivm::iso20022::{parse_message, parse_xml_message};
 use norito::json::Value as JsonValue;
 use p256::ecdsa::{
     Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
 };
+use parking_lot::ReentrantMutex;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Write as FmtWrite,
-    fs,
-    io::Read as _,
+    fs::{self, OpenOptions},
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime},
 };
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
@@ -72,6 +78,7 @@ pub struct Iso20022BridgeRuntime {
     store_max_records: usize,
     audit_export_dir: Option<PathBuf>,
     dedupe_ttl: Duration,
+    state_lock: Arc<ReentrantMutex<()>>,
     records: DashMap<String, IsoMessageRecord>,
     tx_hash_index: DashMap<String, String>,
     payload_hash_index: DashMap<String, String>,
@@ -220,7 +227,7 @@ impl IsoMessageContext {
     }
 }
 /// Profile and idempotency metadata captured for an inbound ISO message.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IsoMessageMetadata {
     profile_id: Option<String>,
     message_type: Option<String>,
@@ -674,6 +681,24 @@ impl IsoMessageRecord {
     fn mark_settled(&mut self, when: SystemTime) {
         self.settled_at = Some(when);
     }
+    fn is_rejected(&self) -> bool {
+        self.state == IsoMessageState::Rejected
+    }
+    fn is_settled(&self) -> bool {
+        self.settled_at.is_some()
+    }
+    fn is_terminal(&self) -> bool {
+        self.is_rejected() || self.is_settled()
+    }
+    fn queue_outcome_unknown(&self) -> bool {
+        self.state == IsoMessageState::Pending
+            && self.transaction_hash.is_some()
+            && !self.ledger_tx_queued
+    }
+    fn retention_protected(&self) -> bool {
+        self.state == IsoMessageState::Pending
+            || (self.ledger_tx_queued && self.settled_at.is_none())
+    }
     fn try_transition(
         &mut self,
         update: impl FnOnce(&mut Self),
@@ -748,6 +773,7 @@ const ISO_PERSISTED_RECORD_MAX_COUNT_V1: u64 = 1_024;
 // V1 retains exact lifecycle evidence; it never rolls this append-only history forward.
 const ISO_STATUS_HISTORY_MAX_ENTRIES_V1: usize = 256;
 const ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1: usize = 256 * 1024;
+static ISO_RECORD_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const ISO_CHANGE_REASON_MAX_ENTRIES_V1: usize = 64;
 const ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1: usize = 16 * 1024;
 const ISO_PERSISTED_AUDIT_INDEX_VERSION: u64 = 1;
@@ -1365,6 +1391,7 @@ impl Iso20022BridgeRuntime {
             store_max_records,
             audit_export_dir: config.audit_export_dir.clone(),
             dedupe_ttl: Duration::from_secs(config.dedupe_ttl_secs),
+            state_lock: Arc::new(ReentrantMutex::new(())),
             records: DashMap::new(),
             tx_hash_index: DashMap::new(),
             payload_hash_index: DashMap::new(),
@@ -1601,12 +1628,19 @@ impl Iso20022BridgeRuntime {
     }
     /// Perform idempotency checks and record a new inbound message.
     pub fn check_and_record_inbound(&self, message_id: &str, metadata: IsoMessageMetadata) -> bool {
+        let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         self.prune_expired(now);
         if let Some(mut existing) = self.records.get_mut(message_id) {
+            if existing.retention_protected() {
+                return false;
+            }
             let expired = now.saturating_duration_since(existing.last_seen) > self.dedupe_ttl;
-            if expired || existing.state == IsoMessageState::Rejected {
-                if self.metadata_conflicts(message_id, &metadata) {
+            let retryable_rejection = existing.state == IsoMessageState::Rejected
+                && !existing.ledger_tx_queued
+                && existing.transaction_hash.is_none();
+            if expired || retryable_rejection {
+                if existing.metadata != metadata || self.metadata_conflicts(message_id, &metadata) {
                     return false;
                 }
                 self.remove_record_indexes(message_id, &existing);
@@ -1622,6 +1656,15 @@ impl Iso20022BridgeRuntime {
         } else if self.metadata_conflicts(message_id, &metadata) {
             false
         } else {
+            if self.store_dir.is_some()
+                && self.records.len() >= self.store_max_records
+                && self
+                    .records
+                    .iter()
+                    .all(|record| record.retention_protected())
+            {
+                return false;
+            }
             let mut record = IsoMessageRecord::pending(now);
             record.metadata = metadata.clone();
             self.records.insert(message_id.to_owned(), record);
@@ -1632,32 +1675,40 @@ impl Iso20022BridgeRuntime {
     }
     /// Remove a tracked message identifier from the dedupe cache (e.g. after a failed submission).
     pub fn remove_message(&self, message_id: &str) {
+        let _state_guard = self.state_lock.lock();
         if let Some((_, record)) = self.records.remove(message_id) {
             self.remove_record_indexes(message_id, &record);
         }
         self.remove_persisted_message(message_id);
     }
-    /// Record supplementary ledger/account context attached to the message.
-    pub fn update_message_context(&self, message_id: &str, context: IsoMessageContext) {
+    /// Record supplementary ledger/account context attached to an admitted message.
+    ///
+    /// Returns `false` if the reservation no longer exists or the updated record
+    /// cannot be persisted. Missing reservations are never recreated because
+    /// doing so would detach the message from its semantic idempotency indexes.
+    pub fn update_message_context(&self, message_id: &str, context: IsoMessageContext) -> bool {
+        let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         if let Some(mut existing) = self.records.get_mut(message_id) {
             existing.last_seen = now;
             existing.updated_at = SystemTime::now();
             existing.context = context;
         } else {
-            let mut record = IsoMessageRecord::pending(now);
-            record.context = context;
-            self.records.insert(message_id.to_owned(), record);
+            return false;
         }
-        self.persist_message(message_id);
+        self.persist_message(message_id)
     }
     /// Mark the provided message as queued for ledger execution.
     ///
     /// Returns `false` when the exact history is exhausted; the record and its
     /// persisted form then remain unchanged.
     pub fn mark_queued(&self, message_id: &str) -> bool {
+        let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
+            if existing.is_terminal() {
+                return false;
+            }
             let result = existing.try_transition(|record| {
                 record.last_seen = now;
                 record.updated_at = SystemTime::now();
@@ -1676,14 +1727,115 @@ impl Iso20022BridgeRuntime {
         };
         self.finish_status_transition(message_id, transition)
     }
+    /// Bind the exact signed transaction identity before queue admission begins.
+    ///
+    /// This reservation lets an indeterminate queue result remain reconcilable
+    /// without reopening the ISO message identifier for a replacement transfer.
+    pub fn bind_transaction_hash(&self, message_id: &str, transaction_hash: &str) -> bool {
+        let _state_guard = self.state_lock.lock();
+        if self.store_dir.is_none() {
+            return false;
+        }
+        if self
+            .tx_hash_index
+            .get(transaction_hash)
+            .is_some_and(|owner| owner.as_str() != message_id)
+        {
+            return false;
+        }
+        let Some(mut existing) = self.records.get_mut(message_id) else {
+            return false;
+        };
+        if existing.state != IsoMessageState::Pending || existing.ledger_tx_queued {
+            return false;
+        }
+        if let Some(existing_hash) = existing.transaction_hash.as_deref() {
+            if existing_hash != transaction_hash {
+                return false;
+            }
+            drop(existing);
+            self.tx_hash_index
+                .insert(transaction_hash.to_owned(), message_id.to_owned());
+            return self.persist_message(message_id);
+        }
+        let previous = existing.clone();
+        let tx_hash = transaction_hash.to_owned();
+        let old_hash = existing.transaction_hash.clone();
+        let transition = existing.try_transition(|record| {
+            record.transaction_hash = Some(tx_hash.clone());
+            record.last_seen = Instant::now();
+            record.updated_at = SystemTime::now();
+            record.detail = Some("signed transaction prepared for queue admission".to_owned());
+            record.hold_reason_code = None;
+            record.rejection_reason_code = None;
+        });
+        drop(existing);
+        let Err(error) = transition else {
+            if let Some(old_hash) = old_hash.filter(|old_hash| old_hash != &tx_hash) {
+                self.tx_hash_index
+                    .remove_if(&old_hash, |_, owner| owner == message_id);
+            }
+            self.tx_hash_index
+                .insert(tx_hash.clone(), message_id.to_owned());
+            if self.persist_message(message_id) {
+                return true;
+            }
+            self.tx_hash_index
+                .remove_if(&tx_hash, |_, owner| owner == message_id);
+            if let Some(previous_hash) = previous.transaction_hash.as_deref() {
+                self.tx_hash_index
+                    .insert(previous_hash.to_owned(), message_id.to_owned());
+            }
+            self.records.insert(message_id.to_owned(), previous);
+            return false;
+        };
+        self.report_status_history_limit(message_id, error);
+        false
+    }
+    /// Preserve an indeterminate queue outcome for reconciliation by exact hash.
+    pub fn mark_queue_outcome_unknown(
+        &self,
+        message_id: &str,
+        transaction_hash: &str,
+        detail: String,
+    ) -> bool {
+        let _state_guard = self.state_lock.lock();
+        let Some(mut existing) = self.records.get_mut(message_id) else {
+            return false;
+        };
+        if existing.state != IsoMessageState::Pending
+            || existing.transaction_hash.as_deref() != Some(transaction_hash)
+        {
+            return false;
+        }
+        let transition = existing.try_transition(|record| {
+            record.last_seen = Instant::now();
+            record.updated_at = SystemTime::now();
+            record.detail = Some(detail);
+            record.ledger_tx_queued = false;
+            record.settled_at = None;
+            record.set_hold_reason(Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN".to_owned()));
+            record.rejection_reason_code = None;
+        });
+        drop(existing);
+        if transition.is_ok() {
+            self.tx_hash_index
+                .insert(transaction_hash.to_owned(), message_id.to_owned());
+        }
+        self.finish_status_transition(message_id, transition)
+    }
     /// Flag a message as pending due to screening/manual hold with an optional ISO reason code.
     ///
     /// Returns `false` without changing or persisting the record when the exact
     /// append-only status history has reached a V1 capacity bound.
     pub fn mark_hold(&self, message_id: &str, reason_code: Option<&str>) -> bool {
+        let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         let reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
         let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
+            if existing.is_terminal() {
+                return false;
+            }
             let result = existing.try_transition(|record| {
                 record.last_seen = now;
                 record.updated_at = SystemTime::now();
@@ -1709,6 +1861,7 @@ impl Iso20022BridgeRuntime {
     ///
     /// Returns `false` when the message is unknown or its exact history is exhausted.
     pub fn clear_hold(&self, message_id: &str) -> bool {
+        let _state_guard = self.state_lock.lock();
         if let Some(mut existing) = self.records.get_mut(message_id) {
             let result = existing.try_transition(|record| {
                 record.last_seen = Instant::now();
@@ -1728,6 +1881,7 @@ impl Iso20022BridgeRuntime {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
+        let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         let codes_vec = match collect_change_reason_codes_bounded(codes) {
             Ok(codes) => codes,
@@ -1759,6 +1913,7 @@ impl Iso20022BridgeRuntime {
     ///
     /// Returns `false` when the exact history is exhausted.
     pub fn add_change_reason_code(&self, message_id: &str, code: &str) -> bool {
+        let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         let code_encoded_bytes = json_string_encoded_len(code).unwrap_or(usize::MAX);
         if code_encoded_bytes
@@ -1795,8 +1950,17 @@ impl Iso20022BridgeRuntime {
     ///
     /// Returns `false` when the exact history is exhausted.
     pub fn mark_settled(&self, message_id: &str, settled_at: SystemTime) -> bool {
+        let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
+            if existing.is_rejected()
+                && (!existing.ledger_tx_queued || existing.transaction_hash.is_none())
+            {
+                return false;
+            }
+            if existing.is_settled() {
+                return true;
+            }
             let result = existing.try_transition(|record| {
                 record.last_seen = now;
                 record.updated_at = SystemTime::now();
@@ -1829,10 +1993,12 @@ impl Iso20022BridgeRuntime {
     ///
     /// Returns `false` when no message is indexed or its exact history is exhausted.
     pub fn mark_transaction_applied(&self, tx_hash: &str, settled_at: SystemTime) -> bool {
+        let _state_guard = self.state_lock.lock();
         if let Some(message_id) = self.tx_hash_index.get(tx_hash).map(|entry| entry.clone()) {
             let applied = self.mark_settled(&message_id, settled_at);
             if applied {
-                self.tx_hash_index.remove(tx_hash);
+                self.tx_hash_index
+                    .remove_if(tx_hash, |_, owner| owner == &message_id);
             }
             return applied;
         }
@@ -1846,6 +2012,7 @@ impl Iso20022BridgeRuntime {
         tx_hash: &str,
         reason: Option<&TransactionRejectionReason>,
     ) -> bool {
+        let _state_guard = self.state_lock.lock();
         if let Some(message_id) = self.tx_hash_index.get(tx_hash).map(|entry| entry.clone()) {
             let (detail, reason_code) = reason
                 .map(Self::rejection_reason_metadata)
@@ -1858,7 +2025,8 @@ impl Iso20022BridgeRuntime {
                 });
             let rejected = self.mark_rejected(&message_id, detail, reason_code.as_deref());
             if rejected {
-                self.tx_hash_index.remove(tx_hash);
+                self.tx_hash_index
+                    .remove_if(tx_hash, |_, owner| owner == &message_id);
             }
             return rejected;
         }
@@ -1868,6 +2036,7 @@ impl Iso20022BridgeRuntime {
     ///
     /// Returns `false` when no message is indexed or its exact history is exhausted.
     pub fn mark_transaction_expired(&self, tx_hash: &str) -> bool {
+        let _state_guard = self.state_lock.lock();
         if let Some(message_id) = self.tx_hash_index.get(tx_hash).map(|entry| entry.clone()) {
             let expired = self.mark_rejected(
                 &message_id,
@@ -1875,7 +2044,8 @@ impl Iso20022BridgeRuntime {
                 Some("ED07"),
             );
             if expired {
-                self.tx_hash_index.remove(tx_hash);
+                self.tx_hash_index
+                    .remove_if(tx_hash, |_, owner| owner == &message_id);
             }
             return expired;
         }
@@ -1947,6 +2117,7 @@ impl Iso20022BridgeRuntime {
     /// Capacity exhaustion is logged and returns the unchanged exact snapshot;
     /// the record, transaction index, and persisted form are not advanced.
     pub fn mark_accepted(&self, message_id: &str, transaction_hash: &str) -> IsoMessageStatus {
+        let _state_guard = self.state_lock.lock();
         match self.try_mark_accepted(message_id, transaction_hash) {
             Ok(status) => status,
             Err(error) => {
@@ -1964,6 +2135,18 @@ impl Iso20022BridgeRuntime {
         let now = Instant::now();
         let tx_hash = transaction_hash.to_owned();
         let status = if let Some(mut existing) = self.records.get_mut(message_id) {
+            if existing.state != IsoMessageState::Pending
+                || existing
+                    .transaction_hash
+                    .as_deref()
+                    .is_some_and(|hash| hash != transaction_hash)
+                || self
+                    .tx_hash_index
+                    .get(transaction_hash)
+                    .is_some_and(|owner| owner.as_str() != message_id)
+            {
+                return Ok(Self::status_snapshot(message_id, &existing));
+            }
             let old_hash = existing.transaction_hash.clone();
             existing.try_transition(|record| {
                 record.transaction_hash = Some(tx_hash.clone());
@@ -1980,7 +2163,8 @@ impl Iso20022BridgeRuntime {
             let status = Self::status_snapshot(message_id, &existing);
             drop(existing);
             if let Some(old_hash) = old_hash.filter(|old_hash| old_hash != &tx_hash) {
-                self.tx_hash_index.remove(&old_hash);
+                self.tx_hash_index
+                    .remove_if(&old_hash, |_, owner| owner == message_id);
             }
             status
         } else {
@@ -2016,7 +2200,8 @@ impl Iso20022BridgeRuntime {
             })?;
             drop(existing);
             if let Some(old_hash) = old_hash {
-                self.tx_hash_index.remove(&old_hash);
+                self.tx_hash_index
+                    .remove_if(&old_hash, |_, owner| owner == message_id);
             }
         } else {
             let mut record = IsoMessageRecord::pending(now);
@@ -2040,9 +2225,19 @@ impl Iso20022BridgeRuntime {
         reason: Option<String>,
         reason_code: Option<&str>,
     ) -> bool {
+        let _state_guard = self.state_lock.lock();
         let now = Instant::now();
         let reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
         let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
+            if existing.is_settled() {
+                return false;
+            }
+            if existing.is_rejected()
+                && !existing.ledger_tx_queued
+                && existing.transaction_hash.is_none()
+            {
+                return true;
+            }
             let old_hash = existing.transaction_hash.clone();
             let result = existing.try_transition(|record| {
                 record.transaction_hash = None;
@@ -2060,7 +2255,8 @@ impl Iso20022BridgeRuntime {
             if result.is_ok()
                 && let Some(old_hash) = old_hash
             {
-                self.tx_hash_index.remove(&old_hash);
+                self.tx_hash_index
+                    .remove_if(&old_hash, |_, owner| owner == message_id);
             }
             result
         } else {
@@ -2168,6 +2364,7 @@ impl Iso20022BridgeRuntime {
         message_type: &str,
         parsed: &ParsedMessage,
     ) -> Result<IsoLifecycleOutcome, MsgError> {
+        let _state_guard = self.state_lock.lock();
         let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)?
             .map(ToOwned::to_owned)
             .map(|id| {
@@ -2189,6 +2386,7 @@ impl Iso20022BridgeRuntime {
         {
             action = self
                 .apply_lifecycle_update(
+                    message_id,
                     original_id,
                     message_type,
                     status_code.as_deref(),
@@ -2201,7 +2399,9 @@ impl Iso20022BridgeRuntime {
                 })?;
         }
         if let Some(context) = lifecycle_context(message_type, parsed) {
-            self.update_message_context(message_id, context);
+            if !self.update_message_context(message_id, context) {
+                return Err(MsgError::ValidationFailed);
+            }
         }
         self.mark_lifecycle_accepted(
             message_id,
@@ -2547,33 +2747,69 @@ impl Iso20022BridgeRuntime {
 impl Iso20022BridgeRuntime {
     fn apply_lifecycle_update(
         &self,
+        lifecycle_message_id: &str,
         original_id: &str,
         message_type: &str,
         status_code: Option<&str>,
         reason_code: Option<&str>,
         detail: Option<String>,
     ) -> Result<&'static str, IsoStatusHistoryLimitError> {
-        let original_message_type = self
+        let Some(lifecycle_metadata) = self
             .records
-            .get(original_id)
-            .and_then(|record| record.metadata.message_type().map(ToOwned::to_owned));
-        if !lifecycle_update_matches_original(message_type, original_message_type.as_deref()) {
+            .get(lifecycle_message_id)
+            .map(|record| record.metadata.clone())
+        else {
+            return Ok("ignored_profile_mismatch");
+        };
+        let Some((
+            original_message_type,
+            original_metadata,
+            original_state,
+            original_queued,
+            settled,
+        )) = self.records.get(original_id).map(|record| {
+            (
+                record.metadata.message_type().map(ToOwned::to_owned),
+                record.metadata.clone(),
+                record.state,
+                record.ledger_tx_queued,
+                record.settled_at.is_some(),
+            )
+        })
+        else {
+            return Ok("recorded");
+        };
+        if lifecycle_metadata.profile_id().is_none()
+            || lifecycle_metadata.profile_id() != original_metadata.profile_id()
+        {
             return Ok("ignored_profile_mismatch");
         }
+        if lifecycle_metadata.business_service() != original_metadata.business_service() {
+            return Ok("ignored_business_service_mismatch");
+        }
+        if !lifecycle_update_matches_original(message_type, original_message_type.as_deref()) {
+            return Ok("ignored_message_family_mismatch");
+        }
+        if original_state == IsoMessageState::Rejected || (settled && message_type != "pacs.004") {
+            return Ok("ignored_stale_transition");
+        }
+        if original_state == IsoMessageState::Pending && !original_queued {
+            return Ok("ignored_in_flight");
+        }
         if message_type == "pacs.004" {
+            if !settled {
+                return Ok("ignored_unsettled_return");
+            }
             let detail =
                 Some(detail.unwrap_or_else(|| "payment returned by inbound pacs.004".to_owned()));
             let reason_code = reason_code
                 .or(Some("PRTRY:PAYMENT_RETURN"))
                 .map(ToOwned::to_owned);
             self.try_transition_existing(original_id, |record| {
-                record.transaction_hash = None;
                 record.last_seen = Instant::now();
                 record.updated_at = SystemTime::now();
                 record.state = IsoMessageState::Rejected;
                 record.detail = detail;
-                record.ledger_tx_queued = false;
-                record.settled_at = None;
                 record.hold_reason_code = None;
                 record.change_reason_codes.clear();
                 record.rejection_reason_code = reason_code;
@@ -2585,8 +2821,6 @@ impl Iso20022BridgeRuntime {
             self.try_transition_existing(original_id, |record| {
                 record.last_seen = Instant::now();
                 record.updated_at = SystemTime::now();
-                record.state = IsoMessageState::Pending;
-                record.settled_at = None;
                 record.rejection_reason_code = None;
                 record.set_hold_reason(reason_code);
                 record.add_change_reason_code("CANCELLATION_REQUESTED".to_owned());
@@ -2624,12 +2858,10 @@ impl Iso20022BridgeRuntime {
                     Some(detail.unwrap_or_else(|| "ISO 20022 lifecycle rejection".to_owned()));
                 let reason_code = reason_code.or(Some("RJCT")).map(ToOwned::to_owned);
                 self.try_transition_existing(original_id, |record| {
-                    record.transaction_hash = None;
                     record.last_seen = Instant::now();
                     record.updated_at = SystemTime::now();
                     record.state = IsoMessageState::Rejected;
                     record.detail = detail;
-                    record.ledger_tx_queued = false;
                     record.settled_at = None;
                     record.hold_reason_code = None;
                     record.change_reason_codes.clear();
@@ -2700,7 +2932,8 @@ impl Iso20022BridgeRuntime {
         if old_hash != new_hash
             && let Some(old_hash) = old_hash
         {
-            self.tx_hash_index.remove(&old_hash);
+            self.tx_hash_index
+                .remove_if(&old_hash, |_, owner| owner == message_id);
         }
         self.persist_message(message_id);
         Ok(true)
@@ -2715,7 +2948,9 @@ impl Iso20022BridgeRuntime {
             .records
             .iter()
             .filter_map(|entry| {
-                (now.saturating_duration_since(entry.last_seen) > ttl).then(|| entry.key().clone())
+                (!entry.retention_protected()
+                    && now.saturating_duration_since(entry.last_seen) > ttl)
+                    .then(|| entry.key().clone())
             })
             .collect::<Vec<_>>();
         for message_id in expired {
@@ -2760,20 +2995,24 @@ impl Iso20022BridgeRuntime {
     }
     fn remove_record_indexes(&self, message_id: &str, record: &IsoMessageRecord) {
         if let Some(hash) = record.transaction_hash.as_deref() {
-            self.tx_hash_index.remove(hash);
+            self.tx_hash_index
+                .remove_if(hash, |_, owner| owner == message_id);
         }
         if let Some(payload_hash) = record.metadata.payload_hash() {
-            self.payload_hash_index.remove(payload_hash);
+            self.payload_hash_index
+                .remove_if(payload_hash, |_, owner| owner == message_id);
         }
         if let Some(business_message_id) = record
             .metadata
             .business_message_id()
             .and_then(normalise_business_message_id)
         {
-            self.business_message_id_index.remove(&business_message_id);
+            self.business_message_id_index
+                .remove_if(&business_message_id, |_, owner| owner == message_id);
         }
         if let Some(uetr) = record.metadata.uetr() {
-            self.uetr_index.remove(&normalise_uetr(uetr));
+            self.uetr_index
+                .remove_if(&normalise_uetr(uetr), |_, owner| owner == message_id);
         }
         self.payload_hash_index
             .retain(|_, existing_message| existing_message != message_id);
@@ -2815,7 +3054,8 @@ impl Iso20022BridgeRuntime {
                     {
                         continue;
                     }
-                    if !self.store_retention.is_zero()
+                    if !record.retention_protected()
+                        && !self.store_retention.is_zero()
                         && now
                             .duration_since(record.updated_at)
                             .is_ok_and(|age| age > self.store_retention)
@@ -2826,15 +3066,30 @@ impl Iso20022BridgeRuntime {
                     // This is the same stable order used by live compaction: retain the
                     // greatest N `(updated_at_ms, message_id)` keys without ever holding N + 1.
                     let retention_key = (system_time_to_ms(record.updated_at), message_id);
-                    if retained.contains_key(&retention_key) {
+                    if record.retention_protected() {
+                        retained.insert(retention_key, (path, record));
+                        while retained.len() > self.store_max_records {
+                            let evictable = retained.iter().find_map(|(key, (_, candidate))| {
+                                (!candidate.retention_protected()).then(|| key.clone())
+                            });
+                            let Some(evictable) = evictable else {
+                                break;
+                            };
+                            if let Some((evicted_path, _)) = retained.remove(&evictable) {
+                                let _ = fs::remove_file(evicted_path);
+                            }
+                        }
+                    } else if retained.contains_key(&retention_key) {
                         retained.insert(retention_key, (path, record));
                     } else if retained.len() < self.store_max_records {
                         retained.insert(retention_key, (path, record));
-                    } else if retained
-                        .first_key_value()
-                        .is_some_and(|(oldest, _)| &retention_key > oldest)
+                    } else if let Some(oldest) =
+                        retained.iter().find_map(|(key, (_, candidate))| {
+                            (!candidate.retention_protected()).then(|| key.clone())
+                        })
+                        && retention_key > oldest
                     {
-                        if let Some((_, (evicted_path, _))) = retained.pop_first() {
+                        if let Some((evicted_path, _)) = retained.remove(&oldest) {
                             let _ = fs::remove_file(evicted_path);
                         }
                         retained.insert(retention_key, (path, record));
@@ -2847,6 +3102,19 @@ impl Iso20022BridgeRuntime {
         // Secondary indexes are populated only after retention selection, so none can
         // grow with the number of files present on disk.
         for ((_, message_id), (_, record)) in retained {
+            if self.metadata_conflicts(&message_id, &record.metadata)
+                || record.transaction_hash.as_deref().is_some_and(|tx_hash| {
+                    self.tx_hash_index
+                        .get(tx_hash)
+                        .is_some_and(|owner| owner.as_str() != message_id)
+                })
+            {
+                iroha_logger::error!(
+                    message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+                    "ignored persisted ISO record with conflicting replay identity"
+                );
+                continue;
+            }
             self.insert_metadata_indexes(&message_id, &record.metadata);
             if let Some(tx_hash) = record.transaction_hash.as_deref() {
                 self.tx_hash_index
@@ -2856,29 +3124,36 @@ impl Iso20022BridgeRuntime {
         }
         self.persist_audit_index();
     }
-    fn persist_message(&self, message_id: &str) {
+    fn persist_message(&self, message_id: &str) -> bool {
         let Some(store_dir) = self.store_dir.as_deref() else {
-            return;
+            return true;
         };
         let Some(record) = self.records.get(message_id).map(|entry| entry.clone()) else {
-            return;
+            return false;
         };
         let messages_dir = store_dir.join("messages");
         if !ensure_real_directory(&messages_dir) {
-            return;
+            return false;
         }
         let Some(json) = persisted_record_json(message_id, &record) else {
-            return;
+            return false;
         };
         let path = messages_dir.join(message_filename(message_id));
         if !persisted_json_fits_record_cap(&json) {
             let _ = fs::remove_file(path);
             self.persist_audit_index();
-            return;
+            return false;
         }
-        if fs::write(path, json).is_ok() {
-            self.compact_persisted_records();
+        if let Err(error) = write_iso_record_atomically(&path, json.as_bytes()) {
+            iroha_logger::error!(
+                ?error,
+                message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+                "failed to persist ISO record atomically"
+            );
+            return false;
         }
+        self.compact_persisted_records();
+        true
     }
     fn remove_persisted_message(&self, message_id: &str) {
         let Some(store_dir) = self.store_dir.as_deref() else {
@@ -2957,8 +3232,10 @@ impl Iso20022BridgeRuntime {
         self.records
             .iter()
             .filter(|entry| {
-                now.duration_since(entry.value().updated_at)
-                    .is_ok_and(|age| age > self.store_retention)
+                !entry.value().retention_protected()
+                    && now
+                        .duration_since(entry.value().updated_at)
+                        .is_ok_and(|age| age > self.store_retention)
             })
             .min_by(|left, right| {
                 system_time_to_ms(left.value().updated_at)
@@ -2970,6 +3247,7 @@ impl Iso20022BridgeRuntime {
     fn oldest_record_message_id(&self) -> Option<String> {
         self.records
             .iter()
+            .filter(|entry| !entry.value().retention_protected())
             .min_by(|left, right| {
                 system_time_to_ms(left.value().updated_at)
                     .cmp(&system_time_to_ms(right.value().updated_at))
@@ -3650,6 +3928,47 @@ fn read_persisted_record_bounded(path: &Path) -> Option<String> {
         bytes.extend_from_slice(&chunk[..read]);
     }
     String::from_utf8(bytes).ok()
+}
+fn write_iso_record_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "ISO record path has no parent directory",
+        )
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "ISO record path has no file name",
+        )
+    })?;
+    let sequence = ISO_RECORD_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_path = parent.join(format!(
+        ".{}.{}.{sequence}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp_path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temp_path, path)?;
+        #[cfg(unix)]
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp_path);
+    }
+    result
 }
 fn is_real_directory(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
@@ -4431,6 +4750,12 @@ fn verify_embedded_xml_signature(
         signed_info_xml,
         &signed_info_namespaces,
     )?;
+    if !parsed.fields_are_covered_by_xml_range(
+        payload,
+        reference_verification.payload_span.start..reference_verification.payload_span.end,
+    ) {
+        return Err(MsgError::ValidationFailed);
+    }
     let signature_value =
         decode_direct_child_base64(signature_xml, signature_children.signature_value)?;
     let evaluation_time = xml_signature_evaluation_time_for_verified_properties(
@@ -4487,10 +4812,12 @@ fn xml_signature_carrier(text: &str) -> Result<Option<XmlSignatureCarrier>, MsgE
         (None, None) => Ok(None),
         (Some(signature_span), None) => {
             ensure_no_xml_signature_carrier_outside_span(text, signature_span)?;
+            let inherited_namespaces =
+                xml_namespace_bindings_before_offset(text, signature_span.start)?;
             Ok(Some(XmlSignatureCarrier {
                 carrier_span: signature_span,
                 signature_span,
-                inherited_namespaces: Vec::new(),
+                inherited_namespaces,
             }))
         }
         (_, Some(sgntr_span)) => {
@@ -4501,7 +4828,10 @@ fn xml_signature_carrier(text: &str) -> Result<Option<XmlSignatureCarrier>, MsgE
             if find_xml_element_outside_span(text, signature_span, "Signature") {
                 return Err(MsgError::ValidationFailed);
             }
-            let inherited_namespaces = xml_element_namespace_scope(text, sgntr_span, &[])?;
+            let sgntr_inherited_namespaces =
+                xml_namespace_bindings_before_offset(text, sgntr_span.start)?;
+            let inherited_namespaces =
+                xml_element_namespace_scope(text, sgntr_span, &sgntr_inherited_namespaces)?;
             Ok(Some(XmlSignatureCarrier {
                 carrier_span: sgntr_span,
                 signature_span,
@@ -4708,6 +5038,7 @@ fn xml_canonicalization_mode(algorithm: &str) -> Result<CanonicalXmlMode, MsgErr
 }
 struct XmlSignatureReferenceVerification<'a> {
     signed_properties: Option<VerifiedSignedProperties<'a>>,
+    payload_span: XmlElementSpan,
 }
 struct VerifiedSignedProperties<'a> {
     xml: &'a str,
@@ -4729,6 +5060,7 @@ fn verify_xml_signature_references<'a>(
     }
     let mut cursor = 0usize;
     let mut payload_reference_seen = false;
+    let mut payload_span = None;
     let mut signed_properties = None;
     let mut reference_count = 0usize;
     while cursor < signed_info_xml.len() {
@@ -4757,14 +5089,14 @@ fn verify_xml_signature_references<'a>(
                     return Err(MsgError::ValidationFailed);
                 }
                 payload_reference_seen = true;
-                verify_xml_signature_payload_reference(
+                payload_span = Some(verify_xml_signature_payload_reference(
                     full_xml,
                     &unsigned,
                     carrier_span,
                     reference_xml,
                     &uri,
                     signed_info_namespaces,
-                )?;
+                )?);
             }
             Some(XADES_SIGNED_PROPERTIES_TYPE) => {
                 if signed_properties.is_some() {
@@ -4791,7 +5123,10 @@ fn verify_xml_signature_references<'a>(
     if signed_properties.is_some() {
         ensure_xades_qualifying_properties_target(signature_xml)?;
     }
-    Ok(XmlSignatureReferenceVerification { signed_properties })
+    Ok(XmlSignatureReferenceVerification {
+        signed_properties,
+        payload_span: payload_span.ok_or(MsgError::ValidationFailed)?,
+    })
 }
 fn verify_xml_signature_payload_reference(
     full_xml: &str,
@@ -4800,12 +5135,13 @@ fn verify_xml_signature_payload_reference(
     reference_xml: &str,
     uri: &str,
     inherited_namespaces: &[CanonicalXmlNamespaceBinding],
-) -> Result<(), MsgError> {
+) -> Result<XmlElementSpan, MsgError> {
     let c14n_mode = supported_xml_signature_reference_c14n_mode_with_namespaces(
         reference_xml,
         inherited_namespaces,
     )?;
-    ensure_xml_signature_payload_reference_covers_carrier(full_xml, uri, carrier_span)?;
+    let payload_span =
+        ensure_xml_signature_payload_reference_covers_carrier(full_xml, uri, carrier_span)?;
     let referenced_xml = xml_signature_reference_target(unsigned_xml, uri)?;
     let canonical_referenced_xml = canonicalize_supported_xml_with_mode(
         referenced_xml.xml,
@@ -4816,15 +5152,22 @@ fn verify_xml_signature_payload_reference(
         reference_xml,
         &canonical_referenced_xml,
         inherited_namespaces,
-    )
+    )?;
+    Ok(payload_span)
 }
 fn ensure_xml_signature_payload_reference_covers_carrier(
     full_xml: &str,
     uri: &str,
     carrier_span: XmlElementSpan,
-) -> Result<(), MsgError> {
+) -> Result<XmlElementSpan, MsgError> {
     if uri.is_empty() {
-        return Ok(());
+        return Ok(XmlElementSpan {
+            start: 0,
+            opening_end: 0,
+            content_start: 0,
+            content_end: full_xml.len(),
+            end: full_xml.len(),
+        });
     }
     let reference_id = uri
         .strip_prefix('#')
@@ -4833,7 +5176,7 @@ fn ensure_xml_signature_payload_reference_covers_carrier(
     ensure_supported_same_document_reference_id(reference_id)?;
     let target = find_xml_element_by_reference_id(full_xml, reference_id)?;
     if target.span.start < carrier_span.start && carrier_span.end < target.span.end {
-        Ok(())
+        Ok(target.span)
     } else {
         Err(MsgError::ValidationFailed)
     }
@@ -5483,6 +5826,68 @@ fn ensure_supported_same_document_reference_id(reference_id: &str) -> Result<(),
 struct XmlReferenceTarget {
     span: XmlElementSpan,
     inherited_namespaces: Vec<CanonicalXmlAttribute>,
+}
+fn xml_namespace_bindings_before_offset(
+    text: &str,
+    target_start: usize,
+) -> Result<Vec<CanonicalXmlNamespaceBinding>, MsgError> {
+    let mut cursor = 0usize;
+    let mut namespace_scope_lengths = Vec::new();
+    let mut in_scope_namespaces = Vec::new();
+    while cursor < text.len() {
+        let Some(start_offset) = text[cursor..].find('<') else {
+            break;
+        };
+        let start = cursor + start_offset;
+        if start == target_start {
+            return Ok(in_scope_namespaces);
+        }
+        if start > target_start {
+            return Err(MsgError::ValidationFailed);
+        }
+        if text[start..].starts_with("<!--") {
+            cursor = find_supported_xml_comment_end(text, start)? + 3;
+            continue;
+        }
+        if text[start..].starts_with("<?") {
+            cursor = text[start + 2..]
+                .find("?>")
+                .map(|offset| start + 2 + offset + 2)
+                .ok_or(MsgError::ValidationFailed)?;
+            continue;
+        }
+        let tag_start = start + 1;
+        let opening_end =
+            find_xml_tag_end(text.as_bytes(), tag_start).ok_or(MsgError::ValidationFailed)?;
+        let raw_tag = text[tag_start..opening_end].trim();
+        if raw_tag.starts_with('/') {
+            let namespace_scope_len = namespace_scope_lengths
+                .pop()
+                .ok_or(MsgError::ValidationFailed)?;
+            in_scope_namespaces.truncate(namespace_scope_len);
+            cursor = opening_end + 1;
+            continue;
+        }
+        if raw_tag.starts_with('!') {
+            return Err(MsgError::ValidationFailed);
+        }
+        let self_closing = raw_tag.ends_with('/');
+        let tag_body = raw_tag.trim_end_matches('/').trim_end();
+        let (name, attributes) = split_supported_xml_tag(tag_body)?;
+        ensure_supported_xml_name(name)?;
+        let mut attributes = parse_supported_xml_attributes(attributes)?;
+        sort_and_validate_canonical_xml_attributes(&mut attributes, &in_scope_namespaces)?;
+        if !self_closing {
+            namespace_scope_lengths.push(in_scope_namespaces.len());
+            in_scope_namespaces.extend(
+                attributes
+                    .iter()
+                    .filter_map(namespace_binding_from_attribute),
+            );
+        }
+        cursor = opening_end + 1;
+    }
+    Err(MsgError::ValidationFailed)
 }
 fn find_xml_element_by_reference_id(
     text: &str,
@@ -8291,12 +8696,10 @@ fn ensure_xml_element_prefixed_namespace(
     let (name, attributes) =
         validated_xml_element_name_and_attributes(container, span, inherited_namespaces)?;
     let Some((prefix, _)) = name.split_once(':') else {
-        return match namespace_uri_for_prefix("", &attributes, inherited_namespaces) {
-            Some(namespace) if !namespace.is_empty() && namespace != expected_namespace => {
-                Err(MsgError::ValidationFailed)
-            }
-            _ => Ok(()),
-        };
+        return (namespace_uri_for_prefix("", &attributes, inherited_namespaces)
+            == Some(expected_namespace))
+        .then_some(())
+        .ok_or(MsgError::ValidationFailed);
     };
     if namespace_uri_for_prefix(prefix, &attributes, inherited_namespaces)
         == Some(expected_namespace)

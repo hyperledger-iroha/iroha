@@ -4,6 +4,7 @@ import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
+import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKeyAdmission
 
 class MultisigSignature private constructor(
     @JvmField val curveId: Int,
@@ -22,6 +23,9 @@ class MultisigSignature private constructor(
         require(_publicKey.isNotEmpty()) { "publicKey must not be empty" }
         require(curveId != 0x01 || Ed25519PublicKeyAdmission.isValid(_publicKey)) {
             "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup"
+        }
+        require(curveId != 0x02 || MlDsaPublicKeyAdmission.isValid(_publicKey)) {
+            "invalid ML-DSA-65 public key: expected ${MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH} nonzero bytes"
         }
         require(_signature.isNotEmpty()) { "signature must not be empty" }
     }

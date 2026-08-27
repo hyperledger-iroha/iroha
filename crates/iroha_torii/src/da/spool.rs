@@ -17,6 +17,7 @@ const OUTCOME_PARTIAL_ERROR: &str = "partial_error";
 const OUTCOME_ERROR: &str = "error";
 const KIND_WORKER: &str = "worker";
 /// Result payload emitted by a DA spool action.
+#[derive(Debug)]
 pub(crate) enum DaSpoolActionOutput {
     /// The action has no handler-visible output.
     None,
@@ -77,6 +78,7 @@ fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 /// A handler-visible report for one spool action.
+#[derive(Debug)]
 pub(crate) struct DaSpoolActionReport {
     kind: &'static str,
     outcome: DaSpoolActionOutcome,
@@ -101,7 +103,7 @@ impl DaSpoolActionReport {
         self.output.as_ref()
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum DaSpoolActionOutcome {
     Ok,
     Error,
@@ -158,6 +160,7 @@ impl DaSpoolBatch {
     }
 }
 /// Handler-visible result of a DA spool batch.
+#[derive(Debug)]
 pub(crate) struct DaSpoolBatchReport {
     action_reports: Vec<DaSpoolActionReport>,
     write_duration: Duration,

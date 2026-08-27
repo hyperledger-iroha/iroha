@@ -86,7 +86,7 @@ class RegisterOfflineDeviceAttestationTest {
 
         val request = request(registration)
         val instruction = request.instruction()
-        assertEquals(OfflineDeviceAttestationCodec.INSTRUCTION_SCHEMA, instruction.name)
+        assertEquals(OfflineDeviceAttestationCodec.INSTRUCTION_WIRE_ID, instruction.name)
         val wire = assertIs<WirePayload>(instruction.payload)
         assertContentEquals(hexToBytes(rust[1]), wire.payloadBytes)
         assertEquals(

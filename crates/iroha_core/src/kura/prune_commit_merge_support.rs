@@ -585,16 +585,119 @@ impl FastpqProofSidecarTelemetry {
         let _ = event;
     }
 }
+
+/// Stable structural position of one indexed Kaigi signal carrier.
+///
+/// Positions follow the app endpoint's chronological order: lower block
+/// heights are older, merge execution precedes ordinary execution in one
+/// carrier, and lower indexes are earlier within either execution phase. The
+/// hashes bind a cursor to the exact canonical carrier and entrypoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+pub struct KaigiSignalCandidatePosition {
+    block_height: u64,
+    execution_phase: u8,
+    transaction_index: u64,
+    block_hash: HashOf<BlockHeader>,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+}
+
+impl KaigiSignalCandidatePosition {
+    /// Construct a canonical signal position.
+    ///
+    /// Phase zero denotes merge execution and phase one ordinary execution.
+    #[must_use]
+    pub fn new(
+        block_height: u64,
+        execution_phase: u8,
+        transaction_index: u64,
+        block_hash: HashOf<BlockHeader>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Option<Self> {
+        (block_height > 0 && execution_phase <= 1).then_some(Self {
+            block_height,
+            execution_phase,
+            transaction_index,
+            block_hash,
+            entrypoint_hash,
+        })
+    }
+
+    /// Return the one-based canonical carrier height.
+    #[must_use]
+    pub const fn block_height(self) -> u64 {
+        self.block_height
+    }
+
+    /// Return zero for merge execution or one for ordinary execution.
+    #[must_use]
+    pub const fn execution_phase(self) -> u8 {
+        self.execution_phase
+    }
+
+    /// Return the canonical transaction index within the execution phase.
+    #[must_use]
+    pub const fn transaction_index(self) -> u64 {
+        self.transaction_index
+    }
+
+    /// Return the canonical carrier block hash.
+    #[must_use]
+    pub const fn block_hash(self) -> HashOf<BlockHeader> {
+        self.block_hash
+    }
+
+    /// Return the indexed entrypoint hash.
+    #[must_use]
+    pub const fn entrypoint_hash(self) -> HashOf<TransactionEntrypoint> {
+        self.entrypoint_hash
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KaigiSignalCandidateLocator {
+    pub(crate) position: KaigiSignalCandidatePosition,
+    pub(crate) authority: AccountId,
+}
+
+type KaigiSignalCandidatesByOffset = BTreeMap<(u8, u64), KaigiSignalCandidateLocator>;
+type KaigiSignalCandidatesByHeight = BTreeMap<NonZeroUsize, KaigiSignalCandidatesByOffset>;
+type KaigiSignalCandidatesByCall = BTreeMap<KaigiId, KaigiSignalCandidatesByHeight>;
+
+#[derive(Debug, Default)]
+struct TransactionEntrypointHeightInventory {
+    entrypoint_hashes: BTreeSet<HashOf<TransactionEntrypoint>>,
+    offline_operation_ids: BTreeSet<(AccountId, [u8; 32])>,
+    authorities: BTreeSet<AccountId>,
+    timestamps_ms: BTreeSet<u64>,
+    result_statuses: BTreeSet<bool>,
+    kaigi_calls: BTreeSet<KaigiId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KaigiSignalCandidateIndexError {
+    Unavailable,
+    CursorMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KaigiSignalCandidateLocatorPage {
+    pub(crate) candidates: Vec<KaigiSignalCandidateLocator>,
+    pub(crate) has_more: bool,
+}
+
 #[derive(Debug)]
 struct TransactionEntrypointIndex {
     complete: bool,
     indexed_heights: BTreeSet<NonZeroUsize>,
     incomplete_merge_heights: BTreeSet<NonZeroUsize>,
+    incomplete_kaigi_signal_heights: BTreeSet<NonZeroUsize>,
     heights_by_entrypoint: TransactionEntrypointHeights,
     heights_by_offline_operation_id: OfflineOperationHeights,
     heights_by_authority: TransactionAuthorityHeights,
     heights_by_timestamp_ms: TransactionTimestampHeights,
     heights_by_result_status: TransactionResultStatusHeights,
+    kaigi_signal_candidates: KaigiSignalCandidatesByCall,
+    inventories_by_height: BTreeMap<NonZeroUsize, TransactionEntrypointHeightInventory>,
 }
 impl TransactionEntrypointIndex {
     fn complete_empty() -> Self {
@@ -602,11 +705,14 @@ impl TransactionEntrypointIndex {
             complete: true,
             indexed_heights: BTreeSet::new(),
             incomplete_merge_heights: BTreeSet::new(),
+            incomplete_kaigi_signal_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
             heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
+            kaigi_signal_candidates: BTreeMap::new(),
+            inventories_by_height: BTreeMap::new(),
         }
     }
 }

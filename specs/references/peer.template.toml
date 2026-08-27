@@ -187,7 +187,7 @@ expected_hash_file = "genesis.expected_hash"
 # smoothing_enabled = false            # Enable EMA smoothing (advisory)
 # smoothing_alpha = 0.2                # EMA alpha in [0,1]; higher = more responsive
 # max_adjust_ms_per_min = 50           # Slew cap: max ms adjustment per minute
-# min_samples = 3                      # Minimum samples required for healthy status
+# min_samples = 3                      # Positive minimum samples required for healthy status
 # max_offset_ms = 1_000                # Max absolute offset (ms) before unhealthy (0 disables)
 # max_confidence_ms = 500              # Max MAD confidence (ms) before unhealthy (0 disables)
 # enforcement_mode = "warn"            # Admission behavior: "warn" or "reject"

@@ -126,6 +126,20 @@ class SumeragiV2WireFixtureTest {
     }
 
     @Test
+    fun `certified body response carries the peer id responder payload`() {
+        val row = fixtureRows().single {
+            it.kind == "message" && it.name == "certified_body_response"
+        }
+        val message = SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(row.hex.hexBytes())
+        val response = (
+            message.payload as SumeragiV2Wire.ConsensusPayload.CertifiedBodyResponseMessage
+            ).value
+
+        assertEquals(75, response.responder.bytes().size)
+        assertContentEquals(row.hex.hexBytes(), message.encode())
+    }
+
+    @Test
     fun `Rust merge carrier fixture pins the current v4 shape`() {
         val rows = fixtureRows()
         val carried = SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(

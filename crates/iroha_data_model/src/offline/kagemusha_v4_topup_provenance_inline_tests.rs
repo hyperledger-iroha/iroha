@@ -580,6 +580,86 @@ mod kagemusha_v4_topup_provenance_tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn verify_result_rejects_summary_state_that_no_valid_bundle_can_produce() {
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("test domain"),
+            "rose".parse().expect("test asset name"),
+        );
+        let binding = KagemushaRecursiveSpendArtifactBindingV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: "verify-result-test-release".to_owned(),
+            manifest_sha256: [0x80; 32],
+        };
+        let verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
+            KagemushaPastaCycleParityV1::StepEq,
+            binding.manifest_sha256,
+        );
+        let result = KagemushaRecursiveSpendVerifyResultV4 {
+            valid: true,
+            chain_admissible: true,
+            lineage_redeemable: true,
+            witnessless_redemption_supported: true,
+            summary: KagemushaRecursiveSpendBundleSummaryV4 {
+                asset,
+                amount: KagemushaScaledAmountV2::new(400, 2).expect("test amount"),
+                note_commitment: [0x81; 32],
+                spend_nullifier: [0x82; 32],
+                hop_count: 1,
+                proof_step_count: 2,
+                branch_claims: vec![
+                    KagemushaRecursiveSpendBranchClaimV2::root([0x86; 32])
+                        .expect("root branch claim"),
+                ],
+                artifact_binding: binding,
+                verifier_key_id: verifier_key_id.clone(),
+                bundle_digest: [0x83; 32],
+            },
+            recipient_request_digest: [0x84; 32],
+            request_output_binding_digest: [0x85; 32],
+            verifier_key_id,
+            verifier_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4.to_owned(),
+            verifier_activation_height: Some(1),
+            verifier_withdraw_height: Some(100),
+            verified_at_block_height: 50,
+            verified_at_ms: 1,
+        };
+        result
+            .validate_public_binding()
+            .expect("valid bundle-derived summary");
+
+        let assert_rejected = |result: &KagemushaRecursiveSpendVerifyResultV4| {
+            assert!(matches!(
+                result.validate_public_binding(),
+                Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "verify_result.v4",
+                })
+            ));
+        };
+        let mut zero_commitment = result.clone();
+        zero_commitment.summary.note_commitment = [0; 32];
+        assert_rejected(&zero_commitment);
+        let mut zero_nullifier = result.clone();
+        zero_nullifier.summary.spend_nullifier = [0; 32];
+        assert_rejected(&zero_nullifier);
+        let mut reused_material = result.clone();
+        reused_material.summary.spend_nullifier = reused_material.summary.note_commitment;
+        assert_rejected(&reused_material);
+        let mut zero_steps = result.clone();
+        zero_steps.summary.proof_step_count = 0;
+        assert_rejected(&zero_steps);
+        let mut impossible_counter_relation = result.clone();
+        impossible_counter_relation.summary.hop_count =
+            impossible_counter_relation.summary.proof_step_count;
+        assert_rejected(&impossible_counter_relation);
+        let mut excessive_steps = result.clone();
+        excessive_steps.summary.proof_step_count = KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2 + 1;
+        assert_rejected(&excessive_steps);
+        let mut excessive_hops = result;
+        excessive_hops.summary.hop_count = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2 + 1;
+        assert_rejected(&excessive_hops);
+    }
 }
 impl KagemushaRecursiveSpendVerifyRequestV4 {
     /// Validate the terminal receiver request and every V4 proof/provenance binding.
@@ -673,6 +753,13 @@ impl KagemushaRecursiveSpendVerifyResultV4 {
             || !self.chain_admissible
             || !self.lineage_redeemable
             || !self.witnessless_redemption_supported
+            || self.summary.note_commitment == [0; 32]
+            || self.summary.spend_nullifier == [0; 32]
+            || self.summary.note_commitment == self.summary.spend_nullifier
+            || self.summary.proof_step_count == 0
+            || self.summary.hop_count >= self.summary.proof_step_count
+            || self.summary.proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
+            || self.summary.hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
             || self.recipient_request_digest == [0; 32]
             || self.request_output_binding_digest == [0; 32]
             || self.summary.bundle_digest == [0; 32]

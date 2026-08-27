@@ -6,12 +6,13 @@
 use super::{
     BscNativeSourceError, BscNativeSourceProofV1, EthereumNativeSourceErrorV1,
     EthereumNativeSourceProofV1, H256, SccpPayloadV1, SccpSolanaAgaveSourceProofV1,
-    SolanaNativeSourceErrorV1, TronNativeSourceError, TronNativeSourceProofV1,
-    bsc_native_anchor_block_number, canonical_sccp_payload_bytes, payload_hash,
-    sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,
+    SolanaNativeSourceErrorV1, TonNativeSourceError, TonNativeSourceProofV1, TronNativeSourceError,
+    TronNativeSourceProofV1, bsc_native_anchor_block_number, canonical_sccp_payload_bytes,
+    payload_hash, sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,
     sccp_message_source_domain, sccp_message_target_domain, sccp_source_identity_hash_v1,
     verify_bsc_native_source, verify_ethereum_native_source_proof_v1,
-    verify_sccp_payload_structure, verify_sccp_solana_agave_source_v1, verify_tron_native_source,
+    verify_sccp_payload_structure, verify_sccp_solana_agave_source_v1, verify_ton_native_source,
+    verify_tron_native_source,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
@@ -62,6 +63,8 @@ pub enum SccpNativeSourceProofV1 {
     SolanaAgave(Box<SccpSolanaAgaveSourceProofV1>),
     /// TRON `DPoS` replay and transaction-inclusion proof.
     TronDpos(Box<TronNativeSourceProofV1>),
+    /// TON masterchain-finality, shard-state, and source-message proof.
+    TonMasterchain(Box<TonNativeSourceProofV1>),
 }
 impl SccpNativeSourceProofV1 {
     /// Return the closed bridge backend selected by this typed variant.
@@ -72,6 +75,7 @@ impl SccpNativeSourceProofV1 {
             Self::BscParlia(_) => BridgeNativeProofBackendV1::BscParlia,
             Self::SolanaAgave(_) => BridgeNativeProofBackendV1::SolanaAgave,
             Self::TronDpos(_) => BridgeNativeProofBackendV1::TronDpos,
+            Self::TonMasterchain(_) => BridgeNativeProofBackendV1::TonMasterchain,
         }
     }
     fn embedded_source_network(&self) -> SccpNetworkV1 {
@@ -80,6 +84,7 @@ impl SccpNativeSourceProofV1 {
             Self::BscParlia(proof) => proof.finality.anchor.network,
             Self::SolanaAgave(proof) => proof.anchor.network,
             Self::TronDpos(proof) => proof.finality.anchor.network,
+            Self::TonMasterchain(proof) => proof.finality.anchor.network,
         }
     }
 }
@@ -256,6 +261,8 @@ pub enum SccpNativeAdmissionErrorV1 {
     Solana(SolanaNativeSourceErrorV1),
     /// Native TRON verification failed.
     Tron(TronNativeSourceError),
+    /// Native TON verification failed.
+    Ton(TonNativeSourceError),
     /// A native verifier returned fields inconsistent with the admitted statement.
     NormalizedResultMismatch(&'static str),
 }
@@ -306,6 +313,7 @@ impl fmt::Display for SccpNativeAdmissionErrorV1 {
             Self::Bsc(error) => write!(formatter, "native BSC proof failed: {error:?}"),
             Self::Solana(error) => write!(formatter, "native Solana proof failed: {error}"),
             Self::Tron(error) => write!(formatter, "native TRON proof failed: {error:?}"),
+            Self::Ton(error) => write!(formatter, "native TON proof failed: {error}"),
             Self::NormalizedResultMismatch(role) => {
                 write!(formatter, "native verifier returned mismatched {role}")
             }
@@ -338,6 +346,9 @@ pub const fn sccp_native_backend_for_source_network_v1(
         SccpNetworkV1::SolanaTestnet => Some(BridgeNativeProofBackendV1::SolanaAgave),
         SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta => {
             Some(BridgeNativeProofBackendV1::TronDpos)
+        }
+        SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet => {
+            Some(BridgeNativeProofBackendV1::TonMasterchain)
         }
         SccpNetworkV1::SoraTaira => None,
     }
@@ -419,7 +430,9 @@ fn validate_source_envelope_shape(
                 return Err(SccpNativeAdmissionErrorV1::BackendMismatch);
             }
         }
-        SccpNativeSourceProofV1::BscParlia(_) | SccpNativeSourceProofV1::TronDpos(_) => {}
+        SccpNativeSourceProofV1::BscParlia(_)
+        | SccpNativeSourceProofV1::TronDpos(_)
+        | SccpNativeSourceProofV1::TonMasterchain(_) => {}
     }
     Ok(lane_hash)
 }
@@ -842,6 +855,44 @@ fn verify_tron_native_admission_v1(
         anchor_interval_height: validated.finality.block_number,
     })
 }
+fn verify_ton_native_admission_v1(
+    context: &GovernedNativeAdmissionContextV1<'_>,
+    native: &TonNativeSourceProofV1,
+) -> Result<VerifiedNativeFinalityV1, SccpNativeAdmissionErrorV1> {
+    if u64::from(native.finality.anchor.checkpoint.seqno) != context.trust_anchor.checkpoint_height
+    {
+        return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
+    }
+    let proof = context.proof;
+    let validated = verify_ton_native_source(
+        native,
+        context.source_identity,
+        proof.source.source_identity_hash,
+        proof.source.trust_anchor.anchor_hash,
+        proof.source.message_id,
+        proof.source.payload_hash,
+        &proof.payload,
+    )
+    .map_err(SccpNativeAdmissionErrorV1::Ton)?;
+    if validated.source_identity_hash != proof.source.source_identity_hash
+        || validated.lane_hash != context.lane_hash
+        || validated.anchor_hash != proof.source.trust_anchor.anchor_hash
+        || validated.message_id != proof.source.message_id
+        || validated.payload_hash != proof.source.payload_hash
+        || validated.source_event_digest != proof.source.source_event_digest
+    {
+        return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
+            "TON statement",
+        ));
+    }
+    Ok(VerifiedNativeFinalityV1 {
+        source_finality: SccpNativeFinalityPointV1 {
+            height: u64::from(validated.shard_seqno),
+            block_hash: validated.shard_block_hash,
+        },
+        anchor_interval_height: u64::from(validated.masterchain_seqno),
+    })
+}
 fn verify_solana_native_admission_v1(
     context: &GovernedNativeAdmissionContextV1<'_>,
     native: &SccpSolanaAgaveSourceProofV1,
@@ -912,6 +963,9 @@ pub fn verify_sccp_native_inbound_message_proof_v1(
         }
         SccpNativeSourceProofV1::TronDpos(native) => {
             verify_tron_native_admission_v1(&context, native)?
+        }
+        SccpNativeSourceProofV1::TonMasterchain(native) => {
+            verify_ton_native_admission_v1(&context, native)?
         }
     };
     if verified_finality.source_finality != proof.source.source_finality {

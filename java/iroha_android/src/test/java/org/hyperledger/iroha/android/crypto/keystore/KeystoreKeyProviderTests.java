@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.crypto.keystore;
 
+import java.io.ByteArrayInputStream;
 import java.security.KeyPair;
 import java.util.Arrays;
 import java.util.Base64;
@@ -15,6 +16,8 @@ import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.crypto.keystore.AndroidKeystoreStubBackend;
 import org.hyperledger.iroha.android.crypto.keystore.KeyGenerationResult;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AndroidAttestationRevocationPolicyV1;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AndroidAttestationRevocationTestFixtures;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationResult;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerificationException;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifier;
@@ -61,6 +64,7 @@ public final class KeystoreKeyProviderTests {
           + "FxdGTgtauVtYo24deQ==");
 
   private static final byte[] STRONGBOX_CHALLENGE = hex("4145454245");
+  private static final long EVALUATION_TIME_EPOCH_MILLIS = 1761408000000L;
 
   private KeystoreKeyProviderTests() {}
 
@@ -68,9 +72,13 @@ public final class KeystoreKeyProviderTests {
     hardwareProviderSatisfiesRequirement();
     metadataReflectsBackendCapabilities();
     stubBackendSurfacesUnsupported();
+    challengeIsMandatoryAtProviderAndManagerBoundaries();
     verifyAttestationRoundTrip();
     verifyAttestationReturnsEmptyWhenMissing();
-    verifyAttestationGeneratesOnDemand();
+    verifyAttestationRereadsRecordedEvidence();
+    verifyAttestationPropagatesBackendReadFailures();
+    verifyAttestationRejectsMismatchedAliasKey();
+    keyAttestationDefensivelyCopiesCertificateBytes();
     attestationChallengeMismatchFails();
     attestationChallengeMismatchEvictsCache();
     generateAttestationStoresBundle();
@@ -163,9 +171,10 @@ public final class KeystoreKeyProviderTests {
             .addCertificate(STRONGBOX_CERT)
             .addCertificate(ROOT_CERT)
             .build());
+    backend.setAttestedKey("alias", STRONGBOX_CERT);
 
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
     final Optional<AttestationResult> result =
         provider.verifyAttestation("alias", verifier, STRONGBOX_CHALLENGE);
     assert result.isPresent() : "Attestation must verify when present";
@@ -174,19 +183,49 @@ public final class KeystoreKeyProviderTests {
         : "Challenge should match expected value";
   }
 
+  private static void challengeIsMandatoryAtProviderAndManagerBoundaries() throws Exception {
+    final FakeBackend backend =
+        new FakeBackend(
+            KeyProviderMetadata.builder("challenge-boundary-backend")
+                .setStrongBoxBacked(true)
+                .setSupportsAttestationCertificates(true)
+                .build());
+    final KeystoreKeyProvider provider =
+        new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
+    final IrohaKeyManager manager = IrohaKeyManager.fromProviders(List.of(provider));
+    final AttestationVerifier verifier =
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+
+    assertAttestationFails(() -> provider.verifyAttestation("alias", verifier));
+    assertAttestationFails(() -> provider.verifyAttestation("alias", verifier, null));
+    assertAttestationFails(() -> provider.verifyAttestation("alias", verifier, new byte[0]));
+    assertAttestationFails(() -> manager.verifyAttestation("alias", verifier));
+    assertAttestationFails(() -> manager.verifyAttestation("alias", verifier, null));
+    assertAttestationFails(() -> manager.verifyAttestation("alias", verifier, new byte[0]));
+
+    assert backend.attestationReads() == 0
+        : "Missing challenges must fail before an attestation lookup";
+    assert backend.attestationGenerations() == 0
+        : "Missing challenges must fail before attestation generation";
+  }
+
   private static void verifyAttestationReturnsEmptyWhenMissing() throws Exception {
     final FakeBackend backend =
         new FakeBackend(KeyProviderMetadata.builder("fake-strongbox-backend").build());
     final KeystoreKeyProvider provider =
         new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).build();
     final Optional<AttestationResult> result =
         provider.verifyAttestation("alias", verifier, STRONGBOX_CHALLENGE);
     assert result.isEmpty() : "Absent attestation should return empty optional";
+    assert backend.attestationGenerations() == 0
+        : "Verification must not claim to regenerate an existing Android alias";
+    assert backend.attestationReads() == 1
+        : "Challenge verification must reread recorded attestation material";
   }
 
-  private static void verifyAttestationGeneratesOnDemand() throws Exception {
+  private static void verifyAttestationRereadsRecordedEvidence() throws Exception {
     final FakeBackend backend =
         new FakeBackend(
             KeyProviderMetadata.builder("fake-strongbox-backend")
@@ -195,23 +234,92 @@ public final class KeystoreKeyProviderTests {
                 .build());
     final KeystoreKeyProvider provider =
         new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
-    provider.generate("generated-alias");
+    backend.setAttestation(
+        "generated-alias",
+        KeyAttestation.builder()
+            .setAlias("generated-alias")
+            .addCertificate(STRONGBOX_CERT)
+            .addCertificate(ROOT_CERT)
+            .build());
+    backend.setAttestedKey("generated-alias", STRONGBOX_CERT);
 
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
     final Optional<AttestationResult> result =
         provider.verifyAttestation("generated-alias", verifier, STRONGBOX_CHALLENGE);
-    assert result.isPresent() : "Attestation should be generated when missing";
-    assert backend.attestationGenerations() == 1
-        : "Challenge verification should generate a fresh attestation";
-    assert backend.attestationReads() == 0
-        : "Generation path should not require a separate attestation read";
+    assert result.isPresent() : "Recorded challenge-bound attestation should verify";
+    assert backend.attestationGenerations() == 0
+        : "Verification must not claim to regenerate an existing Android alias";
+    assert backend.attestationReads() == 1
+        : "Verification should reread recorded attestation evidence";
 
-    final Optional<AttestationResult> cached =
+    final Optional<AttestationResult> refreshed =
         provider.verifyAttestation("generated-alias", verifier, STRONGBOX_CHALLENGE);
-    assert cached.isPresent() : "Cached attestation should verify";
-    assert backend.attestationGenerations() == 1
-        : "Cached challenge-specific attestation should prevent regeneration";
+    assert refreshed.isPresent() : "Recorded attestation should verify again";
+    assert backend.attestationReads() == 2
+        : "Challenge verification must bypass cached attestation material";
+  }
+
+  private static void verifyAttestationPropagatesBackendReadFailures() throws Exception {
+    final FakeBackend backend =
+        new FakeBackend(
+            KeyProviderMetadata.builder("failing-attestation-backend")
+                .setSupportsAttestationCertificates(true)
+                .build());
+    backend.failAttestationReads();
+    final KeystoreKeyProvider provider =
+        new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
+    final AttestationVerifier verifier = verifierBuilder().addTrustedRoot(ROOT_CERT).build();
+
+    assertAttestationFails(
+        () -> provider.verifyAttestation("alias", verifier, STRONGBOX_CHALLENGE));
+  }
+
+  private static void keyAttestationDefensivelyCopiesCertificateBytes() {
+    final byte[] certificate = new byte[] {0x01, 0x02, 0x03};
+    final KeyAttestation attestation =
+        KeyAttestation.builder().setAlias("immutable-alias").addCertificate(certificate).build();
+
+    certificate[0] = 0x7f;
+    final List<byte[]> firstRead = attestation.certificateChain();
+    assert firstRead.get(0)[0] == 0x01
+        : "Builder input mutation must not alter stored certificate bytes";
+
+    firstRead.get(0)[1] = 0x7f;
+    final List<byte[]> secondRead = attestation.certificateChain();
+    assert secondRead.get(0)[1] == 0x02
+        : "Getter output mutation must not alter stored certificate bytes";
+
+    final KeyAttestation rebuilt = attestation.toBuilder().build();
+    secondRead.get(0)[2] = 0x7f;
+    assert rebuilt.certificateChain().get(0)[2] == 0x03
+        : "Builder round-trips must retain independent certificate bytes";
+  }
+
+  private static void verifyAttestationRejectsMismatchedAliasKey() throws Exception {
+    final FakeBackend backend =
+        new FakeBackend(
+            KeyProviderMetadata.builder("alias-binding-backend")
+                .setStrongBoxBacked(true)
+                .setSupportsAttestationCertificates(true)
+                .build());
+    backend.setAttestation(
+        "alias",
+        KeyAttestation.builder()
+            .setAlias("alias")
+            .addCertificate(STRONGBOX_CERT)
+            .addCertificate(ROOT_CERT)
+            .build());
+    backend.setAttestedKey("alias", ROOT_CERT);
+    final KeystoreKeyProvider provider =
+        new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
+
+    assertAttestationFails(
+        () ->
+            provider.verifyAttestation(
+                "alias",
+                verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build(),
+                STRONGBOX_CHALLENGE));
   }
 
   private static void attestationChallengeMismatchFails() throws Exception {
@@ -228,11 +336,12 @@ public final class KeystoreKeyProviderTests {
             .addCertificate(STRONGBOX_CERT)
             .addCertificate(ROOT_CERT)
             .build());
+    backend.setAttestedKey("alias", STRONGBOX_CERT);
 
     final KeystoreKeyProvider provider =
         new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
     boolean threw = false;
     try {
       provider.verifyAttestation("alias", verifier, hex("DEADBEEF"));
@@ -256,11 +365,12 @@ public final class KeystoreKeyProviderTests {
             .addCertificate(STRONGBOX_CERT)
             .addCertificate(ROOT_CERT)
             .build());
+    backend.setAttestedKey("alias", STRONGBOX_CERT);
 
     final KeystoreKeyProvider provider =
         new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
 
     boolean threw = false;
     try {
@@ -269,9 +379,10 @@ public final class KeystoreKeyProviderTests {
       threw = true;
     }
     assert threw : "Verification must fail when cached attestation does not match the challenge";
-    assert backend.attestationGenerations() == 1
-        : "Verification should generate fresh attestation for the supplied challenge";
-    assert backend.attestationReads() == 1 : "Cached attestation should be fetched when present";
+    assert backend.attestationGenerations() == 0
+        : "Verification must not claim to regenerate an existing Android alias";
+    assert backend.attestationReads() == 1
+        : "Challenge verification must reread recorded attestation material";
 
     backend.setAttestation(
         "alias",
@@ -284,10 +395,8 @@ public final class KeystoreKeyProviderTests {
     final Optional<AttestationResult> refreshed =
         provider.verifyAttestation("alias", verifier, STRONGBOX_CHALLENGE);
     assert refreshed.isPresent() : "Verification should succeed after cache eviction";
-    assert backend.attestationGenerations() == 2
-        : "Fresh attestation should be generated after mismatch eviction";
     assert backend.attestationReads() == 2
-        : "Cache should be cleared after mismatch so verification rereads attestation";
+        : "Verification must reread evidence after a challenge mismatch";
   }
 
   private static void generateAttestationStoresBundle() throws Exception {
@@ -392,6 +501,7 @@ public final class KeystoreKeyProviderTests {
             .addCertificate(STRONGBOX_CERT)
             .addCertificate(ROOT_CERT)
             .build());
+    backend.setAttestedKey("failure-alias", STRONGBOX_CERT);
 
     final RecordingTelemetrySink sink = new RecordingTelemetrySink();
     final TelemetryOptions options =
@@ -413,7 +523,7 @@ public final class KeystoreKeyProviderTests {
         IrohaKeyManager.fromProviders(java.util.List.of(provider), emitter);
 
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
     boolean threw = false;
     try {
       manager.verifyAttestation("failure-alias", verifier, hex("BADC0DE0"));
@@ -665,6 +775,7 @@ public final class KeystoreKeyProviderTests {
     private final AtomicInteger attestationReads = new AtomicInteger();
     private final AtomicInteger attestationGenerations = new AtomicInteger();
     private volatile KeyGenParameters lastParameters;
+    private volatile boolean failAttestationReads;
 
     private FakeBackend(final KeyProviderMetadata metadata) {
       this(metadata, metadata);
@@ -713,8 +824,12 @@ public final class KeystoreKeyProviderTests {
     }
 
     @Override
-    public Optional<KeyAttestation> attestation(final String alias) {
+    public Optional<KeyAttestation> attestation(final String alias)
+        throws KeyManagementException {
       attestationReads.incrementAndGet();
+      if (failAttestationReads) {
+        throw new KeyManagementException("fixture attestation read failure");
+      }
       return Optional.ofNullable(attestations.get(alias));
     }
 
@@ -740,6 +855,18 @@ public final class KeystoreKeyProviderTests {
 
     void setAttestation(final String alias, final KeyAttestation attestation) {
       attestations.put(alias, attestation);
+    }
+
+    void failAttestationReads() {
+      failAttestationReads = true;
+    }
+
+    void setAttestedKey(final String alias, final byte[] certificateDer) throws Exception {
+      final java.security.cert.X509Certificate certificate =
+          (java.security.cert.X509Certificate)
+              java.security.cert.CertificateFactory.getInstance("X.509")
+                  .generateCertificate(new ByteArrayInputStream(certificateDer));
+      keys.put(alias, new KeyPair(certificate.getPublicKey(), null));
     }
 
     int attestationReads() {
@@ -884,6 +1011,31 @@ public final class KeystoreKeyProviderTests {
 
   private static byte[] decodeBase64(final String value) {
     return Base64.getDecoder().decode(value);
+  }
+
+  private static AttestationVerifier.Builder verifierBuilder() {
+    final AndroidAttestationRevocationPolicyV1 policy =
+        AndroidAttestationRevocationTestFixtures.policy(
+            EVALUATION_TIME_EPOCH_MILLIS,
+            86_400L,
+            java.util.Collections.emptyList(),
+            java.util.Collections.emptyList());
+    return AttestationVerifier.builder(policy, EVALUATION_TIME_EPOCH_MILLIS);
+  }
+
+  private static void assertAttestationFails(final AttestationCall call) throws Exception {
+    boolean threw = false;
+    try {
+      call.run();
+    } catch (final AttestationVerificationException expected) {
+      threw = true;
+    }
+    assert threw : "Attestation verification must fail closed";
+  }
+
+  @FunctionalInterface
+  private interface AttestationCall {
+    void run() throws Exception;
   }
 
   private static byte[] hex(final String value) {
