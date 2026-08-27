@@ -341,7 +341,10 @@ Durable state
   admitted before parse. The retained overlay is capped at 4,096 entries,
   4 MiB of canonical path text, and 16 MiB of raw values. Set, restore, load,
   checkpoint, and flush all share those bounds; persistence writes one encoded
-  output buffer instead of building an additional JSON value tree.
+  output buffer to an exclusive sibling (mode 0600 on Unix) and atomically
+  replaces a direct single-link regular destination. Stable links, hard links,
+  and special files are rejected without opening their targets. The configured
+  ancestor directories remain an operator-owned trust boundary.
 
 Smart‑contract helpers (Norito)
 - 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)`, `r11=operation_tag` (`1=SubmitBallot`, `2=RecordSccpMessage`) → 0 — Gas: G_sci

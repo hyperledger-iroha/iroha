@@ -9,6 +9,8 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
@@ -25,6 +27,7 @@ import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import org.hyperledger.iroha.android.crypto.keystore.KeyAttestation;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AndroidAttestationRevocationPolicyV1;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationResult;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerificationException;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifier;
@@ -35,11 +38,14 @@ import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVeri
  * archive attestation bundles and confirm firmware coverage before onboarding pilot networks.
  *
  * <p>The harness accepts DER or PEM encoded certificate chains and requires at least one trusted
- * root. Challenges can be supplied via command-line flag or a {@code challenge.hex} file located in
- * the bundle directory. Results are printed to stdout and may optionally be written to a JSON file
- * for archival.
+ * root, a trusted alias/key expectation, a non-empty challenge, a governed revocation snapshot, and
+ * an explicit evaluation time. Trust roots and identity expectations are never discovered from the
+ * untrusted evidence bundle. Results are printed to stdout and may optionally be written to a JSON
+ * file for archival.
  */
 public final class AndroidKeystoreAttestationHarness {
+
+  private static final int MAX_REVOCATION_SNAPSHOT_BYTES = 512 * 1024;
 
   /** Summary of the attestation verification. */
   public static final class Result {
@@ -157,7 +163,12 @@ public final class AndroidKeystoreAttestationHarness {
       throw new IllegalArgumentException("No attestation certificates found");
     }
 
-    final AttestationVerifier.Builder verifierBuilder = AttestationVerifier.builder();
+    final AndroidAttestationRevocationPolicyV1 revocationPolicy =
+        AndroidAttestationRevocationPolicyV1.fromCanonicalSnapshot(
+            arguments.revocationSnapshot, arguments.trustedRevocationSnapshotSha256);
+    final AttestationVerifier.Builder verifierBuilder =
+        AttestationVerifier.builder(
+            revocationPolicy, arguments.evaluationTimeEpochMillis);
     for (final X509Certificate root :
         loadTrustedRoots(
             arguments.trustedRoots, arguments.trustedRootDirs, arguments.trustedRootBundles)) {
@@ -173,6 +184,12 @@ public final class AndroidKeystoreAttestationHarness {
     final KeyAttestation attestation = attestationBuilder.build();
     final AttestationVerifier verifier = verifierBuilder.build();
     final AttestationResult attestationResult = verifier.verify(attestation, arguments.challenge);
+    final byte[] leafSpki = attestationResult.leafCertificate().getPublicKey().getEncoded();
+    if (leafSpki == null
+        || !MessageDigest.isEqual(arguments.expectedLeafSpkiSha256, sha256(leafSpki))) {
+      throw new AttestationVerificationException(
+          "Attestation leaf public key does not match the separately trusted alias key commitment");
+    }
 
     final Result result =
         new Result(
@@ -383,6 +400,14 @@ public final class AndroidKeystoreAttestationHarness {
     return builder.toString();
   }
 
+  private static byte[] sha256(final byte[] data) {
+    try {
+      return MessageDigest.getInstance("SHA-256").digest(data);
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new IllegalStateException("SHA-256 is unavailable", ex);
+    }
+  }
+
   private static String escapeJson(final String value) {
     final StringBuilder builder = new StringBuilder();
     for (char ch : value.toCharArray()) {
@@ -428,6 +453,10 @@ public final class AndroidKeystoreAttestationHarness {
     final boolean requireStrongBox;
     final String alias;
     final byte[] challenge;
+    final byte[] revocationSnapshot;
+    final byte[] trustedRevocationSnapshotSha256;
+    final byte[] expectedLeafSpkiSha256;
+    final long evaluationTimeEpochMillis;
     final Path output;
 
     private Arguments(
@@ -439,6 +468,10 @@ public final class AndroidKeystoreAttestationHarness {
         final boolean requireStrongBox,
         final String alias,
         final byte[] challenge,
+        final byte[] revocationSnapshot,
+        final byte[] trustedRevocationSnapshotSha256,
+        final byte[] expectedLeafSpkiSha256,
+        final long evaluationTimeEpochMillis,
         final Path output) {
       this.bundleDir = bundleDir;
       this.chainFile = chainFile;
@@ -448,6 +481,10 @@ public final class AndroidKeystoreAttestationHarness {
       this.requireStrongBox = requireStrongBox;
       this.alias = alias;
       this.challenge = challenge;
+      this.revocationSnapshot = revocationSnapshot;
+      this.trustedRevocationSnapshotSha256 = trustedRevocationSnapshotSha256;
+      this.expectedLeafSpkiSha256 = expectedLeafSpkiSha256;
+      this.evaluationTimeEpochMillis = evaluationTimeEpochMillis;
       this.output = output;
     }
 
@@ -458,8 +495,12 @@ public final class AndroidKeystoreAttestationHarness {
       final List<Path> trustedRootDirs = new ArrayList<>();
       final List<Path> trustedRootBundles = new ArrayList<>();
       boolean requireStrongBox = false;
-      String alias = "android-keystore-alias";
+      String alias = null;
       byte[] challenge = null;
+      byte[] revocationSnapshot = null;
+      byte[] trustedRevocationSnapshotSha256 = null;
+      byte[] expectedLeafSpkiSha256 = null;
+      Long evaluationTimeEpochMillis = null;
       Path output = null;
 
       for (int i = 0; i < args.length; ++i) {
@@ -495,6 +536,31 @@ public final class AndroidKeystoreAttestationHarness {
                     Files.readString(Paths.get(requireValue(args, ++i, "--challenge-file")))
                         .trim());
             break;
+          case "--revocation-snapshot":
+            revocationSnapshot =
+                readBoundedFile(
+                    Paths.get(requireValue(args, ++i, "--revocation-snapshot")),
+                    "--revocation-snapshot",
+                    MAX_REVOCATION_SNAPSHOT_BYTES);
+            break;
+          case "--revocation-snapshot-sha256":
+            trustedRevocationSnapshotSha256 =
+                parseRequiredDigest(
+                    requireValue(args, ++i, "--revocation-snapshot-sha256"),
+                    "--revocation-snapshot-sha256");
+            break;
+          case "--expected-leaf-spki-sha256":
+            expectedLeafSpkiSha256 =
+                parseRequiredDigest(
+                    requireValue(args, ++i, "--expected-leaf-spki-sha256"),
+                    "--expected-leaf-spki-sha256");
+            break;
+          case "--evaluation-time-ms":
+            evaluationTimeEpochMillis =
+                parsePositiveLong(
+                    requireValue(args, ++i, "--evaluation-time-ms"),
+                    "--evaluation-time-ms");
+            break;
           case "--output":
             output = Paths.get(requireValue(args, ++i, "--output"));
             break;
@@ -516,21 +582,29 @@ public final class AndroidKeystoreAttestationHarness {
           throw new IllegalArgumentException(
               "--bundle-dir does not refer to a directory: " + bundleDir);
         }
-        if (challenge == null) {
-          final Path challengeFile = bundleDir.resolve("challenge.hex");
-          if (Files.isRegularFile(challengeFile)) {
-            challenge = parseHex(Files.readString(challengeFile).trim());
-          }
-        }
-        final Path aliasFile = bundleDir.resolve("alias.txt");
-        if (Files.isRegularFile(aliasFile)) {
-          alias = Files.readString(aliasFile).trim();
-        }
-        collectTrustRootsFromBundle(bundleDir, trustedRoots, trustedRootBundles);
       }
 
-      if (challenge == null) {
-        challenge = new byte[0];
+      if (challenge == null || challenge.length == 0) {
+        throw new IllegalArgumentException(
+            "A separately trusted non-empty --challenge-hex or --challenge-file is required");
+      }
+      if (alias == null
+          || alias.isBlank()
+          || !alias.equals(alias.trim())
+          || alias.length() > 255
+          || alias.chars().anyMatch(Character::isISOControl)) {
+        throw new IllegalArgumentException("A canonical separately trusted --alias is required");
+      }
+      if (trustedRoots.isEmpty() && trustedRootDirs.isEmpty() && trustedRootBundles.isEmpty()) {
+        throw new IllegalArgumentException(
+            "At least one separately trusted --trust-root, --trust-root-dir, or --trust-root-bundle is required");
+      }
+      if (revocationSnapshot == null
+          || trustedRevocationSnapshotSha256 == null
+          || expectedLeafSpkiSha256 == null
+          || evaluationTimeEpochMillis == null) {
+        throw new IllegalArgumentException(
+            "Canonical governed revocation snapshot, trusted commitments, and explicit evaluation time are required");
       }
 
       final List<Path> normalizedRoots =
@@ -551,6 +625,10 @@ public final class AndroidKeystoreAttestationHarness {
           requireStrongBox,
           alias,
           challenge,
+          revocationSnapshot,
+          trustedRevocationSnapshotSha256,
+          expectedLeafSpkiSha256,
+          evaluationTimeEpochMillis,
           output == null ? null : output.toAbsolutePath());
     }
 
@@ -561,50 +639,81 @@ public final class AndroidKeystoreAttestationHarness {
       return args[index];
     }
 
+    private static byte[] readBoundedFile(
+        final Path path, final String flag, final int maxBytes) throws IOException {
+      if (!Files.isRegularFile(path) || Files.isSymbolicLink(path)) {
+        throw new IllegalArgumentException(flag + " must name a regular non-symlink file");
+      }
+      try (InputStream input = Files.newInputStream(path);
+          ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+        final byte[] buffer = new byte[8192];
+        int total = 0;
+        while (true) {
+          final int read = input.read(buffer);
+          if (read < 0) {
+            break;
+          }
+          total += read;
+          if (total > maxBytes) {
+            throw new IllegalArgumentException(flag + " exceeds the V1 size bound");
+          }
+          output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
+      }
+    }
+
+    private static long parsePositiveLong(final String value, final String flag) {
+      if (!value.matches("[1-9][0-9]*")) {
+        throw new IllegalArgumentException(flag + " requires a canonical positive integer");
+      }
+      try {
+        return Long.parseLong(value);
+      } catch (final NumberFormatException ex) {
+        throw new IllegalArgumentException(flag + " is outside the supported integer range", ex);
+      }
+    }
+
+    private static byte[] parseRequiredDigest(final String value, final String flag) {
+      if (!value.matches("[0-9a-f]{64}")) {
+        throw new IllegalArgumentException(
+            flag + " requires exactly 32 bytes of lowercase hexadecimal");
+      }
+      final byte[] digest = parseHex(value);
+      int aggregate = 0;
+      for (final byte current : digest) {
+        aggregate |= current;
+      }
+      if (aggregate == 0) {
+        throw new IllegalArgumentException(flag + " must not be all zero");
+      }
+      return digest;
+    }
+
     private static String usage() {
       return String.join(
           System.lineSeparator(),
-          "Usage: android_keystore_attestation --bundle-dir <path> --trust-root <root.pem> [options]",
+          "Usage: android_keystore_attestation --bundle-dir <path> --trust-root <root.pem> --alias <alias> --challenge-hex <hex> --expected-leaf-spki-sha256 <hex> [options]",
           "",
           "Required:",
-          "  --bundle-dir <path>      Directory containing chain.pem/alias.txt/challenge.hex.",
+          "  --bundle-dir <path>      Untrusted evidence directory containing chain.pem.",
           "  --trust-root <path>      Trusted root certificate (PEM/DER). Repeat as needed.",
-          "                             Files named trust_root_*.pem in the bundle directory are detected",
-          "                             automatically.",
+          "  --alias <alias>          Separately trusted keystore alias label.",
+          "  --challenge-hex <hex>    Separately trusted non-empty challenge (or use --challenge-file).",
+          "  --expected-leaf-spki-sha256 <hex>  Separately trusted SHA-256 of the alias public-key SPKI.",
+          "  --revocation-snapshot <path>  Canonical domain-separated governed V1 snapshot.",
+          "  --revocation-snapshot-sha256 <hex>  Separately trusted SHA-256 of that exact snapshot.",
+          "  --evaluation-time-ms <ms>  Explicit verification time within snapshot freshness.",
           "",
           "Optional:",
           "  --trust-root-dir <path>  Directory containing PEM/DER/CRT trust anchors (recursively scanned).",
           "  --trust-root-bundle <zip>  ZIP archive containing trusted roots. Repeat as needed.",
-          "                             Bundles named trust_root_bundle_*.zip inside the bundle directory",
-          "                             are detected automatically.",
           "  --chain <path>           Explicit attestation chain file (PEM/DER). Overrides bundle.",
-          "  --alias <alias>          Override alias (default: alias.txt).",
-          "  --challenge-hex <hex>    Verification challenge (hex encoded).",
           "  --challenge-file <path>  File containing hex-encoded challenge.",
           "  --require-strongbox      Enforce StrongBox attestation.",
           "  --output <path>          Write result JSON to <path>.",
           "  --help                   Print this message.");
     }
 
-    private static void collectTrustRootsFromBundle(
-        final Path bundleDir,
-        final List<Path> trustedRoots,
-        final List<Path> trustedRootBundles)
-        throws IOException {
-      try (DirectoryStream<Path> entries = Files.newDirectoryStream(bundleDir)) {
-        for (Path entry : entries) {
-          if (!Files.isRegularFile(entry)) {
-            continue;
-          }
-          final String filename = entry.getFileName().toString();
-          final String lower = filename.toLowerCase(Locale.US);
-          if (lower.startsWith("trust_root_bundle_") && lower.endsWith(".zip")) {
-            trustedRootBundles.add(entry);
-          } else if (lower.startsWith("trust_root_") && isCertificateFilename(lower)) {
-            trustedRoots.add(entry);
-          }
-        }
-      }
-    }
   }
 }

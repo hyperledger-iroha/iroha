@@ -178,12 +178,15 @@ Follow these phases whenever you demo the console for operators or auditors.
    scripts/android_keystore_attestation.sh \
      --bundle-dir artifacts/android/attestation/pixel8-strongbox-a/20260324 \
      --trust-root configs/android/trust_roots/google_root.pem \
+     --revocation-snapshot "$ANDROID_ATTESTATION_REVOCATION_SNAPSHOT" \
+     --revocation-snapshot-sha256 "$ANDROID_ATTESTATION_GOVERNED_SNAPSHOT_SHA256" \
+     --evaluation-time-ms "$ANDROID_ATTESTATION_EVALUATION_TIME_MS" \
      --require-strongbox \
      --output artifacts/android/attestation/pixel8-strongbox-a/20260324/result.json
    ```
 
 4. Archive the attestation digest under
-   `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md`
+   `specs/sdk/android/strongbox_attestation_harness_plan.md`
    as required by AND2/AND6.
 
 ### Step 2 — Compose & review a governance transaction

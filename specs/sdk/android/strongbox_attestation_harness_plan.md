@@ -19,46 +19,44 @@ Related roadmap item: AND2 — Plan StrongBox attestation harness
 | Component | Responsibility | Sources |
 |-----------|----------------|---------|
 | **On-device capture API** | Provision aliases, request attestation chains, and surface challenges through `IrohaKeyManager` + `KeyProvider` helpers. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/IrohaKeyManager.java`; `java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeystoreKeyProvider.java`; `specs/sdk/android/key_management.md` |
-| **Verification library** | Parse the Android Keymaster extension, enforce challenge binding, and classify security levels. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java` |
+| **Verification library** | Parse the Android Keymaster extension, enforce mandatory challenge binding, evaluate the chain at an explicit time, reject governed revoked serials/TBS hashes, and classify security levels. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java` |
 | **CLI harness + wrapper script** | Build the verifier, load bundles, inject trust roots, and emit JSON summaries for archives. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/tools/AndroidKeystoreAttestationHarness.java`; `scripts/android_keystore_attestation.sh` |
 | **Lab/CI runner** | Walk archived bundles, enforce StrongBox-only policy, create reports, and annotate Buildkite runs. | `scripts/android_strongbox_attestation_ci.sh`; `scripts/android_strongbox_attestation_report.py`; `.buildkite/android-strongbox-attestation.yml` |
-| **Readiness artefacts** | Track device matrix, bundle format, and compliance evidence so audits re-run reproductions. | `specs/sdk/android/readiness/android_strongbox_device_matrix.md`; `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md`; `specs/compliance/android/` |
+| **Readiness artefacts** | Track device matrix, bundle format, and compliance evidence so audits re-run reproductions. | `specs/sdk/android/readiness/android_strongbox_device_matrix.md`; this plan; `specs/compliance/android/` |
 
 ## 3. Capture API & Bundle Flow
 
 1. **Alias provisioning**
-   - `IrohaKeyManager.generateOrLoad(alias, KeySecurityPreference.STRONGBOX_REQUIRED)` creates or loads a StrongBox key.
+   - Generate an externally issued random challenge, set it in `KeyGenParameters`, and call `IrohaKeyManager.generateOrLoad(newUniqueAlias, KeySecurityPreference.STRONGBOX_REQUIRED)`. Android cannot attach a new challenge to an existing alias.
    - Providers persist alias ownership so downgrades are rejected unless the caller explicitly relaxes the preference. Alias naming and telemetry labels follow the guidance in `specs/sdk/android/key_management.md`.
 2. **Challenge orchestration**
-   - The capture helper app (lab build) derives a 32-byte random challenge, encodes it as uppercase hex, and writes `challenge.hex`. The same value is passed to `IrohaKeyManager.generateAttestation(...)` so the verifier can detect tampering.
+   - The lab authority records the issued challenge, alias, and generated key's leaf-SPKI SHA-256 in an authenticated expectations tree. Copies returned by the device are evidence only and never become verifier expectations.
 3. **Attestation export**
-   - `AndroidKeystoreAttestationHarness` ingests either `chain.pem` or individual DER files plus trust roots and runs `AttestationVerifier`.
+   - `AndroidKeystoreAttestationHarness` ingests either `chain.pem` or individual DER files plus separately trusted roots, alias, non-empty challenge, expected leaf-SPKI digest, explicit evaluation time, and the current governed revocation snapshot before running `AttestationVerifier`.
    - Successful runs print a one-line summary and, when `--output` is supplied, persist `result.json` containing alias, attestation/keymaster level, StrongBox boolean, and chain length.
-4. **Bundle layout**
-- Device lab operators follow the canonical structure documented in `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md` (`chain.pem`, `challenge.hex`, `alias.txt`, `trust_root_*.pem`, optional `notes.md`).
-- When OEMs deliver root packs as archives, store them next to the bundle using the
-  `trust_root_bundle_<vendor>.zip` naming convention; the harness extracts the PEM/DER files directly
-  so labs do not need to keep parallel directories in secure storage.
-   - Bundles live under `artifacts/android/attestation/<fleet-tag>/<YYYY-MM-DD>/` so `scripts/android_strongbox_attestation_ci.sh` can auto-discover them.
+4. **Evidence and expectations layout**
+   - Untrusted bundles live under `artifacts/android/attestation/<fleet-tag>/<YYYY-MM-DD>/` and contain the submitted chain plus output/notes.
+   - A separately authenticated tree mirrors each relative path under `artifacts/android/attestation-expectations/` and contains `alias.txt`, `challenge.hex`, and `leaf_spki_sha256.hex`.
+   - Vendor roots and root archives remain in a governed authority directory outside both trees. Bundle-local roots, identity files, and challenges are never authoritative.
 5. **Verification loop**
-   - `scripts/android_keystore_attestation.sh` compiles the verifier with JDK 21+, injects trust roots, enforces `--require-strongbox`, and emits JSON summaries used by CI, the readiness archive, and compliance evidence logs.
-- **Lab rehearsal bundles:** Use `scripts/android_generate_mock_attestation_bundles.sh` (backed by `scripts/android_mock_attestation_der.py`) to mint deterministic mock bundles for every fleet tag when physical hardware is unavailable. The script emits a shared mock root (`trust_root_mock.pem`), Norito-aligned challenges, and notes so CI can exercise the harness end-to-end before real captures arrive.
+   - `scripts/android_keystore_attestation.sh` compiles the verifier with JDK 21+, injects trust roots, requires the governed snapshot digest/date/max-age and evaluation time, enforces `--require-strongbox`, and emits JSON summaries used by CI, the readiness archive, and compliance evidence logs.
+- **Lab rehearsal bundles:** Use `scripts/android_generate_mock_attestation_bundles.sh` (backed by `scripts/android_mock_attestation_der.py`) to mint mock bundles and a separate expectations tree. Supply its mock root from `artifacts/android/attestation-authority/`; never copy it into a submitted bundle.
 
 ## 4. Alias Lifecycle Hooks
 
 - **Creation:** StrongBox-preferred aliases must be generated through `IrohaKeyManager.withDefaultProviders()` so telemetry and attestation helpers see consistent metadata. When the alias is missing, the StrongBox provider receives the request first and is allowed to fallback only when `KeySecurityPreference` permits downgrades.
-- **Rotation:** The harness records `alias` inside every bundle; operators delete/recreate aliases via `KeystoreKeyProvider.deleteKey(alias)` before collecting new chains. Rotation events are logged in `specs/android_runbook.md` Section 5 and the readiness archive (`specs/sdk/android/readiness/archive/`).
-- **Attestation refresh:** `IrohaKeyManager.verifyAttestation(...)` feeds directly into the harness, so apps can surface “last verified” timestamps. The plan requires exposing this metadata in upcoming sample apps (AND5 dependency).
+- **Rotation:** Provision a new unique alias with the new challenge, verify its recorded chain, then switch application ownership deliberately. Never silently overwrite the active signing alias. Rotation events are logged in `specs/android_runbook.md` Section 5 and the readiness archive (`specs/sdk/android/readiness/archive/`).
+- **Attestation verification:** `IrohaKeyManager.verifyAttestation(...)` rereads provisioning-time evidence and feeds directly into the harness, so apps can surface “last verified” timestamps without claiming a new certificate was minted.
 - **Telemetry linkage:** Alias labels map to `telemetry.redaction.alias_labels` so overrides recorded in `specs/sdk/android/telemetry_override_log.md` always point to an attested key.
 
 ## 5. CI & Device Requirements
 
 - **Device pool re-use:** The Pixel/Samsung fleet tracked in `specs/sdk/android/readiness/android_strongbox_device_matrix.md` is sufficient; no new procurement is needed before finance approval. Each device must ship an attestation bundle every quarter or after firmware refreshes.
 - **Buildkite lane:** `.buildkite/android-strongbox-attestation.yml` triggers two steps:
-  1. `scripts/android_strongbox_attestation_ci.sh` finds bundles and runs the harness with `--require-strongbox`.
+  1. `scripts/android_strongbox_attestation_ci.sh` finds bundles and runs the harness with a separately trusted expectations tree, roots, and governed snapshot.
   2. `scripts/android_strongbox_attestation_report.py --report-path artifacts/android/attestation/report.txt` emits a summary that is attached to the Buildkite annotation and archived in `specs/compliance/android/evidence_log.csv`.
-- **Gating policy:** The CI job fails if any bundle lacks trust roots, produces a non-STRONGBOX security level, or misses `result.json`. Device lab ops receive Slack notifications (per `specs/android_runbook.md` Section 7) when the pipeline fails.
-- **Log retention:** Bundle directories store `result.json` plus `trust_root_*.pem` so auditors can re-run the harness offline. Reports reference Buildkite job IDs and are cross-linked from `specs/compliance/android/jp/strongbox_attestation.md`.
+- **Gating policy:** The CI job fails for zero bundles, missing evidence, missing trusted expectations, bundle/authority path overlap, stale governed status, revoked certificates or anchors, a leaf-SPKI mismatch, non-StrongBox evidence, or a missing `result.json`.
+- **Log retention:** Store `result.json` with evidence, but retain expectations and trust anchors in the separately governed inventory. Reports reference Buildkite job IDs and are cross-linked from `specs/compliance/android/jp/strongbox_attestation.md`.
 - **Verification log:** Each manual execution of the harness is recorded in `specs/sdk/android/readiness/android_strongbox_attestation_run_log.md` with date, executor, and outcome so AND2 status reviews have auditable evidence between CI runs.
 
 ## 6. Implementation Checklist

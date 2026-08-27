@@ -57,8 +57,94 @@ public enum SigningAlgorithm: UInt8, CaseIterable, Sendable {
     }
 }
 
+private enum Ed25519FieldParameters: PastaFieldParameters {
+    static let modulus: [UInt64] = [
+        0xffff_ffff_ffff_ffed,
+        0xffff_ffff_ffff_ffff,
+        0xffff_ffff_ffff_ffff,
+        0x7fff_ffff_ffff_ffff,
+    ]
+    static let montgomeryInv: UInt64 = 0x86bc_a1af_286b_ca1b
+    static let r: [UInt64] = [0x26, 0, 0, 0]
+    static let r2: [UInt64] = [0x5a4, 0, 0, 0]
+    static let r3: [UInt64] = [0xd658, 0, 0, 0]
+    static let rootOfUnity: [UInt64] = [
+        0xc4ee_1b27_4a0e_a0b0,
+        0x2f43_1806_ad2f_e478,
+        0x2b4d_0099_3dfb_d7a7,
+        0x2b83_2480_4fc1_df0b,
+    ]
+    static let rootOfUnityInv: [UInt64] = [
+        0x3b11_e4d8_b5f1_5f3d,
+        0xd0bc_e7f9_52d0_1b87,
+        0xd4b2_ff66_c204_2858,
+        0x547c_db7f_b03e_20f4,
+    ]
+    static let zeta: [UInt64] = [0, 0, 0, 0]
+    static let twoAdicity = 2
+    static let t: [UInt64] = [
+        0xffff_ffff_ffff_fffb,
+        0xffff_ffff_ffff_ffff,
+        0xffff_ffff_ffff_ffff,
+        0x1fff_ffff_ffff_ffff,
+    ]
+    static let tPlusOneOverTwo: [UInt64] = [
+        0xffff_ffff_ffff_fffe,
+        0xffff_ffff_ffff_ffff,
+        0xffff_ffff_ffff_ffff,
+        0x0fff_ffff_ffff_ffff,
+    ]
+}
+
 enum Ed25519CompressedPointAdmission {
+    private typealias Field = PastaField<Ed25519FieldParameters>
+
+    private struct ExtendedPoint {
+        let x: Field
+        let y: Field
+        let z: Field
+        let t: Field
+
+        static let identity = ExtendedPoint(x: .zero, y: .one, z: .one, t: .zero)
+
+        var isIdentity: Bool {
+            z != .zero && x == .zero && y == z
+        }
+
+        func adding(_ other: ExtendedPoint) -> ExtendedPoint {
+            // Complete extended Edwards addition for a = -1. This remains
+            // deterministic across platforms because PastaField is fixed-width.
+            let a = (y - x) * (other.y - other.x)
+            let b = (y + x) * (other.y + other.x)
+            let c = twiceCurveD * t * other.t
+            let d = Field(2) * z * other.z
+            let e = b - a
+            let f = d - c
+            let g = d + c
+            let h = b + a
+            return ExtendedPoint(x: e * f, y: g * h, z: f * g, t: e * h)
+        }
+    }
+
     static let compressedPointLength = 32
+    private static let curveD = Field.fromRawLimbs([
+        0x75eb_4dca_1359_78a3,
+        0x0070_0a4d_4141_d8ab,
+        0x8cc7_4079_7779_e898,
+        0x5203_6cee_2b6f_fe73,
+    ])
+    private static let twiceCurveD = Field.fromRawLimbs([
+        0xebd6_9b94_26b2_f159,
+        0x00e0_149a_8283_b156,
+        0x198e_80f2_eef3_d130,
+        0x2406_d9dc_56df_fce7,
+    ])
+    private static let subgroupOrder: [UInt64] = [
+        0x5812_631a_5cf5_d3ed,
+        0x14de_f9de_a2f7_9cd6,
+        0,
+        0x1000_0000_0000_0000,
+    ]
     private static let fieldPrimeLittleEndian: [UInt8] = [
         0xED, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -130,7 +216,66 @@ enum Ed25519CompressedPointAdmission {
 
     static func isValidCompressedPoint(_ compressed: Data) -> Bool {
         let bytes = [UInt8](compressed)
-        return isCanonicalCompressedEdwardsY(bytes) && !isSmallOrderCompressedEdwardsY(bytes)
+        guard isCanonicalCompressedEdwardsY(bytes),
+              !isSmallOrderCompressedEdwardsY(bytes),
+              let point = decompress(compressed),
+              !point.isIdentity else {
+            return false
+        }
+        return multiply(point, by: subgroupOrder).isIdentity
+    }
+
+    private static func decompress(_ compressed: Data) -> ExtendedPoint? {
+        guard compressed.count == compressedPointLength else {
+            return nil
+        }
+        // `Data.SubSequence` is also `Data` and can retain a non-zero start index.
+        // Rebase before the field decoder performs zero-based indexing.
+        var yBytes = Data(compressed)
+        let lastIndex = yBytes.index(before: yBytes.endIndex)
+        let xIsOdd = (yBytes[lastIndex] & 0x80) != 0
+        yBytes[lastIndex] &= 0x7f
+        guard let y = Field.fromCanonicalBytes(yBytes) else {
+            return nil
+        }
+
+        let ySquared = y.squared()
+        let numerator = ySquared - .one
+        let denominator = curveD * ySquared + .one
+        guard let ratio = Field.sqrtRatio(numerator: numerator, denominator: denominator),
+              ratio.isSquare else {
+            return nil
+        }
+        var x = ratio.root
+        if x.isOdd != xIsOdd {
+            x = -x
+        }
+        // RFC 8032 requires the sign bit to be zero when x is zero.
+        guard !(x == .zero && xIsOdd) else {
+            return nil
+        }
+
+        var canonical = y.canonicalBytes()
+        let canonicalLastIndex = canonical.index(before: canonical.endIndex)
+        if x.isOdd {
+            canonical[canonicalLastIndex] |= 0x80
+        }
+        guard canonical == compressed else {
+            return nil
+        }
+        return ExtendedPoint(x: x, y: y, z: .one, t: x * y)
+    }
+
+    private static func multiply(_ point: ExtendedPoint, by scalar: [UInt64]) -> ExtendedPoint {
+        precondition(scalar.count == 4)
+        var result = ExtendedPoint.identity
+        for bit in stride(from: 255, through: 0, by: -1) {
+            result = result.adding(result)
+            if ((scalar[bit / 64] >> UInt64(bit % 64)) & 1) == 1 {
+                result = result.adding(point)
+            }
+        }
+        return result
     }
 
     private static func isCanonicalCompressedEdwardsY(_ compressed: [UInt8]) -> Bool {
@@ -168,6 +313,13 @@ enum Ed25519PublicKeyAdmission {
 
 enum Ed25519SignatureAdmission {
     static let signatureLength = 64
+    private static let scalarLength = 32
+    private static let subgroupOrderLittleEndian: [UInt8] = [
+        0xED, 0xD3, 0xF5, 0x5C, 0x1A, 0x63, 0x12, 0x58,
+        0xD6, 0x9C, 0xF7, 0xA2, 0xDE, 0xF9, 0xDE, 0x14,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+    ]
 
     static func isValidSignature(_ signature: Data) -> Bool {
         guard signature.count == signatureLength else {
@@ -178,7 +330,26 @@ enum Ed25519SignatureAdmission {
             return false
         }
         let r = Data(bytes.prefix(Ed25519CompressedPointAdmission.compressedPointLength))
+        let s = bytes.suffix(scalarLength)
         return Ed25519CompressedPointAdmission.isValidCompressedPoint(r)
+            && isCanonicalScalar(s)
+    }
+
+    private static func isCanonicalScalar(_ scalar: ArraySlice<UInt8>) -> Bool {
+        guard scalar.count == scalarLength else {
+            return false
+        }
+        let bytes = Array(scalar)
+        for index in stride(from: scalarLength - 1, through: 0, by: -1) {
+            if bytes[index] < subgroupOrderLittleEndian[index] {
+                return true
+            }
+            if bytes[index] > subgroupOrderLittleEndian[index] {
+                return false
+            }
+        }
+        // Equality is non-canonical: RFC 8032 requires 0 <= S < l.
+        return false
     }
 }
 
@@ -376,16 +547,19 @@ public struct SigningKey {
                                     metadata: metadata)
     }
 
+    /// Wrap an ML-DSA-65 keypair for Iroha protocol signing.
     public static func mldsa(_ keypair: MlDsaKeypair,
-                             metadata: SigningMetadata = SigningMetadata()) -> SigningKey {
-        (try? nativeSigningKey(algorithm: .mlDsa,
-                               privateKey: keypair.secretKey,
-                               metadata: metadata))
-        ?? SigningKey(algorithm: .mlDsa,
-                      metadata: metadata,
-                      signer: { message in try keypair.sign(message: message) },
-                      publicKeyProvider: { keypair.publicKey },
-                      rawPrivateKeyProvider: { keypair.secretKey })
+                             metadata: SigningMetadata = SigningMetadata()) throws -> SigningKey {
+        guard keypair.suite == .mlDsa65 else {
+            throw MlDsaError.unsupportedProtocolSuite
+        }
+        let signingKey = try nativeSigningKey(algorithm: .mlDsa,
+                                              privateKey: keypair.secretKey,
+                                              metadata: metadata)
+        guard try signingKey.publicKey() == keypair.publicKey else {
+            throw MlDsaError.inconsistentKeypair
+        }
+        return signingKey
     }
 }
 
@@ -828,6 +1002,8 @@ public enum MlDsaError: Error, LocalizedError, Sendable {
     case bridgeUnavailable
     case invalidKeyLength
     case invalidSignatureLength
+    case unsupportedProtocolSuite
+    case inconsistentKeypair
     case generateFailed
     case signFailed
     case verifyFailed
@@ -840,6 +1016,10 @@ public enum MlDsaError: Error, LocalizedError, Sendable {
             return "ML-DSA keys do not match the expected length for this suite."
         case .invalidSignatureLength:
             return "ML-DSA signatures must match the suite's signature length."
+        case .unsupportedProtocolSuite:
+            return "Iroha protocol signing requires ML-DSA-65."
+        case .inconsistentKeypair:
+            return "The ML-DSA public key does not match the supplied secret key."
         case .generateFailed:
             return "Failed to generate an ML-DSA keypair."
         case .signFailed:

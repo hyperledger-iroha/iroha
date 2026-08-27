@@ -77,3 +77,31 @@ fn test_field_wraparound() {
     };
     assert!(inv_one.verify().is_ok());
 }
+
+#[test]
+fn field_circuit_reduces_raw_register_operands() {
+    const MODULUS: u64 = 0xffff_ffff_0000_0001;
+    let add = FieldCircuit {
+        op: FieldOp::Add,
+        a: u64::MAX,
+        b: u64::MAX,
+        result: 2 * (u64::from(u32::MAX) - 1),
+    };
+    assert!(add.verify().is_ok());
+
+    let sub = FieldCircuit {
+        op: FieldOp::Sub,
+        a: 0,
+        b: u64::MAX,
+        result: MODULUS - (u64::from(u32::MAX) - 1),
+    };
+    assert!(sub.verify().is_ok());
+
+    let inverse_of_noncanonical_zero = FieldCircuit {
+        op: FieldOp::Inv,
+        a: MODULUS,
+        b: 0,
+        result: 0,
+    };
+    assert!(inverse_of_noncanonical_zero.verify().is_err());
+}

@@ -1069,33 +1069,33 @@ public struct SumeragiV2CertifiedBodyRequest: Equatable, Sendable {
     }
 }
 
-/// Archive-signed response carrying a certified body and a distinct
-/// frozen-QC signer citation.
+/// Archive-signed response carrying a certified body and the responder's
+/// current network identity.
 public struct SumeragiV2CertifiedBodyResponse: Equatable, Sendable {
     public let requestHash: SumeragiV2Hash
     public let manifest: SumeragiV2PayloadManifest
     public let body: Data
-    public let citedResponder: UInt32
+    public let responder: SumeragiV2PeerIDPayload
     public let signature: Data
 
     public init(
         requestHash: SumeragiV2Hash,
         manifest: SumeragiV2PayloadManifest,
         body: Data,
-        citedResponder: UInt32,
+        responder: SumeragiV2PeerIDPayload,
         signature: Data
     ) {
         self.requestHash = requestHash
         self.manifest = manifest
         self.body = body
-        self.citedResponder = citedResponder
+        self.responder = responder
         self.signature = signature
     }
 
     public func encode() -> Data {
         sumeragiV2Struct(
             requestHash.bytes, manifest.encode(), sumeragiV2ByteVector(body),
-            sumeragiV2U32(citedResponder), sumeragiV2ByteVector(signature)
+            responder.bytes, sumeragiV2ByteVector(signature)
         )
     }
 
@@ -1105,7 +1105,7 @@ public struct SumeragiV2CertifiedBodyResponse: Equatable, Sendable {
             requestHash: SumeragiV2Hash(reader.field("body response request hash")),
             manifest: SumeragiV2PayloadManifest.decode(reader.field("body response manifest")),
             body: sumeragiV2DecodeByteVector(reader.field("body response body")),
-            citedResponder: sumeragiV2DecodeU32(reader.field("body response cited responder")),
+            responder: SumeragiV2PeerIDPayload(reader.field("body response responder")),
             signature: sumeragiV2DecodeByteVector(reader.field("body response signature"))
         )
         try reader.finish("certified body response")

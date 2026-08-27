@@ -237,12 +237,12 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
   }
 
   @Override
-  public Optional<KeyAttestation> attestation(final String alias) {
+  public Optional<KeyAttestation> attestation(final String alias) throws KeyManagementException {
     Objects.requireNonNull(alias, "alias");
     try {
       return loadAttestationBundle(alias);
     } catch (final GeneralSecurityException | IOException ex) {
-      return Optional.empty();
+      throw new KeyManagementException("Failed to read Android Keystore attestation", ex);
     }
   }
 
@@ -260,13 +260,9 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
         return Optional.empty();
       }
       if (challengeCopy.length > 0) {
-        final Optional<KeyAttestation> fresh =
-            generateAttestationWithChallenge(keyStore, alias, challengeCopy);
-        if (fresh.isPresent()) {
-          return fresh;
-        }
         throw new KeyManagementException(
-            "Android Keystore attestation challenge unsupported on this device/API level");
+            "Android Keystore cannot re-attest an existing alias; provision a new alias with "
+                + "KeyGenParameters.setAttestationChallenge");
       }
       return loadAttestationBundle(alias, keyStore);
     } catch (final GeneralSecurityException | IOException ex) {
@@ -442,24 +438,6 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
       throws GeneralSecurityException {
     final java.security.cert.Certificate[] chain = keyStore.getCertificateChain(alias);
     return buildAttestation(alias, chain);
-  }
-
-  private Optional<KeyAttestation> generateAttestationWithChallenge(
-      final KeyStore keyStore, final String alias, final byte[] challenge)
-      throws GeneralSecurityException {
-    try {
-      final java.lang.reflect.Method attestKey =
-          keyStore.getClass().getMethod("getCertificateChain", String.class, byte[].class);
-      final Object certificateResult = attestKey.invoke(keyStore, alias, challenge.clone());
-      if (!(certificateResult instanceof java.security.cert.Certificate[] chain)) {
-        return Optional.empty();
-      }
-      return buildAttestation(alias, chain);
-    } catch (final NoSuchMethodException ignored) {
-      return loadAttestationBundle(alias, keyStore);
-    } catch (final ReflectiveOperationException ex) {
-      throw new GeneralSecurityException("Android Keystore attestation invocation failed", ex);
-    }
   }
 
   private Optional<KeyAttestation> buildAttestation(

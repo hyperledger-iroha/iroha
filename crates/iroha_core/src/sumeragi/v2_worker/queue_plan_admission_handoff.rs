@@ -99,6 +99,48 @@ fn queue_plan_admission_reconstruction_covers(
         .ok_or_else(|| "QueuePlan admission rollover lost its exact durable Kura source".to_owned())
 }
 
+fn rotating_current_archive_targets(
+    local_peer: &PeerId,
+    cursor: &AtomicUsize,
+    limit: usize,
+    mut snapshot: impl FnMut(usize, usize) -> ConfiguredPeerBatch,
+) -> Vec<PeerId> {
+    let mut remaining_in_cycle = None;
+    loop {
+        let mut start = cursor.load(AtomicOrdering::Relaxed);
+        let batch = loop {
+            let candidate = snapshot(start, limit);
+            match cursor.compare_exchange(
+                start,
+                candidate.next_start_index,
+                AtomicOrdering::Relaxed,
+                AtomicOrdering::Relaxed,
+            ) {
+                Ok(_) => break candidate,
+                Err(current) => start = current,
+            }
+        };
+        let remaining = remaining_in_cycle.get_or_insert(batch.total_peer_count);
+        if batch.peer_ids.is_empty() || *remaining == 0 {
+            return Vec::new();
+        }
+        *remaining = remaining.saturating_sub(batch.peer_ids.len());
+        let mut targets = batch
+            .peer_ids
+            .into_iter()
+            .filter(|peer| peer != local_peer)
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets.dedup();
+        if !targets.is_empty() {
+            return targets;
+        }
+        if *remaining == 0 {
+            return Vec::new();
+        }
+    }
+}
+
 impl ProductionV2Services {
     #[cfg(test)]
     pub(in crate::sumeragi) fn queue_plan_test_kura(&self) -> &Kura {
@@ -180,6 +222,36 @@ impl ProductionV2Services {
             .filter(|entry| entry.validator != self.local_peer)
             .map(|entry| entry.validator.clone())
             .collect()
+    }
+
+    /// Prefer the live authenticated topology for historical archive traffic.
+    ///
+    /// The supplied sources remain the deterministic frozen authority retained
+    /// in the effect/WAL. They are used only when the live topology has no
+    /// remote target, so key rotation cannot strand historical catch-up while
+    /// an empty discovery snapshot cannot suppress the frozen fallback.
+    fn current_archive_targets_with_frozen_fallback(
+        &self,
+        frozen_sources: &[PeerId],
+    ) -> Vec<PeerId> {
+        let limit = self.network.reply_route_source_capacity().max(1);
+        let targets = rotating_current_archive_targets(
+            &self.local_peer,
+            &self.archive_peer_cursor,
+            limit,
+            |start, limit| self.network.configured_peer_ids_bounded(start, limit),
+        );
+        if !targets.is_empty() {
+            return targets;
+        }
+        let mut fallback = frozen_sources
+            .iter()
+            .filter(|peer| *peer != &self.local_peer)
+            .cloned()
+            .collect::<Vec<_>>();
+        fallback.sort();
+        fallback.dedup();
+        fallback
     }
 
     fn queue_plan_effect_parts(

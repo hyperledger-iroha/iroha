@@ -60,13 +60,11 @@ internal static class ToriiPreparedTransactionSignatureV1
         AppendField(
             transcript,
             "claim.pow_anchor_height",
-            prepared.Claim.PowAnchorHeight is ulong anchor
-                ? $"some:{anchor.ToString(CultureInfo.InvariantCulture)}"
-                : "none");
+            prepared.Claim.PowAnchorHeight.ToString(CultureInfo.InvariantCulture));
         AppendField(
             transcript,
             "claim.pow_nonce_hex",
-            prepared.Claim.PowNonceHex is string nonce ? $"some:{nonce}" : "none");
+            prepared.Claim.PowNonceHex);
         AppendField(transcript, "semantic_hash_hex", prepared.SemanticHashHex);
         AppendField(transcript, "account_id", prepared.AccountId);
         AppendField(transcript, "asset_definition_id", prepared.AssetDefinitionId);

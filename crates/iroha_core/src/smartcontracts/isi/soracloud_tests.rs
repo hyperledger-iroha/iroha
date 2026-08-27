@@ -79,7 +79,8 @@ use iroha_data_model::{
         FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
         SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1, SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
         SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1,
-        SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+        SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1, SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_GAS_SCHEDULE_ID_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES, SecretEnvelopeEncryptionV1,
@@ -90,12 +91,12 @@ use iroha_data_model::{
         SoraInrouManifestV1, SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
         SoraMailboxContractV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
         SoraPublishedInrouGuestImageArtifactV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
-        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeDeterministicValidatorHostV1,
-        SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-        SoraServiceMailboxMessageV1, SoraServiceManifestV1, SoraServiceRuntimeStateV1,
-        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-        SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
-        encode_inrou_host_advertise_provenance_payload,
+        SoraRolloutStageV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+        SoraRuntimeDeterministicValidatorHostV1, SoraRuntimeReceiptV1, SoraServiceHandlerClassV1,
+        SoraServiceHandlerV1, SoraServiceMailboxMessageV1, SoraServiceManifestV1,
+        SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraStateBindingV1,
+        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1,
+        SoraStateScopeV1, SoraTlsModeV1, encode_inrou_host_advertise_provenance_payload,
     },
     sorafs::pin_registry::ManifestDigest,
 };
@@ -16645,6 +16646,101 @@ fn seed_active_inrou_replica_runtime_fixture(
     .execute(&runtime_state.validator_account_id, state_transaction)?;
     Ok((bundle, runtime_state))
 }
+
+#[test]
+fn active_inrou_resolver_rejects_dual_revision_rollout_and_keeps_retained_revision_inactive()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    let service_name = "single_revision_gate";
+    let service_version = "1.0.0";
+    seed_active_inrou_replica_runtime_fixture(&mut stx, service_name, service_version)?;
+    let retained_version = "0.9.0";
+    let mut retained_record = stx
+        .world
+        .soracloud_inrou_service_placements
+        .get(&(service_name.to_owned(), service_version.to_owned()))
+        .cloned()
+        .expect("current Inrou placement");
+    retained_record.service_version = retained_version.to_owned();
+    stx.world.soracloud_inrou_service_placements.insert(
+        (service_name.to_owned(), retained_version.to_owned()),
+        retained_record,
+    );
+    {
+        let deployment = stx
+            .world
+            .soracloud_service_deployments
+            .get_mut(&service_name.parse().expect("service name"))
+            .expect("active Inrou deployment");
+        let rollout = SoraServiceRolloutStateV1 {
+            schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+            rollout_handle: "single-revision-gate".to_owned(),
+            baseline_version: retained_version.to_owned(),
+            candidate_version: service_version.to_owned(),
+            canary_percent: 25,
+            traffic_percent: 25,
+            stage: SoraRolloutStageV1::Canary,
+            health_failures: 0,
+            max_health_failures: 2,
+            health_window_secs: 30,
+            created_sequence: 1,
+            updated_sequence: 1,
+        };
+        deployment.active_rollout = Some(rollout.clone());
+        deployment.last_rollout = Some(rollout);
+        deployment
+            .validate()
+            .expect("active canary remains structurally valid without bundle context");
+    }
+
+    for version in [service_version, retained_version] {
+        let error = crate::soracloud_runtime::resolve_active_inrou_placement_record(
+            &stx.world,
+            service_name,
+            version,
+            stx.block_height(),
+        )
+        .expect_err("first-release Inrou must reject a second active revision");
+        assert!(
+            error.contains("unsupported active Inrou canary")
+                && error.contains("require one active revision"),
+            "unexpected resolver error: {error}"
+        );
+    }
+    {
+        let deployment = stx
+            .world
+            .soracloud_service_deployments
+            .get_mut(&service_name.parse().expect("service name"))
+            .expect("active Inrou deployment");
+        deployment.active_rollout = None;
+        deployment.last_rollout = None;
+    }
+    assert!(
+        crate::soracloud_runtime::resolve_active_inrou_placement_record(
+            &stx.world,
+            service_name,
+            service_version,
+            stx.block_height(),
+        )
+        .map_err(eyre::Report::msg)?
+        .is_some(),
+        "the exact current revision must remain active"
+    );
+    assert!(
+        crate::soracloud_runtime::resolve_active_inrou_placement_record(
+            &stx.world,
+            service_name,
+            retained_version,
+            stx.block_height(),
+        )
+        .map_err(eyre::Report::msg)?
+        .is_none(),
+        "a retained non-current revision must remain inactive"
+    );
+    Ok(())
+}
+
 #[test]
 fn active_inrou_resolver_fails_closed_when_any_lease_volume_expires() -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
@@ -17059,7 +17155,8 @@ fn set_inrou_replica_runtime_state_rejects_missing_placement() -> Result<(), eyr
     Ok(())
 }
 #[test]
-fn clear_inrou_replica_runtime_state_rejects_missing_placement() -> Result<(), eyre::Report> {
+fn clear_inrou_replica_runtime_state_removes_exact_stale_state_without_placement()
+-> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
     let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
@@ -17077,19 +17174,19 @@ fn clear_inrou_replica_runtime_state_rejects_missing_placement() -> Result<(), e
     stx.world
         .soracloud_inrou_replica_runtime
         .insert(key.clone(), runtime_state.clone());
-    let error = isi::ClearSoracloudInrouReplicaRuntimeState {
+    isi::ClearSoracloudInrouReplicaRuntimeState {
         service_name,
         service_version: service_version.to_string(),
         replica_slot: 1,
         expected_placement_incarnation: runtime_state.placement_incarnation,
     }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("runtime clear without an authoritative placement must fail");
-    assert_invariant_contains(error, "has no authoritative Inrou placement");
-    assert_eq!(
-        stx.world.soracloud_inrou_replica_runtime.get(&key),
-        Some(&runtime_state),
-        "a rejected clear must preserve stale state for an explicitly authorized reconciliation path"
+    .execute(&ALICE_ID, &mut stx)?;
+    assert!(
+        stx.world
+            .soracloud_inrou_replica_runtime
+            .get(&key)
+            .is_none(),
+        "the exact recorded validator must be able to clear retired runtime state without reviving a placement"
     );
     Ok(())
 }
@@ -17223,7 +17320,7 @@ fn set_inrou_replica_runtime_state_rejects_non_assigned_validator() -> Result<()
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("a non-assigned validator runtime update must fail");
-    assert_invariant_contains(error, "is not assigned to service");
+    assert_invariant_contains(error, "belongs to account");
     assert_eq!(
         stx.world.soracloud_inrou_replica_runtime.get(&key),
         Some(&assigned_runtime_state),
@@ -17292,7 +17389,7 @@ fn clear_inrou_replica_runtime_state_rejects_non_assigned_validator() -> Result<
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("a non-assigned validator clear must fail");
-    assert_invariant_contains(error, "is not assigned to service");
+    assert_invariant_contains(error, "belongs to account");
     assert_eq!(
         stx.world.soracloud_inrou_replica_runtime.get(&key),
         Some(&assigned_runtime_state),
@@ -20068,6 +20165,84 @@ fn upgrade_inrou_service_rejects_partial_canary_before_revision_admission()
 }
 
 #[test]
+fn advance_rollout_rejects_inrou_even_if_active_rollout_state_is_present()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let mut bundle = sample_bundle("portal", "1.0.0", 0);
+    bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
+    bundle.container.entrypoint = "/app/bin/service".to_owned();
+    bundle.container.inrou = Some(sample_inrou_manifest());
+    bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
+    bundle.service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+    bundle.service.state_bindings.clear();
+    bundle.service.lease_volumes = sample_inrou_lease_volumes();
+    bundle.service.handlers.clear();
+    bundle.service.artifacts.clear();
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+    soracloud_transaction!(state, block_header, state_block, stx);
+    isi::DeploySoracloudService {
+        bundle: bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+
+    let service_name = bundle.service.service_name.clone();
+    let rollout_handle = "retired-inrou-rollout".to_owned();
+    let rollout = SoraServiceRolloutStateV1 {
+        schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+        rollout_handle: rollout_handle.clone(),
+        baseline_version: "0.9.0".to_owned(),
+        candidate_version: bundle.service.service_version.clone(),
+        canary_percent: 25,
+        traffic_percent: 25,
+        stage: SoraRolloutStageV1::Canary,
+        health_failures: 0,
+        max_health_failures: 3,
+        health_window_secs: 60,
+        created_sequence: 1,
+        updated_sequence: 1,
+    };
+    let deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get_mut(&service_name)
+        .expect("Inrou deployment");
+    deployment.active_rollout = Some(rollout.clone());
+    deployment.last_rollout = Some(rollout);
+    let governance_tx_hash = Hash::new(b"retired-inrou-rollout-governance");
+    let error = isi::AdvanceSoracloudRollout {
+        service_name: service_name.clone(),
+        rollout_handle: rollout_handle.clone(),
+        healthy: true,
+        promote_to_percent: Some(100),
+        governance_tx_hash,
+        provenance: rollout_provenance(
+            &service_name,
+            &rollout_handle,
+            true,
+            Some(100),
+            governance_tx_hash,
+        ),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("Inrou must reject the retired staged rollout transition path");
+    assert_invariant_contains(error, "does not support staged rollout transitions");
+    assert_eq!(
+        stx.world
+            .soracloud_service_deployments
+            .get(&service_name)
+            .and_then(|deployment| deployment.active_rollout.as_ref())
+            .map(|rollout| rollout.rollout_handle.as_str()),
+        Some(rollout_handle.as_str()),
+        "the rejected transition must not mutate authoritative state"
+    );
+    Ok(())
+}
+
+#[test]
 fn build_rollout_state_rejects_out_of_range_canary_percent() {
     let mut bundle = sample_bundle("portal", "1.1.0", 25);
     bundle.service.rollout.canary_percent = 101;
@@ -20267,8 +20442,7 @@ fn unhealthy_rollout_auto_rolls_back_to_baseline() -> Result<(), eyre::Report> {
 }
 
 #[test]
-fn automatic_rollback_rebuilds_baseline_hosted_lease_after_plane_change() -> Result<(), eyre::Report>
-{
+fn upgrade_inrou_service_rejects_execution_plane_and_runtime_change() -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     let mut deploy_bundle = sample_bundle("portal", "1.0.0", 0);
     deploy_bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
@@ -20292,56 +20466,39 @@ fn automatic_rollback_rebuilds_baseline_hosted_lease_after_plane_change() -> Res
     }
     .execute(&ALICE_ID, &mut stx)?;
     let upgrade_precondition = exact_service_revision_precondition(&deploy_bundle, 1);
-    isi::UpgradeSoracloudService {
+    let error = isi::UpgradeSoracloudService {
         bundle: upgrade_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
         precondition: upgrade_precondition.clone(),
         provenance: bundle_provenance_with_precondition(&upgrade_bundle, &upgrade_precondition),
     }
-    .execute(&ALICE_ID, &mut stx)?;
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an Inrou revision must not change execution plane or container runtime");
+    assert!(
+        error
+            .to_string()
+            .contains("service revision cannot change execution_plane"),
+        "unexpected error: {error:?}"
+    );
     let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-    let rollout_handle = latest_service_audit_event(&stx, &service_name)
-        .and_then(|event| event.rollout_state.map(|rollout| rollout.rollout_handle))
-        .expect("rollout handle");
-    let governance_tx_hash = Hash::new(b"gov-hosted-baseline-rollback");
-    for _ in 0..2 {
-        isi::AdvanceSoracloudRollout {
-            service_name: service_name.clone(),
-            rollout_handle: rollout_handle.clone(),
-            healthy: false,
-            promote_to_percent: None,
-            governance_tx_hash,
-            provenance: rollout_provenance(
-                &service_name,
-                &rollout_handle,
-                false,
-                None,
-                governance_tx_hash,
-            ),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-    }
-
     let deployment = stx
         .world
         .soracloud_service_deployments
         .get(&service_name)
-        .expect("rolled-back deployment");
+        .expect("baseline deployment remains active");
     assert_eq!(deployment.current_service_version, "1.0.0");
-    let lease = deployment
-        .service_lease
-        .as_ref()
-        .expect("hosted baseline lease is reconstructed");
-    assert_eq!(lease.replica_count, deploy_bundle.service.replicas);
-    assert_eq!(
-        deployment.lease_volume_states.len(),
-        deploy_bundle.service.lease_volumes.len(),
-        "the baseline revision's exact volume shape must be restored"
+    assert_eq!(deployment.revision_count, 1);
+    assert!(
+        stx.world
+            .soracloud_service_revisions
+            .get(&(service_name.as_ref().to_owned(), "1.1.0".to_owned()))
+            .is_none(),
+        "a rejected identity-changing revision must not be admitted"
     );
     deployment
         .validate_against_active_bundle(&deploy_bundle)
-        .expect("automatic rollback state binds exactly to the hosted baseline bundle");
+        .expect("the unchanged Inrou deployment remains bound to its sole active bundle");
     Ok(())
 }
 #[test]

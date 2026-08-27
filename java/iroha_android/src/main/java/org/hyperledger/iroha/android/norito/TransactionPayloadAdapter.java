@@ -1119,6 +1119,10 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           encoder,
           OPTIONAL_STRING_ADAPTER,
           optionalValidationFeePolicyHash(value.validationFeePolicyHash()));
+      encodeSizedField(
+          encoder,
+          OPTIONAL_STRING_ADAPTER,
+          optionalValidationFeeHijiriFeeQuoteHash(value.validationFeeHijiriFeeQuoteHash()));
       encodeSizedField(encoder, ENCODED_INSTRUCTION_LIST_ADAPTER, value.instructions());
       encodeSizedField(
           encoder,
@@ -1585,6 +1589,13 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     return Optional.of(normalizeValidationFeePolicyHash(value));
   }
 
+  private static Optional<String> optionalValidationFeeHijiriFeeQuoteHash(final String value) {
+    if (value == null) {
+      return Optional.empty();
+    }
+    return Optional.of(normalizeValidationFeeHijiriFeeQuoteHash(value));
+  }
+
   private static Optional<String> optionalValidationFeeInstructionIndex(final Long value) {
     if (value == null) {
       return Optional.empty();
@@ -1606,10 +1617,19 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   }
 
   private static String normalizeValidationFeePolicyHash(final String value) {
+    return normalizeValidationFeeHash(value, "validationFeePolicyHash");
+  }
+
+  private static String normalizeValidationFeeHijiriFeeQuoteHash(final String value) {
+    return normalizeValidationFeeHash(value, "validationFeeHijiriFeeQuoteHash");
+  }
+
+  private static String normalizeValidationFeeHash(
+      final String value, final String fieldName) {
     final String normalized =
-        requireNonBlank(value, "validationFeePolicyHash").toLowerCase(Locale.ROOT);
+        requireNonBlank(value, fieldName).toLowerCase(Locale.ROOT);
     if (normalized.length() != 64) {
-      throw new IllegalArgumentException("validationFeePolicyHash must contain 64 hex characters");
+      throw new IllegalArgumentException(fieldName + " must contain 64 hex characters");
     }
     for (int index = 0; index < normalized.length(); index++) {
       final char character = normalized.charAt(index);
@@ -1617,7 +1637,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           (character >= '0' && character <= '9')
               || (character >= 'a' && character <= 'f');
       if (!isHex) {
-        throw new IllegalArgumentException("validationFeePolicyHash must contain 64 hex characters");
+        throw new IllegalArgumentException(fieldName + " must contain 64 hex characters");
       }
     }
     return normalized;
@@ -1653,11 +1673,16 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     }
     final boolean hasPolicyVersion = request.validationFeePolicyVersion() != null;
     final boolean hasPolicyHash = request.validationFeePolicyHash() != null;
+    final boolean hasHijiriFeeQuoteHash = request.validationFeeHijiriFeeQuoteHash() != null;
     final boolean hasInstructionIndex = request.validationFeeInstructionIndex() != null;
     final boolean hasTransferEntryIndex = request.validationFeeTransferEntryIndex() != null;
     if (hasPolicyVersion != hasPolicyHash) {
       throw new IllegalArgumentException(
           "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
+    }
+    if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
+      throw new IllegalArgumentException(
+          "validationFeeHijiriFeeQuoteHash requires validationFeePolicyVersion and validationFeePolicyHash");
     }
     if (!hasPolicyVersion && hasInstructionIndex) {
       throw new IllegalArgumentException(
@@ -1673,6 +1698,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     }
     optionalValidationFeePolicyVersion(request.validationFeePolicyVersion());
     optionalValidationFeePolicyHash(request.validationFeePolicyHash());
+    optionalValidationFeeHijiriFeeQuoteHash(request.validationFeeHijiriFeeQuoteHash());
     optionalValidationFeeInstructionIndex(request.validationFeeInstructionIndex());
     optionalValidationFeeTransferEntryIndex(request.validationFeeTransferEntryIndex());
   }

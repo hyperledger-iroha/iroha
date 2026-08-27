@@ -3293,6 +3293,81 @@ mod tests {
         }
     }
     #[test]
+    fn unknown_ledger_argument_before_literal_keeps_helper_hints_conservative() {
+        let source = r#"
+seiyaku CompilerFixture {
+  fn remove_role(Name role) {
+    ledger::role::delete(role);
+  }
+
+  kotoage fn main(Name dynamic_role) authorize("CompilerFixture") {
+    remove_role(dynamic_role);
+    remove_role(Name::parse("auditor"));
+  }
+}
+"#;
+        let (_artifact, manifest) = Compiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile mixed dynamic/literal ledger helper calls");
+        let hints = manifest
+            .access_set_hints
+            .expect("mixed helper calls must retain conservative access hints");
+        assert!(hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_owned()));
+        assert!(hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_owned()));
+        assert!(!hints.read_keys.contains(&"role:auditor".to_owned()));
+        assert!(!hints.write_keys.contains(&"role:auditor".to_owned()));
+        let main = manifest
+            .entrypoints
+            .expect("entrypoints present")
+            .into_iter()
+            .find(|entrypoint| entrypoint.name == "main")
+            .expect("main entrypoint");
+        assert!(main.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_owned()));
+        assert!(main.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_owned()));
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(
+            main.access_hints_skipped
+                .contains(&HINT_SKIP_OPAQUE_ISI.to_owned())
+        );
+    }
+    #[test]
+    fn dynamic_account_before_authority_keeps_helper_hints_conservative() {
+        let source = r#"
+seiyaku CompilerFixture {
+  fn remove_account(AccountId account) {
+    ledger::account::unregister(account);
+  }
+
+  kotoage fn main(AccountId dynamic_account) authorize("CompilerFixture") {
+    remove_account(dynamic_account);
+    remove_account(context::authority());
+  }
+}
+"#;
+        let (_artifact, manifest) = Compiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile mixed dynamic/authority account helper calls");
+        let hints = manifest
+            .access_set_hints
+            .expect("mixed account helper calls must retain conservative access hints");
+        assert!(hints.read_keys.contains(&ACCOUNT_WILDCARD_KEY.to_owned()));
+        assert!(hints.write_keys.contains(&ACCOUNT_WILDCARD_KEY.to_owned()));
+        assert!(!hints.read_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
+        assert!(!hints.write_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
+        let main = manifest
+            .entrypoints
+            .expect("entrypoints present")
+            .into_iter()
+            .find(|entrypoint| entrypoint.name == "main")
+            .expect("main entrypoint");
+        assert!(main.read_keys.contains(&ACCOUNT_WILDCARD_KEY.to_owned()));
+        assert!(main.write_keys.contains(&ACCOUNT_WILDCARD_KEY.to_owned()));
+        assert!(!main.read_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
+        assert!(!main.write_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+    #[test]
     fn encode_addi_rejects_out_of_range_immediate() {
         let imm = (WIDE_IMM_MAX + 1) as i16;
         assert!(super::encode_addi(1, 1, imm).is_err());
@@ -7636,10 +7711,13 @@ kotoage fn main() authorize("AssetAdmin") {{
     #[test]
     fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         let code_hash = iroha_crypto::Hash::new(b"kotodama lifecycle access hints");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"kotodama lifecycle access-hint network"),
+        ));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
+            &network_id,
             &sample_account_id(),
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -10784,7 +10862,12 @@ impl Compiler {
         for (idx, func) in ir_prog.functions.iter().enumerate() {
             fn_index_by_name.insert(&func.name, idx);
         }
+        // Interprocedural facts are valid only when every call site agrees.
+        // Remember negative observations as well as positive ones so source
+        // order cannot let a later literal or authority value hide an earlier
+        // dynamic argument.
         let mut literal_param_conflicts: HashSet<(usize, ir::Temp)> = HashSet::new();
+        let mut authority_param_seen: HashSet<(usize, ir::Temp)> = HashSet::new();
         let mut authority_param_conflicts: HashSet<(usize, ir::Temp)> = HashSet::new();
         let mut instruction_param_unknowns: HashSet<(usize, ir::Temp)> = HashSet::new();
         let mut state_path_param_unknowns: HashSet<(usize, ir::Temp)> = HashSet::new();
@@ -10834,28 +10917,26 @@ impl Compiler {
                                         .entry(param_key)
                                         .or_default()
                                         .union_with(&access);
-                                } else if instruction_literal_access_map
-                                    .remove(&param_key)
-                                    .is_some()
-                                {
+                                } else {
+                                    instruction_literal_access_map.remove(&param_key);
                                     instruction_param_unknowns.insert(param_key);
                                 }
                             }
                             let arg_has_authority =
                                 authority_account_temps.contains(&(caller_idx, arg_temp));
+                            let authority_seen_before = !authority_param_seen.insert(param_key);
                             if !authority_param_conflicts.contains(&param_key) {
-                                if arg_has_authority {
-                                    if string_map.contains_key(&param_key) {
-                                        string_map.remove(&param_key);
-                                        string_literal_temps.remove(&param_key);
-                                        dataref_kind_map.remove(&param_key);
-                                        authority_account_temps.remove(&param_key);
-                                        authority_param_conflicts.insert(param_key);
-                                    } else {
+                                if !authority_seen_before {
+                                    if arg_has_authority {
                                         authority_account_temps.insert(param_key);
                                         dataref_kind_map.insert(param_key, DRK::Account);
+                                    } else {
+                                        authority_account_temps.remove(&param_key);
                                     }
-                                } else if authority_account_temps.remove(&param_key) {
+                                } else if authority_account_temps.contains(&param_key)
+                                    != arg_has_authority
+                                {
+                                    authority_account_temps.remove(&param_key);
                                     authority_param_conflicts.insert(param_key);
                                 }
                             }
@@ -10867,21 +10948,17 @@ impl Compiler {
                                 || dataref_kind_map.contains_key(&(caller_idx, arg_temp));
                             let Some(value) = string_map.get(&(caller_idx, arg_temp)).cloned()
                             else {
-                                if string_map.contains_key(&param_key) {
-                                    string_map.remove(&param_key);
-                                    string_literal_temps.remove(&param_key);
-                                    dataref_kind_map.remove(&param_key);
-                                    literal_param_conflicts.insert(param_key);
-                                }
+                                string_map.remove(&param_key);
+                                string_literal_temps.remove(&param_key);
+                                dataref_kind_map.remove(&param_key);
+                                literal_param_conflicts.insert(param_key);
                                 continue;
                             };
                             if !arg_has_literal {
-                                if string_map.contains_key(&param_key) {
-                                    string_map.remove(&param_key);
-                                    string_literal_temps.remove(&param_key);
-                                    dataref_kind_map.remove(&param_key);
-                                    literal_param_conflicts.insert(param_key);
-                                }
+                                string_map.remove(&param_key);
+                                string_literal_temps.remove(&param_key);
+                                dataref_kind_map.remove(&param_key);
+                                literal_param_conflicts.insert(param_key);
                                 continue;
                             }
                             if let Some(existing) = string_map.get(&param_key) {

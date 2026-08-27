@@ -13,8 +13,10 @@ python3 - "$ROOT_DIR" "$MODE" "${BASH_SOURCE[0]}" <<'PY'
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1101,6 +1103,11 @@ privacy_compiled_profile_symbols = (
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
 )
+parliament_timed_ovn_symbols = (
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
+    "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
+    "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",
+)
 base_bridge_symbols = (
     "connect_norito_bridge_abi_version",
     "connect_norito_free",
@@ -1113,6 +1120,7 @@ base_bridge_symbols = (
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    *parliament_timed_ovn_symbols,
     *privacy_compiled_profile_symbols,
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",
@@ -1176,40 +1184,81 @@ required_bridge_symbols = base_bridge_symbols + c_symbols
 
 
 def parse_shell_symbol_array(label: str, name: str) -> tuple[str, ...]:
-    match = re.search(
-        rf"^{re.escape(name)}=\(\s*\n(?P<body>.*?)^\)",
-        texts[label],
-        re.MULTILINE | re.DOTALL,
+    assignment_matches = tuple(
+        re.finditer(
+            rf"(?<![A-Za-z0-9_]){re.escape(name)}"
+            r"(?:\[[^\]\n]+\])?[ \t]*(?:\+?=)",
+            texts[label],
+        )
     )
-    if match is None:
-        errors.append(f"{paths[label]}: missing shell array {name}")
+    matches = tuple(
+        re.finditer(
+            rf"^{re.escape(name)}=\(\s*\n(?P<body>.*?)^\)",
+            texts[label],
+            re.MULTILINE | re.DOTALL,
+        )
+    )
+    if len(assignment_matches) != 1 or len(matches) != 1:
+        errors.append(
+            f"{paths[label]}: shell array {name} must have exactly one "
+            f"canonical assignment (found {len(assignment_matches)} assignments "
+            f"and {len(matches)} canonical blocks)"
+        )
         return ()
+    match = matches[0]
     values: list[str] = []
-    for raw_line in match.group("body").splitlines():
-        value = raw_line.strip()
-        if not value or value.startswith("#"):
+    for line_number, raw_line in enumerate(match.group("body").splitlines(), start=1):
+        try:
+            tokens = shlex.split(raw_line, comments=True, posix=True)
+        except ValueError as error:
+            errors.append(
+                f"{paths[label]}: shell array {name} line {line_number} "
+                f"is not canonical: {error}"
+            )
+            return ()
+        if not tokens:
             continue
-        if value.startswith('"') and value.endswith('"'):
-            value = value[1:-1]
-        values.append(value)
+        if len(tokens) != 1:
+            errors.append(
+                f"{paths[label]}: shell array {name} line {line_number} "
+                "must contain exactly one symbol or array expansion"
+            )
+            return ()
+        values.append(tokens[0])
     return tuple(values)
 
 
 def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
-    match = re.search(
-        r'"required_symbols"\s*:\s*\[(?P<body>.*?)\]',
-        texts[label],
-        re.MULTILINE | re.DOTALL,
-    )
-    if match is None:
-        errors.append(f"{paths[label]}: missing required_symbols manifest inventory")
-        return ()
-    return tuple(
-        re.findall(
-            r'"((?:connect_norito|iroha_privacy)_[A-Za-z0-9_]+)"',
-            match.group("body"),
+    matches = tuple(
+        re.finditer(
+            r'"required_symbols"\s*:\s*\[(?P<body>.*?)\]',
+            texts[label],
+            re.MULTILINE | re.DOTALL,
         )
     )
+    if len(matches) != 1:
+        errors.append(
+            f"{paths[label]}: required_symbols manifest inventory must occur exactly once "
+            f"(found {len(matches)})"
+        )
+        return ()
+    try:
+        values = json.loads(f"[{matches[0].group('body')}]")
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        errors.append(
+            f"{paths[label]}: required_symbols manifest inventory is not strict JSON: "
+            f"{error}"
+        )
+        return ()
+    if not isinstance(values, list) or any(
+        not isinstance(value, str) or not value for value in values
+    ):
+        errors.append(
+            f"{paths[label]}: required_symbols manifest inventory must contain only "
+            "non-empty JSON strings"
+        )
+        return ()
+    return tuple(values)
 
 
 actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
@@ -1242,10 +1291,23 @@ if actual_privacy_compiled_profile_symbols != privacy_compiled_profile_symbols:
         f"(found {len(actual_privacy_compiled_profile_symbols)})"
     )
 
+actual_parliament_timed_ovn_symbols = parse_shell_symbol_array(
+    "mobile_check", "PARLIAMENT_TIMED_OVN_C_SYMBOLS"
+)
+if actual_parliament_timed_ovn_symbols != parliament_timed_ovn_symbols:
+    errors.append(
+        f"{paths['mobile_check']}: exact ordered "
+        f"{len(parliament_timed_ovn_symbols)}-symbol Parliament timed-OVN "
+        "C inventory mismatch "
+        f"(found {len(actual_parliament_timed_ovn_symbols)})"
+    )
+
 actual_required_bridge_symbols: list[str] = []
 for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS"):
     if value == "${KAGEMUSHA_C_SYMBOLS[@]}":
         actual_required_bridge_symbols.extend(actual_kagemusha_symbols)
+    elif value == "${PARLIAMENT_TIMED_OVN_C_SYMBOLS[@]}":
+        actual_required_bridge_symbols.extend(actual_parliament_timed_ovn_symbols)
     elif value == "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}":
         actual_required_bridge_symbols.extend(actual_appeal_finance_symbols)
     elif value == "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}":
@@ -1600,6 +1662,48 @@ if mode == "--self-test":
         ),
         "exact ordered 5-symbol privacy compiled-profile C inventory mismatch",
     )
+
+    def append_duplicate_kagemusha_shell_inventory(fixture: Path) -> None:
+        mobile_check = fixture / paths["mobile_check"]
+        mobile_check.write_text(
+            mobile_check.read_text(encoding="utf-8")
+            + "\nKAGEMUSHA_C_SYMBOLS=(\n  connect_norito_free\n)\n",
+            encoding="utf-8",
+        )
+
+    run_negative(
+        "later shell inventory override cannot hide behind a canonical decoy",
+        append_duplicate_kagemusha_shell_inventory,
+        "shell array KAGEMUSHA_C_SYMBOLS must have exactly one canonical assignment",
+    )
+
+    run_negative(
+        "unrecognized manifest symbol is not filtered before comparison",
+        lambda fixture: replace_once(
+            fixture / paths["xcframework_build"],
+            '    "connect_norito_bridge_abi_version",\n',
+            '    "connect_norito_bridge_abi_version",\n'
+            '    "unexpected_mobile_bridge_symbol",\n',
+        ),
+        f"exact ordered {len(required_bridge_symbols)}-symbol required bridge inventory mismatch",
+    )
+
+    def append_duplicate_manifest_inventory(fixture: Path) -> None:
+        build = fixture / paths["xcframework_build"]
+        build.write_text(
+            build.read_text(encoding="utf-8")
+            + "\n: <<'DUPLICATE_REQUIRED_SYMBOLS'\n"
+            + '{"required_symbols": []}\n'
+            + "DUPLICATE_REQUIRED_SYMBOLS\n",
+            encoding="utf-8",
+        )
+
+    run_negative(
+        "manifest inventory decoy cannot hide a second block",
+        append_duplicate_manifest_inventory,
+        "required_symbols manifest inventory must occur exactly once",
+    )
+
     run_negative(
         "privacy bridge manifest omission is rejected",
         lambda fixture: replace_once(

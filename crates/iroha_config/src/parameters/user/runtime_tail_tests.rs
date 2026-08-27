@@ -379,6 +379,28 @@ fn nts_parse_clamps_zero_sample_interval() {
     assert_eq!(actual.nts.sample_interval, StdDuration::from_millis(100));
 }
 #[test]
+fn nts_parse_rejects_unsafe_bounds() {
+    for (field, value) in [
+        ("sample_cap_per_round", Value::Integer(0)),
+        ("max_rtt_ms", Value::Integer(0)),
+        ("trim_percent", Value::Integer(46)),
+        ("per_peer_buffer", Value::Integer(0)),
+        ("min_samples", Value::Integer(0)),
+        ("smoothing_alpha", Value::Float(-0.1)),
+        ("smoothing_alpha", Value::Float(1.1)),
+        ("smoothing_alpha", Value::Float(f64::NAN)),
+    ] {
+        let mut table = base_table();
+        let mut nts = Table::new();
+        nts.insert(field.into(), value);
+        table.insert("nts".into(), Value::Table(nts));
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "unsafe NTS field `{field}` must fail configuration parsing"
+        );
+    }
+}
+#[test]
 fn telemetry_clamps_zero_telegram_metrics_period() {
     let mut table = base_table();
     let mut telemetry = Table::new();

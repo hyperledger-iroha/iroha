@@ -12,6 +12,8 @@ const OPERATOR_REQUEST_DOMAIN_V1 = Buffer.from(
 
 const ISO_RETIRED_AUTH_HEADERS = new Set([
   "authorization",
+  "cookie",
+  "proxy-authorization",
   "x-api-token",
   "x-iroha-account",
   "x-iroha-signature",

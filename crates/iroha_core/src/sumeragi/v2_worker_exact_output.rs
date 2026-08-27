@@ -227,6 +227,18 @@ struct PendingExactOutputBatchPlan {
     shared_ownership_units: usize,
     next_fanout_fifo_id: ExactFanoutFifoId,
 }
+/// Fully validated exact-output removal which can be committed without a
+/// fallible step after a surrounding persistence transaction crosses its
+/// irreversible boundary.
+struct PendingExactOutputRemovalPlan {
+    existing_fifo_ids: Vec<ExactFanoutFifoId>,
+    removed_fifo_ids: BTreeSet<ExactFanoutFifoId>,
+    retained_source_fifo_owners: BTreeMap<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>,
+    retained_reservation_owner_counts: BTreeMap<ExactTargetReservation, usize>,
+    retained_ownership_units: usize,
+    retained_shared_ownership_units: usize,
+    retained_next_fanout_index: usize,
+}
 impl PendingExactOutput {
     fn new(
         shared_ownership_unit_capacity: usize,
@@ -314,6 +326,7 @@ impl PendingExactOutput {
     ) -> Result<Option<PendingExactOutputBatchPlan>, String> {
         let existing_fanout_count = self.fanouts.len();
         let mut additions = BTreeMap::<ExactTargetReservation, usize>::new();
+        let mut incumbent_component = false;
         for fanout in &fanouts {
             self.validate_fanout_bounds(fanout)?;
             if fanout.is_complete()
@@ -324,10 +337,6 @@ impl PendingExactOutput {
                     .iter()
                     .any(|target| !matches!(target.route, ExactTargetRoute::Topology))
                 || self
-                    .fanouts
-                    .iter()
-                    .any(|retained| retained.can_coalesce_retry(fanout))
-                || self
                     .stranded_responder_control_replacement_index(fanout)
                     .is_some()
                 || self.retains_retryable_sidecar_responder_control_for(fanout)
@@ -336,12 +345,33 @@ impl PendingExactOutput {
                     "Sumeragi v2 atomic Proposal output changed fresh topology geometry".to_owned(),
                 );
             }
+            incumbent_component |= self.fanouts.iter().any(|retained| {
+                retained.rollover_claim == fanout.rollover_claim
+                    && retained.message_hashes == fanout.message_hashes
+                    && retained.reply_routes.is_none()
+                    && retained.ingress_ownership.is_none()
+                    && retained
+                        .targets
+                        .iter()
+                        .all(|target| matches!(target.route, ExactTargetRoute::Topology))
+            });
             for (reservation, count) in fanout.outstanding_reservation_counts()? {
                 let aggregate = additions.entry(reservation).or_default();
                 *aggregate = aggregate.checked_add(count).ok_or_else(|| {
                     "Sumeragi v2 atomic Proposal output ownership overflowed".to_owned()
                 })?;
             }
+        }
+        if incumbent_component {
+            // Proposal control and chunks are one inseparable source
+            // occurrence. A periodic retry may find either component still
+            // actor-backpressured, and the chunk target set may expand from
+            // Set A to all voters. Leave the whole retry with that reducer
+            // source until the incumbent drains; admitting a duplicate
+            // component here would multiply bounded corridor ownership once
+            // per retransmission interval. Validate every batch child above
+            // before classifying this as temporary source retention.
+            return Ok(None);
         }
         if !self.ownership_capacity_available(&additions)? {
             return Ok(None);
@@ -472,8 +502,8 @@ impl PendingExactOutput {
         for fanout in &self.fanouts {
             messages = messages.saturating_add(fanout.messages.len());
             targets = targets.saturating_add(fanout.targets.len());
-            dispatchable_fanouts = dispatchable_fanouts
-                .saturating_add(usize::from(fanout.has_dispatchable_target()));
+            dispatchable_fanouts =
+                dispatchable_fanouts.saturating_add(usize::from(fanout.has_dispatchable_target()));
             for target in &fanout.targets {
                 remaining_message_occurrences = remaining_message_occurrences
                     .saturating_add(fanout.messages.len().saturating_sub(target.message_index));
@@ -504,11 +534,9 @@ impl PendingExactOutput {
                 }
                 pending_flushes =
                     pending_flushes.saturating_add(usize::from(target.pending_flush.is_some()));
-                parked_targets =
-                    parked_targets.saturating_add(usize::from(target.parked));
-                completed_targets = completed_targets.saturating_add(usize::from(
-                    target.message_index == fanout.messages.len(),
-                ));
+                parked_targets = parked_targets.saturating_add(usize::from(target.parked));
+                completed_targets = completed_targets
+                    .saturating_add(usize::from(target.message_index == fanout.messages.len()));
             }
         }
         let mut reliable_units = 0usize;
@@ -519,9 +547,7 @@ impl PendingExactOutput {
             let aggregate = match reservation.kind {
                 ExactTargetReservationKind::Reliable => &mut reliable_units,
                 ExactTargetReservationKind::Pacemaker => &mut pacemaker_units,
-                ExactTargetReservationKind::SidecarTopologyProgress => {
-                    &mut sidecar_topology_units
-                }
+                ExactTargetReservationKind::SidecarTopologyProgress => &mut sidecar_topology_units,
                 ExactTargetReservationKind::SidecarReplyControl => &mut sidecar_reply_units,
             };
             *aggregate = aggregate.saturating_add(*count);
@@ -588,18 +614,19 @@ impl PendingExactOutput {
         }
         Ok(heights)
     }
-    fn remove_fanouts_matching(
-        &mut self,
+    fn plan_fanout_removal(
+        &self,
         covered: impl Fn(&PendingExactFanout) -> bool,
         validate_removed: impl Fn(&PendingExactFanout) -> Result<(), String>,
         operation: &'static str,
-    ) -> Result<usize, String> {
+    ) -> Result<PendingExactOutputRemovalPlan, String> {
         let mut current_sources = BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
         let mut current_reservations = BTreeMap::<ExactTargetReservation, usize>::new();
         let mut retained_sources =
             BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
         let mut retained_reservations = BTreeMap::<ExactTargetReservation, usize>::new();
-        let mut removed = 0usize;
+        let mut existing_fifo_ids = Vec::with_capacity(self.fanouts.len());
+        let mut removed_fifo_ids = BTreeSet::new();
         for fanout in &self.fanouts {
             if fanout.message_hashes.len() != fanout.messages.len()
                 || fanout
@@ -615,6 +642,7 @@ impl PendingExactOutput {
             let fifo_id = fanout.fifo_id.ok_or_else(|| {
                 format!("Sumeragi v2 {operation} found an unowned exact-output fanout")
             })?;
+            existing_fifo_ids.push(fifo_id);
             let sources = fanout.outstanding_sources()?;
             let reservations = fanout.outstanding_reservation_counts()?;
             for source in &sources {
@@ -631,9 +659,11 @@ impl PendingExactOutput {
             }
             if covered(fanout) {
                 validate_removed(fanout)?;
-                removed = removed
-                    .checked_add(1)
-                    .ok_or_else(|| format!("Sumeragi v2 {operation} count overflowed"))?;
+                if !removed_fifo_ids.insert(fifo_id) {
+                    return Err(format!(
+                        "Sumeragi v2 {operation} found duplicate exact-output FIFO ownership"
+                    ));
+                }
                 continue;
             }
             for source in sources {
@@ -668,17 +698,66 @@ impl PendingExactOutput {
                     format!("Sumeragi v2 retained {operation} shared units overflowed")
                 })?;
         }
-        self.fanouts.retain(|fanout| !covered(fanout));
-        self.source_fifo_owners = retained_sources;
-        self.reservation_owner_counts = retained_reservations;
-        self.ownership_units = retained_units;
-        self.shared_ownership_units = retained_shared_units;
-        self.next_fanout_index = if self.fanouts.is_empty() {
+        let retained_fanout_count = self
+            .fanouts
+            .len()
+            .checked_sub(removed_fifo_ids.len())
+            .ok_or_else(|| format!("Sumeragi v2 {operation} count underflowed"))?;
+        let retained_next_fanout_index = if retained_fanout_count == 0 {
             0
         } else {
-            self.next_fanout_index % self.fanouts.len()
+            self.next_fanout_index % retained_fanout_count
         };
-        Ok(removed)
+        Ok(PendingExactOutputRemovalPlan {
+            existing_fifo_ids,
+            removed_fifo_ids,
+            retained_source_fifo_owners: retained_sources,
+            retained_reservation_owner_counts: retained_reservations,
+            retained_ownership_units: retained_units,
+            retained_shared_ownership_units: retained_shared_units,
+            retained_next_fanout_index,
+        })
+    }
+    fn commit_fanout_removal(&mut self, plan: PendingExactOutputRemovalPlan) -> usize {
+        let PendingExactOutputRemovalPlan {
+            existing_fifo_ids,
+            removed_fifo_ids,
+            retained_source_fifo_owners,
+            retained_reservation_owner_counts,
+            retained_ownership_units,
+            retained_shared_ownership_units,
+            retained_next_fanout_index,
+        } = plan;
+        debug_assert_eq!(
+            self.fanouts
+                .iter()
+                .map(|fanout| fanout.fifo_id.expect("preflighted exact-output FIFO owner"))
+                .collect::<Vec<_>>(),
+            existing_fifo_ids,
+            "an exclusive exact-output removal plan cannot observe intervening fanout mutation"
+        );
+        self.fanouts.retain(|fanout| {
+            !removed_fifo_ids.contains(
+                &fanout
+                    .fifo_id
+                    .expect("preflighted exact-output fanout remains FIFO-owned"),
+            )
+        });
+        self.source_fifo_owners = retained_source_fifo_owners;
+        self.reservation_owner_counts = retained_reservation_owner_counts;
+        self.ownership_units = retained_ownership_units;
+        self.shared_ownership_units = retained_shared_ownership_units;
+        self.next_fanout_index = retained_next_fanout_index;
+        removed_fifo_ids.len()
+    }
+    fn remove_fanouts_matching(
+        &mut self,
+        covered: impl Fn(&PendingExactFanout) -> bool,
+        validate_removed: impl Fn(&PendingExactFanout) -> Result<(), String>,
+        operation: &'static str,
+    ) -> Result<usize, String> {
+        let plan = self.plan_fanout_removal(covered, validate_removed, operation)?;
+        Ok(self.commit_fanout_removal(plan))
     }
     fn close_certified_sidecar_prefix(
         &mut self,
@@ -745,6 +824,69 @@ impl PendingExactOutput {
                     .validate_fanout(&fanout.messages, &fanout.semantic_peers())
             },
             "historical recovery cancellation",
+        )
+    }
+    fn cancel_certified_body_request(
+        &mut self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Result<usize, String> {
+        let plan = self.plan_certified_body_request_cancellation(request_hash)?;
+        Ok(self.commit_fanout_removal(plan))
+    }
+    fn plan_certified_body_request_cancellation(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Result<PendingExactOutputRemovalPlan, String> {
+        self.plan_fanout_removal(
+            |fanout| {
+                matches!(
+                    fanout.messages.as_slice(),
+                    [NetworkMessage::SumeragiBlock(envelope)]
+                        if matches!(
+                            envelope.as_message(),
+                            BlockMessage::V2(message)
+                                if matches!(
+                                    &message.payload,
+                                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)
+                                        if HashOf::new(request) == request_hash
+                                )
+                        )
+                )
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "certified body-request cancellation",
+        )
+    }
+    fn cancel_commit_certificate_request(
+        &mut self,
+        request_hash: HashOf<wire::CommitCertificateRequest>,
+    ) -> Result<usize, String> {
+        self.remove_fanouts_matching(
+            |fanout| {
+                matches!(
+                    fanout.messages.as_slice(),
+                    [NetworkMessage::SumeragiBlock(envelope)]
+                        if matches!(
+                            envelope.as_message(),
+                            BlockMessage::V2(message)
+                                if matches!(
+                                    &message.payload,
+                                    wire::ConsensusMessageV2Payload::CommitCertificateRequest(request)
+                                        if HashOf::new(request) == request_hash
+                                )
+                        )
+                )
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "commit-certificate request cancellation",
         )
     }
     fn cancel_certified_merge_sidecar_requests(
@@ -1553,6 +1695,13 @@ impl PendingExactOutput {
         {
             return Ok(true);
         }
+        if self
+            .fanouts
+            .iter()
+            .any(|pending| pending.is_same_acquisition_topology_retry(fanout))
+        {
+            return Ok(false);
+        }
         if let Some(pending) = self
             .fanouts
             .iter()
@@ -1831,6 +1980,13 @@ impl PendingExactOutput {
         if self
             .fanouts
             .iter()
+            .any(|pending| pending.is_same_acquisition_topology_retry(fanout))
+        {
+            return Ok(false);
+        }
+        if self
+            .fanouts
+            .iter()
             .any(|pending| pending.can_coalesce_retry(fanout))
         {
             return self.capacity_available_for(fanout);
@@ -1992,6 +2148,16 @@ impl PendingExactOutput {
             .any(|pending| pending.can_coalesce_exact_topology_retry(&fanout))
         {
             return Ok(ExactFanoutOwnership::Owned);
+        }
+        if self
+            .fanouts
+            .iter()
+            .any(|pending| pending.is_same_acquisition_topology_retry(&fanout))
+        {
+            // The task/discovery source retains rotated target batches while
+            // the incumbent owns actor rank. Once that fanout drains, a later
+            // source retry may install the next bounded batch.
+            return Ok(ExactFanoutOwnership::SourceRetained);
         }
         if let Some(index) = self
             .fanouts
@@ -2926,6 +3092,31 @@ impl PendingExactOutput {
                             "Sumeragi v2 network actor changed an exact output target".to_owned()
                         );
                     }
+                    let release_to_discovery = ticket.is_none()
+                        && matches!(&route, ExactTargetRoute::Topology)
+                        && self.fanouts.get(fanout_index).is_some_and(
+                            PendingExactFanout::is_commit_certificate_acquisition_topology_fanout,
+                        );
+                    if release_to_discovery {
+                        // No actor ticket means this target owns no FIFO rank:
+                        // its live-topology membership may have disappeared, or
+                        // the bounded waiter table may be full. The discovery
+                        // tracker still owns the immutable request and retries
+                        // it on a rotating archive batch. Retaining this
+                        // ticketless worker copy would reject every rotated
+                        // batch as SourceRetained forever.
+                        drop(message);
+                        self.fanouts
+                            .get_mut(fanout_index)
+                            .expect("released discovery fanout must remain present")
+                            .mark_admitted(target_index)?;
+                        self.advance_after_attempt(
+                            fanout_index,
+                            target_index,
+                            Some(&attempted_source),
+                        )?;
+                        continue;
+                    }
                     self.fanouts
                         .get_mut(fanout_index)
                         .expect("backpressured exact fanout must remain present")
@@ -3113,16 +3304,7 @@ fn durable_history_source_covers(
             response
                 .validate(&source.height_context)
                 .map_err(|error| error.to_string())?;
-            let responder_index = usize::try_from(response.responder)
-                .map_err(|_| "durable body responder index is not representable".to_owned())?;
-            let responder = source
-                .height_context
-                .roster
-                .get(responder_index)
-                .ok_or_else(|| {
-                    "durable body responder is outside the historical roster".to_owned()
-                })?;
-            if &responder.validator != claimed_responder {
+            if &response.responder != claimed_responder {
                 return Err(
                     "durable body response is not bound to the serving network identity".to_owned(),
                 );
@@ -3130,7 +3312,7 @@ fn durable_history_source_covers(
             Signature::try_from_bytes(&response.signature)
                 .map_err(|error| error.to_string())?
                 .verify(
-                    responder.validator.public_key(),
+                    response.responder.public_key(),
                     &response.signature_preimage(),
                 )
                 .map_err(|error| error.to_string())?;

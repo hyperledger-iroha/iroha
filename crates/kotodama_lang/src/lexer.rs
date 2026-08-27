@@ -166,6 +166,20 @@ pub(crate) fn lower_lexed_recovering(
     budget: FrontendBudget,
     lexed: crate::syntax::lexer::Lexed,
 ) -> (Vec<Token>, Vec<Diagnostic>) {
+    let (tokens, diagnostics, omitted) =
+        lower_lexed_recovering_with_omissions(source, budget, lexed);
+    (
+        tokens,
+        finalize_recovering_diagnostics(diagnostics, omitted),
+    )
+}
+/// Lower recoverable tokens while leaving room for callers to merge a
+/// mandatory parser resource diagnostic before the diagnostic cap is sealed.
+pub(crate) fn lower_lexed_recovering_with_omissions(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    lexed: crate::syntax::lexer::Lexed,
+) -> (Vec<Token>, Vec<Diagnostic>, usize) {
     let crate::syntax::lexer::Lexed {
         tokens,
         diagnostics,
@@ -179,13 +193,29 @@ pub(crate) fn lower_lexed_recovering(
         omitted_diagnostics,
     )
 }
+/// Append the canonical diagnostic-cap marker after all recovery diagnostics
+/// that must survive truncation have been selected.
+pub(crate) fn finalize_recovering_diagnostics(
+    mut diagnostics: Vec<Diagnostic>,
+    omitted: usize,
+) -> Vec<Diagnostic> {
+    if omitted != 0 {
+        diagnostics.push(Diagnostic::error(
+            "K0004",
+            DiagnosticPhase::Lex,
+            format!("diagnostic limit reached; {omitted} additional syntax error(s) were omitted"),
+            None,
+        ));
+    }
+    diagnostics
+}
 fn lower_green_tokens<'token>(
     source: &SourceFile,
     budget: FrontendBudget,
     green_tokens: impl IntoIterator<Item = &'token crate::syntax::cst::GreenToken>,
     mut diagnostics: Vec<Diagnostic>,
     omitted_diagnostics: usize,
-) -> (Vec<Token>, Vec<Diagnostic>) {
+) -> (Vec<Token>, Vec<Diagnostic>, usize) {
     let retained = budget.max_diagnostics().saturating_sub(1);
     let mut omitted =
         omitted_diagnostics.saturating_add(diagnostics.len().saturating_sub(retained));
@@ -217,15 +247,7 @@ fn lower_green_tokens<'token>(
             }
         }
     }
-    if omitted != 0 {
-        diagnostics.push(Diagnostic::error(
-            "K0004",
-            DiagnosticPhase::Lex,
-            format!("diagnostic limit reached; {omitted} additional syntax error(s) were omitted"),
-            None,
-        ));
-    }
-    (tokens, diagnostics)
+    (tokens, diagnostics, omitted)
 }
 fn lexical_diagnostic(
     source: &SourceFile,

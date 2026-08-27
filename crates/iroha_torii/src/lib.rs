@@ -345,7 +345,7 @@ use iroha_torii_shared::{
     route_catalog::{self, RouteCatalog},
     uri,
 };
-use ivm::iso20022::{MsgError, parse_message};
+use ivm::iso20022::{MsgError, parse_xml_message};
 #[cfg(feature = "app_api")]
 use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey};
 use mv::storage::StorageReadOnly;
@@ -2402,6 +2402,7 @@ struct AppState {
     da_replay_cache: Arc<iroha_core::da::ReplayCache>,
     da_replay_store: Arc<da::ReplayCursorStore>,
     da_receipt_log: Arc<da::DaReceiptLog>,
+    da_replay_lifecycle_lock: Arc<parking_lot::Mutex<()>>,
     da_receipt_signer: KeyPair,
     torii_proxy_bridge_signer: KeyPair,
     vpn_operator_signer: Option<KeyPair>,
@@ -2534,6 +2535,7 @@ struct DaRuntimeServices {
     replay_cache: Arc<iroha_core::da::ReplayCache>,
     replay_store: Arc<da::ReplayCursorStore>,
     receipt_log: Arc<da::DaReceiptLog>,
+    replay_lifecycle_lock: Arc<parking_lot::Mutex<()>>,
     spooler: Option<Arc<da::DaSpooler>>,
 }
 #[cfg(feature = "connect")]
@@ -4679,6 +4681,107 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
     #[tokio::test]
+    async fn required_api_token_forces_private_no_store_on_every_response() {
+        let mut app = app_with_scheme_cap("http");
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+        let router = Router::new()
+            .route(
+                "/protected",
+                get(|| async {
+                    let mut response = StatusCode::OK.into_response();
+                    response.headers_mut().insert(
+                        header::CACHE_CONTROL,
+                        HeaderValue::from_static("public, max-age=86400"),
+                    );
+                    response
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_api_token,
+            ));
+
+        let rejection = router
+            .clone()
+            .oneshot(request("/protected", false))
+            .await
+            .expect("missing-token response");
+        assert_eq!(rejection.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            rejection.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+
+        let mut authenticated = request("/protected", false);
+        authenticated
+            .headers_mut()
+            .insert(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
+        let response = router
+            .oneshot(authenticated)
+            .await
+            .expect("authenticated response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+    }
+    #[tokio::test]
+    async fn required_api_token_outer_cache_boundary_covers_early_responses() {
+        let mut app = app_with_scheme_cap("http");
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.require_api_token = true;
+        let protected = Router::new()
+            .fallback(|| async {
+                let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=86400"),
+                );
+                response
+            })
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_required_api_token_private_no_store,
+            ));
+        let response = protected
+            .oneshot(request("/early-rejection", false))
+            .await
+            .expect("early response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+
+        let public = Router::new()
+            .route(
+                "/public",
+                get(|| async {
+                    let mut response = StatusCode::OK.into_response();
+                    response.headers_mut().insert(
+                        header::CACHE_CONTROL,
+                        HeaderValue::from_static("public, max-age=60"),
+                    );
+                    response
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                app_with_scheme_cap("http"),
+                enforce_required_api_token_private_no_store,
+            ));
+        let response = public
+            .oneshot(request("/public", false))
+            .await
+            .expect("public response");
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("public, max-age=60"))
+        );
+    }
+    #[tokio::test]
     async fn offline_command_authentication_precedes_media_and_idempotency_validation() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         async fn error_code(response: Response) -> String {
@@ -5121,10 +5224,40 @@ async fn enforce_api_token(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
-    if let Some(response) = api_token_rejection(&app, req.headers()) {
+    let api_token_required = app.require_api_token;
+    if let Some(mut response) = api_token_rejection(&app, req.headers()) {
+        if api_token_required {
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                HeaderValue::from_static("private, no-store"),
+            );
+        }
         return Ok(response);
     }
-    Ok(next.run(req).await)
+    let mut response = next.run(req).await;
+    if api_token_required {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+    }
+    Ok(response)
+}
+/// Prevent a shared intermediary from replaying any response produced by a
+/// listener whose entire surface is protected by the deployment API token.
+async fn enforce_required_api_token_private_no_store(
+    State(app): State<SharedAppState>,
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    let mut response = next.run(req).await;
+    if app.require_api_token {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+    }
+    Ok(response)
 }
 #[cfg(feature = "app_api")]
 const SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -6723,18 +6856,35 @@ fn route_timeout_for_path(path: &str) -> Duration {
         _ => DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5),
     }
 }
+fn private_no_store_error_response(
+    status: StatusCode,
+    envelope: ErrorEnvelope,
+    format: ResponseFormat,
+) -> Response {
+    let mut response = utils::respond_with_status_and_format(status, envelope, format);
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response
+}
+fn route_timeout_error_response(format: ResponseFormat) -> Response {
+    private_no_store_error_response(
+        StatusCode::REQUEST_TIMEOUT,
+        ErrorEnvelope::new(
+            "request_timeout",
+            "The request exceeded the route execution deadline.",
+        ),
+        format,
+    )
+}
 async fn enforce_route_timeout(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     match tokio::time::timeout(route_timeout_for_path(req.uri().path()), next.run(req)).await {
         Ok(response) => Ok(response),
-        Err(_) => Ok(utils::respond_with_status_and_format(
-            StatusCode::REQUEST_TIMEOUT,
-            ErrorEnvelope::new(
-                "request_timeout",
-                "The request exceeded the route execution deadline.",
-            ),
+        Err(_) => Ok(route_timeout_error_response(
             utils::current_response_format(),
         )),
     }
@@ -6756,7 +6906,7 @@ async fn catch_handler_panics(
                 .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
                 .unwrap_or("non-string panic payload");
             iroha_logger::error!(%message, "Torii request handler panicked");
-            Ok(utils::respond_with_status_and_format(
+            Ok(private_no_store_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 ErrorEnvelope::new(
                     "internal_server_error",
@@ -6786,6 +6936,25 @@ async fn attach_matched_route_metadata(
     req.extensions_mut().insert(metadata.clone());
     let mut response = next.run(req).await;
     response.extensions_mut().insert(metadata);
+    Ok(response)
+}
+/// Enforce catalog-derived private response caching after the trusted matched-route metadata has
+/// been copied onto the response.
+async fn enforce_catalog_private_no_store(
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    let mut response = next.run(req).await;
+    if response
+        .extensions()
+        .get::<MatchedRouteMetadata>()
+        .is_some_and(MatchedRouteMetadata::requires_private_no_store)
+    {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+    }
     Ok(response)
 }
 fn route_surface_label(metadata: &MatchedRouteMetadata) -> &'static str {
@@ -7008,8 +7177,8 @@ mod matched_route_metadata_tests {
         http::{Request, StatusCode, header},
     };
     use iroha_torii_shared::route_catalog::{
-        AdmissionPolicy, ApiSurface, EnabledFeatures, HttpMethod, Listener, RouteDescriptor,
-        RouteEffect, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, EnabledFeatures, HttpMethod, Listener,
+        RouteDescriptor, RouteEffect, RouteProjections,
     };
     use tower::ServiceExt as _;
     const ITEM: RouteDescriptor = RouteDescriptor::new(
@@ -7034,6 +7203,39 @@ mod matched_route_metadata_tests {
     )
     .with_implicit_head(true)
     .with_cors_options(true);
+    const CREDENTIAL_EXCHANGE: RouteDescriptor = RouteDescriptor::new(
+        "test.operator_credential_exchange",
+        HttpMethod::Post,
+        "/v1/tests/operator-credential",
+        ApiSurface::Operator,
+        Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::Operator,
+    )
+    .with_authentication(AuthenticationPolicy::OperatorCredentialExchange)
+    .with_cors_options(true);
+    const PUBLIC_CREDENTIAL_READ: RouteDescriptor = RouteDescriptor::new(
+        "test.operator_credential_public_read",
+        HttpMethod::Get,
+        "/v1/tests/operator-credential",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_implicit_head(true)
+    .with_cors_options(true);
+    const CANONICAL_ACCOUNT_READ: RouteDescriptor = RouteDescriptor::new(
+        "test.canonical_account_read",
+        HttpMethod::Get,
+        "/v1/tests/canonical-account",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_implicit_head(true);
     async fn metadata_handler(Extension(metadata): Extension<MatchedRouteMetadata>) -> Response {
         assert_eq!(metadata.stable_route_id(), "test.item.read");
         assert_eq!(metadata.path_template(), "/v1/tests/items/{item_id}");
@@ -7092,6 +7294,371 @@ mod matched_route_metadata_tests {
         assert_eq!(metadata.path_template(), "/v1/tests/items/{item_id}");
         assert!(!metadata.path_template().contains("customer-secret"));
         assert!(!metadata.path_template().contains("cursor"));
+    }
+    #[tokio::test]
+    async fn credential_exchange_overwrites_conflicting_inner_cache_policy() {
+        use http_body_util::BodyExt as _;
+
+        let mut builder = RouterBuilder::new(
+            (),
+            RouteCatalog::new(&[CREDENTIAL_EXCHANGE]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid credential-exchange catalog");
+        builder.route(
+            &CREDENTIAL_EXCHANGE,
+            catalog_post(|| async {
+                let mut response = (StatusCode::OK, "credential-response").into_response();
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=86400"),
+                );
+                response
+            })
+            .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange),
+        );
+        let (router, manifest) = builder.finish().expect("complete credential router");
+        let router = router
+            .layer(axum::middleware::from_fn_with_state(
+                manifest.route_index(),
+                attach_matched_route_metadata,
+            ))
+            .layer(axum::middleware::from_fn(enforce_catalog_private_no_store))
+            .with_state(());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::POST)
+                    .uri(CREDENTIAL_EXCHANGE.path())
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+        assert!(
+            response
+                .extensions()
+                .get::<MatchedRouteMetadata>()
+                .is_some_and(MatchedRouteMetadata::requires_private_no_store)
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect credential response")
+            .to_bytes();
+        assert_eq!(body.as_ref(), b"credential-response");
+    }
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn early_canonical_auth_rejection_is_private_no_store() {
+        let app = crate::mk_app_state_for_tests();
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(&[CANONICAL_ACCOUNT_READ]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid canonical-account catalog");
+        builder.route(
+            &CANONICAL_ACCOUNT_READ,
+            catalog_get(|| async { StatusCode::NO_CONTENT })
+                .authenticated_canonical_account_body(app.clone(), 0),
+        );
+        let (router, manifest) = builder.finish().expect("complete canonical-account router");
+        let router = router
+            .layer(axum::middleware::from_fn_with_state(
+                manifest.route_index(),
+                attach_matched_route_metadata,
+            ))
+            .layer(axum::middleware::from_fn(enforce_catalog_private_no_store))
+            .with_state(app);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri(CANONICAL_ACCOUNT_READ.path())
+                    .body(Body::empty())
+                    .expect("unsigned canonical-account request"),
+            )
+            .await
+            .expect("canonical-account rejection");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+        assert!(
+            response
+                .extensions()
+                .get::<MatchedRouteMetadata>()
+                .is_some_and(MatchedRouteMetadata::requires_private_no_store)
+        );
+    }
+    fn connect_cache_policy_test_router() -> (Router, MountedRouteIndex) {
+        const CONNECT_FEATURES: &[&str] = &["connect"];
+        let mut builder = RouterBuilder::new(
+            (),
+            RouteCatalog::new(&[
+                route_catalog::connect::SESSION_CREATE,
+                route_catalog::connect::SESSION_STATUS,
+            ]),
+            EnabledFeatures::new(CONNECT_FEATURES),
+        )
+        .expect("valid Connect credential catalog");
+        builder.route(
+            &route_catalog::connect::SESSION_CREATE,
+            catalog_post(|| async {
+                let mut response = (StatusCode::OK, "role-and-management-tokens").into_response();
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=86400"),
+                );
+                response
+            })
+            .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        );
+        builder.route(
+            &route_catalog::connect::SESSION_STATUS,
+            catalog_get(|| async {
+                let mut response = StatusCode::UNAUTHORIZED.into_response();
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=86400"),
+                );
+                response
+            })
+            .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        );
+        let (router, manifest) = builder
+            .finish()
+            .expect("complete Connect credential router");
+        (router, manifest.route_index())
+    }
+    #[test]
+    fn explicit_connect_cache_policy_reaches_exact_and_framework_metadata() {
+        let (_, index) = connect_cache_policy_test_router();
+        let preflight = index.resolve(
+            &axum::http::Method::OPTIONS,
+            Some(route_catalog::connect::SESSION_CREATE.path()),
+        );
+        assert_eq!(preflight.stable_route_id(), "http.cors_preflight");
+        assert!(preflight.requires_private_no_store());
+        let method_not_allowed = index.resolve(
+            &axum::http::Method::DELETE,
+            Some(route_catalog::connect::SESSION_STATUS.path()),
+        );
+        assert_eq!(
+            method_not_allowed.stable_route_id(),
+            "http.method_not_allowed"
+        );
+        assert!(method_not_allowed.requires_private_no_store());
+        let head = index.resolve(
+            &axum::http::Method::HEAD,
+            Some(route_catalog::connect::SESSION_STATUS.path()),
+        );
+        assert_eq!(
+            head.stable_route_id(),
+            route_catalog::connect::SESSION_STATUS.stable_route_id()
+        );
+        assert!(head.requires_private_no_store());
+    }
+    #[tokio::test]
+    async fn explicit_connect_cache_policy_covers_success_error_and_framework_responses() {
+        use http_body_util::BodyExt as _;
+
+        let (router, index) = connect_cache_policy_test_router();
+        let router = router
+            .method_not_allowed_fallback(|| async {
+                let mut response = StatusCode::METHOD_NOT_ALLOWED.into_response();
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=86400"),
+                );
+                response
+            })
+            .layer(axum::middleware::from_fn_with_state(
+                index,
+                attach_matched_route_metadata,
+            ))
+            .layer(axum::middleware::from_fn(enforce_catalog_private_no_store))
+            .with_state(());
+        let success = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::POST)
+                    .uri(route_catalog::connect::SESSION_CREATE.path())
+                    .body(Body::empty())
+                    .expect("Connect session-create request"),
+            )
+            .await
+            .expect("Connect session-create response");
+        assert_eq!(success.status(), StatusCode::OK);
+        assert_eq!(
+            success.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+        let body = success
+            .into_body()
+            .collect()
+            .await
+            .expect("collect Connect credential response")
+            .to_bytes();
+        assert_eq!(body.as_ref(), b"role-and-management-tokens");
+        let rejection = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(route_catalog::connect::SESSION_STATUS.path())
+                    .body(Body::empty())
+                    .expect("Connect session-status request"),
+            )
+            .await
+            .expect("Connect session-status rejection");
+        assert_eq!(rejection.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            rejection.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+        let framework = router
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::DELETE)
+                    .uri(route_catalog::connect::SESSION_STATUS.path())
+                    .body(Body::empty())
+                    .expect("Connect method-not-allowed request"),
+            )
+            .await
+            .expect("Connect method-not-allowed response");
+        assert_eq!(framework.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            framework.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+    }
+    #[tokio::test]
+    async fn framework_responses_or_cache_policy_across_methods_at_one_path() {
+        let mut builder = RouterBuilder::new(
+            (),
+            RouteCatalog::new(&[CREDENTIAL_EXCHANGE, PUBLIC_CREDENTIAL_READ]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid mixed-method catalog");
+        builder.route(
+            &CREDENTIAL_EXCHANGE,
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange),
+        );
+        builder.route(
+            &PUBLIC_CREDENTIAL_READ,
+            catalog_get(|| async { StatusCode::NO_CONTENT }),
+        );
+        let (router, manifest) = builder.finish().expect("complete mixed-method router");
+        let index = manifest.route_index();
+        for method in [axum::http::Method::OPTIONS, axum::http::Method::DELETE] {
+            let metadata = index.resolve(&method, Some(CREDENTIAL_EXCHANGE.path()));
+            assert!(
+                metadata.requires_private_no_store(),
+                "{method} must inherit the strictest cache policy at the path"
+            );
+        }
+        let head = index.resolve(
+            &axum::http::Method::HEAD,
+            Some(PUBLIC_CREDENTIAL_READ.path()),
+        );
+        assert_eq!(
+            head.stable_route_id(),
+            PUBLIC_CREDENTIAL_READ.stable_route_id()
+        );
+        assert!(
+            !head.requires_private_no_store(),
+            "HEAD must inherit the exact GET policy, not the path-wide framework fallback"
+        );
+        let router = router
+            .method_not_allowed_fallback(|| async {
+                let mut response = StatusCode::METHOD_NOT_ALLOWED.into_response();
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=86400"),
+                );
+                response
+            })
+            .layer(axum::middleware::from_fn_with_state(
+                index,
+                attach_matched_route_metadata,
+            ))
+            .layer(axum::middleware::from_fn(enforce_catalog_private_no_store))
+            .with_state(());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::DELETE)
+                    .uri(CREDENTIAL_EXCHANGE.path())
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+        let metadata = response
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .expect("framework route metadata");
+        assert_eq!(metadata.stable_route_id(), "http.method_not_allowed");
+        assert!(metadata.requires_private_no_store());
+    }
+    #[tokio::test]
+    async fn catalog_cache_boundary_leaves_public_responses_unchanged() {
+        let mut builder =
+            RouterBuilder::new((), RouteCatalog::new(&[ITEM]), EnabledFeatures::none())
+                .expect("valid public catalog");
+        builder.route(
+            &ITEM,
+            catalog_get(|| async {
+                let mut response = StatusCode::OK.into_response();
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=60"),
+                );
+                response
+            }),
+        );
+        let (router, manifest) = builder.finish().expect("complete public router");
+        let router = router
+            .layer(axum::middleware::from_fn_with_state(
+                manifest.route_index(),
+                attach_matched_route_metadata,
+            ))
+            .layer(axum::middleware::from_fn(enforce_catalog_private_no_store))
+            .with_state(());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/tests/items/public")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("public, max-age=60"))
+        );
+        assert!(
+            response
+                .extensions()
+                .get::<MatchedRouteMetadata>()
+                .is_some_and(|metadata| !metadata.requires_private_no_store())
+        );
     }
     #[test]
     fn uncataloged_resolution_keeps_only_axum_template() {
@@ -7813,6 +8380,13 @@ mod response_negotiation_middleware_tests {
             assert_eq!(
                 response
                     .headers()
+                    .get(header::CACHE_CONTROL)
+                    .and_then(|value| value.to_str().ok()),
+                Some("private, no-store")
+            );
+            assert_eq!(
+                response
+                    .headers()
                     .get(header::CONTENT_TYPE)
                     .and_then(|value| value.to_str().ok()),
                 Some(expected_content_type)
@@ -7835,6 +8409,18 @@ mod response_negotiation_middleware_tests {
                 "request-local suppression must not leak after recovery"
             );
         }
+    }
+    #[test]
+    fn route_timeout_error_is_private_and_not_cacheable() {
+        let response = route_timeout_error_response(ResponseFormat::Json);
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("private, no-store")
+        );
     }
 }
 #[cfg(test)]
@@ -18389,6 +18975,64 @@ async fn soracloud_failed_admissions_section(
     ])
 }
 #[cfg(feature = "app_api")]
+fn is_soracloud_public_runtime_reserved_header(name: &HeaderName) -> bool {
+    let name = name.as_str();
+    // These first-release namespaces belong to Torii protocols, not tenant applications.
+    name == HEADER_API_TOKEN
+        || name.starts_with("x-iroha-")
+        || name.starts_with("x-sora-")
+        || name.starts_with("x-sorafs-")
+        || name.starts_with("x-soranet-")
+        || name.starts_with("sora-")
+        || name == "forwarded"
+        || name.starts_with("x-forwarded-")
+        || matches!(
+            name,
+            "connection"
+                | "keep-alive"
+                | "proxy-authenticate"
+                | "proxy-authorization"
+                | "proxy-connection"
+                | "te"
+                | "trailer"
+                | "transfer-encoding"
+                | "upgrade"
+        )
+}
+#[cfg(feature = "app_api")]
+fn sanitize_soracloud_public_runtime_headers(
+    headers: &HeaderMap,
+) -> Result<HeaderMap, SoracloudRuntimeExecutionError> {
+    let mut connection_scoped = HashSet::new();
+    for value in headers.get_all(axum::http::header::CONNECTION).iter() {
+        for token in value.as_bytes().split(|byte| *byte == b',') {
+            let token = token.trim_ascii();
+            if token.is_empty() {
+                return Err(SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                    "Soracloud public runtime request contains an invalid Connection option",
+                ));
+            }
+            let name = HeaderName::from_bytes(token).map_err(|_| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                    "Soracloud public runtime request contains an invalid Connection option",
+                )
+            })?;
+            connection_scoped.insert(name);
+        }
+    }
+
+    let mut sanitized = HeaderMap::with_capacity(headers.len());
+    for (name, value) in headers {
+        if is_soracloud_public_runtime_reserved_header(name) || connection_scoped.contains(name) {
+            continue;
+        }
+        sanitized.append(name.clone(), value.clone());
+    }
+    Ok(sanitized)
+}
+#[cfg(feature = "app_api")]
 fn canonicalize_soracloud_local_read_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
     headers
         .iter()
@@ -23525,6 +24169,13 @@ fn header_map_to_torii_proxy_headers(
         )
         .collect()
 }
+#[cfg(feature = "app_api")]
+fn soracloud_public_runtime_headers_to_torii_proxy_headers(
+    headers: &HeaderMap,
+) -> Result<Vec<iroha_core::torii_proxy::ToriiProxyHeaderV1>, SoracloudRuntimeExecutionError> {
+    let headers = sanitize_soracloud_public_runtime_headers(headers)?;
+    Ok(header_map_to_torii_proxy_headers(&headers))
+}
 fn torii_proxy_headers_to_header_map(
     headers: &[iroha_core::torii_proxy::ToriiProxyHeaderV1],
 ) -> HeaderMap {
@@ -25982,12 +26633,16 @@ fn normalize_proxied_transaction_submission_response(
 #[cfg(feature = "connect")]
 async fn execute_torii_transaction_via_proxy(
     app: &SharedAppState,
-    transaction: TransactionEntrypoint,
+    accepted_transaction: iroha_core::tx::AcceptedTransaction<'static>,
     routing_plan: RoutingPlan,
     durable_retry_claim: Option<queue::QueuePlanDurableAdmissionV1>,
     minimal_response: bool,
     format: ResponseFormat,
 ) -> Response {
+    let ingress_validation_timestamp_ms = app
+        .queue
+        .queue_plan_admission_timestamp_ms_for(&accepted_transaction);
+    let transaction = accepted_transaction.entrypoint().clone();
     let routing_decision = routing_plan.coordinator_route();
     let entrypoint_hash = transaction.hash();
     let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
@@ -26071,13 +26726,12 @@ async fn execute_torii_transaction_via_proxy(
                 );
             }
         };
-        let enqueue_timestamp_ms = app.queue.queue_plan_admission_timestamp_ms();
         match QueuePlanAdmissionBindingV1::new(
             app.state.network_id_ref(),
             &transaction,
             &routing_plan,
             context,
-            enqueue_timestamp_ms,
+            ingress_validation_timestamp_ms,
         ) {
             Ok(binding) => binding,
             Err(error) => {
@@ -29562,48 +30216,6 @@ fn hosted_http_request_hash(
     *blake3_hash(&payload).as_bytes()
 }
 #[cfg(feature = "app_api")]
-fn hosted_http_rollout_bucket(
-    service_name: &str,
-    remote_ip: Option<IpAddr>,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-) -> u8 {
-    let digest = hosted_http_request_hash(
-        "soracloud:hosted-http-rollout:v1",
-        service_name,
-        None,
-        remote_ip,
-        method,
-        uri,
-    );
-    (u16::from_le_bytes([digest[0], digest[1]]) % 100) as u8
-}
-#[cfg(all(test, feature = "app_api"))]
-#[test]
-fn hosted_http_rollout_bucket_uses_the_domain_separated_request_hash() {
-    let method = axum::http::Method::GET;
-    let uri = "/app/v1/health?probe=ready"
-        .parse::<axum::http::Uri>()
-        .expect("valid hosted HTTP test URI");
-    let remote_ip = Some(IpAddr::from([203, 0, 113, 7]));
-    let digest = hosted_http_request_hash(
-        "soracloud:hosted-http-rollout:v1",
-        "web_portal",
-        None,
-        remote_ip,
-        &method,
-        &uri,
-    );
-
-    let bucket = hosted_http_rollout_bucket("web_portal", remote_ip, &method, &uri);
-
-    assert_eq!(
-        bucket,
-        (u16::from_le_bytes([digest[0], digest[1]]) % 100) as u8
-    );
-    assert!(bucket < 100);
-}
-#[cfg(feature = "app_api")]
 fn hosted_http_placement_has_active_peer_binding(
     world: &impl WorldReadOnly,
     placement: &iroha_data_model::soracloud::SoraInrouReplicaPlacementV1,
@@ -29699,11 +30311,11 @@ fn select_authoritative_hosted_http_replica(
     healthy_replicas.into_iter().nth(index)
 }
 #[cfg(feature = "app_api")]
-fn authoritative_weighted_hosted_http_versions(
+fn authoritative_hosted_http_revision(
     world: &impl WorldReadOnly,
     current_height: u64,
     service_name: &str,
-) -> Result<(Vec<(String, u8)>, u64), SoracloudRuntimeExecutionError> {
+) -> Result<(String, u64), SoracloudRuntimeExecutionError> {
     let deployment_name: Name = service_name.parse().map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
@@ -29759,67 +30371,18 @@ fn authoritative_weighted_hosted_http_versions(
             ),
         ));
     }
-    let Some(rollout) = deployment.active_rollout.as_ref() else {
-        return Ok((
-            vec![(deployment.current_service_version.clone(), 100)],
-            deployment.process_generation,
-        ));
-    };
-    let invalid_rollout = |reason: String| {
-        SoracloudRuntimeExecutionError::new(
+    if deployment.active_rollout.is_some() {
+        return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!(
-                "invalid authoritative hosted Soracloud rollout for service `{service_name}`: {reason}"
+                "service `{service_name}` carries an unsupported active Inrou canary; first-release host-local lease disks require one active revision"
             ),
-        )
-    };
-    if rollout.stage != iroha_data_model::soracloud::SoraRolloutStageV1::Canary {
-        return Err(invalid_rollout(format!(
-            "active rollout stage must be Canary, got {:?}",
-            rollout.stage
-        )));
-    }
-    if rollout.candidate_version != deployment.current_service_version {
-        return Err(invalid_rollout(format!(
-            "candidate revision `{}` must equal current revision `{}`",
-            rollout.candidate_version, deployment.current_service_version
-        )));
-    }
-    let candidate_weight = rollout.traffic_percent;
-    if !(1..=99).contains(&candidate_weight) {
-        return Err(invalid_rollout(format!(
-            "candidate traffic percent must be within 1..=99, got {candidate_weight}"
-        )));
-    }
-    let baseline_version = rollout.baseline_version.trim();
-    if baseline_version.is_empty() {
-        return Err(invalid_rollout(
-            "baseline revision must be present and nonempty".to_owned(),
         ));
     }
-    if baseline_version == rollout.candidate_version {
-        return Err(invalid_rollout(
-            "baseline and candidate revisions must be distinct".to_owned(),
-        ));
-    }
-    rollout
-        .validate()
-        .map_err(|error| invalid_rollout(error.to_string()))?;
-    let baseline_weight = 100 - candidate_weight;
-    let versions = vec![
-        (rollout.candidate_version.clone(), candidate_weight),
-        (baseline_version.to_owned(), baseline_weight),
-    ];
-    let total_weight = versions
-        .iter()
-        .map(|(_, weight)| u16::from(*weight))
-        .sum::<u16>();
-    if total_weight != 100 {
-        return Err(invalid_rollout(format!(
-            "configured revision weights must total 100, got {total_weight}"
-        )));
-    }
-    Ok((versions, deployment.process_generation))
+    Ok((
+        deployment.current_service_version.clone(),
+        deployment.process_generation,
+    ))
 }
 #[cfg(feature = "app_api")]
 #[derive(Clone, Debug)]
@@ -29962,174 +30525,108 @@ fn resolve_hosted_http_runtime_target(
     method: &axum::http::Method,
     uri: &axum::http::Uri,
 ) -> Result<ResolvedHostedHttpTarget, SoracloudRuntimeExecutionError> {
-    struct HealthyTarget {
-        route_match: soracloud::HostedHttpRouteMatch,
-        replica_slot: u16,
-        peer_id: String,
-        local_listen_base_url: Option<String>,
-        materialized_bundle_hash: String,
-        process_generation: u64,
-    }
     let service_name = route_match.service_name.clone();
     let now_ms = current_public_ingress_ledger_time_ms(app);
     let state_view = app.state.view();
     let world = state_view.world();
     let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
-    let (weighted_versions, process_generation) =
-        authoritative_weighted_hosted_http_versions(world, current_height, &service_name)?;
-    let mut healthy_targets = Vec::with_capacity(weighted_versions.len());
-    for (service_version, weight) in &weighted_versions {
-        if *weight == 0 {
-            continue;
-        }
-        let admitted_bundle_hash = world
-            .soracloud_service_revisions()
-            .get(&(service_name.clone(), service_version.clone()))
-            .map(|bundle| bundle.container.bundle_hash)
-            .ok_or_else(|| {
-                SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Internal,
-                    format!(
-                        "active hosted Soracloud service `{service_name}` revision `{service_version}` has no admitted deployment bundle"
-                    ),
-                )
-            })?;
-        let placements = iroha_core::soracloud_runtime::resolve_active_inrou_replica_assignments(
-            world,
-            &service_name,
-            service_version,
-            now_ms,
-            current_height,
-            |lane_id| state_view.is_lane_active_for_authority(lane_id),
-        )
-        .map_err(|message| {
+    let (service_version, process_generation) =
+        authoritative_hosted_http_revision(world, current_height, &service_name)?;
+    let admitted_bundle_hash = world
+        .soracloud_service_revisions()
+        .get(&(service_name.clone(), service_version.clone()))
+        .map(|bundle| bundle.container.bundle_hash)
+        .ok_or_else(|| {
             SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Internal,
-                message,
+                format!(
+                    "active hosted Soracloud service `{service_name}` revision `{service_version}` has no admitted deployment bundle"
+                ),
             )
         })?;
-        let Some((placement, runtime_state)) = select_authoritative_hosted_http_replica(
-            &state_view,
-            &service_name,
-            service_version,
-            &admitted_bundle_hash,
-            &placements,
-            remote_ip,
-            method,
-            uri,
-        ) else {
-            continue;
-        };
-        let placement_is_local = app
-            .local_peer_id
-            .as_ref()
-            .is_some_and(|local_peer_id| local_peer_id.to_string() == placement.peer_id);
-        let local_runtime = placement_is_local
-            .then(|| {
-                resolve_local_hosted_http_replica_runtime(
-                    app,
-                    &service_name,
-                    service_version,
-                    &placement,
-                )
-            })
-            .transpose()?
-            .flatten();
-        if placement_is_local && local_runtime.is_none() {
-            continue;
-        }
-        debug_assert_eq!(runtime_state.materialized_bundle_hash, admitted_bundle_hash);
-        let materialized_bundle_hash = admitted_bundle_hash.to_string();
-        if let Some(local_runtime) = local_runtime.as_ref() {
-            ensure_matching_hosted_http_materialized_bundle_hash(
-                &service_name,
-                service_version,
-                placement.replica_slot,
-                &materialized_bundle_hash,
-                &local_runtime.materialized_bundle_hash,
-                process_generation,
-                local_runtime.process_generation,
-            )?;
-        }
-        healthy_targets.push(HealthyTarget {
-            route_match: soracloud::HostedHttpRouteMatch {
-                service_name: service_name.clone(),
-                service_version: service_version.clone(),
-                request_path: route_match.request_path.clone(),
-            },
-            replica_slot: placement.replica_slot,
-            peer_id: placement.peer_id,
-            local_listen_base_url: local_runtime.map(|runtime| runtime.listen_base_url),
-            materialized_bundle_hash,
-            process_generation,
-        });
-    }
-    drop(state_view);
-    if healthy_targets.is_empty() {
-        let requested_versions = weighted_versions
-            .into_iter()
-            .map(|(version, weight)| format!("{version} ({weight}%)"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(SoracloudRuntimeExecutionError::new(
+    let placements = iroha_core::soracloud_runtime::resolve_active_inrou_replica_assignments(
+        world,
+        &service_name,
+        &service_version,
+        now_ms,
+        current_height,
+        |lane_id| state_view.is_lane_active_for_authority(lane_id),
+    )
+    .map_err(|message| {
+        SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Internal, message)
+    })?;
+    let no_healthy_replica = || {
+        SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "no healthy authoritative hosted Soracloud revision is available for service `{service_name}` across [{requested_versions}]"
+                "hosted Soracloud current revision `{service_version}` for service `{service_name}` has no healthy authoritative replica"
             ),
-        ));
-    }
-    // Select the authoritative rollout bucket before considering health. Moving a request to a
-    // different revision would silently alter the configured rollout percentage.
-    let bucket = hosted_http_rollout_bucket(&service_name, remote_ip, method, uri);
-    let mut cumulative = 0u8;
-    let intended_version_index = weighted_versions
-        .iter()
-        .position(|(_, weight)| {
-            cumulative = cumulative.saturating_add(*weight);
-            bucket < cumulative
+        )
+    };
+    let (placement, runtime_state) = select_authoritative_hosted_http_replica(
+        &state_view,
+        &service_name,
+        &service_version,
+        &admitted_bundle_hash,
+        &placements,
+        remote_ip,
+        method,
+        uri,
+    )
+    .ok_or_else(|| no_healthy_replica())?;
+    let placement_is_local = app
+        .local_peer_id
+        .as_ref()
+        .is_some_and(|local_peer_id| local_peer_id.to_string() == placement.peer_id);
+    let local_runtime = placement_is_local
+        .then(|| {
+            resolve_local_hosted_http_replica_runtime(
+                app,
+                &service_name,
+                &service_version,
+                &placement,
+            )
         })
-        .ok_or_else(|| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Internal,
-                format!(
-                    "authoritative hosted Soracloud traffic weights for service `{service_name}` do not cover rollout bucket {bucket}"
-                ),
-            )
-        })?;
-    let intended_version = &weighted_versions[intended_version_index].0;
-    let selected_index = healthy_targets
-        .iter()
-        .position(|target| target.route_match.service_version == *intended_version)
-
-        .ok_or_else(|| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!(
-                    "authoritative hosted Soracloud revision `{intended_version}` selected for service `{service_name}` has no healthy replica"
-                ),
-            )
-        })?;
-    let selected = healthy_targets.remove(selected_index);
-    let assigned_peer_id = selected.peer_id.parse::<PeerId>().map_err(|error| {
+        .transpose()?
+        .flatten();
+    if placement_is_local && local_runtime.is_none() {
+        return Err(no_healthy_replica());
+    }
+    debug_assert_eq!(runtime_state.materialized_bundle_hash, admitted_bundle_hash);
+    let materialized_bundle_hash = admitted_bundle_hash.to_string();
+    if let Some(local_runtime) = local_runtime.as_ref() {
+        ensure_matching_hosted_http_materialized_bundle_hash(
+            &service_name,
+            &service_version,
+            placement.replica_slot,
+            &materialized_bundle_hash,
+            &local_runtime.materialized_bundle_hash,
+            process_generation,
+            local_runtime.process_generation,
+        )?;
+    }
+    let assigned_peer_id = placement.peer_id.parse::<PeerId>().map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!(
                 "authoritative hosted Soracloud peer id `{}` for service `{}` revision `{}` replica {} is invalid: {error}",
-                selected.peer_id,
-                selected.route_match.service_name,
-                selected.route_match.service_version,
-                selected.replica_slot
+                placement.peer_id, service_name, service_version, placement.replica_slot
             ),
         )
     })?;
+    drop(state_view);
 
     Ok(ResolvedHostedHttpTarget {
-        route_match: selected.route_match,
-        replica_slot: selected.replica_slot,
+        route_match: soracloud::HostedHttpRouteMatch {
+            service_name,
+            service_version,
+            request_path: route_match.request_path.clone(),
+        },
+        replica_slot: placement.replica_slot,
         assigned_peer_id,
-        local_listen_base_url: selected.local_listen_base_url,
-        materialized_bundle_hash: selected.materialized_bundle_hash,
-        process_generation: selected.process_generation,
+        local_listen_base_url: local_runtime.map(|runtime| runtime.listen_base_url),
+        materialized_bundle_hash,
+        process_generation,
     })
 }
 #[cfg(feature = "app_api")]
@@ -30149,16 +30646,13 @@ fn resolve_exact_hosted_http_runtime_target(
     let state_view = app.state.view();
     let world = state_view.world();
     let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
-    let (active_versions, process_generation) =
-        authoritative_weighted_hosted_http_versions(world, current_height, service_name)?;
-    if !active_versions
-        .iter()
-        .any(|(version, weight)| *weight > 0 && version == service_version)
-    {
+    let (current_version, process_generation) =
+        authoritative_hosted_http_revision(world, current_height, service_name)?;
+    if current_version != service_version {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "hosted Soracloud revision `{service_version}` is not active for service `{service_name}`"
+                "hosted Soracloud revision `{service_version}` is not the current revision `{current_version}` for service `{service_name}`"
             ),
         ));
     }
@@ -30426,6 +30920,9 @@ async fn proxy_soracloud_public_hosted_http_locally(
     route_match: &soracloud::HostedHttpRouteMatch,
     listen_base_url: &str,
 ) -> Result<Response, SoracloudRuntimeExecutionError> {
+    // Re-sanitize at the final tenant boundary because authenticated peer proxy
+    // envelopes are independently attacker-controlled inputs.
+    let headers = sanitize_soracloud_public_runtime_headers(headers)?;
     let reqwest_method =
         reqwest::Method::from_bytes(method.as_str().as_bytes()).map_err(|error| {
             SoracloudRuntimeExecutionError::new(
@@ -30509,7 +31006,7 @@ async fn proxy_soracloud_public_hosted_http_locally(
         display_host
     };
     builder = builder.header(axum::http::header::HOST, host_header);
-    for (name, value) in headers {
+    for (name, value) in &headers {
         if name == &axum::http::header::HOST || name == &axum::http::header::CONTENT_LENGTH {
             continue;
         }
@@ -30578,6 +31075,10 @@ async fn execute_hosted_http_proxy_request_with_fallback(
     body: Bytes,
     remote_ip: Option<IpAddr>,
 ) -> Result<Option<Response>, Response> {
+    let forwarded_headers = match soracloud_public_runtime_headers_to_torii_proxy_headers(headers) {
+        Ok(headers) => headers,
+        Err(error) => return Err(soracloud_local_read_error_response(error)),
+    };
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
         return Ok(None);
     };
@@ -30595,7 +31096,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         request_path: target.route_match.request_path.clone(),
         method: method.as_str().to_owned(),
         query_string: uri.query().map(ToOwned::to_owned),
-        headers: header_map_to_torii_proxy_headers(headers),
+        headers: forwarded_headers,
         body: body.to_vec(),
         remote_ip: remote_ip.map(|ip| ip.to_string()),
     });
@@ -30950,6 +31451,12 @@ async fn execute_soracloud_public_runtime_request(
         soracloud::resolve_public_route(&app, host, method.as_str(), uri.path())
     else {
         return StatusCode::NOT_FOUND.into_response();
+    };
+    // Authentication, rate identity, and routing consume platform headers before
+    // this projection. Tenant runtimes receive only end-to-end application data.
+    let headers = match sanitize_soracloud_public_runtime_headers(&headers) {
+        Ok(headers) => headers,
+        Err(error) => return soracloud_local_read_error_response(error),
     };
     let route_match = match route_match {
         soracloud::PublicRouteMatch::HostedHttp(route_match) => {
@@ -31370,10 +31877,7 @@ async fn handler_kaigi_relay_detail(
     .await
     {
         Ok(response) => Ok(response.into_response()),
-        Err(error) => Ok(error_response_with_format(
-            error,
-            crate::utils::ResponseFormat::Norito,
-        )),
+        Err(error) => Ok(error_response_with_format(error, format)),
     }
 }
 #[cfg(all(feature = "app_api", not(feature = "telemetry")))]
@@ -32996,11 +33500,13 @@ async fn handler_list_proofs(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return crate::routing::handle_list_proofs(
+        let admission = acquire_query_admission(app.as_ref(), true).await?;
+        return crate::routing::handle_list_proofs_admitted(
             app.state.clone(),
             app.proof_limits,
             app.telemetry.clone(),
             AxQuery(q),
+            admission,
         )
         .await;
     }
@@ -33025,11 +33531,13 @@ async fn handler_list_proofs(
         true,
     )
     .await?;
-    crate::routing::handle_list_proofs(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    crate::routing::handle_list_proofs_admitted(
         app.state.clone(),
         app.proof_limits,
         app.telemetry.clone(),
         AxQuery(q),
+        admission,
     )
     .await
 }
@@ -33042,11 +33550,13 @@ async fn handler_count_proofs(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return crate::routing::handle_count_proofs(
+        let admission = acquire_query_admission(app.as_ref(), true).await?;
+        return crate::routing::handle_count_proofs_admitted(
             app.state.clone(),
             app.proof_limits,
             app.telemetry.clone(),
             AxQuery(q),
+            admission,
         )
         .await;
     }
@@ -33059,11 +33569,13 @@ async fn handler_count_proofs(
         true,
     )
     .await?;
-    crate::routing::handle_count_proofs(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    crate::routing::handle_count_proofs_admitted(
         app.state.clone(),
         app.proof_limits,
         app.telemetry.clone(),
         AxQuery(q),
+        admission,
     )
     .await
 }
@@ -35474,8 +35986,8 @@ macro_rules! iso_payment_submission_handlers {
                         iroha_data_model::ValidationFail::NotPermitted("empty ISO 20022 payload".into()),
                     ));
                 }
-                let parsed =
-                    parse_message($message_type, &body).map_err(|err| Error::Query(map_iso_error(err)))?;
+                let parsed = parse_xml_message($message_type, &body)
+                    .map_err(|err| Error::Query(map_iso_error(err)))?;
                 let profile = iso_profile_from_request(&runtime, &headers, &query)?;
                 let metadata = runtime
                     .validate_profile_submission(profile, $message_type, &parsed, &body)
@@ -35525,12 +36037,56 @@ macro_rules! iso_payment_submission_handlers {
                         return Err(Error::Query(map_iso_error(err)));
                     }
                 };
-                runtime.update_message_context(&msg_id, context.clone());
+                if !runtime.update_message_context(&msg_id, context.clone()) {
+                    runtime.remove_message(&msg_id);
+                    return Err(Error::Query(
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "failed to retain the admitted ISO message context before queue admission"
+                                .into(),
+                        ),
+                    ));
+                }
                 let tx_hash = transaction.hash();
                 let tx_hash_str = format!("{}", tx_hash);
+                if !runtime.bind_transaction_hash(&msg_id, &tx_hash_str) {
+                    runtime.remove_message(&msg_id);
+                    return Err(Error::Query(
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "failed to reserve the signed ISO transaction identity before queue admission"
+                                .into(),
+                        ),
+                    ));
+                }
                 if let Err(err) =
                     routing::handle_transaction(app.queue.clone(), app.state.clone(), transaction).await
                 {
+                    if let Error::PushIntoQueue { source, .. } = &err
+                        && let queue::Error::PlanJournalDurabilityIndeterminate {
+                            entrypoint_hash,
+                            signed_transaction_hash,
+                            reason,
+                        } = source.as_ref()
+                    {
+                        let queue_signed_hash =
+                            signed_transaction_hash.as_ref().map(ToString::to_string);
+                        let hash_evidence = match queue_signed_hash.as_deref() {
+                            Some(hash) if hash == tx_hash_str => {
+                                "queue signed-transaction hash matched the reserved identity"
+                                    .to_owned()
+                            }
+                            Some(hash) => format!(
+                                "queue signed-transaction hash `{hash}` did not match reserved identity `{tx_hash_str}`"
+                            ),
+                            None => format!(
+                                "queue omitted the signed-transaction hash; reserved identity is `{tx_hash_str}`"
+                            ),
+                        };
+                        let detail = format!(
+                            "queue plan journal outcome unknown for entrypoint {entrypoint_hash}: {reason}; {hash_evidence}"
+                        );
+                        runtime.mark_queue_outcome_unknown(&msg_id, &tx_hash_str, detail);
+                        return Err(err);
+                    }
                     let (detail, reason_code) = match &err {
                         Error::PushIntoQueue { source, .. } => {
                             let (code, detail) = queue_rejection_metadata(source.as_ref());
@@ -35670,7 +36226,7 @@ async fn handler_iso_lifecycle_submit(
         ));
     }
     let parsed =
-        parse_message(message_type, &body).map_err(|err| Error::Query(map_iso_error(err)))?;
+        parse_xml_message(message_type, &body).map_err(|err| Error::Query(map_iso_error(err)))?;
     let profile = iso_profile_from_request(&runtime, &headers, &query)?;
     let metadata = runtime
         .validate_profile_submission(profile, message_type, &parsed, &body)
@@ -37094,7 +37650,7 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
     {
         return Ok(execute_torii_transaction_via_proxy(
             &app,
-            accepted_tx.entrypoint().clone(),
+            accepted_tx,
             routing_plan,
             durable_retry_claim,
             transaction_submission_prefers_minimal_response(&headers),
@@ -37172,7 +37728,7 @@ async fn handler_post_transaction_entrypoint(
     {
         return Ok(execute_torii_transaction_via_proxy(
             &app,
-            accepted_tx.entrypoint().clone(),
+            accepted_tx,
             routing_plan,
             durable_retry_claim,
             transaction_submission_prefers_minimal_response(&headers),
@@ -47649,6 +48205,7 @@ impl Torii {
                 GOV_PARLIAMENT_TLE_PARTIAL_RELEASE => canonical_account_post(handler_gov_parliament_tle_partial_release, app_state, 0);
                 GOV_PARLIAMENT_TRANSITION_DRAFT => canonical_account_post(handler_gov_parliament_transition_draft, app_state, runtime_governance_body_limit);
                 VALIDATION_FEE_CURRENT_POLICY_PROOF => canonical_account_post(validation_fee_api::handler_current_policy_proof, app_state, runtime_governance_body_limit);
+                VALIDATION_FEE_HIJIRI_QUOTE => canonical_account_post(validation_fee_api::handler_hijiri_quote, app_state, iroha_torii_shared::validation_fee_api::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1);
                 VALIDATION_FEE_PROPOSALS => canonical_account_get(validation_fee_api::handler_proposals, app_state, 0);
                 VALIDATION_FEE_PROPOSAL_DETAIL => canonical_account_get(validation_fee_api::handler_proposal_detail, app_state, 0);
                 VALIDATION_FEE_PROPOSAL_DRAFT => canonical_account_post(validation_fee_api::handler_proposal_draft, app_state, runtime_governance_body_limit);
@@ -49493,6 +50050,7 @@ impl Torii {
                 replay_cache,
                 replay_store,
                 receipt_log,
+                replay_lifecycle_lock: Arc::new(parking_lot::Mutex::new(())),
                 spooler: None,
             };
         }
@@ -49507,14 +50065,27 @@ impl Torii {
                 replay_store_dir.display()
             )
         });
-        let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
-        for (lane_epoch, highest) in replay_cursor_store.highest_sequences() {
-            replay_cache
-                .prime_lane_epoch(lane_epoch, highest)
-                .expect("bounded replay cursor store must fit the matching replay cache capacity");
-        }
         let replay_store = Arc::new(replay_cursor_store);
-        let receipt_log = Arc::new(
+        let admission_snapshot = da::committed_da_ingest_admission_snapshot(&self.state)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "failed to decode committed DA ingest admission policy; refusing to start Torii: {error}"
+                )
+            });
+        let receipt_log = Arc::new(if admission_snapshot.is_configured() {
+            da::DaReceiptLog::open_with_lane_epoch_filter(
+                self.da_ingest.manifest_store_dir.clone(),
+                Arc::clone(&replay_store),
+                self.da_receipt_signer.public_key().clone(),
+                |lane_epoch| admission_snapshot.retains(lane_epoch.lane_id, lane_epoch.epoch),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to open durable DA receipt log at {}; refusing to start Torii: {err:?}",
+                    self.da_ingest.manifest_store_dir.display()
+                )
+            })
+        } else {
             da::DaReceiptLog::open(
                 self.da_ingest.manifest_store_dir.clone(),
                 Arc::clone(&replay_store),
@@ -49525,8 +50096,25 @@ impl Torii {
                     "failed to open durable DA receipt log at {}; refusing to start Torii: {err:?}",
                     self.da_ingest.manifest_store_dir.display()
                 )
-            }),
-        );
+            })
+        });
+        #[cfg(feature = "app_api")]
+        da::recover_pending_taikai_lineages(
+            &self.da_ingest.manifest_store_dir,
+            receipt_log.as_ref(),
+        )
+        .unwrap_or_else(|(_, error)| {
+            panic!(
+                "failed to recover pending Taikai routing lineage at {}; refusing to start Torii: {error}",
+                self.da_ingest.manifest_store_dir.display()
+            )
+        });
+        let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
+        for (lane_epoch, highest) in replay_store.highest_sequences() {
+            replay_cache
+                .prime_lane_epoch(lane_epoch, highest)
+                .expect("bounded replay cursor store must fit the matching replay cache capacity");
+        }
         #[cfg(feature = "telemetry")]
         self.telemetry.with_metrics(|metrics| {
             for (lane_epoch, highest) in replay_store.highest_sequences() {
@@ -49546,34 +50134,13 @@ impl Torii {
             replay_cache,
             replay_store,
             receipt_log,
+            replay_lifecycle_lock: Arc::new(parking_lot::Mutex::new(())),
             spooler,
         }
     }
     /// Helper function to create router and shared runtime state.
     #[allow(clippy::too_many_lines)]
     fn create_api_router_with_state(&self) -> (axum::Router, SharedAppState) {
-        // Ensure the erased iterable-query registry is initialized before any
-        // request decoding happens (the Norito extractor deserializes queries).
-        #[allow(let_underscore_drop)]
-        {
-            use iroha_data_model as dm;
-            use iroha_data_model::query as dm_query;
-            dm_query::set_query_registry(dm::query_registry![
-                dm_query::ErasedIterQuery<dm::domain::Domain>,
-                dm_query::ErasedIterQuery<dm::account::Account>,
-                dm_query::ErasedIterQuery<dm::asset::value::Asset>,
-                dm_query::ErasedIterQuery<dm::asset::definition::AssetDefinition>,
-                dm_query::ErasedIterQuery<dm::nft::Nft>,
-                dm_query::ErasedIterQuery<dm::role::Role>,
-                dm_query::ErasedIterQuery<dm::role::RoleId>,
-                dm_query::ErasedIterQuery<dm::peer::PeerId>,
-                dm_query::ErasedIterQuery<dm::trigger::TriggerId>,
-                dm_query::ErasedIterQuery<dm::trigger::Trigger>,
-                dm_query::ErasedIterQuery<dm_query::CommittedTransaction>,
-                dm_query::ErasedIterQuery<dm::block::SignedBlock>,
-                dm_query::ErasedIterQuery<dm::block::BlockHeader>,
-            ]);
-        }
         #[cfg(feature = "app_api")]
         let gateway_components = self.sorafs_gateway_security.clone();
         let da_runtime = self.prepare_da_runtime_services();
@@ -49781,6 +50348,7 @@ impl Torii {
             da_replay_cache: da_runtime.replay_cache,
             da_replay_store: da_runtime.replay_store,
             da_receipt_log: da_runtime.receipt_log,
+            da_replay_lifecycle_lock: da_runtime.replay_lifecycle_lock,
             da_receipt_signer: self.da_receipt_signer.clone(),
             torii_proxy_bridge_signer: self.torii_proxy_bridge_signer.clone(),
             vpn_operator_signer: self.vpn_operator_signer.clone(),
@@ -50165,9 +50733,21 @@ impl Torii {
             route_index,
             attach_matched_route_metadata,
         ));
+        // Catalog-derived cache enforcement wraps matched-route attachment so it can overwrite
+        // every inner response, including early middleware failures and every catalog-marked
+        // credential response.
+        let router = router.layer(axum::middleware::from_fn(enforce_catalog_private_no_store));
         // Correlation IDs wrap every response, including CORS, pre-authentication,
         // request-size, rate-limit, timeout, and panic failures.
         let router = router.layer(axum::middleware::from_fn(attach_request_id));
+        // The deployment-wide API-token policy is runtime configuration rather
+        // than catalog metadata, so this outer boundary must overwrite cache
+        // directives on every response, including failures returned before the
+        // authentication middleware runs.
+        let router = router.layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            enforce_required_api_token_private_no_store,
+        ));
         let router = router.with_state(app_state.clone());
         {
             let mut guard = app_state

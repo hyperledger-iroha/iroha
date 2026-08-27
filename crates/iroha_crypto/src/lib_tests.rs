@@ -357,6 +357,14 @@ mod tests {
             .verify(first.public_key(), message)
             .expect("signature verifies");
     }
+    #[test]
+    fn try_from_seed_ml_dsa_rejects_empty_seed_material() {
+        match KeyPair::try_from_seed(Vec::new(), Algorithm::MlDsa) {
+            Err(Error::KeyGen(message)) => assert!(message.contains("empty")),
+            Err(err) => panic!("expected empty seed KeyGen error, got {err:?}"),
+            Ok(_) => panic!("empty ML-DSA seed material must fail"),
+        }
+    }
     #[cfg(feature = "gost")]
     #[test]
     fn try_from_seed_gost_is_deterministic_and_signs() {

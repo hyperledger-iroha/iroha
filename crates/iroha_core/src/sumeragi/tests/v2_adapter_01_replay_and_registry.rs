@@ -101,7 +101,7 @@ fn canonical_body_rolls_back_exact_busy_deferred_conflicting_proposal() {
             fingerprint: IngressFingerprint::Proposal(Hash::new(
                 conflicting_proposal.signature_preimage(),
             )),
-            generation: deferred_tag.generation(),
+            consumer_tag: deferred_tag,
             locked_commit_progress: false,
             locked_reproposal_prepare_progress: false,
         },
@@ -2734,7 +2734,11 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
     assert_eq!(
         retry_admission
             .expect("the proposal owns the upgraded consumer epoch")
-            .generation,
+            .consumer_tag,
+        adapter.current_tag()
+    );
+    assert_eq!(
+        adapter.current_tag().generation(),
         reducer::Generation::new(3)
     );
     adapter.reducer = reducer_before.clone();

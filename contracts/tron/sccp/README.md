@@ -18,14 +18,24 @@ accepts an arbitrary SCCP digest.
   transfers, verifies Taira finality proofs, and mints wrapped XOR for
   Taira-to-TRON transfers.
 
+Direct allowance replacement is zero-first: after any nonzero grant,
+`approve(spender, nonzero)` fails until the owner explicitly revokes that
+spender to zero, even if `transferFrom` already consumed the visible allowance.
+Wait for the zero transaction to finalize before granting a replacement, so a
+spender cannot consume both the old remainder and a concurrently installed
+replacement.
+
 ## Exact source event
 
 `transferToTaira(bytes,uint256,uint64)` accepts a canonical Taira account
 payload, a raw token amount, and the caller's exact expected transfer nonce,
 then constructs the complete SCCP Transfer payload in the contract. The call
-requires `expectedNonce == transferNonce`, so the successful native TRON
-transaction authenticates the same nonce used by the emitted payload and
-message id. Wrapped XOR has 18 decimals while the Taira payload uses 9, so raw
+requires `expectedNonce == transferNonces(caller)`, then advances only that
+caller's counter. Unrelated holders may therefore use the same nonce without
+invalidating each other's transactions; the payload commits both sender and
+nonce, so their message ids remain distinct. The successful native TRON
+transaction authenticates the same caller-specific nonce used by the emitted
+payload. Wrapped XOR has 18 decimals while the Taira payload uses 9, so raw
 token amounts must be divisible by `10^9` and the payload commits the quotient.
 It burns before emitting:
 
@@ -49,7 +59,9 @@ payload commits the constructor-bound,
 nonzero governed route revision immediately after the nonce, preventing a new
 route whose nonce restarts at zero from colliding with an earlier revision.
 The irreversible recipient is specifically the exact discriminant-`369`
-`test...` I105 spelling of a canonical, non-weak single-key Ed25519 account.
+`test...` I105 spelling of a canonical single-key Ed25519 account in the
+prime-order subgroup. Small-order and mixed-torsion keys are rejected exactly
+as they are by Taira's native admission.
 This is intentionally narrower than the proof-authenticated Taira sender on the
 reverse path, which may use a canonical Ed25519/secp256k1 single or multisig
 controller. Unsupported controller algorithms are rejected on Taira before an
@@ -116,7 +128,12 @@ Before activating a route, independently verify all of the following:
    bridge, then deploy the route at the precomputed address with the exact
    token address. Verify `token.bridge()`, `route.token()`, token code, and the
    governed token code hash. Neither contract exposes an owner or
-   bridge-mutation entrypoint.
+   bridge-mutation entrypoint. Every retained revision in the same governed
+   TRON lane must use a fresh route address: revision and route configuration
+   are constructor-immutable, and registry validation rejects address reuse so
+   a finalized transaction cannot be relabeled under a successor revision.
+   Registration permanently retains the route record, including while staged;
+   TRON revisions cannot use the generic never-used staged-route removal path.
 5. The Groth16 verifying key belongs to an independently audited,
    reproducibly generated circuit and witness generator that prove canonical
    payload semantics, message inclusion, block commitment, commit-QC finality,
@@ -157,9 +174,11 @@ code under an EVM compatibility runtime, while still treating the real-TRE
 phase as the only TVM deployment evidence. It covers
 canonical cross-language vectors, zero and mismatched revisions, malformed
 payloads and codecs, hash-role separation, wrong networks/routes/assets, token
-failures, reentrancy, changed code/key identities, deployment-size and
-BLAKE2b-parity checks, Groth16 point and public-input failures, replay, and the
-cross-route TRON proof attack described above.
+failures, zero-first allowance replacement, independent per-sender nonces,
+small-order and mixed-torsion Ed25519 rejection, reentrancy, changed code/key
+identities, deployment-size and BLAKE2b-parity checks, Groth16 point and
+public-input failures, replay, and the cross-route TRON proof attack described
+above.
 
 Release TVM evidence is produced only by `scripts/contract_tvm_runner.sh` on
 the immutable official TRE image. The runner snapshots the authenticated

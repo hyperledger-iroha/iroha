@@ -8,13 +8,15 @@ use blake2::{Blake2bVar, digest::VariableOutput};
 use eyre::{Context, Result, bail, eyre};
 use hex::encode as hex_encode;
 use iroha_crypto::{Algorithm, KeyPair};
+#[cfg(test)]
+use iroha_data_model::isi::frame_instruction_payload;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::{AssetBalancePolicy, AssetDefinition},
     isi::{
         Instruction, InstructionBox, InstructionRegistry, Register, decode_instruction_from_pair,
-        frame_instruction_payload, framed_instruction_payload,
+        framed_instruction_payload,
     },
     metadata::Metadata,
     name::Name,

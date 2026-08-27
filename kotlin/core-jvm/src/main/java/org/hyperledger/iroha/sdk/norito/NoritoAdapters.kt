@@ -58,9 +58,6 @@ object NoritoAdapters {
         MapAdapter(key, value)
 
     @JvmStatic
-    fun tuple(elements: List<TypeAdapter<*>>): TypeAdapter<List<Any>> = TupleAdapter(elements)
-
-    @JvmStatic
     fun <T> field(name: String, adapter: TypeAdapter<T>): StructField<T> =
         StructField(name, adapter)
 
@@ -674,24 +671,4 @@ object NoritoAdapters {
             key.isSelfDelimiting() && value.isSelfDelimiting()
     }
 
-    private class TupleAdapter(elements: List<TypeAdapter<*>>) : TypeAdapter<List<Any>> {
-        private val elements: List<TypeAdapter<*>> = elements.toList()
-
-        override fun encode(encoder: NoritoEncoder, value: List<Any>) {
-            require(value.size == elements.size) { "Tuple size mismatch" }
-            for (i in elements.indices) {
-                encodeAdapter(elements[i], encoder, value[i])
-            }
-        }
-
-        override fun decode(decoder: NoritoDecoder): List<Any> {
-            val values = ArrayList<Any>(elements.size)
-            for (element in elements) {
-                values.add(decodeAdapter(element, decoder)!!)
-            }
-            return values
-        }
-
-        override fun isSelfDelimiting(): Boolean = elements.all { it.isSelfDelimiting() }
-    }
 }

@@ -8,8 +8,10 @@
 //! order. Accessing an entry moves its digest to the back; capacity or byte
 //! budget overflow evicts from the front.
 use crate::{decoder, metadata::ProgramMetadata};
+use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 use sha2::{Digest, Sha256};
 use std::{
+    cell::Cell,
     collections::{HashMap, VecDeque},
     sync::{
         Arc, Mutex, OnceLock, RwLock,
@@ -49,6 +51,7 @@ pub struct CacheLimits {
 }
 const DEFAULT_CACHE_MAX_DECODED_OPS: usize = 8_000_000;
 const DEFAULT_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_CACHE_CAPACITY: usize = 128;
 /// Minimal LRU cache for pre-decoded instruction streams.
 pub struct IvmCache {
     cap: usize,
@@ -67,9 +70,12 @@ pub struct IvmCache {
 impl IvmCache {
     /// Create a new cache with the given capacity (number of entries).
     pub fn new(capacity: usize) -> Self {
+        Self::new_with_max_bytes(capacity, configured_max_bytes())
+    }
+    fn new_with_max_bytes(capacity: usize, max_bytes: usize) -> Self {
         Self {
             cap: capacity,
-            max_bytes: configured_max_bytes(),
+            max_bytes,
             cur_bytes: 0,
             map: HashMap::new(),
             order: VecDeque::new(),
@@ -203,6 +209,16 @@ impl IvmCache {
             return Self::decode_stream(code);
         }
         if let Some(hit) = { self.map.get(&key).cloned() } {
+            if hit.len() > configured_max_decoded_ops() {
+                self.map.remove(&key);
+                if let Some(position) = self.order.iter().position(|candidate| candidate == &key) {
+                    self.order.remove(position);
+                }
+                self.cur_bytes = self.cur_bytes.saturating_sub(Self::entry_size(&hit));
+                self.evictions += 1;
+                self.misses += 1;
+                return Self::decode_stream(code);
+            }
             self.touch(&key);
             self.hits += 1;
             return Ok(hit);
@@ -234,13 +250,21 @@ pub struct ShardedCache {
 const SHARD_ACTIVATION_THRESHOLD: usize = 64;
 impl ShardedCache {
     fn new(total_capacity: usize) -> Self {
-        let shard_vec = Self::build_shards(total_capacity, default_shard_count());
+        let shard_vec = Self::build_shards(
+            total_capacity,
+            configured_max_bytes(),
+            default_shard_count(),
+        );
         Self {
             shards: RwLock::new(shard_vec),
             total_capacity: AtomicUsize::new(total_capacity),
         }
     }
-    fn build_shards(total_capacity: usize, suggested_shards: usize) -> Vec<Arc<Mutex<IvmCache>>> {
+    fn build_shards(
+        total_capacity: usize,
+        total_max_bytes: usize,
+        suggested_shards: usize,
+    ) -> Vec<Arc<Mutex<IvmCache>>> {
         let desired_shards = if total_capacity <= SHARD_ACTIVATION_THRESHOLD {
             1
         } else {
@@ -267,7 +291,10 @@ impl ShardedCache {
             if idx < remainder {
                 cap = cap.saturating_add(1);
             }
-            shards.push(Arc::new(Mutex::new(IvmCache::new(cap))));
+            let max_bytes = shard_share(total_max_bytes, shard_count, idx);
+            shards.push(Arc::new(Mutex::new(IvmCache::new_with_max_bytes(
+                cap, max_bytes,
+            ))));
         }
         shards
     }
@@ -285,7 +312,11 @@ impl ShardedCache {
     }
     fn set_capacity(&self, total_capacity: usize) {
         self.total_capacity.store(total_capacity, Ordering::Relaxed);
-        let shard_vec = Self::build_shards(total_capacity, default_shard_count());
+        let shard_vec = Self::build_shards(
+            total_capacity,
+            configured_max_bytes(),
+            default_shard_count(),
+        );
         let old_shards = {
             let mut guard = self.shards.write().unwrap();
             std::mem::replace(&mut *guard, shard_vec)
@@ -299,10 +330,43 @@ impl ShardedCache {
             .sum();
         atomic_saturating_add(&EVICTS, evicted);
     }
+    fn set_max_bytes(&self, total_max_bytes: usize) {
+        let shards = self.shards.read().unwrap();
+        let shard_count = shards.len();
+        let mut evicted = 0_u64;
+        for (index, shard) in shards.iter().enumerate() {
+            let mut guard = shard.lock().unwrap();
+            let before = guard.evictions;
+            guard.max_bytes = shard_share(total_max_bytes, shard_count, index);
+            guard.enforce_limits();
+            evicted = evicted.saturating_add(guard.evictions.saturating_sub(before));
+        }
+        atomic_saturating_add(&EVICTS, evicted);
+    }
+}
+fn shard_share(total: usize, shard_count: usize, index: usize) -> usize {
+    debug_assert!(shard_count > 0);
+    debug_assert!(index < shard_count);
+    if total == usize::MAX {
+        return usize::MAX;
+    }
+    total / shard_count + usize::from(index < total % shard_count)
 }
 static CACHE_MAX_BYTES: AtomicUsize = AtomicUsize::new(DEFAULT_CACHE_MAX_BYTES);
 static CACHE_MAX_DECODED_OPS: AtomicUsize = AtomicUsize::new(DEFAULT_CACHE_MAX_DECODED_OPS);
 static GLOBAL_CACHE: OnceLock<ShardedCache> = OnceLock::new();
+static CACHE_CONFIGURATION: ReentrantMutex<()> = ReentrantMutex::new(());
+thread_local! {
+    /// A cache-limit override may call ordinary writers reentrantly, but two
+    /// RAII overrides on one thread would have ambiguous out-of-order drop
+    /// semantics and are rejected before changing global state.
+    static CACHE_LIMITS_GUARD_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+static CACHE_LIMITS_SNAPSHOT: Mutex<CacheLimits> = Mutex::new(CacheLimits {
+    capacity: DEFAULT_CACHE_CAPACITY,
+    max_bytes: DEFAULT_CACHE_MAX_BYTES,
+    max_decoded_ops: DEFAULT_CACHE_MAX_DECODED_OPS,
+});
 static HITS: AtomicU64 = AtomicU64::new(0);
 static MISSES: AtomicU64 = AtomicU64::new(0);
 static EVICTS: AtomicU64 = AtomicU64::new(0);
@@ -312,7 +376,7 @@ static DECODE_FAILURES: AtomicU64 = AtomicU64::new(0);
 static DECODE_TIME_NS: AtomicU64 = AtomicU64::new(0);
 fn global_capacity() -> usize {
     // Default capacity used when hosts do not configure the cache explicitly.
-    128
+    DEFAULT_CACHE_CAPACITY
 }
 fn configured_max_decoded_ops() -> usize {
     let raw = CACHE_MAX_DECODED_OPS.load(Ordering::Relaxed);
@@ -340,7 +404,25 @@ fn atomic_saturating_add(cell: &AtomicU64, value: u64) {
         }
     }
 }
+fn lock_cache_configuration() -> ReentrantMutexGuard<'static, ()> {
+    CACHE_CONFIGURATION.lock()
+}
+fn lock_cache_limits_snapshot() -> std::sync::MutexGuard<'static, CacheLimits> {
+    CACHE_LIMITS_SNAPSHOT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+fn current_cache_limits_snapshot() -> CacheLimits {
+    *lock_cache_limits_snapshot()
+}
+fn publish_cache_limits_snapshot(limits: CacheLimits) {
+    *lock_cache_limits_snapshot() = limits;
+}
 pub fn global_cache() -> &'static ShardedCache {
+    if let Some(cache) = GLOBAL_CACHE.get() {
+        return cache;
+    }
+    let _configuration = lock_cache_configuration();
     GLOBAL_CACHE.get_or_init(|| ShardedCache::new(global_capacity()))
 }
 pub fn global_get(code: &[u8]) -> Result<Arc<[DecodedOp]>, crate::VMError> {
@@ -374,13 +456,22 @@ pub fn global_counters() -> (u64, u64, u64) {
 /// Initialize the global cache with a specific capacity if it has not been created yet.
 /// If the cache already exists, this function is a no‑op.
 pub fn init_global_with_capacity(capacity: usize) {
-    let _ = GLOBAL_CACHE.set(ShardedCache::new(capacity));
+    let _configuration = lock_cache_configuration();
+    if GLOBAL_CACHE.set(ShardedCache::new(capacity)).is_ok() {
+        let mut limits = current_cache_limits_snapshot();
+        limits.capacity = capacity;
+        publish_cache_limits_snapshot(limits);
+    }
 }
 /// Update the capacity of the global cache at runtime. If the cache is not yet
 /// initialized, it will be created with the requested capacity.
 pub fn set_global_capacity(capacity: usize) {
-    let cache = global_cache();
+    let _configuration = lock_cache_configuration();
+    let cache = GLOBAL_CACHE.get_or_init(|| ShardedCache::new(global_capacity()));
     cache.set_capacity(capacity);
+    let mut limits = current_cache_limits_snapshot();
+    limits.capacity = capacity;
+    publish_cache_limits_snapshot(limits);
 }
 fn normalize_limits(limits: CacheLimits) -> CacheLimits {
     CacheLimits {
@@ -400,57 +491,257 @@ fn normalize_limits(limits: CacheLimits) -> CacheLimits {
 fn denormalize(value: usize) -> usize {
     if value == usize::MAX { 0 } else { value }
 }
-fn apply_max_bytes_to_shards(max_bytes: usize) {
-    if let Some(cache) = GLOBAL_CACHE.get() {
-        let shards = cache.shards.read().unwrap();
-        for shard in shards.iter() {
-            let mut guard = shard.lock().unwrap();
-            guard.max_bytes = max_bytes;
-            guard.enforce_limits();
-        }
-    }
-}
 /// Configure cache limits (capacity, byte budget, decoded-op guard) from host config.
 pub fn configure_limits(limits: CacheLimits) {
+    let _configuration = lock_cache_configuration();
+    configure_limits_locked(limits);
+}
+fn configure_limits_locked(limits: CacheLimits) {
     let normalized = normalize_limits(limits);
     CACHE_MAX_BYTES.store(normalized.max_bytes, Ordering::Relaxed);
     CACHE_MAX_DECODED_OPS.store(normalized.max_decoded_ops, Ordering::Relaxed);
     if let Some(cache) = GLOBAL_CACHE.get() {
-        apply_max_bytes_to_shards(normalized.max_bytes);
         let current = cache.total_capacity.load(Ordering::Relaxed);
         if current != normalized.capacity {
             cache.set_capacity(normalized.capacity);
+        } else {
+            cache.set_max_bytes(normalized.max_bytes);
         }
     } else {
         let _ = GLOBAL_CACHE.set(ShardedCache::new(normalized.capacity));
     }
+    publish_cache_limits_snapshot(CacheLimits {
+        capacity: normalized.capacity,
+        max_bytes: denormalize(normalized.max_bytes),
+        max_decoded_ops: denormalize(normalized.max_decoded_ops),
+    });
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shard_limits(shards: &[Arc<Mutex<IvmCache>>]) -> Vec<(usize, usize)> {
+        shards
+            .iter()
+            .map(|shard| {
+                let shard = shard.lock().expect("cache shard lock");
+                (shard.cap, shard.max_bytes)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn finite_and_unlimited_shard_shares_are_deterministic() {
+        assert_eq!(
+            (0..4).map(|i| shard_share(10, 4, i)).collect::<Vec<_>>(),
+            [3, 3, 2, 2]
+        );
+        assert_eq!(
+            (0..4).map(|i| shard_share(2, 4, i)).collect::<Vec<_>>(),
+            [1, 1, 0, 0]
+        );
+        assert_eq!(
+            (0..4)
+                .map(|i| shard_share(usize::MAX, 4, i))
+                .collect::<Vec<_>>(),
+            [usize::MAX; 4]
+        );
+    }
+
+    #[test]
+    fn sharded_cache_partitions_entry_and_byte_budgets() {
+        let shards = ShardedCache::build_shards(67, 10, 4);
+        assert_eq!(shard_limits(&shards), [(17, 3), (17, 3), (17, 2), (16, 2)]);
+        assert_eq!(
+            shards
+                .iter()
+                .map(|shard| shard.lock().unwrap().max_bytes)
+                .sum::<usize>(),
+            10
+        );
+    }
+
+    #[test]
+    fn live_byte_limit_updates_remain_aggregate() {
+        let cache = ShardedCache {
+            shards: RwLock::new(ShardedCache::build_shards(67, 10, 4)),
+            total_capacity: AtomicUsize::new(67),
+        };
+        cache.set_max_bytes(2);
+        assert_eq!(
+            shard_limits(&cache.shards.read().unwrap()),
+            [(17, 1), (17, 1), (17, 0), (16, 0)]
+        );
+        cache.set_max_bytes(usize::MAX);
+        assert_eq!(
+            shard_limits(&cache.shards.read().unwrap()),
+            [
+                (17, usize::MAX),
+                (17, usize::MAX),
+                (17, usize::MAX),
+                (16, usize::MAX)
+            ]
+        );
+    }
+
+    #[test]
+    fn live_byte_limit_evictions_reach_global_diagnostics() {
+        let cache = ShardedCache {
+            shards: RwLock::new(ShardedCache::build_shards(1, usize::MAX, 1)),
+            total_capacity: AtomicUsize::new(1),
+        };
+        {
+            let shards = cache.shards.read().unwrap();
+            let mut shard = shards[0].lock().unwrap();
+            let key = [0xA5; 32];
+            let decoded: Arc<[DecodedOp]> = Arc::from(
+                vec![DecodedOp {
+                    pc: 0,
+                    inst: crate::encoding::wide::encode_halt(),
+                }]
+                .into_boxed_slice(),
+            );
+            shard.cur_bytes = IvmCache::entry_size(&decoded);
+            shard.map.insert(key, decoded);
+            shard.order.push_back(key);
+        }
+
+        let before = EVICTS.load(Ordering::Relaxed);
+        cache.set_max_bytes(0);
+        let after = EVICTS.load(Ordering::Relaxed);
+        assert!(
+            after.saturating_sub(before) >= 1,
+            "byte-limit eviction must increment global diagnostics"
+        );
+        let shards = cache.shards.read().unwrap();
+        let shard = shards[0].lock().unwrap();
+        assert!(shard.map.is_empty());
+        assert_eq!(shard.evictions, 1);
+    }
+
+    #[test]
+    fn overlapping_cache_limits_guards_serialize_and_restore() {
+        let first_limits = CacheLimits {
+            capacity: 71,
+            max_bytes: 1_234_567,
+            max_decoded_ops: 7_654,
+        };
+        let second_limits = CacheLimits {
+            capacity: 72,
+            max_bytes: 7_654_321,
+            max_decoded_ops: 4_567,
+        };
+
+        let first_guard = CacheLimitsGuard::new(first_limits);
+        let baseline = first_guard.previous;
+        assert_eq!(cache_limits(), first_limits);
+
+        let (attempted_tx, attempted_rx) = std::sync::mpsc::sync_channel(0);
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+        let second = std::thread::spawn(move || {
+            let blocked = CACHE_CONFIGURATION.try_lock().is_none();
+            attempted_tx.send(blocked).expect("report lock attempt");
+
+            let second_guard = CacheLimitsGuard::new(second_limits);
+            acquired_tx
+                .send(cache_limits())
+                .expect("report acquired guard limits");
+            release_rx.recv().expect("wait to release second guard");
+            drop(second_guard);
+        });
+
+        assert!(attempted_rx.recv().expect("receive lock attempt"));
+        assert_eq!(cache_limits(), first_limits);
+        assert!(matches!(
+            acquired_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+
+        drop(first_guard);
+        assert_eq!(
+            acquired_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("second guard should acquire after the first drops"),
+            second_limits
+        );
+        assert_eq!(cache_limits(), second_limits);
+        release_tx.send(()).expect("release second guard");
+        second.join().expect("second cache guard thread");
+        assert_eq!(cache_limits(), baseline);
+    }
+
+    #[test]
+    fn nested_cache_limits_guard_fails_before_clobbering_outer_limits() {
+        let outer_limits = CacheLimits {
+            capacity: 73,
+            max_bytes: 12_345,
+            max_decoded_ops: 543,
+        };
+        let outer = CacheLimitsGuard::new(outer_limits);
+        let baseline = outer.previous;
+
+        let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            CacheLimitsGuard::new(CacheLimits {
+                capacity: 74,
+                max_bytes: 54_321,
+                max_decoded_ops: 345,
+            })
+        }));
+        assert!(nested.is_err(), "nested override must fail closed");
+        assert_eq!(cache_limits(), outer_limits);
+
+        drop(outer);
+        assert_eq!(cache_limits(), baseline);
+    }
 }
 /// Snapshot of the current cache limits (0 denotes unlimited for max fields).
 pub fn cache_limits() -> CacheLimits {
-    let capacity = GLOBAL_CACHE
-        .get()
-        .map(|cache| cache.total_capacity.load(Ordering::Relaxed))
-        .unwrap_or_else(global_capacity);
-    CacheLimits {
-        capacity,
-        max_bytes: denormalize(configured_max_bytes()),
-        max_decoded_ops: denormalize(configured_max_decoded_ops()),
-    }
+    current_cache_limits_snapshot()
 }
 /// RAII guard that restores previous cache limits when dropped.
 pub struct CacheLimitsGuard {
     previous: CacheLimits,
+    _claim: CacheLimitsGuardClaim,
+    _configuration: ReentrantMutexGuard<'static, ()>,
+}
+struct CacheLimitsGuardClaim;
+impl CacheLimitsGuardClaim {
+    fn acquire() -> Self {
+        CACHE_LIMITS_GUARD_ACTIVE.with(|active| {
+            assert!(
+                !active.replace(true),
+                "nested CacheLimitsGuard overrides on one thread are unsupported"
+            );
+        });
+        Self
+    }
+}
+impl Drop for CacheLimitsGuardClaim {
+    fn drop(&mut self) {
+        CACHE_LIMITS_GUARD_ACTIVE.with(|active| active.set(false));
+    }
 }
 impl CacheLimitsGuard {
     /// Apply new cache limits for the lifetime of the guard.
+    ///
+    /// Other cache-limit writers and guards wait until this guard is dropped.
+    /// Constructing a second guard on the same thread panics before changing
+    /// the active limits; ordinary cache writers remain reentrant.
     pub fn new(limits: CacheLimits) -> Self {
-        let previous = cache_limits();
-        configure_limits(limits);
-        Self { previous }
+        let claim = CacheLimitsGuardClaim::acquire();
+        let configuration = lock_cache_configuration();
+        let previous = current_cache_limits_snapshot();
+        configure_limits_locked(limits);
+        Self {
+            previous,
+            _claim: claim,
+            _configuration: configuration,
+        }
     }
 }
 impl Drop for CacheLimitsGuard {
     fn drop(&mut self) {
-        configure_limits(self.previous);
+        configure_limits_locked(self.previous);
     }
 }

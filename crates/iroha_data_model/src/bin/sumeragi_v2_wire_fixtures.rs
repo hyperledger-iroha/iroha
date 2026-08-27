@@ -395,7 +395,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
                     request_hash: HashOf::new(&body_request),
                     manifest: manifest.clone(),
                     body: CANONICAL_BODY.to_vec(),
-                    responder: 0,
+                    responder: context.roster[0].validator.clone(),
                     signature: vec![3],
                 },
             )),

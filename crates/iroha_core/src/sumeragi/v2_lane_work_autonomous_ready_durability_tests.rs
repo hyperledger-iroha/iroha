@@ -1933,8 +1933,6 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     );
     let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
-    let historical_epoch = adapter.context.epoch;
-    let historical_height = adapter.context.height;
     let current_context = adapter.context.clone();
     let mut sidecar_only_successor = successor_context_for_parent(&adapter, &block);
     sidecar_only_successor.epoch = {

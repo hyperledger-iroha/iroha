@@ -177,10 +177,11 @@ def clean_source(tmp_path: Path) -> Path:
     source = tmp_path / "source"
     source.mkdir()
     (source / "tracked.txt").write_text("reviewed source\n", encoding="utf-8")
+    (source / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
     git(source, "init", "-q")
     git(source, "config", "user.name", "ABI Contract Test")
     git(source, "config", "user.email", "abi-contract@example.invalid")
-    git(source, "add", "tracked.txt")
+    git(source, "add", "Cargo.lock", "tracked.txt")
     git(source, "commit", "-q", "-m", "fixture")
     return source
 
@@ -191,6 +192,104 @@ def native_artifact(tmp_path: Path) -> Path:
     artifact = tmp_path / "native.bin"
     artifact.write_bytes(b"native artifact bytes")
     return artifact
+
+
+def test_raw_artifact_and_evidence_descriptors_request_binary_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows CRT descriptors preserve every artifact and evidence byte."""
+
+    payload = b"native\x1aartifact\r\nbytes"
+    artifact = tmp_path / "native.bin"
+    artifact.write_bytes(payload)
+    manifest = tmp_path / "manifest.json"
+    binary_flag = 1 << 29
+    real_open = os.open
+    opened_flags: list[int] = []
+
+    def record_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        opened_flags.append(flags)
+        return real_open(path, flags & ~binary_flag, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(checker, "_BINARY_OPEN_FLAG", binary_flag)
+    monkeypatch.setattr(checker.os, "open", record_open)
+
+    assert checker.stable_artifact_identity(artifact) == (
+        hashlib.sha256(payload).hexdigest(),
+        len(payload),
+    )
+    assert checker.stable_bounded_file_bytes(
+        artifact,
+        label="native artifact manifest",
+        maximum_bytes=len(payload),
+    ) == payload
+    checker._exclusive_write(manifest, payload)
+
+    assert manifest.read_bytes() == payload
+    assert len(opened_flags) == 3
+    assert all(flags & binary_flag for flags in opened_flags)
+
+
+def test_bounded_reader_ignores_only_windows_cross_api_ctime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows path/fd ctime differences do not hide descriptor mutations."""
+
+    payload = b"canonical manifest bytes\n"
+    manifest = tmp_path / "manifest.json"
+    manifest.write_bytes(payload)
+    real_fstat = checker.os.fstat
+
+    class ReportedStat:
+        def __init__(
+            self,
+            metadata: os.stat_result,
+            *,
+            ctime_delta: int = 1,
+        ) -> None:
+            self._metadata = metadata
+            self.st_ctime_ns = metadata.st_ctime_ns + ctime_delta
+
+        def __getattr__(self, name: str):
+            return getattr(self._metadata, name)
+
+    monkeypatch.setattr(checker, "_windows_host_semantics", lambda: True)
+    monkeypatch.setattr(
+        checker.os,
+        "fstat",
+        lambda descriptor: ReportedStat(real_fstat(descriptor)),
+    )
+    assert checker.stable_bounded_file_bytes(
+        manifest,
+        label="native artifact manifest",
+        maximum_bytes=len(payload),
+    ) == payload
+
+    observations = 0
+
+    def changed_fstat(descriptor: int) -> ReportedStat:
+        nonlocal observations
+        observations += 1
+        return ReportedStat(
+            real_fstat(descriptor),
+            ctime_delta=2 if observations == 2 else 1,
+        )
+
+    monkeypatch.setattr(checker.os, "fstat", changed_fstat)
+    with pytest.raises(checker.ArtifactContractError, match="changed while it was read"):
+        checker.stable_bounded_file_bytes(
+            manifest,
+            label="native artifact manifest",
+            maximum_bytes=len(payload),
+        )
 
 
 def test_checker_cli_loads_manifest_helper_under_python_isolation(
@@ -1066,6 +1165,24 @@ def test_record_rejects_source_manifest_toctou(
         )
 
 
+def test_source_manifest_failure_preserves_actionable_detail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native build logs retain the safe manifest invariant that failed."""
+
+    def fail_manifest(_root: Path) -> str:
+        raise RuntimeError("portable clean source has tracked changes: tracked.txt")
+
+    monkeypatch.setattr(checker, "workspace_source_manifest", fail_manifest)
+
+    with pytest.raises(
+        checker.ArtifactContractError,
+        match="portable clean source has tracked changes: tracked.txt",
+    ):
+        checker.workspace_source_manifest_sha256(tmp_path)
+
+
 def test_symbol_tool_parsers_preserve_duplicates_and_normalize_only_macho() -> None:
     symbol = checker.APPROVED_PRIVACY_C_EXPORTS[0]
     assert checker._parse_symbol_tool_output(
@@ -1076,6 +1193,51 @@ def test_symbol_tool_parsers_preserve_duplicates_and_normalize_only_macho() -> N
         f"    1    0 0000000000001000 {symbol}\n".encode("ascii"),
         "dumpbin",
     ) == (symbol,)
+    assert checker._parse_symbol_tool_output(
+        (
+            "File: bridge.dll\n"
+            "Format: COFF-x86-64\n"
+            "Export {\n"
+            "  Ordinal: 1\n"
+            f"  Name: {symbol}\n"
+            "  RVA: 0x1000\n"
+            "}\n"
+        ).encode("ascii"),
+        "llvm-coff-exports",
+    ) == (symbol,)
+
+
+def test_windows_symbol_tools_read_the_pe_export_table(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows inspects PE exports and rejects empty tool output."""
+
+    artifact = native_artifact(tmp_path)
+    symbol = checker.APPROVED_PRIVACY_C_EXPORTS[0]
+    commands: list[str] = []
+
+    monkeypatch.setattr(checker.sys, "platform", "win32")
+    monkeypatch.setattr(checker, "_windows_host_semantics", lambda: True)
+    configured = checker._symbol_tool_commands(artifact)
+    assert [tool for tool, _, _ in configured] == ["llvm-readobj", "dumpbin"]
+    assert configured[0][1][0] == "--coff-exports"
+
+    monkeypatch.setattr(checker.shutil, "which", lambda tool: tool)
+
+    def run_tool(command, **_kwargs):
+        tool = command[0]
+        commands.append(tool)
+        stdout = (
+            b""
+            if tool == "llvm-readobj"
+            else f"    1    0 0000000000001000 {symbol}\n".encode("ascii")
+        )
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr=b"")
+
+    monkeypatch.setattr(checker.subprocess, "run", run_tool)
+    assert checker.inspect_exported_symbols(artifact, required=True) == (symbol,)
+    assert commands == ["llvm-readobj", "dumpbin"]
 
 
 def test_missing_symbol_tool_fails_closed_only_for_bridge_lanes(
@@ -2226,6 +2388,19 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
         assert "check_native_sdk_abi22_artifact.py" in lane
         assert "record" in lane
         assert "verify" in lane
+    preflight = csharp_workflow.index("Preflight Windows native source manifest")
+    assert "if: runner.os == 'Windows'" in csharp_workflow
+    assert "python -I scripts/compute_workspace_source_manifest.py" in csharp_workflow
+    assert "--native-artifact-manifest" in csharp_workflow
+    assert (
+        "GIT_CONFIG_COUNT: ${{ matrix.os == 'windows-latest' && '2' || '1' }}"
+        in csharp_workflow
+    )
+    assert "GIT_CONFIG_KEY_1: core.symlinks" in csharp_workflow
+    assert 'GIT_CONFIG_VALUE_1: "false"' in csharp_workflow
+    assert preflight < csharp_workflow.index(
+        "Build native C# bridge on its matching release host"
+    )
     assert 'PYTHON_VERSION}" != "3.12"' in python_lane
     assert "sys.version_info.major}{sys.version_info.minor}" in python_lane
     kagemusha_workflow = read(".github/workflows/pr_kagemusha_payload_bench.yml")

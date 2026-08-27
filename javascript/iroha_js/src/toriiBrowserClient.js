@@ -44,7 +44,10 @@ import {
 const DEFAULT_SUCCESS_STATUSES = [200];
 const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const KAIGI_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
 const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
+const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
 const EXPLORER_CURSOR_MAX_LIMIT = 100;
 const EXPLORER_CURSOR_MAX_LENGTH = 1_424;
@@ -1220,6 +1223,312 @@ function requireExactJsonContentType(contentType, context) {
   }
 }
 
+function requireExactKaigiString(value, context) {
+  const normalized = requireNonEmptyString(value, context);
+  if (normalized !== value) {
+    throw new TypeError(`${context} must not contain surrounding whitespace`);
+  }
+  return value;
+}
+
+function requireExactKaigiAccountId(value, context) {
+  const literal = requireExactKaigiString(value, context);
+  const canonical = ensureCanonicalAccountId(literal, context);
+  if (canonical !== literal) {
+    throw new TypeError(`${context} must be a canonical I105 account id`);
+  }
+  return literal;
+}
+
+function requireExactKaigiObject(value, requiredFields, optionalFields, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  const allowed = new Set([...requiredFields, ...optionalFields]);
+  const missing = requiredFields.filter(
+    (field) => !Object.prototype.hasOwnProperty.call(value, field),
+  );
+  const extra = Object.keys(value).filter((field) => !allowed.has(field));
+  if (missing.length !== 0 || extra.length !== 0) {
+    throw new TypeError(
+      `${context} fields are not canonical; missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`,
+    );
+  }
+  return value;
+}
+
+function requireDenseBrowserKaigiArray(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) {
+      throw new TypeError(`${context} must be a dense array`);
+    }
+  }
+  return value;
+}
+
+function normalizeBrowserKaigiU64(value, context) {
+  let integer;
+  if (
+    typeof value === "number"
+    && Number.isSafeInteger(value)
+    && !Object.is(value, -0)
+  ) {
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else {
+    throw new TypeError(`${context} must be a canonical unsigned integer`);
+  }
+  if (integer < 0n || integer > MAX_UINT64_BIGINT) {
+    throw new RangeError(`${context} must be between 0 and ${MAX_UINT64_BIGINT}`);
+  }
+  return integer <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(integer) : integer;
+}
+
+function requireBrowserKaigiFingerprint(value, context) {
+  const literal = requireExactKaigiString(value, context);
+  if (!/^[0-9a-f]{64}$/u.test(literal)) {
+    throw new TypeError(`${context} must be exact lowercase 32-byte hex`);
+  }
+  if ((Number.parseInt(literal.slice(-2), 16) & 1) !== 1) {
+    throw new TypeError(`${context} must set the Iroha Hash marker bit`);
+  }
+  return literal;
+}
+
+function normalizeBrowserKaigiRelaySummary(value, context) {
+  const record = requireExactKaigiObject(
+    value,
+    ["relay_id", "domain", "bandwidth_class", "hpke_fingerprint_hex"],
+    ["status", "reported_at_ms"],
+    context,
+  );
+  if (
+    typeof record.bandwidth_class !== "number"
+    || !Number.isInteger(record.bandwidth_class)
+    || record.bandwidth_class < 1
+    || record.bandwidth_class > 0xff
+  ) {
+    throw new RangeError(`${context}.bandwidth_class must be between 1 and 255`);
+  }
+  const hasStatus = Object.prototype.hasOwnProperty.call(record, "status");
+  const hasReportedAt = Object.prototype.hasOwnProperty.call(record, "reported_at_ms");
+  if (hasStatus !== hasReportedAt) {
+    throw new TypeError(`${context}.status and reported_at_ms must be present together`);
+  }
+  let status = null;
+  let reportedAtMs = null;
+  if (hasStatus) {
+    status = requireExactKaigiString(record.status, `${context}.status`);
+    if (!KAIGI_HEALTH_STATUS_VALUES.has(status)) {
+      throw new TypeError(`${context}.status must be exact lowercase healthy, degraded, or unavailable`);
+    }
+    reportedAtMs = normalizeBrowserKaigiU64(
+      record.reported_at_ms,
+      `${context}.reported_at_ms`,
+    );
+  }
+  return {
+    relay_id: requireExactKaigiAccountId(record.relay_id, `${context}.relay_id`),
+    domain: requireExactKaigiString(record.domain, `${context}.domain`),
+    bandwidth_class: record.bandwidth_class,
+    hpke_fingerprint_hex: requireBrowserKaigiFingerprint(
+      record.hpke_fingerprint_hex,
+      `${context}.hpke_fingerprint_hex`,
+    ),
+    status,
+    reported_at_ms: reportedAtMs,
+  };
+}
+
+function normalizeBrowserKaigiRelayList(value) {
+  const context = "kaigi relay list response";
+  const record = requireExactKaigiObject(value, ["total", "items"], [], context);
+  const rawItems = requireDenseBrowserKaigiArray(record.items, `${context}.items`);
+  if (rawItems.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
+    throw new RangeError(
+      `${context}.items must contain at most ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
+    );
+  }
+  const items = rawItems.map((item, index) =>
+    normalizeBrowserKaigiRelaySummary(item, `${context}.items[${index}]`),
+  );
+  const total = normalizeBrowserKaigiU64(record.total, `${context}.total`);
+  if (BigInt(total) !== BigInt(items.length)) {
+    throw new RangeError(`${context}.total must equal items.length`);
+  }
+  if (new Set(items.map((item) => item.relay_id)).size !== items.length) {
+    throw new TypeError(`${context}.items must contain unique relay_id values`);
+  }
+  return { total, items };
+}
+
+function normalizeBrowserKaigiDomainMetrics(value, context) {
+  const fields = [
+    "domain",
+    "registrations_total",
+    "manifest_updates_total",
+    "failovers_total",
+    "health_reports_total",
+  ];
+  const record = requireExactKaigiObject(value, fields, [], context);
+  return {
+    domain: requireExactKaigiString(record.domain, `${context}.domain`),
+    registrations_total: normalizeBrowserKaigiU64(
+      record.registrations_total,
+      `${context}.registrations_total`,
+    ),
+    manifest_updates_total: normalizeBrowserKaigiU64(
+      record.manifest_updates_total,
+      `${context}.manifest_updates_total`,
+    ),
+    failovers_total: normalizeBrowserKaigiU64(
+      record.failovers_total,
+      `${context}.failovers_total`,
+    ),
+    health_reports_total: normalizeBrowserKaigiU64(
+      record.health_reports_total,
+      `${context}.health_reports_total`,
+    ),
+  };
+}
+
+function normalizeBrowserKaigiRelayDetail(value) {
+  const context = "kaigi relay detail response";
+  const record = requireExactKaigiObject(
+    value,
+    ["relay", "hpke_public_key_b64"],
+    ["reported_call", "reported_by", "notes", "metrics"],
+    context,
+  );
+  const relay = normalizeBrowserKaigiRelaySummary(record.relay, `${context}.relay`);
+  const hpkePublicKey = requireExactKaigiString(
+    record.hpke_public_key_b64,
+    `${context}.hpke_public_key_b64`,
+  );
+  const hpkeBytes = Buffer.from(hpkePublicKey, "base64");
+  if (hpkeBytes.length === 0 || hpkeBytes.toString("base64") !== hpkePublicKey) {
+    throw new TypeError(`${context}.hpke_public_key_b64 must be exact standard-base64`);
+  }
+  const expectedFingerprint = Buffer.from(blake2b256(hpkeBytes));
+  expectedFingerprint[expectedFingerprint.length - 1] |= 1;
+  if (relay.hpke_fingerprint_hex !== expectedFingerprint.toString("hex")) {
+    throw new TypeError(`${context}.relay.hpke_fingerprint_hex must match the marked HPKE key`);
+  }
+  const hasFeedback = relay.status !== null;
+  const hasReportedCall = Object.prototype.hasOwnProperty.call(record, "reported_call");
+  const hasReportedBy = Object.prototype.hasOwnProperty.call(record, "reported_by");
+  const hasNotes = Object.prototype.hasOwnProperty.call(record, "notes");
+  if (hasReportedCall !== hasFeedback || hasReportedBy !== hasFeedback || (hasNotes && !hasFeedback)) {
+    throw new TypeError(`${context} feedback fields must agree with relay feedback`);
+  }
+  let reportedCall = null;
+  if (hasReportedCall) {
+    const call = requireExactKaigiObject(
+      record.reported_call,
+      ["domain_id", "call_name"],
+      [],
+      `${context}.reported_call`,
+    );
+    reportedCall = {
+      domain_id: requireExactKaigiString(call.domain_id, `${context}.reported_call.domain_id`),
+      call_name: requireExactKaigiString(call.call_name, `${context}.reported_call.call_name`),
+    };
+  }
+  const reportedBy = hasReportedBy
+    ? requireExactKaigiAccountId(record.reported_by, `${context}.reported_by`)
+    : null;
+  if (hasNotes && typeof record.notes !== "string") {
+    throw new TypeError(`${context}.notes must be a string`);
+  }
+  const notes = hasNotes ? record.notes : null;
+  const metrics = Object.prototype.hasOwnProperty.call(record, "metrics")
+    ? normalizeBrowserKaigiDomainMetrics(record.metrics, `${context}.metrics`)
+    : null;
+  if (metrics !== null && metrics.domain !== relay.domain) {
+    throw new TypeError(`${context}.metrics.domain must match relay.domain`);
+  }
+  return {
+    relay,
+    hpke_public_key_b64: hpkePublicKey,
+    reported_call: reportedCall,
+    reported_by: reportedBy,
+    notes,
+    metrics,
+  };
+}
+
+function normalizeBrowserKaigiHealth(value) {
+  const context = "kaigi relay health response";
+  const fields = [
+    "healthy_total",
+    "degraded_total",
+    "unavailable_total",
+    "reports_total",
+    "registrations_total",
+    "failovers_total",
+    "domains",
+  ];
+  const record = requireExactKaigiObject(value, fields, [], context);
+  const rawDomains = requireDenseBrowserKaigiArray(record.domains, `${context}.domains`);
+  if (rawDomains.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
+    throw new RangeError(
+      `${context}.domains must contain at most ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
+    );
+  }
+  const domains = rawDomains.map((domain, index) =>
+    normalizeBrowserKaigiDomainMetrics(domain, `${context}.domains[${index}]`),
+  );
+  for (let index = 1; index < domains.length; index += 1) {
+    if (domains[index - 1].domain >= domains[index].domain) {
+      throw new TypeError(`${context}.domains must be sorted with unique domain values`);
+    }
+  }
+  const snapshot = {
+    healthy_total: normalizeBrowserKaigiU64(record.healthy_total, `${context}.healthy_total`),
+    degraded_total: normalizeBrowserKaigiU64(record.degraded_total, `${context}.degraded_total`),
+    unavailable_total: normalizeBrowserKaigiU64(
+      record.unavailable_total,
+      `${context}.unavailable_total`,
+    ),
+    reports_total: normalizeBrowserKaigiU64(record.reports_total, `${context}.reports_total`),
+    registrations_total: normalizeBrowserKaigiU64(
+      record.registrations_total,
+      `${context}.registrations_total`,
+    ),
+    failovers_total: normalizeBrowserKaigiU64(record.failovers_total, `${context}.failovers_total`),
+    domains,
+  };
+  if (
+    BigInt(snapshot.healthy_total)
+      + BigInt(snapshot.degraded_total)
+      + BigInt(snapshot.unavailable_total)
+    > BigInt(KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS)
+  ) {
+    throw new RangeError(
+      `${context} current status totals must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS}`,
+    );
+  }
+  for (const [totalField, domainField] of [
+    ["reports_total", "health_reports_total"],
+    ["registrations_total", "registrations_total"],
+    ["failovers_total", "failovers_total"],
+  ]) {
+    let expected = 0n;
+    for (const domain of domains) {
+      expected += BigInt(domain[domainField]);
+      if (expected > MAX_UINT64_BIGINT) expected = MAX_UINT64_BIGINT;
+    }
+    if (BigInt(snapshot[totalField]) !== expected) {
+      throw new RangeError(`${context}.${totalField} must equal the saturated domain sum`);
+    }
+  }
+  return snapshot;
+}
+
 async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
   if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
     throw new TypeError(`${context} response byte-size bound is invalid`);
@@ -1506,6 +1815,7 @@ export class ToriiBrowserClient {
     const normalized = normalizeRequest(request, `${context} request`);
     const opts = signalOnlyOptions(options, `${context} options`);
     let location = null;
+    let retryAfter = null;
     return this._json("POST", path, {
       rawBody: normalized.norito,
       contentType: "application/x-norito",
@@ -1521,11 +1831,13 @@ export class ToriiBrowserClient {
           "Kagemusha operation reference response",
         );
         location = response.headers.get("location");
+        retryAfter = response.headers.get("retry-after");
       },
     }).then((payload) => normalizeKagemushaOperationReference(payload, {
       expectedOperationId: normalized.operationId,
       expectedKind: kind,
       location,
+      retryAfter,
     }));
   }
 
@@ -1583,6 +1895,7 @@ export class ToriiBrowserClient {
         ),
         url,
       );
+      init.credentials = "omit";
       init.redirect = "error";
     }
     const { response, status } = await fetchToriiResponse(
@@ -1598,7 +1911,10 @@ export class ToriiBrowserClient {
       }
       normalizedOptions.responseObserver(response);
     }
-    if (status === 204) return null;
+    if (
+      status === 204
+      || normalizedOptions.nullStatuses?.includes(status)
+    ) return null;
     const jsonParser = normalizedOptions.jsonParser ?? JSON.parse;
     if (typeof jsonParser !== "function") {
       throw new TypeError(`${method} ${path} jsonParser must be a function`);
@@ -2705,36 +3021,71 @@ export class ToriiBrowserClient {
   }
 
   listKaigiRelays(options = {}) {
-    const opts = requireObject(options, "listKaigiRelays options");
+    const opts = signalOnlyOptions(options, "listKaigiRelays options");
     return this._json("GET", "/v1/kaigi/relays", {
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
         this._operatorSigningContext,
         "listKaigiRelays",
       ),
-    });
+      maximumBodyBytes: KAIGI_JSON_RESPONSE_MAX_BYTES,
+      jsonParser: (text) => parseStrictLosslessIntegerJson(
+        text,
+        "kaigi relay list response",
+      ),
+      responseObserver: (response) => requireExactJsonContentType(
+        response.headers?.get?.("content-type"),
+        "kaigi relay list response",
+      ),
+    }).then(normalizeBrowserKaigiRelayList);
   }
 
   getKaigiRelay(relayId, options = {}) {
-    const opts = requireObject(options, "getKaigiRelay options");
-    return this._json("GET", `/v1/kaigi/relays/${encodeURIComponent(requireNonEmptyString(relayId, "relayId"))}`, {
+    const opts = signalOnlyOptions(options, "getKaigiRelay options");
+    const normalizedRelayId = requireExactKaigiAccountId(relayId, "relayId");
+    return this._json("GET", `/v1/kaigi/relays/${encodeURIComponent(normalizedRelayId)}`, {
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
         this._operatorSigningContext,
         "getKaigiRelay",
       ),
-    });
+      maximumBodyBytes: KAIGI_JSON_RESPONSE_MAX_BYTES,
+      successStatuses: [200, 404],
+      nullStatuses: [404],
+      jsonParser: (text) => parseStrictLosslessIntegerJson(
+        text,
+        "kaigi relay detail response",
+      ),
+      responseObserver: (response) => {
+        if (responseStatus(response) === 404) {
+          return;
+        }
+        requireExactJsonContentType(
+          response.headers?.get?.("content-type"),
+          "kaigi relay detail response",
+        );
+      },
+    }).then((payload) => payload === null ? null : normalizeBrowserKaigiRelayDetail(payload));
   }
 
   getKaigiRelaysHealth(options = {}) {
-    const opts = requireObject(options, "getKaigiRelaysHealth options");
+    const opts = signalOnlyOptions(options, "getKaigiRelaysHealth options");
     return this._json("GET", "/v1/kaigi/relays/health", {
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
         this._operatorSigningContext,
         "getKaigiRelaysHealth",
       ),
-    });
+      maximumBodyBytes: KAIGI_JSON_RESPONSE_MAX_BYTES,
+      jsonParser: (text) => parseStrictLosslessIntegerJson(
+        text,
+        "kaigi relay health response",
+      ),
+      responseObserver: (response) => requireExactJsonContentType(
+        response.headers?.get?.("content-type"),
+        "kaigi relay health response",
+      ),
+    }).then(normalizeBrowserKaigiHealth);
   }
 
 }

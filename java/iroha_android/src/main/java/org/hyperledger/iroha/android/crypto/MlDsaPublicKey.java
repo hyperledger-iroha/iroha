@@ -9,8 +9,9 @@ public final class MlDsaPublicKey implements PublicKey, Serializable {
   private final byte[] encoded;
 
   public MlDsaPublicKey(final byte[] encoded) {
-    if (encoded == null || encoded.length == 0) {
-      throw new IllegalArgumentException("encoded must not be empty");
+    if (!MlDsaPublicKeyAdmission.isValid(encoded)) {
+      throw new IllegalArgumentException(
+          "invalid ML-DSA-65 public key: expected 1952 bytes with nonzero material");
     }
     this.encoded = Arrays.copyOf(encoded, encoded.length);
   }

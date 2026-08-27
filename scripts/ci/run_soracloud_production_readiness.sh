@@ -12,7 +12,6 @@ OBSERVABILITY_EVIDENCE=""
 STEP_TIMEOUT_SECONDS="${SORACLOUD_READINESS_STEP_TIMEOUT_SECONDS:-7200}"
 CARGO_TARGET_DIR_OVERRIDE="${SORACLOUD_READINESS_CARGO_TARGET_DIR:-}"
 ISOLATE_CARGO_TARGET=0
-ALLOW_OPEN_BLOCKERS=0
 
 usage() {
   cat <<'USAGE' >&2
@@ -24,7 +23,6 @@ Options:
   --step-timeout-seconds SECONDS    timeout each gate after SECONDS (default: 7200; use 0 to disable)
   --cargo-target-dir DIR            run Cargo gates with this CARGO_TARGET_DIR
   --isolate-cargo-target            run Cargo gates under OUT_DIR/cargo-target to avoid workspace lock contention
-  --allow-open-blockers             exit 0 when runnable gates pass but production-only gates are blocked
   --prepare-portable-assets         prepare verified Debian genericcloud assets when portable env vars are missing
   --no-prepare-portable-assets      require caller-provided IROHA_INROU_PORTABLE_* asset paths
   --skip-portable                   skip PortableVm QEMU smoke even in full profile
@@ -58,10 +56,6 @@ while [ "$#" -gt 0 ]; do
       ;;
     --isolate-cargo-target)
       ISOLATE_CARGO_TARGET=1
-      shift
-      ;;
-    --allow-open-blockers)
-      ALLOW_OPEN_BLOCKERS=1
       shift
       ;;
     --prepare-portable-assets)
@@ -137,7 +131,6 @@ cat > "$REPORT" <<EOF
 - Workspace: \`${ROOT_DIR}\`
 - Step timeout seconds: \`${STEP_TIMEOUT_SECONDS}\`
 - Cargo target dir: \`${CARGO_TARGET_DIR:-workspace default}\`
-- Allow open blockers: \`${ALLOW_OPEN_BLOCKERS}\`
 - Observability evidence: \`${OBSERVABILITY_EVIDENCE:-not provided}\`
 
 EOF
@@ -373,6 +366,6 @@ esac
 printf 'Soracloud readiness report: %s\n' "$REPORT"
 printf 'Soracloud readiness TSV: %s\n' "$TSV"
 
-if [ "$FAILED" -ne 0 ] || { [ "$BLOCKED" -ne 0 ] && [ "$ALLOW_OPEN_BLOCKERS" -ne 1 ]; }; then
+if [ "$FAILED" -ne 0 ] || [ "$BLOCKED" -ne 0 ]; then
   exit 1
 fi

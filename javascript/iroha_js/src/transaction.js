@@ -46,6 +46,7 @@ import {
   buildRecordKaigiUsageInstruction,
   buildSetKaigiRelayManifestInstruction,
   buildRegisterKaigiRelayInstruction,
+  buildUnregisterKaigiRelayInstruction,
   buildReportKaigiRelayHealthInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
@@ -1031,10 +1032,14 @@ export async function quoteAndSignTransaction(client, input, options = {}) {
     accountId: draftInput.authority,
     privateKey,
   };
-  const quote = await client.quoteFees(draft, {
-    canonicalAuth,
-    signal: options.signal,
-  });
+  const quote = ToriiClient._validateFeeQuoteForDraft(
+    draft,
+    await client.quoteFees(draft, {
+      canonicalAuth,
+      signal: options.signal,
+    }),
+    "quoteAndSignTransaction fee quote",
+  );
   const signed = signQuotedTransactionPayload({
     networkId: draftInput.networkId,
     payload: draft,
@@ -1444,6 +1449,7 @@ const IVM_PROVED_CONTRACT_METADATA_KEYS = new Set([
   "gas_limit",
   "validation_fee_policy_version",
   "validation_fee_policy_hash",
+  "validation_fee_hijiri_fee_quote_hash",
   "validation_fee_instruction_index",
   "validation_fee_transfer_entry_index",
 ]);
@@ -2567,13 +2573,17 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   });
   const feeQuotePayloadJson = feeQuoteDraft.payloadJson;
   const feeQuoteAttachmentJson = feeQuoteDraft.attachmentJson;
-  const feeQuote = await client.quoteFees(feeQuoteDraft, {
-    canonicalAuth: {
-      accountId: authority,
-      privateKey,
-    },
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const feeQuote = ToriiClient._validateFeeQuoteForDraft(
+    feeQuoteDraft,
+    await client.quoteFees(feeQuoteDraft, {
+      canonicalAuth: {
+        accountId: authority,
+        privateKey,
+      },
+      ...(signal === undefined ? {} : { signal }),
+    }),
+    "submitIvmProvedContractCall fee quote",
+  );
   throwIfSubmissionAborted(signal);
   const built = signQuotedIvmProvedTransactionPayload({
     networkId,
@@ -4177,6 +4187,38 @@ export function buildRegisterKaigiRelayTransaction(input) {
     privateKeyAlgorithm = null,
   } = input;
   const instruction = buildRegisterKaigiRelayInstruction(relay);
+  return buildTransaction({
+    networkId,
+    authority,
+    feePayment,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+    privateKeyAlgorithm,
+  });
+}
+
+/**
+ * Build a transaction containing a `Kaigi::UnregisterKaigiRelay` instruction.
+ */
+export function buildUnregisterKaigiRelayTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    relayId,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
+  const instruction = buildUnregisterKaigiRelayInstruction({ relayId });
   return buildTransaction({
     networkId,
     authority,

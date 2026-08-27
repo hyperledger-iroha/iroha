@@ -702,7 +702,8 @@ ceiling `F(8 + C * F(32)) + 228`. The maximal proposal contains that manifest,
 one full-QC timeout group per validator, the separately carried highest QC, and
 maximum signatures; the recommended 128-validator value is 232,541 bare bytes.
 The maximum recommended `PayloadChunk`/`CertifiedBodyResponse` envelope is
-16,811,581 bare bytes. Recovery request and
+16,828,108 bare bytes; the response arm includes a current responder `PeerId`
+at the protocol-wide maximum public-key payload. Recovery request and
 `CommitCertificateResponse` ceilings include maximum QCs, maximum signatures,
 the actual chain-id length where present, and an embedded `PeerId` derived from
 the protocol-wide 8,258-byte raw public-key payload ceiling. Thus the premise
@@ -1166,9 +1167,11 @@ agree while no successor activation is pending. `MaxHeight` remains only a
 finite-horizon projection. A valid checked Running failure latches the local
 snapshot; an invalid projection preserves it, while the runner's already
 latched process output guard remains authoritative in public status.
-Historical body service requires frozen-roster membership, not participation
-in the old QC; the QC authenticates the subject and the archive signs the
-response. Source token/order checks,
+Post-Apply historical body service requires an authenticated current archive
+identity and a matching durable Kura finality artifact, not membership in the
+historical frozen roster or old QC; the QC authenticates the subject and the
+archive signs the response. Before Apply, live certified-body serving remains
+restricted to signers in the frozen QC. Source token/order checks,
 adversarial production tests, stale-token mutation tests, and source-manifest
 binding constrain those claims, but do not prove any of them. Consequently the
 already proved abstract successor invariant cannot discharge this production

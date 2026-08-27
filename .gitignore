@@ -118,7 +118,8 @@ specs/da/_generated/threat_model_report.json
 # Developer-local caches and sandboxes
 .cargo-temp/
 /crates/irohad/.tmp*/
-/.codex*
+/.codex/*
+!/.codex/.gitkeep
 .venv-*/
 .cache/
 .swift_test_home/
@@ -360,5 +361,7 @@ artifacts/*.json
 # Runtime output from the interactive setup wizard (may contain private keys).
 /wizard-output/
 
-# Relay tests and local runs create tempfile-backed replay stores and links here.
+# Relay tests and local runs create tempfile-backed replay stores and links in
+# either the repository root or the relay crate, depending on the test cwd.
+/.tmp*
 tools/soranet-relay/.tmp*

@@ -57,8 +57,8 @@ DecisionCertifiedResponseLineageExact(node, qc, item) ==
   /\ item.envelope.subject = qc.subject
   /\ item.envelope.requestHash =
        AsyncCertifiedRequestHashOf(node, qc, 0)
-  /\ item.envelope.signatureOwner = item.envelope.archiveServer
-  /\ item.envelope.citedResponder \in qc.signers
+  /\ item.envelope.signatureOwner = item.envelope.responder
+  /\ item.envelope.responder \in AsyncArchiveServerIds
   /\ CertifiedResponseAuthenticatedOccurrence(item)
   /\ CertifiedResponseCapabilityAuthorized(item)
 
@@ -326,7 +326,7 @@ THEOREM PersistDecisionControlRetainsExactlySurvivingRequests ==
 BY Isa
    DEF PersistDecisionControl, FilterCertifiedResponseAuthority
 
-THEOREM ExactCertifiedResponseBindsArchiveAndCitedIdentityRoles ==
+THEOREM ExactCertifiedResponseBindsCurrentResponderIdentity ==
   \A node, qc, item:
     DecisionCertifiedResponseLineageExact(node, qc, item)
       => /\ item.envelope.recipient = node
@@ -336,8 +336,8 @@ THEOREM ExactCertifiedResponseBindsArchiveAndCitedIdentityRoles ==
          /\ item.envelope.requestHash =
               AsyncCertifiedRequestHashOf(node, qc, 0)
          /\ item.envelope.signatureOwner =
-              item.envelope.archiveServer
-         /\ item.envelope.citedResponder \in qc.signers
+              item.envelope.responder
+         /\ item.envelope.responder \in AsyncArchiveServerIds
          /\ CertifiedResponseAuthenticatedOccurrence(item)
          /\ CertifiedResponseCapabilityAuthorized(item)
 BY DEF DecisionCertifiedResponseLineageExact

@@ -12,18 +12,23 @@ import java.util.Optional;
 import java.util.Set;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeyProvider;
+import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
 import org.hyperledger.iroha.android.telemetry.DeviceProfile;
 import org.hyperledger.iroha.android.telemetry.DeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.KeystoreTelemetryEmitter;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 import org.hyperledger.iroha.android.telemetry.TelemetrySink;
+
 public final class IrohaKeyManagerTelemetryTests {
 
   public static void main(final String[] args) throws Exception {
     verifyAttestationEmitsTelemetry();
     verifyAttestationRecordsFailures();
     verifyAttestationChallengeFailuresEmitTelemetry();
+    managerRejectsMissingChallengesBeforeProviderDispatch();
+    managerRejectsSyntheticProviderResults();
+    managerRejectsAbsentFailedAndMismatchedAliasKeys();
     System.out.println("[IrohaAndroid] Keystore telemetry tests passed.");
   }
 
@@ -33,11 +38,11 @@ public final class IrohaKeyManagerTelemetryTests {
         KeystoreTelemetryEmitter.from(options(), sink, deviceProfileProvider());
     final IrohaKeyManager manager =
         IrohaKeyManager.fromProviders(List.of(new SuccessfulAttestationProvider()), emitter);
-    final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(new StubCertificate()).build();
+    final AttestationVerifier verifier = AttestationVerifierTests.fixtureVerifier();
 
     final Optional<AttestationResult> result =
-        manager.verifyAttestation("retail-wallet", verifier, null);
+        manager.verifyAttestation(
+            "retail-wallet", verifier, AttestationVerifierTests.fixtureChallenge());
     assert result.isPresent() : "verification result expected";
 
     final RecordingTelemetrySink.SignalEvent event =
@@ -46,7 +51,7 @@ public final class IrohaKeyManagerTelemetryTests {
     final String expectedAlias =
         options().redaction().hashIdentifier("retail-wallet").orElseThrow();
     assert expectedAlias.equals(event.fields.get("alias_label"));
-    assert "trusted_environment".equals(event.fields.get("security_level"));
+    assert "strong_box".equals(event.fields.get("security_level"));
     assert "enterprise".equals(event.fields.get("device_brand_bucket"));
     assert "trusted-provider".equals(event.fields.get("provider"));
     final String digest = (String) event.fields.get("attestation_digest");
@@ -54,18 +59,18 @@ public final class IrohaKeyManagerTelemetryTests {
     assert digest.length() == 64 : "digest should be hex encoded";
   }
 
-  private static void verifyAttestationRecordsFailures() {
+  private static void verifyAttestationRecordsFailures() throws Exception {
     final RecordingTelemetrySink sink = new RecordingTelemetrySink();
     final KeystoreTelemetryEmitter emitter =
         KeystoreTelemetryEmitter.from(options(), sink, deviceProfileProvider());
     final IrohaKeyManager manager =
         IrohaKeyManager.fromProviders(List.of(new FailingAttestationProvider()), emitter);
-    final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(new StubCertificate()).build();
+    final AttestationVerifier verifier = AttestationVerifierTests.fixtureVerifier();
 
     boolean threw = false;
     try {
-      manager.verifyAttestation("retail-wallet", verifier, null);
+      manager.verifyAttestation(
+          "retail-wallet", verifier, AttestationVerifierTests.fixtureChallenge());
     } catch (final AttestationVerificationException expected) {
       threw = true;
     }
@@ -83,14 +88,13 @@ public final class IrohaKeyManagerTelemetryTests {
     assert "failing-provider".equals(event.fields.get("provider"));
   }
 
-  private static void verifyAttestationChallengeFailuresEmitTelemetry() {
+  private static void verifyAttestationChallengeFailuresEmitTelemetry() throws Exception {
     final RecordingTelemetrySink sink = new RecordingTelemetrySink();
     final KeystoreTelemetryEmitter emitter =
         KeystoreTelemetryEmitter.from(options(), sink, deviceProfileProvider());
     final IrohaKeyManager manager =
         IrohaKeyManager.fromProviders(List.of(new ChallengeMismatchProvider()), emitter);
-    final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(new StubCertificate()).build();
+    final AttestationVerifier verifier = AttestationVerifierTests.fixtureVerifier();
 
     boolean threw = false;
     try {
@@ -108,8 +112,61 @@ public final class IrohaKeyManagerTelemetryTests {
             .hashIdentifier("retail-wallet")
             .orElseThrow()
             .equals(event.fields.get("alias_label"));
-    assert "challenge_mismatch".equals(event.fields.get("failure_reason"));
+    assert "Attestation challenge mismatch".equals(event.fields.get("failure_reason"));
     assert "mismatch-provider".equals(event.fields.get("provider"));
+  }
+
+  private static void managerRejectsMissingChallengesBeforeProviderDispatch() throws Exception {
+    final SuccessfulAttestationProvider provider = new SuccessfulAttestationProvider();
+    final IrohaKeyManager manager = IrohaKeyManager.fromProviders(List.of(provider));
+    final AttestationVerifier verifier = AttestationVerifierTests.fixtureVerifier();
+
+    assertVerificationFails(() -> manager.verifyAttestation("retail-wallet", verifier));
+    assertVerificationFails(
+        () -> manager.verifyAttestation("retail-wallet", verifier, null));
+    assertVerificationFails(
+        () -> manager.verifyAttestation("retail-wallet", verifier, new byte[0]));
+    assert provider.verificationRequests == 0
+        : "Missing challenges must fail before provider dispatch";
+  }
+
+  private static void managerRejectsSyntheticProviderResults() throws Exception {
+    final IrohaKeyManager manager =
+        IrohaKeyManager.fromProviders(List.of(new SyntheticAttestationProvider()));
+    final AttestationVerifier verifier = AttestationVerifierTests.fixtureVerifier();
+
+    assertVerificationFails(
+        () ->
+            manager.verifyAttestation(
+                "retail-wallet", verifier, AttestationVerifierTests.fixtureChallenge()));
+  }
+
+  private static void managerRejectsAbsentFailedAndMismatchedAliasKeys() throws Exception {
+    final AttestationVerifier verifier = AttestationVerifierTests.fixtureVerifier();
+    for (final AliasLoadMode mode :
+        List.of(AliasLoadMode.MISSING, AliasLoadMode.FAILING, AliasLoadMode.MISMATCHED)) {
+      final IrohaKeyManager manager =
+          IrohaKeyManager.fromProviders(List.of(new SuccessfulAttestationProvider(mode)));
+      assertVerificationFails(
+          () ->
+              manager.verifyAttestation(
+                  "retail-wallet", verifier, AttestationVerifierTests.fixtureChallenge()));
+    }
+  }
+
+  private static void assertVerificationFails(final VerificationCall call) throws Exception {
+    boolean threw = false;
+    try {
+      call.run();
+    } catch (final AttestationVerificationException expected) {
+      threw = true;
+    }
+    assert threw : "Attestation verification must fail closed";
+  }
+
+  @FunctionalInterface
+  private interface VerificationCall {
+    void run() throws Exception;
   }
 
   private static TelemetryOptions options() {
@@ -127,10 +184,43 @@ public final class IrohaKeyManagerTelemetryTests {
     return () -> Optional.of(DeviceProfile.of("enterprise"));
   }
 
+  private enum AliasLoadMode {
+    MATCHING,
+    MISSING,
+    MISMATCHED,
+    FAILING
+  }
+
   private static final class SuccessfulAttestationProvider implements KeyProvider {
+    private int verificationRequests;
+    private final AliasLoadMode aliasLoadMode;
+
+    private SuccessfulAttestationProvider() {
+      this(AliasLoadMode.MATCHING);
+    }
+
+    private SuccessfulAttestationProvider(final AliasLoadMode aliasLoadMode) {
+      this.aliasLoadMode = aliasLoadMode;
+    }
+
     @Override
-    public Optional<java.security.KeyPair> load(final String alias) {
-      return Optional.empty();
+    public Optional<java.security.KeyPair> load(final String alias)
+        throws KeyManagementException {
+      if (aliasLoadMode == AliasLoadMode.MISSING) {
+        return Optional.empty();
+      }
+      if (aliasLoadMode == AliasLoadMode.FAILING) {
+        throw new KeyManagementException("fixture load failure");
+      }
+      try {
+        final AttestationResult result = AttestationVerifierTests.fixtureResult(alias);
+        final int certificateIndex = aliasLoadMode == AliasLoadMode.MATCHING ? 0 : 1;
+        return Optional.of(
+            new java.security.KeyPair(
+                result.certificateChain().get(certificateIndex).getPublicKey(), null));
+      } catch (final Exception ex) {
+        throw new KeyManagementException("failed to load fixture key", ex);
+      }
     }
 
     @Override
@@ -152,18 +242,14 @@ public final class IrohaKeyManagerTelemetryTests {
     public Optional<AttestationResult> verifyAttestation(
         final String alias, final AttestationVerifier verifier, final byte[] expectedChallenge)
         throws AttestationVerificationException {
-      final AttestationResult result =
-          new AttestationResult(
-              alias,
-              List.of(new StubCertificate()),
-              AttestationResult.SecurityLevel.TRUSTED_ENVIRONMENT,
-              AttestationResult.SecurityLevel.TRUSTED_ENVIRONMENT,
-              new byte[] {0x01},
-              new byte[] {0x02},
-              true,
-              true,
-              false);
-      return Optional.of(result);
+      verificationRequests++;
+      try {
+        return Optional.of(AttestationVerifierTests.fixtureResult(alias));
+      } catch (final AttestationVerificationException ex) {
+        throw ex;
+      } catch (final Exception ex) {
+        throw new AttestationVerificationException("fixture_verification_failed", ex);
+      }
     }
 
     @Override
@@ -217,8 +303,6 @@ public final class IrohaKeyManagerTelemetryTests {
   }
 
   private static final class ChallengeMismatchProvider implements KeyProvider {
-    private static final byte[] PROVIDER_CHALLENGE = new byte[] {0x02};
-
     @Override
     public Optional<java.security.KeyPair> load(final String alias) {
       return Optional.empty();
@@ -243,22 +327,13 @@ public final class IrohaKeyManagerTelemetryTests {
     public Optional<AttestationResult> verifyAttestation(
         final String alias, final AttestationVerifier verifier, final byte[] expectedChallenge)
         throws AttestationVerificationException {
-      if (expectedChallenge == null
-          || !java.security.MessageDigest.isEqual(expectedChallenge, PROVIDER_CHALLENGE)) {
-        throw new AttestationVerificationException("challenge_mismatch");
+      try {
+        return Optional.of(AttestationVerifierTests.fixtureResult(alias));
+      } catch (final AttestationVerificationException ex) {
+        throw ex;
+      } catch (final Exception ex) {
+        throw new AttestationVerificationException("fixture_verification_failed", ex);
       }
-      final AttestationResult result =
-          new AttestationResult(
-              alias,
-              List.of(new StubCertificate()),
-              AttestationResult.SecurityLevel.TRUSTED_ENVIRONMENT,
-              AttestationResult.SecurityLevel.TRUSTED_ENVIRONMENT,
-              PROVIDER_CHALLENGE.clone(),
-              new byte[] {0x02},
-              true,
-              true,
-              false);
-      return Optional.of(result);
     }
 
     @Override
@@ -269,6 +344,54 @@ public final class IrohaKeyManagerTelemetryTests {
     @Override
     public String name() {
       return "mismatch-provider";
+    }
+  }
+
+  private static final class SyntheticAttestationProvider implements KeyProvider {
+    @Override
+    public Optional<java.security.KeyPair> load(final String alias) {
+      return Optional.empty();
+    }
+
+    @Override
+    public java.security.KeyPair generate(final String alias) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public java.security.KeyPair generateEphemeral() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isHardwareBacked() {
+      return true;
+    }
+
+    @Override
+    public Optional<AttestationResult> verifyAttestation(
+        final String alias, final AttestationVerifier verifier, final byte[] expectedChallenge) {
+      return Optional.of(
+          new AttestationResult(
+              alias,
+              List.of(new StubCertificate()),
+              AttestationResult.SecurityLevel.STRONG_BOX,
+              AttestationResult.SecurityLevel.STRONG_BOX,
+              expectedChallenge,
+              new byte[] {0x02},
+              true,
+              true,
+              true));
+    }
+
+    @Override
+    public KeyProviderMetadata metadata() {
+      return KeyProviderMetadata.trustedEnvironment("synthetic-provider");
+    }
+
+    @Override
+    public String name() {
+      return "synthetic-provider";
     }
   }
 

@@ -3,6 +3,34 @@
 mod tests {
     use super::*;
     #[test]
+    fn credential_bound_authentication_boundaries_require_private_no_store() {
+        for policy in [
+            AuthenticationPolicy::OnboardingToken,
+            AuthenticationPolicy::CanonicalAccountSignature,
+            AuthenticationPolicy::OperatorSignature,
+            AuthenticationPolicy::OperatorCredentialExchange,
+        ] {
+            assert!(
+                policy.requires_private_no_store(),
+                "missing private no-store policy for {policy:?}"
+            );
+        }
+        for policy in [
+            AuthenticationPolicy::ToriiDefault,
+            AuthenticationPolicy::CanonicalSignedBody,
+            AuthenticationPolicy::ManifestConditionalContent,
+            AuthenticationPolicy::IdentityBoundSignature,
+            AuthenticationPolicy::ProtocolHandshake,
+            AuthenticationPolicy::NestedRouteAuthentication,
+            AuthenticationPolicy::Unauthenticated,
+        ] {
+            assert!(
+                !policy.requires_private_no_store(),
+                "unexpected private no-store policy for {policy:?}"
+            );
+        }
+    }
+    #[test]
     fn mcp_json_rpc_is_a_sealed_nested_route_gateway() {
         let route = mcp_transport::JSON_RPC;
         assert_eq!(route.effect(), RouteEffect::Mutation);

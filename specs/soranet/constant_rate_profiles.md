@@ -5,8 +5,8 @@ description: SNNet-17B1 preset catalogue for core/home production nodes plus the
 
 # SoraNet Constant-Rate Profiles (SNNet-17B1)
 
-SNNet-17B introduces constant-rate transport lanes so every SoraFS fetch hops across fixed-size
-cells independent of payload size. The preset catalogue now ships with:
+SNNet-17B defines constant-rate transport lanes in which every SoraFS fetch hops across fixed-size
+cells independent of payload size. The preset catalogue ships with:
 
 - **core** – datacentre or professionally hosted relays that can dedicate ≥30 Mbps of uplink to
   constant-rate cover traffic.
@@ -16,10 +16,20 @@ cells independent of payload size. The preset catalogue now ships with:
   tick and ceiling so operators can test capability negotiation without paying the full bandwidth
   cost. This preset should remain on staging or tightly scoped pilots.
 
-Both presets share a 1,024 B payload cell, 1024 B dummy fill, and the hybrid Noise+QUIC envelope
+All presets share a 1,024 B payload cell, 1024 B dummy fill, and the hybrid Noise+QUIC envelope
 defined in SNNet-17A. This document records the normative parameters mandated by SNNet-17B1, the
 tick→bandwidth conversion table used by SDKs, and the CLI interface that operators can call when
 generating configs or status reports.
+
+> **Current relay status:** the production scheduler emits fixed-rate dummy QUIC DATAGRAM cover,
+> but application, exit, measurement, and VPN payload still travels on QUIC streams outside that
+> scheduler. The relay therefore supports only best-effort cover traffic. It rejects
+> `constant_rate_capability.enabled=true` with `strict=true` during configuration validation and
+> independently rejects any strict result during live handshake preflight. There is no silent
+> downgrade to best-effort. Until payload is scheduler-bound and DATAGRAM unavailability or send
+> failure closes the circuit, these profiles and their metrics are rollout instrumentation, not a
+> strict traffic-analysis protection claim. In best-effort mode, unavailable DATAGRAM support or a
+> send error stops the cover task while the circuit remains open.
 
 ## Preset summary
 
@@ -48,11 +58,10 @@ generating configs or status reports.
   indefinitely.
 
 **Null preset usage:** operators should use `null` when validating SNNet-17A2 capability negotiation,
-mixed hops, and downgrade policies without consuming the bandwidth that the production profiles
-require. The preset keeps the same TLVs/envelope so clients exercise the entire constant-rate stack,
-but its low lane cap and ceiling make it unsuitable for production privacy guarantees. Limit the
-preset to staging clusters or constrained pilots and switch back to `home`/`core` once telemetry
-confirms the rollout.
+mixed hops, downgrade policies, and the best-effort cover loop without consuming the bandwidth that
+the production profiles require. It does not exercise scheduler-bound application payload, and its
+low lane cap and ceiling make it unsuitable for production privacy guarantees. Limit the preset to
+staging clusters or constrained pilots.
 
 Relays now enforce the `neighbor_cap` directly during the handshake: once the number of
 constant-rate circuits reaches the preset limit, additional `snnet.constant_rate` sessions are
@@ -154,7 +163,7 @@ is a staging/dogfood preset; only enable it when exercising the SNNet‑17A capa
   ```json
   "constant_rate_capability": {
     "enabled": true,
-    "strict": true
+    "strict": false
   }
   ```
   When enabled, the handshake includes the `snnet.constant_rate` TLV (type `0x0203`)
@@ -169,11 +178,14 @@ is a staging/dogfood preset; only enable it when exercising the SNNet‑17A capa
   The payload is exactly four bytes. Clients reject alternate lengths, versions,
   reserved flag bits, and cell sizes; a capability advertisement does not carry
   a dummy cell or allocate storage proportional to `cell_bytes`.
-- Clients that set the strict flag require every hop to expose the same TLV; the relay now rejects
-  handshakes when a strict request is received but the server advertises best-effort or no
-  constant-rate support. Best-effort requests gracefully downgrade when a hop lacks the capability.
-- Defaults keep the capability disabled so brownfield deployments can stage the rollout; enabling
-  strict mode is recommended once every hop supports SNNet‑17A pacing.
+- At the wire-protocol level, clients that set the strict flag require every hop to expose the same
+  TLV; capability negotiation rejects a strict request when a server advertises best-effort or no
+  constant-rate support. The current relay additionally rejects every negotiated strict result at
+  runtime because real payload is not yet scheduler-bound. It never accepts the circuit as
+  best-effort instead.
+- Defaults keep the capability disabled so brownfield deployments can stage the rollout. Operators
+  may enable `strict=false` for best-effort cover-traffic telemetry. `strict=true` is a configuration
+  error until the relay can provide the complete transport invariant.
 
 ## Telemetry-driven lane management
 
@@ -190,15 +202,17 @@ auditable. Recommended actions:
 3. Log every automatic change with the measured utilisation and neighbor list so audits can prove
    adherence to the SNNet-17B policy.
 4. Track the new cover-traffic gauges and alerts:
-   - `soranet_constant_rate_queue_depth_class{class}` exposes per-class queue pressure feeding the
-     constant-rate sender; `soranet_constant_rate_queue_depth` remains the aggregate view.
+   - `soranet_constant_rate_queue_depth_class{class}` exposes the scheduler's internal per-class
+     queues; current production payload does not feed these queues, so they normally remain empty.
+     `soranet_constant_rate_queue_depth` remains the aggregate view.
    - `soranet_constant_rate_low_dummy_events_total` increments whenever the live dummy ratio falls
-     below 20 % in the scheduler loop (real traffic should never fully crowd out cover).
-   - `soranet_constant_rate_dummy_ratio` reflects the observed ratio across emitted cells (real +
-     dummy); combine with `soranet_constant_rate_degraded` to alert on cover shrinkage.
-   - The relay now runs a dedicated constant-rate datagram loop per circuit that emits the
-     scheduler’s 1,024 B envelopes on the profile tick even when idle, so dashboards can chart live
-     slot-rate health instead of inferring it from admission counters alone.
+     below 20 % in the scheduler loop. With no production payload producer, this ratio should stay
+     at 100 %; a lower value currently indicates test or future scheduler integration.
+   - `soranet_constant_rate_dummy_ratio` reflects only cells emitted by the DATAGRAM scheduler. It
+     does not include or characterize application bytes sent on QUIC streams.
+   - The relay runs a dedicated best-effort DATAGRAM loop per negotiated circuit that emits dummy
+     1,024 B envelopes on the profile tick. Dashboards may use it to chart cover-loop health, but
+     must not interpret it as evidence that application traffic followed the same schedule.
 5. Observability assets: Grafana board `dashboards/grafana/soranet_constant_rate.json` charts
    queue depth per class, dummy ratio, live neighbor count, and degraded-state markers; the
    companion alert bundle `dashboards/alerts/soranet_constant_rate_rules.yml` fires when dummy

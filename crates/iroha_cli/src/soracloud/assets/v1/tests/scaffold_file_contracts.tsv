@@ -308,6 +308,8 @@ init_http_service_template_scaffolds_inrou_service	contains	http-service/README.
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --target-version <VERSION> --torii-url http://127.0.0.1:8080
+init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	Inrou upgrades are atomic exact-revision replacements in the first release.
+init_http_service_template_scaffolds_inrou_service	excludes	http-service/README.md	iroha soracloud service rollout
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	hf join
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	hf status
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	training-job-*

@@ -9,6 +9,18 @@ import java.util.Objects;
 public final class LeaveKaigiInstruction implements InstructionTemplate {
 
   private static final String ACTION = "LeaveKaigi";
+  private static final java.util.Set<String> ALLOWED_ARGUMENTS =
+      KaigiInstructionUtils.argumentSet(
+          "action",
+          "call.domain_id",
+          "call.call_name",
+          "participant",
+          "commitment.commitment",
+          "commitment.alias_tag",
+          "nullifier.digest",
+          "nullifier.issued_at_ms",
+          "roster_root",
+          "proof");
 
   private final KaigiInstructionUtils.CallId callId;
   private final String participant;
@@ -79,6 +91,7 @@ public final class LeaveKaigiInstruction implements InstructionTemplate {
   }
 
   public static LeaveKaigiInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireKnownArguments(arguments, ALLOWED_ARGUMENTS);
     KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
@@ -94,7 +107,7 @@ public final class LeaveKaigiInstruction implements InstructionTemplate {
           "LeaveKaigi privacy artifacts are reserved and must be omitted in V1");
     }
 
-    return new LeaveKaigiInstruction(builder, new LinkedHashMap<>(arguments));
+    return builder.build();
   }
 
   public static Builder builder() {

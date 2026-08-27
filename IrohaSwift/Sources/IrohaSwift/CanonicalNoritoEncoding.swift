@@ -157,9 +157,21 @@ struct CanonicalNumeric {
             normalizedDigits.removeFirst()
         }
         let isZero = normalizedDigits.allSatisfy { $0 == "0" }
-        self.isNegative = isZero ? false : isNegative
-        self.scale = isZero ? 0 : scale
-        self.digits = isZero ? "0" : normalizedDigits
+        guard !isZero else {
+            self.isNegative = false
+            self.scale = 0
+            self.digits = "0"
+            return
+        }
+
+        var normalizedScale = scale
+        while normalizedScale > 0 && normalizedDigits.last == "0" {
+            normalizedDigits.removeLast()
+            normalizedScale -= 1
+        }
+        self.isNegative = isNegative
+        self.scale = normalizedScale
+        self.digits = normalizedDigits
     }
 
     var canonicalString: String {
@@ -186,31 +198,22 @@ struct CanonicalNumeric {
     }
 
     func compared(to other: CanonicalNumeric) -> ComparisonResult {
+        if isNegative != other.isNegative {
+            return isNegative ? .orderedAscending : .orderedDescending
+        }
         let targetScale = max(scale, other.scale)
-        if let lhsDigits = alignedDigitsIfWithinBounds(targetScale: targetScale),
-           let rhsDigits = other.alignedDigitsIfWithinBounds(targetScale: targetScale) {
-            let magnitudeOrder = Self.compareMagnitudeStrings(lhsDigits, rhsDigits)
-            if isNegative != other.isNegative {
-                return isNegative ? .orderedAscending : .orderedDescending
+        let magnitudeOrder = Self.compareMagnitudeStrings(
+            alignedDigits(targetScale: targetScale),
+            other.alignedDigits(targetScale: targetScale)
+        )
+        if isNegative {
+            switch magnitudeOrder {
+            case .orderedAscending: return .orderedDescending
+            case .orderedSame: return .orderedSame
+            case .orderedDescending: return .orderedAscending
             }
-            if isNegative {
-                switch magnitudeOrder {
-                case .orderedAscending: return .orderedDescending
-                case .orderedSame: return .orderedSame
-                case .orderedDescending: return .orderedAscending
-                }
-            }
-            return magnitudeOrder
         }
-
-        let mantissaOrder = comparedMantissa(to: other)
-        if mantissaOrder != .orderedSame {
-            return mantissaOrder
-        }
-        if scale == other.scale {
-            return .orderedSame
-        }
-        return scale < other.scale ? .orderedAscending : .orderedDescending
+        return magnitudeOrder
     }
 
     func adding(
@@ -261,35 +264,10 @@ struct CanonicalNumeric {
         return digits + String(repeating: "0", count: Int(targetScale - scale))
     }
 
-    private func alignedDigitsIfWithinBounds(targetScale: UInt32) -> String? {
-        let aligned = alignedDigits(targetScale: targetScale)
-        var mantissa = try? CanonicalBigInt(decimalDigits: aligned)
-        mantissa?.isNegative = isNegative
-        guard let mantissa, (try? mantissa.toTwosComplementBytes(maxBytes: CanonicalNorito.maxBigIntBytes)) != nil else {
-            return nil
-        }
-        return aligned
-    }
-
     private func validate(maxBytes: Int) throws {
         var mantissa = try CanonicalBigInt(decimalDigits: digits)
         mantissa.isNegative = isNegative
         _ = try mantissa.toTwosComplementBytes(maxBytes: maxBytes)
-    }
-
-    private func comparedMantissa(to other: CanonicalNumeric) -> ComparisonResult {
-        if isNegative != other.isNegative {
-            return isNegative ? .orderedAscending : .orderedDescending
-        }
-        let magnitudeOrder = Self.compareMagnitudeStrings(digits, other.digits)
-        if isNegative {
-            switch magnitudeOrder {
-            case .orderedAscending: return .orderedDescending
-            case .orderedSame: return .orderedSame
-            case .orderedDescending: return .orderedAscending
-            }
-        }
-        return magnitudeOrder
     }
 
     private static func compareMagnitudeStrings(

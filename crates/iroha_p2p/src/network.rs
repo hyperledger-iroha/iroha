@@ -11,12 +11,12 @@ use crate::{
     boilerplate::*,
     peer::{
         Connection, ConnectionId, OutboundFrameQueueLimits, OutboundPostByteBudgets,
-        SharedByteBudget, SharedByteLease, SoranetHandshakeConfig,
+        SharedByteBudget, SharedByteLease,
         handles::{PeerHandle, RecoverPostError, connected_from, connecting},
         message::*,
     },
     sampler::LogSampler,
-    soranet_handshake_runtime::runtime_from_handshake,
+    soranet_handshake_runtime::{SoranetHandshakeRuntime, runtime_from_handshake},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::actual::{
@@ -50,12 +50,18 @@ use std::{
 };
 #[cfg(test)]
 use tokio::net::TcpListener;
-use tokio::sync::{Semaphore, mpsc, watch};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 #[cfg(test)]
 fn test_network_id(seed: &str) -> NetworkId {
     NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
         seed.as_bytes(),
     )))
+}
+#[cfg(test)]
+fn test_soranet_handshake_runtime() -> Arc<SoranetHandshakeRuntime> {
+    let mut handshake = ActualSoranetHandshake::default();
+    handshake.pow.required = false;
+    runtime_from_handshake(handshake).expect("test SoraNet handshake runtime")
 }
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -64,6 +70,7 @@ static NEXT_TLS_CONN_ID: std::sync::OnceLock<AtomicU64> = std::sync::OnceLock::n
 const TCP_LISTEN_BACKLOG: i32 = 1024;
 type ControlUpdateSender<T> = watch::Sender<Option<Arc<T>>>;
 type ControlUpdateReceiver<T> = watch::Receiver<Option<Arc<T>>>;
+const HANDSHAKE_UPDATE_CHANNEL_CAPACITY: usize = 1;
 // Each control category gets its own single retained snapshot so unrelated
 // updates cannot overwrite one another. Store snapshots behind `Arc` so
 // receiver cloning never holds the watch read lock while copying a large
@@ -3656,6 +3663,56 @@ pub struct NetworkActorAdmissionTicketTestFixture {
 }
 #[cfg(any(test, feature = "test-fixtures"))]
 impl NetworkActorAdmissionTicketTestFixture {
+    /// Create an active admission ticket bound to an exact topology post.
+    #[must_use]
+    pub fn for_topology<T>(post: &Post<T>) -> (Self, NetworkActorAdmissionTicket)
+    where
+        T: Pload + message::ClassifyTopic,
+    {
+        let topic = post.data.topic();
+        let subscriber_route = post.data.subscriber_route();
+        assert!(
+            is_reliable_progress_route(topic, subscriber_route),
+            "test topology post must use a reliable-progress route"
+        );
+        let mut canonical_post = post.clone();
+        canonical_post.priority =
+            canonical_outbound_priority(topic, subscriber_route, canonical_post.priority);
+        let stream_wire_bytes = ncore::encoded_payload_len(&canonical_post.data)
+            .expect("test topology payload must have a canonical Norito encoding")
+            .max(1);
+        let canonical = NetworkMessage::Post(canonical_post);
+        let class = ActorProgressClass::for_route(topic, subscriber_route)
+            .expect("reliable test topology route must have an actor class");
+        let shape = ProgressTicketShape {
+            topic,
+            stream_wire_bytes,
+            broadcast: false,
+            reply_writer_timeout_attempt: None,
+            request_digest: progress_ticket_request_digest(&canonical),
+            authority: None,
+        };
+        let source = ActorProgressSource {
+            target: Some(post.peer_id.clone()),
+            class,
+        };
+        let fixture = Self {
+            budget: NetworkActorProgressBudget::new(stream_wire_bytes, 1, 1)
+                .expect("test actor admission geometry must fit"),
+        };
+        let ProgressLeaseAttempt::Ready { lease, ticket } =
+            fixture
+                .budget
+                .try_reserve_for_source(stream_wire_bytes, shape, source, None, None)
+        else {
+            panic!("fresh test actor admission ticket must own rank one");
+        };
+        // Model an actor queue which filled after budget reservation. The
+        // exact waiter and canonical post return to the caller for retry.
+        drop(lease);
+        debug_assert_eq!(ticket.rank(), Some(1));
+        (fixture, ticket)
+    }
     /// Create an active admission ticket bound to an exact canonical reply.
     #[must_use]
     pub fn for_reply<T>(
@@ -6682,6 +6739,25 @@ impl<T: Pload> Subscriber<T> {
         pending
     }
 }
+#[derive(Debug, Default)]
+struct ConfiguredPeerState {
+    generation: u64,
+    peer_ids: Vec<PeerId>,
+}
+
+/// One bounded, rotating view of the configured logical peers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfiguredPeerBatch {
+    /// Membership generation from which this batch was selected.
+    pub generation: u64,
+    /// Total configured logical peers in the captured generation.
+    pub total_peer_count: usize,
+    /// Canonically ordered peers selected for this sampling round.
+    pub peer_ids: Vec<PeerId>,
+    /// Start index to use for the next sampling round.
+    pub next_start_index: usize,
+}
+
 /// `NetworkBase` actor handle.
 // NOTE: safety/high/low network queues are bounded by configuration. The
 // authoritative-consensus safety channel is independent so auxiliary control
@@ -6700,6 +6776,8 @@ pub struct NetworkBaseHandle<T: Pload, E: Enc> {
     /// Accepted logical-topology and authenticated-peer authority for direct
     /// reliable progress posts.
     reliable_direct_topology: Arc<Mutex<ReliableProgressTopology>>,
+    /// Actor-published, key-ACL-filtered configured logical peer ids.
+    configured_peer_ids: Arc<Mutex<ConfiguredPeerState>>,
     /// Unforgeable identity binding reply-route tokens to this actor instance.
     reply_route_owner: Arc<()>,
     /// Maximum independent authenticated reply sources derived from connection geometry.
@@ -6716,8 +6794,8 @@ pub struct NetworkBaseHandle<T: Pload, E: Enc> {
     update_trusted_peers_sender: ControlUpdateSender<UpdateTrustedPeers>,
     /// Latest [`UpdateAcl`] snapshot sender.
     update_acl_sender: ControlUpdateSender<message::UpdateAcl>,
-    /// Latest [`UpdateHandshake`] snapshot sender.
-    update_handshake_sender: ControlUpdateSender<message::UpdateHandshake>,
+    /// Exact [`UpdateHandshake`] request sender.
+    update_handshake_sender: mpsc::Sender<message::UpdateHandshake>,
     /// Latest consensus-capabilities snapshot sender.
     update_consensus_caps_sender: ConsensusCapsUpdateSender,
     /// Sender of high priority messages
@@ -6762,6 +6840,7 @@ impl<T: Pload, E: Enc> Clone for NetworkBaseHandle<T, E> {
             online_peer_capabilities_receiver: self.online_peer_capabilities_receiver.clone(),
             reliable_broadcast_topology: Arc::clone(&self.reliable_broadcast_topology),
             reliable_direct_topology: Arc::clone(&self.reliable_direct_topology),
+            configured_peer_ids: Arc::clone(&self.configured_peer_ids),
             reply_route_owner: Arc::clone(&self.reply_route_owner),
             reply_route_source_capacity: self.reply_route_source_capacity,
             update_topology_sender: self.update_topology_sender.clone(),
@@ -7222,7 +7301,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
         let (update_trusted_tx, update_trusted_rx) = control_update_channel();
         let (update_acl_tx, update_acl_rx) = control_update_channel();
-        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
+        let (update_handshake_tx, update_handshake_rx) =
+            mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
@@ -7237,6 +7317,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             watch::channel(HashMap::new());
         let reliable_broadcast_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
         let reliable_direct_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
+        let configured_peer_ids = Arc::new(Mutex::new(ConfiguredPeerState::default()));
         let reply_route_owner = Arc::new(());
         drop(update_topology_rx);
         drop(update_peers_rx);
@@ -7252,6 +7333,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             online_peer_capabilities_receiver,
             reliable_broadcast_topology,
             reliable_direct_topology,
+            configured_peer_ids,
             reply_route_owner,
             reply_route_source_capacity: 1,
             update_topology_sender: update_topology_tx,
@@ -7775,6 +7857,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             watch::channel(HashMap::new());
         let reliable_broadcast_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
         let reliable_direct_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
+        let configured_peer_ids = Arc::new(Mutex::new(ConfiguredPeerState::default()));
         let reply_route_owner = Arc::new(());
         let (subscribe_to_peers_messages_sender, subscribe_to_peers_messages_receiver) =
             mpsc::channel(p2p_subscriber_queue_cap.get());
@@ -7786,7 +7869,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             control_update_channel();
         let (update_trusted_peers_sender, update_trusted_peers_receiver) = control_update_channel();
         let (update_acl_sender, update_acl_receiver) = control_update_channel();
-        let (update_handshake_sender, update_handshake_receiver) = control_update_channel();
+        let (update_handshake_sender, update_handshake_receiver) =
+            mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
         let (update_consensus_caps_sender, update_consensus_caps_receiver) =
             consensus_caps_update_channel();
         // Bounded queue capacities are supplied from node configuration so the
@@ -7845,7 +7929,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 outbound_frame_queue_limits,
                 outbound_post_byte_budgets.clone(),
                 inbound_frame_byte_budgets.clone(),
-                trust_gossip,
+                trust_gossip_config,
                 max_frame_bytes,
                 soranet_runtime.clone(),
                 local_scion_supported,
@@ -7876,7 +7960,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             inbound_frame_byte_budgets.clone(),
             TlsListenerOptions {
                 peer_capabilities: TlsPeerCapabilities {
-                    trust_gossip,
+                    trust_gossip: trust_gossip_config,
                     quic_datagrams_enabled,
                     quic_datagram_max_payload_bytes,
                     local_scion_supported,
@@ -7938,6 +8022,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             online_peer_capabilities_sender,
             reliable_broadcast_topology: Arc::clone(&reliable_broadcast_topology),
             reliable_direct_topology: Arc::clone(&reliable_direct_topology),
+            configured_peer_ids: Arc::clone(&configured_peer_ids),
             reply_route_owner: Arc::clone(&reply_route_owner),
             reply_route_tenures: HashMap::new(),
             next_reply_connection_ordinal: 0,
@@ -8070,6 +8155,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 online_peer_capabilities_receiver,
                 reliable_broadcast_topology,
                 reliable_direct_topology,
+                configured_peer_ids,
                 reply_route_owner,
                 reply_route_source_capacity: max_total_connections,
                 update_topology_sender,
@@ -9138,12 +9224,31 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         send_control_update(&self.update_acl_sender, "ACL", acl);
     }
     /// Update `SoraNet` handshake configuration at runtime.
-    pub fn update_soranet_handshake(&self, handshake: ActualSoranetHandshake) {
-        send_control_update(
-            &self.update_handshake_sender,
-            "handshake",
-            message::UpdateHandshake { handshake },
-        );
+    ///
+    /// # Errors
+    /// Returns an error if the network actor is unavailable or rejects the
+    /// proposed runtime configuration.
+    pub async fn update_soranet_handshake(
+        &self,
+        handshake: ActualSoranetHandshake,
+    ) -> Result<(), Error> {
+        let (respond_to, response) = oneshot::channel();
+        self.update_handshake_sender
+            .send(message::UpdateHandshake {
+                handshake,
+                respond_to,
+            })
+            .await
+            .map_err(|_| {
+                Error::HandshakeSoranet(
+                    "network actor closed before accepting SoraNet handshake update".to_owned(),
+                )
+            })?;
+        response.await.map_err(|_| {
+            Error::HandshakeSoranet(
+                "network actor closed before acknowledging SoraNet handshake update".to_owned(),
+            )
+        })?
     }
     /// Update consensus handshake capabilities at runtime and optionally reconnect peers.
     ///
@@ -9167,6 +9272,79 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         f: impl FnOnce(&message::OnlinePeerCapabilities) -> P,
     ) -> P {
         f(&self.online_peer_capabilities_receiver.borrow())
+    }
+    /// Return the current configured-peer generation and cardinality.
+    ///
+    /// The generation changes whenever the fail-closed effective sampling set
+    /// changes. Consumers can invalidate in-flight work and retained samples
+    /// without cloning the complete topology.
+    pub fn configured_peer_generation_and_count(&self) -> (u64, usize) {
+        let state = self
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (state.generation, state.peer_ids.len())
+    }
+
+    /// Run `f` while the configured-peer generation is held stable.
+    ///
+    /// This provides a linearization point for consumers that must invalidate
+    /// generation-bound state and use it in one operation. The closure should
+    /// remain short and must not call back into configured-peer snapshot APIs.
+    pub fn with_configured_peer_generation_and_count<R>(
+        &self,
+        f: impl FnOnce(u64, usize) -> R,
+    ) -> R {
+        let state = self
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        f(state.generation, state.peer_ids.len())
+    }
+
+    /// Return a bounded rotating batch of configured semantic peer ids.
+    ///
+    /// Unlike [`Self::online_peers`], this relay-aware snapshot retains logical
+    /// targets reachable through a hub in Spoke deployments. The actor publishes
+    /// it only after topology and key-ACL admission; authenticated peers outside the
+    /// configured topology are deliberately excluded.
+    /// Results begin at `start_index`, wrap once, and clone no more than
+    /// `limit` identifiers. A complete-cycle batch advances by one position so
+    /// bounded low-priority admission cannot permanently favor the canonical
+    /// prefix when the peer count is less than or equal to the round cap.
+    pub fn configured_peer_ids_bounded(
+        &self,
+        start_index: usize,
+        limit: usize,
+    ) -> ConfiguredPeerBatch {
+        let state = self
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let total_peer_count = state.peer_ids.len();
+        if limit == 0 || total_peer_count == 0 {
+            return ConfiguredPeerBatch {
+                generation: state.generation,
+                total_peer_count,
+                peer_ids: Vec::new(),
+                next_start_index: 0,
+            };
+        }
+        let start = start_index % total_peer_count;
+        let take = limit.min(total_peer_count);
+        let peer_ids = state.peer_ids[start..]
+            .iter()
+            .chain(state.peer_ids[..start].iter())
+            .take(take)
+            .cloned()
+            .collect();
+        let advance = if take == total_peer_count { 1 } else { take };
+        ConfiguredPeerBatch {
+            generation: state.generation,
+            total_peer_count,
+            peer_ids,
+            next_start_index: (start + advance) % total_peer_count,
+        }
     }
     /// Get a receiver of [`OnlinePeers`]
     pub fn online_peers_receiver(&self) -> watch::Receiver<OnlinePeers> {
@@ -9212,7 +9390,6 @@ include!("network/handle_update_tests.rs");
 #[cfg(test)]
 mod accept_stream_tests {
     use super::*;
-    use crate::peer::SoranetHandshakeConfig;
     use crate::peer::test_support::{SpawnPath, snapshot};
     use iroha_config::parameters::actual::{
         LaneProfile, Network as NetCfg, RelayMode, SoranetHandshake as ActualSoranetHandshake,
@@ -9863,7 +10040,7 @@ mod accept_stream_tests {
         };
         let addr = std_listener.local_addr().unwrap();
         drop(std_listener);
-        let soranet = Arc::new(SoranetHandshakeConfig::defaults());
+        let soranet = test_soranet_handshake_runtime();
         let shutdown = ShutdownSignal::new();
         let _listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             addr,
@@ -10107,7 +10284,7 @@ mod accept_stream_tests {
         };
         let addr = udp.local_addr().unwrap();
         drop(udp);
-        let soranet = Arc::new(SoranetHandshakeConfig::defaults());
+        let soranet = test_soranet_handshake_runtime();
         let _listener_task = start_quic_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             &addr,
             Arc::new(key_pair),
@@ -10416,9 +10593,9 @@ async fn start_quic_listener<T, E>(
     outbound_frame_queue_limits: OutboundFrameQueueLimits,
     outbound_post_byte_budgets: OutboundPostByteBudgets,
     inbound_frame_byte_budgets: crate::peer::InboundFrameByteBudgets,
-    trust_gossip: bool,
+    trust_gossip_config: bool,
     max_frame_bytes: usize,
-    soranet_handshake: Arc<SoranetHandshakeConfig>,
+    soranet_handshake: Arc<SoranetHandshakeRuntime>,
     local_scion_supported: bool,
     relay_role: RelayRole,
     flow_control: crate::transport::quic::FlowControlConfig,
@@ -10545,7 +10722,7 @@ where
             let inbound_frame_byte_budgets = inbound_frame_byte_budgets.clone();
             let soranet_handshake = soranet_handshake.clone();
             let relay_role = relay_role;
-            let trust_gossip = trust_gossip;
+            let trust_gossip_config = trust_gossip_config;
             let transport_binding = transport_binding;
             children.spawn(async move {
                 let remote = incoming.remote_address();
@@ -10628,6 +10805,18 @@ where
                     }
                     Err(_) => (None, None),
                 };
+                let soranet_policy = match soranet_handshake.snapshot() {
+                    Ok(policy) => policy,
+                    Err(error) => {
+                        iroha_logger::error!(
+                            %error,
+                            %remote,
+                            "Refusing QUIC handshake without a SoraNet policy snapshot"
+                        );
+                        return;
+                    }
+                };
+                let trust_gossip = trust_gossip_config && soranet_policy.trust_gossip();
                 let peer_task = connected_from::<T, E>(
                     public_address,
                     key_pair,
@@ -10649,7 +10838,7 @@ where
                     consensus_caps,
                     confidential_caps,
                     crypto_caps,
-                    soranet_handshake,
+                    soranet_policy,
                     local_scion_supported,
                     post_capacity,
                     outbound_frame_queue_limits,
@@ -10712,7 +10901,7 @@ mod quic_tests {
         let (tx, _rx) = tokio::sync::mpsc::channel::<
             crate::peer::message::ServiceMessage<WireMessage<Dummy>>,
         >(1);
-        let soranet = Arc::new(SoranetHandshakeConfig::defaults());
+        let soranet = test_soranet_handshake_runtime();
         let shutdown = ShutdownSignal::new();
         let task = match start_quic_listener::<WireMessage<Dummy>, ChaCha20Poly1305>(
             &addr,
@@ -10803,7 +10992,7 @@ async fn start_tls_listener<T, E>(
     inbound_frame_byte_budgets: crate::peer::InboundFrameByteBudgets,
     options: TlsListenerOptions,
     max_frame_bytes: usize,
-    soranet_handshake: Arc<SoranetHandshakeConfig>,
+    soranet_handshake: Arc<SoranetHandshakeRuntime>,
     relay_role: RelayRole,
     preauth_capacity: Arc<Semaphore>,
     shutdown_signal: ShutdownSignal,
@@ -10815,7 +11004,7 @@ where
     let TlsListenerOptions {
         peer_capabilities:
             TlsPeerCapabilities {
-                trust_gossip,
+                trust_gossip: trust_gossip_config,
                 quic_datagrams_enabled,
                 quic_datagram_max_payload_bytes,
                 local_scion_supported,
@@ -10881,7 +11070,7 @@ where
             let outbound_frame_queue_limits = outbound_frame_queue_limits;
             let outbound_post_byte_budgets = outbound_post_byte_budgets.clone();
             let inbound_frame_byte_budgets = inbound_frame_byte_budgets.clone();
-            let soranet_handshake = soranet_handshake.clone();
+            let soranet_handshake = Arc::clone(&soranet_handshake);
             let relay_role = relay_role;
             let tcp_nodelay = tcp_nodelay;
             let tcp_keepalive = tcp_keepalive;
@@ -10928,6 +11117,18 @@ where
                             );
                             return;
                         }
+                        let soranet_policy = match soranet_handshake.snapshot() {
+                            Ok(policy) => policy,
+                            Err(error) => {
+                                iroha_logger::error!(
+                                    %error,
+                                    %remote,
+                                    "Refusing TLS handshake without a SoraNet policy snapshot"
+                                );
+                                return;
+                            }
+                        };
+                        let trust_gossip = trust_gossip_config && soranet_policy.trust_gossip();
                         let (read_half, write_half) = tokio::io::split(tls_stream);
                         let peer_task = connected_from::<T, E>(
                             public_address,
@@ -10946,7 +11147,7 @@ where
                             consensus_caps,
                             confidential_caps.clone(),
                             crypto_caps.clone(),
-                            soranet_handshake.clone(),
+                            soranet_policy,
                             local_scion_supported,
                             post_capacity,
                             outbound_frame_queue_limits,
@@ -11019,7 +11220,7 @@ struct NetworkBase<T: Pload, E: Enc> {
     /// Local view of peer trust/score.
     peer_reputations: PeerReputationBook,
     /// `SoraNet` handshake runtime configuration shared across peers.
-    soranet_handshake: Arc<SoranetHandshakeConfig>,
+    soranet_handshake: Arc<SoranetHandshakeRuntime>,
     /// Current [`Peer`]s in [`Peer::Ready`] state.
     peers: HashMap<PeerId, RefPeer<WireMessage<T>>>,
     /// [`Peer`]s in process of being connected.
@@ -11047,6 +11248,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     /// Actor-published authority for direct reliable posts. This contains the
     /// accepted logical topology plus currently authenticated peer identities.
     reliable_direct_topology: Arc<Mutex<ReliableProgressTopology>>,
+    /// Actor-published configured logical peers after topology and key-ACL admission.
+    configured_peer_ids: Arc<Mutex<ConfiguredPeerState>>,
     /// Actor-instance identity and exact current connection tenures used to
     /// mint unforgeable reply routes for inbound semantic origins.
     reply_route_owner: Arc<()>,
@@ -11097,8 +11300,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     service_message_sender: mpsc::Sender<ServiceMessage<WireMessage<T>>>,
     /// Latest ACL snapshot receiver.
     update_acl_receiver: ControlUpdateReceiver<message::UpdateAcl>,
-    /// Latest handshake snapshot receiver.
-    update_handshake_receiver: ControlUpdateReceiver<message::UpdateHandshake>,
+    /// Exact handshake update request receiver.
+    update_handshake_receiver: mpsc::Receiver<message::UpdateHandshake>,
     /// Latest consensus-handshake-capabilities snapshot receiver.
     update_consensus_caps_receiver: ControlUpdateReceiver<ConsensusCapsSnapshot>,
     /// Current available connection id
@@ -11275,9 +11478,19 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         &mut self,
         handshake: ActualSoranetHandshake,
     ) -> Result<(), Error> {
-        self.soranet_handshake = runtime_from_handshake(handshake)?;
-        self.trust_gossip = self.trust_gossip_config && self.soranet_handshake.trust_gossip();
+        let updated = self.soranet_handshake.reload(handshake)?;
+        self.trust_gossip = self.trust_gossip_config && updated.trust_gossip();
         Ok(())
+    }
+    fn handle_soranet_handshake_update(&mut self, update: message::UpdateHandshake) {
+        let result = self.update_soranet_handshake_config(update.handshake);
+        if let Err(err) = &result {
+            iroha_logger::error!(
+                error = %err,
+                "Failed to update SoraNet handshake configuration"
+            );
+        }
+        let _ = update.respond_to.send(result);
     }
     fn handle_service_message(&mut self, service_message: ServiceMessage<WireMessage<T>>) {
         match service_message {
@@ -11876,13 +12089,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 Some(acl) = receive_control_update(&mut self.update_acl_receiver) => {
                     self.set_reply_source_acl(acl);
                 }
-                Some(handshake) = receive_control_update(&mut self.update_handshake_receiver) => {
-                    if let Err(err) = self.update_soranet_handshake_config(handshake.handshake) {
-                        iroha_logger::error!(
-                            error = %err,
-                            "Failed to update SoraNet handshake configuration"
-                        );
-                    }
+                Some(handshake) = self.update_handshake_receiver.recv() => {
+                    self.handle_soranet_handshake_update(handshake);
                 }
                 Some(consensus_caps) = receive_control_update(
                     &mut self.update_consensus_caps_receiver,
@@ -13466,8 +13674,13 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 .any(|p| (p.id(), p.address()) == (&id, &addr))
                 && self.ready_to_retry_addr(&id, &addr, now)
             {
-                let connected = self.connect_peer(&peer);
-                debug_assert!(connected, "the total-cap guard was checked above");
+                if !self.connect_peer(&peer) {
+                    let when = apply_connect_startup_delay(
+                        now + Duration::from_millis(50),
+                        self.connect_startup_delay_until,
+                    );
+                    self.pending_connects.push((when, peer));
+                }
             } else {
                 // Not ready; reschedule shortly to avoid starvation
                 let when = apply_connect_startup_delay(
@@ -13501,6 +13714,18 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         if self.exceeds_caps() {
             return false;
         }
+        let soranet_policy = match self.soranet_handshake.snapshot() {
+            Ok(policy) => policy,
+            Err(error) => {
+                iroha_logger::error!(
+                    %error,
+                    peer = %peer.id(),
+                    "Refusing outbound handshake without a SoraNet policy snapshot"
+                );
+                return false;
+            }
+        };
+        let trust_gossip = self.trust_gossip_config && soranet_policy.trust_gossip();
         iroha_logger::trace!(
             listen_addr = %self.listen_addr, peer.id.address = %peer.address(),
             "Creating new peer actor",
@@ -13528,7 +13753,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             self.consensus_caps.clone(),
             self.confidential_caps.clone(),
             self.crypto_caps.clone(),
-            self.soranet_handshake.clone(),
+            soranet_policy,
             self.post_queue_cap,
             self.outbound_frame_queue_limits,
             self.outbound_post_byte_budgets.clone(),
@@ -13536,7 +13761,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             self.quic_enabled,
             prefer_scion,
             self.local_scion_supported,
-            self.trust_gossip,
+            trust_gossip,
             self.max_frame_bytes,
             self.relay_role,
             self.happy_eyeballs_stagger,
@@ -14277,6 +14502,36 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         (removed.len(), cancelled_waiters)
     }
     fn reconcile_reliable_progress_topologies(&mut self) -> (usize, usize) {
+        let mut configured_peer_ids = self
+            .requested_topology
+            .iter()
+            .filter(|peer_id| *peer_id != &self.self_id)
+            // A pending revocation must stop being a sampling authority before
+            // obsolete connection owners finish draining. Pending additions,
+            // however, are not exposed until the topology commits.
+            .filter(|peer_id| {
+                self.pending_reply_source_authority
+                    .topology
+                    .as_ref()
+                    .is_none_or(|pending| pending.0.contains(peer_id))
+            })
+            .filter(|peer_id| self.projected_reply_source_acl_allows(peer_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        configured_peer_ids.sort();
+        let mut state = self
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.peer_ids != configured_peer_ids {
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .expect("configured-peer generation space exhausted");
+            state.peer_ids = configured_peer_ids;
+        }
+        drop(state);
+
         let (removed_broadcast, cancelled_broadcast_waiters) = self.reconcile_reliable_topology(
             &self.reliable_broadcast_topology,
             &self.current_topology,
@@ -17732,6 +17987,61 @@ mod tests {
     fn bare_network() -> Option<NetworkBase<DummyMsg, ChaCha20Poly1305>> {
         bare_network_with::<DummyMsg>()
     }
+    #[tokio::test]
+    async fn handshake_actor_ack_preserves_policy_on_rejection() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let initial = network
+            .soranet_handshake
+            .snapshot()
+            .expect("initial handshake policy");
+        let initial_capacity = initial.puzzle_work_capacities().0;
+        let changed_capacity = if initial_capacity.get() == 1 { 2 } else { 1 };
+        let mut rejected = ActualSoranetHandshake::default();
+        rejected.pow.required = false;
+        rejected.pow.outbound_mint_capacity =
+            std::num::NonZeroUsize::new(changed_capacity).expect("non-zero capacity");
+        let (rejected_response, rejected_result) = oneshot::channel();
+        network.handle_soranet_handshake_update(message::UpdateHandshake {
+            handshake: rejected,
+            respond_to: rejected_response,
+        });
+        let error = rejected_result
+            .await
+            .expect("rejection acknowledgment")
+            .expect_err("owner-changing update must be rejected");
+        assert!(matches!(
+            error,
+            Error::HandshakeSoranet(message) if message.contains("restart required")
+        ));
+        assert!(Arc::ptr_eq(
+            &initial,
+            &network
+                .soranet_handshake
+                .snapshot()
+                .expect("policy after rejection")
+        ));
+
+        let mut accepted = ActualSoranetHandshake::default();
+        accepted.pow.required = false;
+        accepted.pow.difficulty = 6;
+        let (accepted_response, accepted_result) = oneshot::channel();
+        network.handle_soranet_handshake_update(message::UpdateHandshake {
+            handshake: accepted,
+            respond_to: accepted_response,
+        });
+        accepted_result
+            .await
+            .expect("acceptance acknowledgment")
+            .expect("compatible update must be accepted");
+        let active = network
+            .soranet_handshake
+            .snapshot()
+            .expect("policy after acceptance");
+        assert_eq!(active.pow_parameters().difficulty(), 6);
+        assert!(!Arc::ptr_eq(&initial, &active));
+    }
     fn bare_network_with<T: Pload + message::ClassifyTopic>()
     -> Option<NetworkBase<T, ChaCha20Poly1305>> {
         let _guard = enter_test_runtime();
@@ -17755,7 +18065,8 @@ mod tests {
             control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = control_update_channel();
         let (_update_acl_tx, update_acl_rx) = control_update_channel();
-        let (_update_handshake_tx, update_handshake_rx) = control_update_channel();
+        let (_update_handshake_tx, update_handshake_rx) =
+            mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
             consensus_caps_update_channel();
         let (peer_message_hi_tx, peer_message_hi_rx) =
@@ -17771,7 +18082,7 @@ mod tests {
             watch::channel(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
             control_update_channel();
-        let soranet = Arc::new(SoranetHandshakeConfig::defaults());
+        let soranet = test_soranet_handshake_runtime();
         let network_id = test_network_id("p2p-network-fixture");
         let self_id = PeerId::from(key_pair.public_key().clone());
         let key_pair = Arc::new(key_pair);
@@ -17806,6 +18117,7 @@ mod tests {
                     Mutex::new(ReliableProgressTopology::empty()),
                 ),
                 reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+                configured_peer_ids: Arc::new(Mutex::new(ConfiguredPeerState::default())),
                 reply_route_owner: Arc::new(()),
                 reply_route_tenures: HashMap::new(),
                 next_reply_connection_ordinal: 0,
@@ -21817,6 +22129,128 @@ mod tests {
         assert!(progress_rx.try_recv().is_ok());
     }
     #[test]
+    fn configured_peer_snapshot_keeps_spoke_targets_and_excludes_observers() {
+        let_test_network!(network);
+        let mut expected = (0..4).map(|_| random_peer_id()).collect::<Vec<_>>();
+        network.requested_topology = expected.iter().cloned().collect();
+        network.current_topology = HashSet::from([expected[0].clone()]);
+        let observer = random_peer_id();
+        let (observer_handle, _observer_receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            observer.clone(),
+            socket_addr!(127.0.0.1:12888),
+            8_888,
+            observer_handle,
+        );
+
+        let _ = network.reconcile_reliable_progress_topologies();
+        expected.sort();
+        let published = network
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .peer_ids
+            .clone();
+        assert_eq!(published, expected);
+        assert!(!published.contains(&observer));
+    }
+    #[test]
+    fn configured_peer_snapshot_applies_pending_revocations_fail_closed() {
+        let_test_network!(network);
+        let retained = random_peer_id();
+        let topology_revoked = random_peer_id();
+        let acl_revoked = random_peer_id();
+        network.requested_topology = HashSet::from([
+            retained.clone(),
+            topology_revoked.clone(),
+            acl_revoked.clone(),
+        ]);
+        network.pending_reply_source_authority.topology = Some(UpdateTopology(HashSet::from([
+            retained.clone(),
+            acl_revoked.clone(),
+            random_peer_id(),
+        ])));
+        network.pending_reply_source_authority.acl = Some(message::UpdateAcl {
+            deny_keys: vec![acl_revoked.public_key().clone()],
+            ..message::UpdateAcl::default()
+        });
+
+        let _ = network.reconcile_reliable_progress_topologies();
+        let state = network
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(state.peer_ids.as_slice(), [retained]);
+        assert_eq!(state.generation, 1);
+    }
+    #[test]
+    fn configured_peer_ids_are_bounded_and_round_robin() {
+        let (handle, _safety_rx, _progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let mut expected = (0..4).map(|_| random_peer_id()).collect::<Vec<_>>();
+        expected.sort();
+        let mut state = handle
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.generation = 7;
+        state.peer_ids = expected.clone();
+        drop(state);
+
+        let first = handle.configured_peer_ids_bounded(0, 2);
+        assert_eq!(first.generation, 7);
+        assert_eq!(first.peer_ids, expected[..2]);
+        let second = handle.configured_peer_ids_bounded(first.next_start_index, 2);
+        assert_eq!(second.peer_ids, expected[2..]);
+        let wrapped = handle.configured_peer_ids_bounded(second.next_start_index, 2);
+        assert_eq!(wrapped.peer_ids, expected[..2]);
+
+        let full = handle.configured_peer_ids_bounded(0, expected.len());
+        assert_eq!(full.peer_ids, expected);
+        assert_eq!(full.next_start_index, 1);
+        let rotated = handle.configured_peer_ids_bounded(full.next_start_index, usize::MAX);
+        assert_eq!(rotated.peer_ids[0], expected[1]);
+        assert_eq!(rotated.peer_ids.last(), Some(&expected[0]));
+    }
+    #[test]
+    fn configured_peer_generation_callback_holds_membership_stable() {
+        let (handle, _safety_rx, _progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let peer = random_peer_id();
+        {
+            let mut state = handle
+                .configured_peer_ids
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.generation = 3;
+            state.peer_ids = vec![peer];
+        }
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let reader = {
+            let handle = handle.clone();
+            std::thread::spawn(move || {
+                handle.with_configured_peer_generation_and_count(|generation, count| {
+                    assert_eq!((generation, count), (3, 1));
+                    entered_tx.send(()).expect("publish callback entry");
+                    release_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("release generation reader");
+                });
+            })
+        };
+        entered_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("generation reader enters callback");
+        assert!(
+            handle.configured_peer_ids.try_lock().is_err(),
+            "membership publication must wait for a generation-bound operation"
+        );
+        release_tx.send(()).expect("release generation callback");
+        reader.join().expect("generation reader thread");
+    }
+    #[test]
     fn exact_broadcast_retry_coalesces_but_distinct_and_direct_requests_do_not() {
         let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<DeferredProgressMsg>();
@@ -24687,10 +25121,12 @@ pub mod message {
     #[derive(Clone, Debug, Default)]
     pub struct UpdateTrustedPeers(pub HashSet<PeerId>);
     /// Update `SoraNet` handshake runtime configuration.
-    #[derive(Clone, Debug)]
+    #[derive(Debug)]
     pub struct UpdateHandshake {
         /// New handshake parameters to install.
         pub handshake: ActualSoranetHandshake,
+        /// Exact response for this proposed runtime update.
+        pub(crate) respond_to: oneshot::Sender<Result<(), Error>>,
     }
     /// Update consensus handshake capabilities and optionally reconnect peers.
     #[derive(Clone, Copy, Debug)]

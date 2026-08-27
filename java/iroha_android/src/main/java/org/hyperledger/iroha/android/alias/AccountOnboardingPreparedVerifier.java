@@ -10,6 +10,7 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
@@ -23,20 +24,26 @@ import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 public final class AccountOnboardingPreparedVerifier {
   private AccountOnboardingPreparedVerifier() {}
 
-  /** Authenticates and validates an exact prepared transaction for the original receipt/binding. */
+  /** Authenticates an exact prepared transaction for the receipt, binding, and expected fee intent. */
   public static SignedTransaction requireValidPrepared(
       final AccountOnboardingPreparedTransactionV1 prepared,
       final AccountOnboardingPlanRequestV1 request,
       final AccountOnboardingPlanReceiptV1 receipt,
       final TairaPublicResetMutationBindingV1 binding,
+      final FeePaymentIntent expectedFeePayment,
       final NetworkId expectedNetworkId,
       final String expectedAuthority) {
     Objects.requireNonNull(prepared, "prepared");
+    Objects.requireNonNull(expectedFeePayment, "expectedFeePayment");
     AccountOnboardingReceiptVerifier.requireValidForRequest(
         request, receipt, expectedNetworkId, expectedAuthority);
     if (!sameBinding(prepared.binding(), binding) || !sameReceipt(prepared.receipt(), receipt)) {
       throw new IllegalArgumentException(
           "prepared onboarding envelope differs from the exact receipt or binding");
+    }
+    if (!expectedFeePayment.hasSamePayerAndGasBound(prepared.feePayment())) {
+      throw new IllegalArgumentException(
+          "prepared onboarding fee intent changed payer, sponsor revision, or gas bound");
     }
     final byte[] receiptHash = AliasNameSupport.decodeHash(receipt.planHash());
     if (receiptHash == null
@@ -160,11 +167,17 @@ public final class AccountOnboardingPreparedVerifier {
     return proofRequired;
   }
 
-  /** Requires a submit response to reconcile only the exact submitted hash and binding. */
+  /** Reconciles only an independently fee-checked prepared envelope and its exact submit result. */
   public static PreparedTransactionSubmitResponseV1 requireValidSubmitResponse(
       final PreparedTransactionSubmitResponseV1 response,
       final AccountOnboardingPreparedTransactionV1 prepared,
+      final FeePaymentIntent expectedFeePayment,
       final int httpStatus) {
+    Objects.requireNonNull(expectedFeePayment, "expectedFeePayment");
+    if (!expectedFeePayment.hasSamePayerAndGasBound(prepared.feePayment())) {
+      throw new IllegalArgumentException(
+          "prepared onboarding fee intent changed payer, sponsor revision, or gas bound");
+    }
     if (httpStatus != 200 && httpStatus != 202) {
       throw new IllegalArgumentException(
           "prepared onboarding submit requires HTTP 200 or 202");

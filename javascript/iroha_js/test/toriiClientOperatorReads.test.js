@@ -181,6 +181,8 @@ test("operator reads reject token and precomputed signature fallback", async () 
   for (const options of [
     { authToken: "retired-bearer" },
     { apiToken: "retired-token" },
+    { defaultHeaders: { Cookie: "operator-session=ambient" } },
+    { defaultHeaders: { "Proxy-Authorization": "Basic cHJveHk=" } },
     { defaultHeaders: { "X-Iroha-Account": "retired-account" } },
     { defaultHeaders: { "X-Iroha-Operator-Nonce": "precomputed" } },
   ]) {

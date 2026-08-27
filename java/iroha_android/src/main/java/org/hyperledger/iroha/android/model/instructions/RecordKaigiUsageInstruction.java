@@ -9,6 +9,15 @@ import java.util.Objects;
 public final class RecordKaigiUsageInstruction implements InstructionTemplate {
 
   private static final String ACTION = "RecordKaigiUsage";
+  private static final java.util.Set<String> ALLOWED_ARGUMENTS =
+      KaigiInstructionUtils.argumentSet(
+          "action",
+          "call.domain_id",
+          "call.call_name",
+          "duration_ms",
+          "billed_gas",
+          "usage_commitment",
+          "proof");
 
   private final KaigiInstructionUtils.CallId callId;
   private final long durationMs;
@@ -61,6 +70,7 @@ public final class RecordKaigiUsageInstruction implements InstructionTemplate {
   }
 
   public static RecordKaigiUsageInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireKnownArguments(arguments, ALLOWED_ARGUMENTS);
     KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
@@ -68,9 +78,12 @@ public final class RecordKaigiUsageInstruction implements InstructionTemplate {
         KaigiInstructionUtils.parseUnsignedLong(arguments.get("duration_ms"), "duration_ms"));
     builder.setBilledGas(
         KaigiInstructionUtils.parseUnsignedLong(arguments.getOrDefault("billed_gas", "0"), "billed_gas"));
-    builder.setUsageCommitmentLiteral(arguments.get("usage_commitment"));
+    final String usageCommitment = arguments.get("usage_commitment");
+    if (usageCommitment != null) {
+      builder.setUsageCommitment(KaigiInstructionUtils.canonicalizeHash(usageCommitment));
+    }
     builder.setProofBase64(arguments.get("proof"));
-    return new RecordKaigiUsageInstruction(builder, new LinkedHashMap<>(arguments));
+    return builder.build();
   }
 
   public static Builder builder() {

@@ -1,6 +1,6 @@
 //! DoS and abuse mitigation utilities for the relay handshake path.
 use crate::{
-    capability,
+    canonical_remote_ip, capability,
     config::{
         ConfigError, EmergencyThrottleConfig, PowConfig, QuotaConfig,
         RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1, RelayMode, SlowlorisConfig, TokenPolicySource,
@@ -17,7 +17,7 @@ use iroha_crypto::soranet::{
 };
 use norito::{DecodeLimits, derive::JsonDeserialize, json};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     fmt,
     hash::Hash,
     net::{IpAddr, SocketAddr},
@@ -70,16 +70,13 @@ const fn emergency_throttle_preflight_limits_v1() -> json::JsonPreflightLimits {
 pub struct DoSControls {
     pow_params: Parameters,
     remote_limiter: Mutex<RateLimiter<IpAddr>>,
-    descriptor_limiter: Mutex<Option<RateLimiter<[u8; 16]>>>,
     slowloris: SlowlorisDetector,
     require_pow: bool,
     puzzle: Option<PuzzlePolicy>,
     signed_ticket_public_key: Option<Arc<Vec<u8>>>,
     token: Option<TokenPolicy>,
-    replay_filter: Option<Mutex<ReplayFilter>>,
     metrics: Arc<Metrics>,
     remote_limits: QuotaLimits,
-    descriptor_limits: Option<QuotaLimits>,
     emergency: Option<EmergencyThrottle>,
 }
 impl DoSControls {
@@ -92,26 +89,22 @@ impl DoSControls {
         metrics: Arc<Metrics>,
         mode: RelayMode,
     ) -> Result<Self, ConfigError> {
+        config.replay_filter().ensure_disabled()?;
         let quotas_cfg = config.quotas_for_mode(mode);
+        if quotas_cfg.per_descriptor_burst != 0 {
+            return Err(ConfigError::Quota(
+                "per-descriptor admission quotas are unsupported because the descriptor commitment is relay-static; use per-remote quotas and authenticated credential limits"
+                    .to_owned(),
+            ));
+        }
         let mut slowloris_cfg = config.slowloris.clone();
         slowloris_cfg.apply_defaults();
         let remote_params = RateLimitParams::from_remote(&quotas_cfg);
-        let descriptor_params = RateLimitParams::from_descriptor(&quotas_cfg);
         let remote_limits = QuotaLimits::from(&remote_params);
         let remote_limiter = Mutex::new(RateLimiter::new(remote_params));
-        let (descriptor_limits, descriptor_limiter) = match descriptor_params {
-            Some(params) => {
-                let limits = QuotaLimits::from(&params);
-                let limiter = Mutex::new(Some(RateLimiter::new(params)));
-                (Some(limits), limiter)
-            }
-            None => (None, Mutex::new(None)),
-        };
         metrics.set_pow_difficulty(base_params.difficulty());
         metrics.set_active_remote_cooldowns(0);
-        if descriptor_limits.is_none() {
-            metrics.set_active_descriptor_cooldowns(0);
-        }
+        metrics.set_active_descriptor_cooldowns(0);
         let puzzle_policy = puzzle.map(PuzzlePolicy::new);
         let signed_ticket_public_key = config.signed_ticket_public_key()?.map(Arc::new);
         if signed_ticket_public_key.is_some() && puzzle_policy.is_none() {
@@ -120,15 +113,6 @@ impl DoSControls {
                     .to_owned(),
             ));
         }
-        let replay_filter = if config.replay_filter().is_enabled() {
-            Some(Mutex::new(ReplayFilter::new(
-                config.replay_filter().bits_usize(),
-                config.replay_filter().hash_count(),
-                config.replay_filter().ttl(),
-            )?))
-        } else {
-            None
-        };
         let emergency = config
             .emergency_throttle()
             .map(|cfg| EmergencyThrottle::new(cfg.clone()))
@@ -136,16 +120,13 @@ impl DoSControls {
         Ok(Self {
             pow_params: base_params,
             remote_limiter,
-            descriptor_limiter,
-            slowloris: SlowlorisDetector::new(slowloris_cfg),
+            slowloris: SlowlorisDetector::new(slowloris_cfg, remote_limits.max_entries()),
             require_pow: config.required,
             puzzle: puzzle_policy,
             signed_ticket_public_key,
             token: token.map(TokenPolicy::from_source),
-            replay_filter,
             metrics,
             remote_limits,
-            descriptor_limits,
             emergency,
         })
     }
@@ -197,9 +178,9 @@ impl DoSControls {
     pub fn remote_quota_limits(&self) -> QuotaLimits {
         self.remote_limits
     }
-    /// Returns the active descriptor quota limits, if configured.
+    /// Returns no descriptor quota limits because relay-static descriptors cannot isolate clients.
     pub fn descriptor_quota_limits(&self) -> Option<QuotaLimits> {
-        self.descriptor_limits
+        None
     }
     /// Registers a pending handshake attempt, enforcing quota limits.
     pub fn begin(
@@ -216,7 +197,7 @@ impl DoSControls {
         descriptor_commit: Option<&[u8]>,
         now: Instant,
     ) -> Result<AttemptContext, Throttle> {
-        let ip = remote.ip();
+        let ip = canonical_remote_ip(remote);
         if let Some(cooldown) = self.slowloris.unavailable_cooldown() {
             return Err(Throttle {
                 cooldown,
@@ -247,53 +228,10 @@ impl DoSControls {
                 reason: ThrottleReason::RemoteQuota,
             });
         }
-        if let (Some(filter), Some(commit_bytes)) = (self.replay_filter.as_ref(), descriptor_commit)
-        {
-            let mut guard = match filter.lock() {
-                Ok(guard) => guard,
-                Err(error) => {
-                    // Poisoned replay state is not trustworthy enough to make
-                    // an allow decision. Preserve the configured TTL for the
-                    // controlled throttle without observing the filter's
-                    // partially-mutated counters or entries.
-                    let cooldown = error.get_ref().ttl();
-                    warn!(
-                        %error,
-                        "descriptor replay-filter mutex poisoned; rejecting admission"
-                    );
-                    return Err(Throttle {
-                        cooldown,
-                        reason: ThrottleReason::DescriptorReplay,
-                    });
-                }
-            };
-            let is_new = guard.observe(commit_bytes, now);
-            if !is_new {
-                return Err(Throttle {
-                    cooldown: guard.ttl(),
-                    reason: ThrottleReason::DescriptorReplay,
-                });
-            }
-        }
-        if let Some(key) = descriptor_commit.and_then(descriptor_key) {
-            if let Err(cooldown) = self.check_descriptor_limit(key, now) {
-                return Err(Throttle {
-                    cooldown,
-                    reason: ThrottleReason::DescriptorQuota,
-                });
-            }
-            Ok(AttemptContext {
-                remote: ip,
-                _descriptor_key: Some(key),
-                started_at: now,
-            })
-        } else {
-            Ok(AttemptContext {
-                remote: ip,
-                _descriptor_key: None,
-                started_at: now,
-            })
-        }
+        Ok(AttemptContext {
+            remote: ip,
+            started_at: now,
+        })
     }
     /// Records a successful handshake outcome.
     pub fn record_success(&self, attempt: &AttemptContext, elapsed: Duration) {
@@ -368,29 +306,11 @@ impl DoSControls {
         self.metrics.set_active_remote_cooldowns(count);
         result
     }
-    fn check_descriptor_limit(&self, key: [u8; 16], now: Instant) -> Result<(), Duration> {
-        let mut guard = self.descriptor_limiter.lock().map_err(|error| {
-            warn!(%error, "descriptor quota mutex poisoned; rejecting admission");
-            self.descriptor_limits
-                .as_ref()
-                .map_or_else(|| self.remote_limits.cooldown(), QuotaLimits::cooldown)
-        })?;
-        if let Some(limiter) = guard.as_mut() {
-            let result = limiter.check(key, now);
-            let count = limiter.cooldown_count(now);
-            self.metrics.set_active_descriptor_cooldowns(count);
-            result
-        } else {
-            self.metrics.set_active_descriptor_cooldowns(0);
-            Ok(())
-        }
-    }
 }
 /// Context associated with an inbound handshake attempt.
 #[derive(Debug, Clone)]
 pub struct AttemptContext {
     remote: IpAddr,
-    _descriptor_key: Option<[u8; 16]>,
     started_at: Instant,
 }
 impl AttemptContext {
@@ -722,7 +642,29 @@ struct EmergencyThrottleDocument {
 struct RateEntry {
     window_start: Instant,
     count: u32,
-    cooldown_until: Option<Instant>,
+    cooldown: Option<RateCooldown>,
+}
+#[derive(Clone, Copy)]
+struct RateCooldown {
+    started_at: Instant,
+    duration: Duration,
+}
+impl RateCooldown {
+    fn new(started_at: Instant, duration: Duration) -> Self {
+        Self {
+            started_at,
+            duration,
+        }
+    }
+    fn remaining(self, now: Instant) -> Duration {
+        let elapsed = now
+            .checked_duration_since(self.started_at)
+            .unwrap_or_default();
+        self.duration.saturating_sub(elapsed)
+    }
+    fn is_active(self, now: Instant) -> bool {
+        !self.remaining(now).is_zero()
+    }
 }
 #[derive(Clone, Copy)]
 struct RateLimitParams {
@@ -748,20 +690,8 @@ impl RateLimitParams {
             cfg.max_entries.max(1),
         )
     }
-    fn from_descriptor(cfg: &QuotaConfig) -> Option<Self> {
-        if cfg.per_descriptor_burst == 0 {
-            None
-        } else {
-            Some(Self::new(
-                Duration::from_secs(cfg.per_descriptor_window_secs.max(1)),
-                cfg.per_descriptor_burst,
-                Duration::from_secs(cfg.cooldown_secs.max(1)),
-                cfg.max_entries.max(1),
-            ))
-        }
-    }
 }
-/// Per-remote or per-descriptor rate limiter with cooldown tracking.
+/// Per-remote rate limiter with cooldown tracking.
 struct RateLimiter<K> {
     params: RateLimitParams,
     entries: HashMap<K, RateEntry>,
@@ -815,10 +745,21 @@ where
         }
     }
     fn check(&mut self, key: K, now: Instant) -> Result<(), Duration> {
-        if self.params.burst == 0 {
-            return Ok(());
-        }
         self.cleanup(now);
+        if let Some(cooldown) = self.entries.get(&key).and_then(|entry| entry.cooldown) {
+            return Err(cooldown.remaining(now));
+        }
+        if self.params.burst == 0 {
+            // A zero burst disables ordinary quota accounting, but externally
+            // imposed cooldowns (for example slowloris penalties) still occupy
+            // the bounded table. Fail closed for unseen clients while every
+            // slot contains an active penalty.
+            return if self.entries.len() >= self.params.max_entries {
+                Err(self.params.cooldown)
+            } else {
+                Ok(())
+            };
+        }
         if !self.entries.contains_key(&key)
             && (self.entries.len() >= self.params.max_entries
                 || self.entries.try_reserve(1).is_err())
@@ -828,16 +769,8 @@ where
         let entry = self.entries.entry(key).or_insert(RateEntry {
             window_start: now,
             count: 0,
-            cooldown_until: None,
+            cooldown: None,
         });
-        if let Some(until) = entry.cooldown_until {
-            if until > now {
-                return Err(until.saturating_duration_since(now));
-            }
-            entry.cooldown_until = None;
-            entry.count = 0;
-            entry.window_start = now;
-        }
         let elapsed = now
             .checked_duration_since(entry.window_start)
             .unwrap_or_default();
@@ -847,17 +780,13 @@ where
         }
         entry.count = entry.count.saturating_add(1);
         if entry.count > self.params.burst {
-            let cooldown_until = now + self.params.cooldown;
-            entry.cooldown_until = Some(cooldown_until);
+            entry.cooldown = Some(RateCooldown::new(now, self.params.cooldown));
             entry.count = self.params.burst;
             return Err(self.params.cooldown);
         }
         Ok(())
     }
     fn impose_cooldown(&mut self, key: K, now: Instant, cooldown: Duration) {
-        if self.params.burst == 0 {
-            return;
-        }
         let cooldown = if cooldown.is_zero() {
             self.params.cooldown
         } else {
@@ -873,106 +802,40 @@ where
         let entry = self.entries.entry(key).or_insert(RateEntry {
             window_start: now,
             count: 0,
-            cooldown_until: None,
+            cooldown: None,
         });
         entry.window_start = now;
         entry.count = 0;
-        entry.cooldown_until = Some(now + cooldown);
+        if entry
+            .cooldown
+            .is_none_or(|current| current.remaining(now) < cooldown)
+        {
+            entry.cooldown = Some(RateCooldown::new(now, cooldown));
+        }
     }
     fn cooldown_count(&self, now: Instant) -> u64 {
         self.entries
             .values()
-            .filter(|entry| entry.cooldown_until.is_some_and(|until| until > now))
+            .filter(|entry| {
+                entry
+                    .cooldown
+                    .is_some_and(|cooldown| cooldown.is_active(now))
+            })
             .count() as u64
     }
     fn cleanup(&mut self, now: Instant) {
         if self.entries.is_empty() {
             return;
         }
-        let horizon = self.params.window + self.params.cooldown;
+        let horizon = self.params.window.saturating_add(self.params.cooldown);
         self.entries.retain(|_, entry| {
+            if let Some(cooldown) = entry.cooldown {
+                return cooldown.is_active(now);
+            }
             now.checked_duration_since(entry.window_start)
                 .unwrap_or_default()
                 <= horizon
         });
-    }
-}
-/// Stored positions for an observed replay entry.
-struct ReplayEntry {
-    expiry: Instant,
-    positions: Box<[usize]>,
-}
-/// Counting bloom filter used to detect replayed PoW tickets.
-struct ReplayFilter {
-    mask: usize,
-    hash_count: u8,
-    ttl: Duration,
-    counters: Vec<u16>,
-    entries: VecDeque<ReplayEntry>,
-}
-impl ReplayFilter {
-    fn new(bits: usize, hash_count: u8, ttl: Duration) -> Result<Self, ConfigError> {
-        const MAX_BITS: usize = 1 << 24; // 16,777,216 counters
-        let clamped = bits.max(64);
-        if clamped > MAX_BITS {
-            return Err(ConfigError::ReplayFilter(
-                "replay_filter.bits must not exceed 16,777,216".to_string(),
-            ));
-        }
-        let size = clamped.next_power_of_two();
-        let mask = size - 1;
-        debug_assert!(hash_count > 0);
-        Ok(Self {
-            mask,
-            hash_count,
-            ttl,
-            counters: vec![0u16; size],
-            entries: VecDeque::new(),
-        })
-    }
-    fn ttl(&self) -> Duration {
-        self.ttl
-    }
-    fn observe(&mut self, key: &[u8], now: Instant) -> bool {
-        self.purge(now);
-        let positions = self.hash_positions(key);
-        let seen = positions.iter().all(|&pos| self.counters[pos] > 0);
-        for &pos in &positions {
-            let slot = &mut self.counters[pos];
-            *slot = slot.saturating_add(1);
-        }
-        self.entries.push_back(ReplayEntry {
-            expiry: now + self.ttl,
-            positions: positions.into_boxed_slice(),
-        });
-        !seen
-    }
-    fn purge(&mut self, now: Instant) {
-        while let Some(entry) = self.entries.front() {
-            if entry.expiry > now {
-                break;
-            }
-            for &pos in entry.positions.iter() {
-                let slot = &mut self.counters[pos];
-                if *slot > 0 {
-                    *slot -= 1;
-                }
-            }
-            self.entries.pop_front();
-        }
-    }
-    fn hash_positions(&self, key: &[u8]) -> Vec<usize> {
-        let mut hasher = Hasher::new();
-        hasher.update(key);
-        let mut reader = hasher.finalize_xof();
-        let mut buffer = [0u8; 8];
-        let mut positions = Vec::with_capacity(self.hash_count as usize);
-        for _ in 0..self.hash_count {
-            reader.fill(&mut buffer);
-            let value = u64::from_le_bytes(buffer);
-            positions.push((value as usize) & self.mask);
-        }
-        positions
     }
 }
 /// Events observed by the slowloris detector.
@@ -986,13 +849,15 @@ struct SlowlorisEntry {
 }
 struct SlowlorisDetector {
     cfg: SlowlorisConfig,
+    max_entries: usize,
     entries: Mutex<HashMap<IpAddr, SlowlorisEntry>>,
     unavailable: AtomicBool,
 }
 impl SlowlorisDetector {
-    fn new(cfg: SlowlorisConfig) -> Self {
+    fn new(cfg: SlowlorisConfig, max_entries: usize) -> Self {
         Self {
             cfg,
+            max_entries: max_entries.max(1),
             entries: Mutex::new(HashMap::new()),
             unavailable: AtomicBool::new(false),
         }
@@ -1031,17 +896,6 @@ impl SlowlorisDetector {
                 return Some(self.penalty());
             }
         };
-        let entry = guard.entry(ip).or_insert(SlowlorisEntry {
-            window_start: now,
-            score: 0,
-        });
-        let window_elapsed = now
-            .checked_duration_since(entry.window_start)
-            .unwrap_or_default();
-        if window_elapsed >= Duration::from_secs(self.cfg.window_secs) {
-            entry.window_start = now;
-            entry.score = 0;
-        }
         let mut penalise = matches!(event, SlowlorisEvent::Timeout);
         if let SlowlorisEvent::Success(elapsed) = event {
             let threshold = Duration::from_millis(self.cfg.max_handshake_millis);
@@ -1049,16 +903,53 @@ impl SlowlorisDetector {
                 penalise = true;
             }
         }
-        if penalise {
-            entry.score = entry.score.saturating_add(1);
-        } else {
-            entry.score = entry.score.saturating_sub(1);
+        let window = Duration::from_secs(self.cfg.window_secs);
+        if let Some(entry) = guard.get_mut(&ip) {
+            if now
+                .checked_duration_since(entry.window_start)
+                .is_some_and(|elapsed| elapsed >= window)
+            {
+                entry.window_start = now;
+                entry.score = 0;
+            }
+            if penalise {
+                entry.score = entry.score.saturating_add(1);
+            } else {
+                entry.score = entry.score.saturating_sub(1);
+            }
+            let threshold_reached = entry.score >= self.cfg.timeout_threshold;
+            let inactive = entry.score == 0;
+            if threshold_reached || inactive {
+                guard.remove(&ip);
+            }
+            return threshold_reached.then(|| self.penalty());
         }
-        if entry.score >= self.cfg.timeout_threshold {
-            entry.score = 0;
-            entry.window_start = now;
+        // Fast first-time outcomes carry no slowloris evidence and must not allocate
+        // attacker-keyed history. Only suspicious observations enter the bounded map.
+        if !penalise {
+            return None;
+        }
+        if self.cfg.timeout_threshold <= 1 {
             return Some(self.penalty());
         }
+        if guard.len() >= self.max_entries {
+            // Reclaim scores whose complete observation window has elapsed before
+            // rejecting an unseen source. Clock regression retains state fail closed.
+            guard.retain(|_, entry| {
+                !now.checked_duration_since(entry.window_start)
+                    .is_some_and(|elapsed| elapsed >= window)
+            });
+        }
+        if guard.len() >= self.max_entries || guard.try_reserve(1).is_err() {
+            return Some(self.penalty());
+        }
+        guard.insert(
+            ip,
+            SlowlorisEntry {
+                window_start: now,
+                score: 1,
+            },
+        );
         None
     }
 }
@@ -1113,6 +1004,20 @@ mod tests {
         assert!(!limiter.entries.contains_key(&overflow));
     }
     #[test]
+    fn rate_limiter_handles_max_durations_without_absolute_instant_arithmetic() {
+        let maximum = Duration::from_secs(u64::MAX);
+        let params = RateLimitParams::new(maximum, 1, maximum, 16);
+        let mut limiter = RateLimiter::new(params);
+        let now = Instant::now();
+        let throttled = IpAddr::from([127, 0, 0, 1]);
+        let other = IpAddr::from([127, 0, 0, 2]);
+
+        assert_eq!(limiter.check(throttled, now), Ok(()));
+        assert_eq!(limiter.check(throttled, now), Err(maximum));
+        assert_eq!(limiter.check(other, now), Ok(()));
+        assert_eq!(limiter.check(throttled, now), Err(maximum));
+    }
+    #[test]
     fn remote_quota_throttle_sets_active_gauge() {
         let metrics = Arc::new(Metrics::new());
         let mut pow_cfg = PowConfig {
@@ -1143,6 +1048,180 @@ mod tests {
         assert!(matches!(throttle.reason, ThrottleReason::RemoteQuota));
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.active_remote_cooldowns, 1);
+    }
+    #[test]
+    fn slowloris_penalty_is_enforced_when_remote_burst_is_disabled() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 0,
+                per_remote_window_secs: 1,
+                cooldown_secs: 2,
+                ..QuotaConfig::default()
+            },
+            slowloris: SlowlorisConfig {
+                enabled: true,
+                timeout_threshold: 1,
+                window_secs: 1,
+                penalty_secs: 5,
+                ..SlowlorisConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = DoSControls::new(
+            base_params(),
+            &pow_cfg,
+            None,
+            None,
+            Arc::clone(&metrics),
+            RelayMode::Entry,
+        )
+        .expect("dos controls");
+        let remote: SocketAddr = "127.0.0.20:2000".parse().expect("remote addr");
+        let other: SocketAddr = "127.0.0.21:2000".parse().expect("remote addr");
+        let now = Instant::now();
+        let attempt = controls
+            .begin_at(remote, None, now)
+            .expect("disabled burst quota must admit the initial attempt");
+
+        controls.record_timeout_at(&attempt, Duration::ZERO, now);
+        let throttle = controls
+            .begin_at(remote, None, now + Duration::from_secs(1))
+            .expect_err("slowloris penalty must survive a disabled burst quota");
+        assert_eq!(throttle.reason, ThrottleReason::RemoteQuota);
+        assert_eq!(throttle.cooldown, Duration::from_secs(4));
+        controls
+            .begin_at(other, None, now + Duration::from_secs(1))
+            .expect("one penalized remote must not block unrelated capacity");
+        controls
+            .begin_at(remote, None, now + Duration::from_secs(5))
+            .expect("remote must be admitted at the configured penalty boundary");
+        assert_eq!(metrics.snapshot().active_remote_cooldowns, 0);
+    }
+    #[test]
+    fn slowloris_penalty_outlives_the_quota_cleanup_horizon() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 4,
+                per_remote_window_secs: 1,
+                cooldown_secs: 1,
+                ..QuotaConfig::default()
+            },
+            slowloris: SlowlorisConfig {
+                enabled: true,
+                timeout_threshold: 1,
+                window_secs: 1,
+                penalty_secs: 10,
+                ..SlowlorisConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = DoSControls::new(
+            base_params(),
+            &pow_cfg,
+            None,
+            None,
+            metrics,
+            RelayMode::Entry,
+        )
+        .expect("dos controls");
+        let remote: SocketAddr = "127.0.0.22:2000".parse().expect("remote addr");
+        let now = Instant::now();
+        let attempt = controls
+            .begin_at(remote, None, now)
+            .expect("initial attempt");
+
+        controls.record_timeout_at(&attempt, Duration::ZERO, now);
+        let throttle = controls
+            .begin_at(remote, None, now + Duration::from_secs(3))
+            .expect_err("active penalty must not be evicted by quota cleanup");
+        assert_eq!(throttle.cooldown, Duration::from_secs(7));
+        controls
+            .begin_at(remote, None, now + Duration::from_secs(10))
+            .expect("remote must be admitted when the full penalty expires");
+    }
+    #[test]
+    fn maximum_slowloris_penalty_does_not_poison_remote_admission() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 0,
+                per_remote_window_secs: 1,
+                cooldown_secs: 1,
+                ..QuotaConfig::default()
+            },
+            slowloris: SlowlorisConfig {
+                enabled: true,
+                timeout_threshold: 1,
+                window_secs: 1,
+                penalty_secs: u64::MAX,
+                ..SlowlorisConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = DoSControls::new(
+            base_params(),
+            &pow_cfg,
+            None,
+            None,
+            metrics,
+            RelayMode::Entry,
+        )
+        .expect("dos controls");
+        let remote: SocketAddr = "127.0.0.23:2000".parse().expect("remote addr");
+        let other: SocketAddr = "127.0.0.24:2000".parse().expect("remote addr");
+        let now = Instant::now();
+        let attempt = controls
+            .begin_at(remote, None, now)
+            .expect("initial attempt");
+
+        controls.record_timeout_at(&attempt, Duration::ZERO, now);
+        let throttle = controls
+            .begin_at(remote, None, now)
+            .expect_err("maximum representable penalty must remain enforceable");
+        assert_eq!(throttle.cooldown, Duration::from_secs(u64::MAX));
+        controls
+            .begin_at(other, None, now)
+            .expect("maximum penalty must not poison shared admission state");
+    }
+    #[test]
+    fn remote_quota_canonicalizes_ipv4_mapped_ipv6() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 1,
+                cooldown_secs: 1,
+                ..QuotaConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = DoSControls::new(
+            Parameters::new(6, Duration::from_secs(60), Duration::from_secs(30)),
+            &pow_cfg,
+            None,
+            None,
+            metrics,
+            RelayMode::Entry,
+        )
+        .expect("dos controls");
+        let address = std::net::Ipv4Addr::new(192, 0, 2, 9);
+        let ipv4 = SocketAddr::new(IpAddr::V4(address), 2_000);
+        let mapped = SocketAddr::new(IpAddr::V6(address.to_ipv6_mapped()), 2_001);
+
+        controls.begin(ipv4, None).expect("first attempt allowed");
+        let throttle = controls
+            .begin(mapped, None)
+            .expect_err("mapped address must share the IPv4 quota");
+        assert_eq!(throttle.reason, ThrottleReason::RemoteQuota);
     }
     #[test]
     fn poisoned_remote_quota_fails_closed() {
@@ -1239,15 +1318,89 @@ mod tests {
         assert_eq!(throttle.cooldown, Duration::from_secs(13));
     }
     #[test]
-    fn descriptor_quota_throttle_sets_active_gauge() {
+    fn slowloris_fast_first_outcomes_do_not_allocate_history() {
+        let detector = SlowlorisDetector::new(SlowlorisConfig::default(), 2);
+        let now = Instant::now();
+        for octet in 1..=32 {
+            let ip = IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, octet));
+            assert_eq!(
+                detector.observe(ip, SlowlorisEvent::Success(Duration::ZERO), now),
+                None
+            );
+        }
+        assert!(
+            detector
+                .entries
+                .lock()
+                .expect("slowloris entries")
+                .is_empty(),
+            "benign first-time outcomes must not consume attacker-keyed capacity"
+        );
+    }
+    #[test]
+    fn slowloris_rejects_new_suspicious_sources_at_capacity() {
+        let detector = SlowlorisDetector::new(
+            SlowlorisConfig {
+                timeout_threshold: 3,
+                penalty_secs: 17,
+                ..SlowlorisConfig::default()
+            },
+            2,
+        );
+        let now = Instant::now();
+        for ip in ["192.0.2.1", "192.0.2.2"] {
+            assert_eq!(
+                detector.observe(ip.parse().expect("test IP"), SlowlorisEvent::Timeout, now),
+                None
+            );
+        }
+        assert_eq!(
+            detector.observe(
+                "192.0.2.3".parse().expect("test IP"),
+                SlowlorisEvent::Timeout,
+                now,
+            ),
+            Some(Duration::from_secs(17)),
+            "an unseen suspicious source must fail closed at capacity"
+        );
+        assert_eq!(detector.entries.lock().expect("slowloris entries").len(), 2);
+    }
+    #[test]
+    fn slowloris_reclaims_stale_entries_at_window_boundary() {
+        let cfg = SlowlorisConfig {
+            timeout_threshold: 3,
+            window_secs: 5,
+            ..SlowlorisConfig::default()
+        };
+        let detector = SlowlorisDetector::new(cfg, 1);
+        let now = Instant::now();
+        let stale_ip = "192.0.2.1".parse().expect("test IP");
+        let replacement_ip = "192.0.2.2".parse().expect("test IP");
+        assert_eq!(
+            detector.observe(stale_ip, SlowlorisEvent::Timeout, now),
+            None
+        );
+        assert_eq!(
+            detector.observe(
+                replacement_ip,
+                SlowlorisEvent::Timeout,
+                now + Duration::from_secs(5),
+            ),
+            None,
+            "the exact window boundary must make the stale slot reusable"
+        );
+        let entries = detector.entries.lock().expect("slowloris entries");
+        assert_eq!(entries.len(), 1);
+        assert!(entries.contains_key(&replacement_ip));
+    }
+    #[test]
+    fn relay_static_descriptor_never_creates_cross_client_quota() {
         let metrics = Arc::new(Metrics::new());
         let mut pow_cfg = PowConfig {
             required: true,
             quotas: QuotaConfig {
-                per_remote_burst: 4,
-                per_descriptor_burst: 1,
-                per_descriptor_window_secs: 60,
-                cooldown_secs: 2,
+                per_remote_burst: 64,
+                per_descriptor_burst: 0,
                 ..QuotaConfig::default()
             },
             ..PowConfig::default()
@@ -1263,61 +1416,51 @@ mod tests {
             RelayMode::Entry,
         )
         .expect("dos controls");
-        let remote: SocketAddr = "127.0.0.2:2000".parse().expect("remote addr");
         let descriptor = [0xAB; 32];
+        for octet in 1..=5 {
+            let remote: SocketAddr = format!("198.51.100.{octet}:2000")
+                .parse()
+                .expect("remote addr");
+            for _ in 0..32 {
+                controls
+                    .begin(remote, Some(&descriptor))
+                    .expect("relay-static descriptor must not aggregate unrelated clients");
+            }
+        }
         controls
-            .begin(remote, Some(&descriptor))
-            .expect("first attempt allowed");
-        let throttle = controls
-            .begin(remote, Some(&descriptor))
-            .expect_err("second attempt should throttle descriptor");
-        assert!(matches!(throttle.reason, ThrottleReason::DescriptorQuota));
+            .begin(
+                "198.51.100.6:2000".parse().expect("remote addr"),
+                Some(&descriptor),
+            )
+            .expect("the attempt beyond the retired default descriptor burst must be admitted");
         let snapshot = metrics.snapshot();
-        assert_eq!(snapshot.active_descriptor_cooldowns, 1);
+        assert_eq!(snapshot.active_descriptor_cooldowns, 0);
+        assert!(controls.descriptor_quota_limits().is_none());
     }
     #[test]
-    fn poisoned_descriptor_quota_fails_closed() {
-        let metrics = Arc::new(Metrics::new());
-        let mut pow_cfg = PowConfig {
-            required: true,
+    fn dos_controls_rejects_retired_descriptor_quota_without_normalization() {
+        let pow_cfg = PowConfig {
             quotas: QuotaConfig {
-                per_remote_burst: 4,
-                per_descriptor_burst: 2,
-                cooldown_secs: 9,
+                per_descriptor_burst: 1,
                 ..QuotaConfig::default()
             },
             ..PowConfig::default()
         };
-        pow_cfg.apply_defaults().expect("pow defaults");
-        let controls = Arc::new(
-            DoSControls::new(
-                base_params(),
-                &pow_cfg,
-                None,
-                None,
-                metrics,
-                RelayMode::Entry,
-            )
-            .expect("dos controls"),
+        let error = match DoSControls::new(
+            base_params(),
+            &pow_cfg,
+            None,
+            None,
+            Arc::new(Metrics::new()),
+            RelayMode::Entry,
+        ) {
+            Ok(_) => panic!("direct construction accepted the retired descriptor quota"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, ConfigError::Quota(ref message) if message.contains("relay-static")),
+            "unexpected error: {error:?}"
         );
-        let poison_target = Arc::clone(&controls);
-        let poisoned = std::thread::spawn(move || {
-            let _guard = poison_target
-                .descriptor_limiter
-                .lock()
-                .expect("descriptor quota lock");
-            panic!("poison descriptor quota state");
-        })
-        .join();
-        assert!(poisoned.is_err(), "poisoning worker must panic");
-
-        let remote: SocketAddr = "127.0.0.9:2000".parse().expect("remote addr");
-        let descriptor = [0xC3; 32];
-        let throttle = controls
-            .begin(remote, Some(&descriptor))
-            .expect_err("poisoned descriptor quota must reject admission");
-        assert_eq!(throttle.reason, ThrottleReason::DescriptorQuota);
-        assert_eq!(throttle.cooldown, Duration::from_secs(9));
     }
     #[test]
     fn emergency_throttle_blocks_descriptor() {
@@ -1479,21 +1622,19 @@ mod tests {
         assert!(error.contains("direct regular file"), "{error}");
     }
     #[test]
-    fn replay_filter_triggers_descriptor_throttle() {
+    fn shared_relay_descriptor_does_not_trigger_replay_or_quota_throttle() {
         let metrics = Arc::new(Metrics::new());
         let descriptor = [0x24u8; 32];
         let mut pow_cfg = PowConfig {
             required: true,
-            replay_filter: ReplayFilterConfig {
-                enabled: true,
-                bits: 512,
-                hash_functions: 3,
-                ttl_secs: 2,
+            quotas: QuotaConfig {
+                per_remote_burst: 4,
+                per_descriptor_burst: 0,
+                ..QuotaConfig::default()
             },
             ..PowConfig::default()
         };
         pow_cfg.apply_defaults().expect("pow defaults");
-        let filter_ttl = pow_cfg.replay_filter().ttl();
         let base = Parameters::new(6, Duration::from_secs(60), Duration::from_secs(30));
         let controls = DoSControls::new(
             base,
@@ -1504,94 +1645,39 @@ mod tests {
             RelayMode::Entry,
         )
         .expect("dos controls");
-        let remote: SocketAddr = "127.0.0.4:4040".parse().expect("remote addr");
+        let first_remote: SocketAddr = "127.0.0.4:4040".parse().expect("remote addr");
+        let second_remote: SocketAddr = "127.0.0.5:4040".parse().expect("remote addr");
         controls
-            .begin(remote, Some(&descriptor))
+            .begin(first_remote, Some(&descriptor))
             .expect("first attempt allowed");
-        let throttle = controls
-            .begin(remote, Some(&descriptor))
-            .expect_err("descriptor replay should be throttled");
-        assert!(matches!(throttle.reason, ThrottleReason::DescriptorReplay));
-        assert_eq!(throttle.cooldown, filter_ttl);
+        controls
+            .begin(second_remote, Some(&descriptor))
+            .expect("a second client sharing the relay-static descriptor must be admitted");
     }
     #[test]
-    fn poisoned_replay_filter_returns_controlled_throttle() {
-        let metrics = Arc::new(Metrics::new());
-        let mut pow_cfg = PowConfig {
-            required: true,
-            quotas: QuotaConfig {
-                per_remote_burst: 4,
-                ..QuotaConfig::default()
-            },
+    fn dos_controls_rejects_retired_replay_filter_without_normalization() {
+        let pow_cfg = PowConfig {
             replay_filter: ReplayFilterConfig {
                 enabled: true,
-                bits: 512,
-                hash_functions: 3,
-                ttl_secs: 11,
+                ..ReplayFilterConfig::default()
             },
             ..PowConfig::default()
         };
-        pow_cfg.apply_defaults().expect("pow defaults");
-        let controls = Arc::new(
-            DoSControls::new(
-                base_params(),
-                &pow_cfg,
-                None,
-                None,
-                metrics,
-                RelayMode::Entry,
-            )
-            .expect("dos controls"),
-        );
-        let poison_target = Arc::clone(&controls);
-        let poisoned = std::thread::spawn(move || {
-            let filter = poison_target
-                .replay_filter
-                .as_ref()
-                .expect("configured replay filter");
-            let _guard = filter.lock().expect("replay-filter lock");
-            panic!("poison replay-filter state");
-        })
-        .join();
-        assert!(poisoned.is_err(), "poisoning worker must panic");
-
-        let remote: SocketAddr = "127.0.0.10:4040".parse().expect("remote addr");
-        let descriptor = [0xD4; 32];
-        let throttle = controls
-            .begin(remote, Some(&descriptor))
-            .expect_err("poisoned replay filter must reject without panicking");
-        assert_eq!(throttle.reason, ThrottleReason::DescriptorReplay);
-        assert_eq!(throttle.cooldown, Duration::from_secs(11));
-    }
-    #[test]
-    fn replay_filter_allows_reentry_after_ttl() {
-        let ttl = Duration::from_millis(200);
-        let mut filter = ReplayFilter::new(128, 3, ttl).expect("replay filter");
-        let key = b"descriptor-key";
-        let now = Instant::now();
-        assert!(filter.observe(key, now), "first insert should pass");
+        let error = match DoSControls::new(
+            base_params(),
+            &pow_cfg,
+            None,
+            None,
+            Arc::new(Metrics::new()),
+            RelayMode::Entry,
+        ) {
+            Ok(_) => panic!("direct construction accepted the retired static-descriptor filter"),
+            Err(error) => error,
+        };
         assert!(
-            !filter.observe(key, now + Duration::from_millis(10)),
-            "replay within TTL must be rejected"
+            matches!(error, ConfigError::ReplayFilter(ref message) if message.contains("relay-static")),
+            "unexpected error: {error:?}"
         );
-        assert!(
-            filter.observe(
-                key,
-                now + Duration::from_millis(10) + ttl + Duration::from_millis(1)
-            ),
-            "entry should expire after TTL"
-        );
-    }
-    #[test]
-    fn replay_filter_constructor_rejects_overflowing_bits_without_panic() {
-        match ReplayFilter::new(usize::MAX, 3, Duration::from_secs(1)) {
-            Err(ConfigError::ReplayFilter(message)) => assert!(
-                message.contains("bits"),
-                "unexpected replay filter error: {message}"
-            ),
-            Err(other) => panic!("expected replay filter config error, got {other:?}"),
-            Ok(_) => panic!("expected replay filter config error, got Ok(_)"),
-        }
     }
     #[test]
     fn puzzle_parameters_share_static_configured_difficulty() {

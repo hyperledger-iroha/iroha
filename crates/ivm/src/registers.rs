@@ -173,6 +173,45 @@ impl Registers {
             });
         }
     }
+    /// Record a proof-bearing write for the current value of `idx` without
+    /// mutating the register file.
+    ///
+    /// Host callbacks execute with register logging masked so unrelated VMs
+    /// cannot inject events. The caller uses this after the callback to publish
+    /// only net changes to the VM that actually resumed execution.
+    pub(crate) fn record_write_proof(&self, idx: usize) {
+        debug_assert!(idx < 256);
+        if idx == 0 {
+            return;
+        }
+        with_reg_logger(|log| {
+            let (root, path) = self.merkle_root_and_path(idx);
+            log.record(RegEvent::Write {
+                index: idx,
+                value: self.gpr[idx],
+                tag: self.tags[idx],
+                path,
+                root,
+            });
+        });
+    }
+    /// Zero every private register before clearing its privacy tag.
+    ///
+    /// Public registers are preserved so hosts may preload ordinary arguments
+    /// before replacing a program. Zeroing first prevents logs and Merkle
+    /// leaves from ever representing a secret value as public.
+    pub(crate) fn scrub_private(&mut self) {
+        for index in 1..self.tags.len() {
+            if self.tags[index] {
+                self.set(index, 0);
+                self.set_tag(index, false);
+            }
+        }
+    }
+    /// Return whether any general-purpose register is private-tagged.
+    pub(crate) fn has_private(&self) -> bool {
+        self.tags.iter().any(|tag| *tag)
+    }
     /// Mutable access for test‑suites and advanced host tooling.
     #[inline]
     pub fn set_raw(&mut self, index: usize, value: u64) {
@@ -395,6 +434,25 @@ mod tests {
         assert_eq!(cleared.max_index, 0);
     }
     #[test]
+    fn private_scrub_zeros_tagged_registers_and_preserves_public_values() {
+        let mut regs = Registers::new();
+        regs.set(2, 0xfeed_face_dead_beef);
+        regs.set_tag(2, true);
+        regs.set(200, 0x0123_4567_89ab_cdef);
+        regs.set_tag(200, true);
+        regs.set(7, 0x55aa);
+
+        regs.scrub_private();
+
+        assert_eq!(regs.get(2), 0);
+        assert!(!regs.tag(2));
+        assert_eq!(regs.get(200), 0);
+        assert!(!regs.tag(200));
+        assert_eq!(regs.get(7), 0x55aa);
+        assert!(!regs.tag(7));
+        assert!(!regs.has_private());
+    }
+    #[test]
     fn register_writes_defer_merkle_hashing_until_the_root_is_read() {
         let mut regs = Registers::new();
         reset_register_leaf_digest_count();
@@ -427,11 +485,9 @@ mod tests {
     #[test]
     fn logged_writes_update_only_the_changed_merkle_leaf() {
         let mut regs = Registers::new();
-        let mut log = crate::zk::RegLog::default();
+        let log = std::sync::Arc::new(parking_lot::Mutex::new(crate::zk::RegLog::default()));
         reset_register_leaf_digest_count();
-        // SAFETY: `log` remains in this stack frame and is not moved until the guard is dropped.
-        let guard =
-            unsafe { crate::zk::RegLoggerGuard::install(std::ptr::NonNull::from(&mut log)) };
+        let guard = crate::zk::RegLoggerGuard::install(Some(std::sync::Arc::clone(&log)));
 
         regs.set(7, 42);
         assert_eq!(register_leaf_digest_count(), 1);
@@ -443,6 +499,7 @@ mod tests {
         let after_tag = canonical_root_and_path(&regs, 7);
         drop(guard);
 
+        let log = log.lock();
         assert_eq!(log.events.len(), 2);
         assert_logged_event_matches(&log.events[0], &after_set);
         assert_logged_event_matches(&log.events[1], &after_tag);

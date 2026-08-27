@@ -1,7 +1,71 @@
 //! Proof registry query helpers shared with Torii.
+use std::{
+    cmp::Ordering,
+    collections::BinaryHeap,
+    time::{Duration, Instant},
+};
+
 use crate::state::{State, WorldReadOnly};
 use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus};
 use mv::storage::StorageReadOnly;
+
+/// Maximum ordered prefix a proof-list query may retain while paginating.
+///
+/// Proof listing uses offset pagination over a height-ordered registry. Keeping
+/// this invariant in the query helper bounds memory independently of the total
+/// number or encoded size of stored proof records.
+pub const MAX_PROOF_QUERY_WINDOW: usize = 100_000;
+
+/// Resource budget for one proof registry list or count query.
+#[derive(Debug, Clone, Copy)]
+pub struct ProofQueryBudget {
+    deadline: Instant,
+    max_window: usize,
+}
+
+impl ProofQueryBudget {
+    /// Construct a budget whose deadline is relative to the current instant.
+    #[must_use]
+    pub fn for_timeout(timeout: Duration) -> Self {
+        let now = Instant::now();
+        Self {
+            deadline: now.checked_add(timeout).unwrap_or(now),
+            max_window: MAX_PROOF_QUERY_WINDOW,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_max_window(timeout: Duration, max_window: usize) -> Self {
+        let mut budget = Self::for_timeout(timeout);
+        budget.max_window = max_window;
+        budget
+    }
+
+    fn check_deadline(self) -> Result<(), ProofQueryError> {
+        if Instant::now() >= self.deadline {
+            Err(ProofQueryError::DeadlineExceeded)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Failure returned when a proof registry query exceeds its admitted work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ProofQueryError {
+    /// The configured request deadline elapsed during registry traversal.
+    #[error("proof registry query deadline exceeded")]
+    DeadlineExceeded,
+    /// The requested offset and page size require an excessive ordered prefix.
+    #[error("proof registry query window {requested} exceeds maximum {maximum}")]
+    WindowTooLarge {
+        /// Requested ordered prefix size.
+        requested: usize,
+        /// Maximum admitted ordered prefix size.
+        maximum: usize,
+    },
+}
+
 /// Filters applied when querying proof records.
 #[derive(Debug, Clone)]
 pub struct ProofFilters<'a> {
@@ -42,52 +106,125 @@ pub struct ProofListItem {
     /// Stored proof metadata (status, VK references, height).
     pub record: ProofRecord,
 }
+
+#[derive(Clone, Copy)]
+struct OrderedProof<'a> {
+    id: &'a ProofId,
+    record: &'a ProofRecord,
+    descending: bool,
+}
+
+impl OrderedProof<'_> {
+    fn base_cmp(&self, other: &Self) -> Ordering {
+        self.record
+            .verified_at_height
+            .unwrap_or(0)
+            .cmp(&other.record.verified_at_height.unwrap_or(0))
+            .then_with(|| self.id.cmp(other.id))
+    }
+}
+
+impl PartialEq for OrderedProof<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.descending == other.descending && self.base_cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for OrderedProof<'_> {}
+
+impl PartialOrd for OrderedProof<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrderedProof<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.descending.cmp(&other.descending).then_with(|| {
+            let ordering = self.base_cmp(other);
+            if self.descending {
+                ordering.reverse()
+            } else {
+                ordering
+            }
+        })
+    }
+}
+
 /// List proof records using the supplied filters and pagination controls.
-pub fn list_proofs(state: &State, params: &ProofListParams<'_>) -> Vec<ProofListItem> {
-    let world = state.world_view();
-    let mut entries = collect_filtered(&world, &params.filters);
-    entries.sort_by(|a, b| {
-        let ha = a.record.verified_at_height.unwrap_or(0);
-        let hb = b.record.verified_at_height.unwrap_or(0);
-        ha.cmp(&hb).then_with(|| a.id.cmp(&b.id))
-    });
-    if params.descending {
-        entries.reverse();
-    }
+///
+/// # Errors
+///
+/// Returns an error when the deadline expires or the requested ordered prefix
+/// exceeds [`MAX_PROOF_QUERY_WINDOW`].
+pub fn list_proofs(
+    state: &State,
+    params: &ProofListParams<'_>,
+    budget: ProofQueryBudget,
+) -> Result<Vec<ProofListItem>, ProofQueryError> {
+    budget.check_deadline()?;
     let start = params.offset.unwrap_or(0) as usize;
-    if start >= entries.len() {
-        return Vec::new();
+    let cap = params.limit.unwrap_or(1000).max(1).min(1000) as usize;
+    let window = start
+        .checked_add(cap)
+        .filter(|window| *window <= budget.max_window)
+        .ok_or(ProofQueryError::WindowTooLarge {
+            requested: start.saturating_add(cap),
+            maximum: budget.max_window,
+        })?;
+    let world = state.world_view();
+    let mut selected = BinaryHeap::with_capacity(window.min(1024));
+    for (id, record) in candidate_proofs(&world, &params.filters) {
+        budget.check_deadline()?;
+        if !proof_matches_filters(id, record, &params.filters) {
+            continue;
+        }
+        let entry = OrderedProof {
+            id,
+            record,
+            descending: params.descending,
+        };
+        if selected.len() < window {
+            selected.push(entry);
+        } else if selected.peek().is_some_and(|worst| entry < *worst) {
+            selected.pop();
+            selected.push(entry);
+        }
     }
-    let cap = params.limit.unwrap_or(0).min(1000) as usize;
-    let end = if cap == 0 {
-        entries.len()
-    } else {
-        (start + cap).min(entries.len())
-    };
-    entries[start..end].to_vec()
+    budget.check_deadline()?;
+    let mut entries = selected.into_vec();
+    entries.sort_unstable();
+    Ok(entries
+        .into_iter()
+        .skip(start)
+        .take(cap)
+        .map(|entry| ProofListItem {
+            id: entry.id.clone(),
+            record: entry.record.clone(),
+        })
+        .collect())
 }
 /// Count proof records matching the supplied filters (ignores pagination controls).
-pub fn count_proofs(state: &State, filters: &ProofFilters<'_>) -> u64 {
+///
+/// # Errors
+///
+/// Returns an error when the query deadline expires.
+pub fn count_proofs(
+    state: &State,
+    filters: &ProofFilters<'_>,
+    budget: ProofQueryBudget,
+) -> Result<u64, ProofQueryError> {
+    budget.check_deadline()?;
     let world = state.world_view();
-    filtered_proofs(&world, filters).count() as u64
-}
-fn collect_filtered(world: &impl WorldReadOnly, filters: &ProofFilters<'_>) -> Vec<ProofListItem> {
-    filtered_proofs(world, filters)
-        .map(|(id, record)| ProofListItem {
-            id: id.clone(),
-            record: record.clone(),
-        })
-        .collect()
-}
-fn filtered_proofs<'a, W>(
-    world: &'a W,
-    filters: &'a ProofFilters<'a>,
-) -> impl Iterator<Item = (&'a ProofId, &'a ProofRecord)> + 'a
-where
-    W: WorldReadOnly,
-{
-    candidate_proofs(world, filters)
-        .filter(move |(id, record)| proof_matches_filters(id, record, filters))
+    let mut count = 0_u64;
+    for (id, record) in candidate_proofs(&world, filters) {
+        budget.check_deadline()?;
+        if proof_matches_filters(id, record, filters) {
+            count = count.saturating_add(1);
+        }
+    }
+    budget.check_deadline()?;
+    Ok(count)
 }
 fn candidate_proofs<'a, W>(
     world: &'a W,
@@ -177,6 +314,9 @@ mod tests {
         let query = LiveQueryStore::start_test();
         State::new(World::new(), kura, query)
     }
+    fn query_budget() -> ProofQueryBudget {
+        ProofQueryBudget::for_timeout(Duration::from_secs(30))
+    }
     fn list_for_filters(state: &State, filters: ProofFilters<'_>) -> Vec<ProofListItem> {
         list_proofs(
             state,
@@ -186,7 +326,9 @@ mod tests {
                 offset: None,
                 limit: None,
             },
+            query_budget(),
         )
+        .expect("proof query should stay within the test budget")
     }
     fn bridge_proof_record(
         range: BridgeProofRange,
@@ -298,11 +440,13 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let rows = list_proofs(&state, &params);
+        let rows = list_proofs(&state, &params, query_budget())
+            .expect("proof list should stay within the test budget");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, id_verified);
         assert_eq!(rows[0].record.status, ProofStatus::Verified);
-        let total = count_proofs(&state, &params.filters);
+        let total = count_proofs(&state, &params.filters, query_budget())
+            .expect("proof count should stay within the test budget");
         assert_eq!(total, 1);
     }
     #[tokio::test]
@@ -375,7 +519,8 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let rows_min = list_proofs(&state, &params_min);
+        let rows_min = list_proofs(&state, &params_min, query_budget())
+            .expect("minimum-height query should stay within budget");
         assert_eq!(rows_min.len(), 1);
         assert_eq!(rows_min[0].id, id_late);
         // Filter proofs verified at or below height 12 -> should only include id_early
@@ -395,7 +540,8 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let rows_max = list_proofs(&state, &params_max);
+        let rows_max = list_proofs(&state, &params_max, query_budget())
+            .expect("maximum-height query should stay within budget");
         assert_eq!(rows_max.len(), 1);
         assert_eq!(rows_max[0].id, id_early);
         // Narrow window should exclude submitted proof with no height.
@@ -415,7 +561,8 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let rows_window = list_proofs(&state, &params_window);
+        let rows_window = list_proofs(&state, &params_window, query_budget())
+            .expect("height-window query should stay within budget");
         assert_eq!(rows_window.len(), 1);
         assert_eq!(rows_window[0].id, id_early);
         // Count helper should reflect the same filtering.
@@ -431,7 +578,9 @@ mod tests {
                 min_height: Some(0),
                 max_height: Some(30),
             },
-        );
+            query_budget(),
+        )
+        .expect("filtered count should stay within budget");
         assert_eq!(count, 2);
     }
     #[tokio::test]
@@ -507,5 +656,104 @@ mod tests {
         );
         assert_eq!(range_filtered.len(), 1);
         assert_eq!(range_filtered[0].id, id_later);
+    }
+
+    #[tokio::test]
+    async fn list_pagination_keeps_the_requested_ordered_prefix() {
+        let state = blank_state();
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        for height in 1_u8..=4 {
+            let (_, record) = plain_record(
+                "halo2/ipa",
+                [height; 32],
+                ProofStatus::Verified,
+                Some(u64::from(height)),
+            );
+            stx.world.insert_proof_record(record);
+        }
+        stx.apply();
+        block.commit().expect("commit pagination snapshot");
+
+        let filters = ProofFilters {
+            backend: None,
+            status: None,
+            bridge_only: false,
+            bridge_min_range_start: None,
+            bridge_max_range_end: None,
+            has_tag: None,
+            min_height: None,
+            max_height: None,
+        };
+        let mut params = ProofListParams {
+            filters,
+            descending: false,
+            offset: Some(1),
+            limit: Some(2),
+        };
+        let ascending = list_proofs(&state, &params, query_budget())
+            .expect("ascending page should stay within budget");
+        assert_eq!(
+            ascending
+                .iter()
+                .map(|item| item.record.verified_at_height)
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(3)]
+        );
+
+        params.descending = true;
+        let descending = list_proofs(&state, &params, query_budget())
+            .expect("descending page should stay within budget");
+        assert_eq!(
+            descending
+                .iter()
+                .map(|item| item.record.verified_at_height)
+                .collect::<Vec<_>>(),
+            vec![Some(3), Some(2)]
+        );
+    }
+
+    #[tokio::test]
+    async fn proof_query_budget_fails_closed() {
+        let state = blank_state();
+        let filters = ProofFilters {
+            backend: None,
+            status: None,
+            bridge_only: false,
+            bridge_min_range_start: None,
+            bridge_max_range_end: None,
+            has_tag: None,
+            min_height: None,
+            max_height: None,
+        };
+        let params = ProofListParams {
+            filters,
+            descending: false,
+            offset: Some(1),
+            limit: Some(1),
+        };
+        let error = list_proofs(
+            &state,
+            &params,
+            ProofQueryBudget::with_max_window(Duration::from_secs(30), 1),
+        )
+        .expect_err("oversized ordered prefix must be rejected");
+        assert_eq!(
+            error,
+            ProofQueryError::WindowTooLarge {
+                requested: 2,
+                maximum: 1,
+            }
+        );
+        assert_eq!(
+            count_proofs(
+                &state,
+                &params.filters,
+                ProofQueryBudget::for_timeout(Duration::ZERO),
+            ),
+            Err(ProofQueryError::DeadlineExceeded)
+        );
     }
 }

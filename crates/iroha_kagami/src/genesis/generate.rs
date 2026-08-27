@@ -22,7 +22,9 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_executor_data_model::permission::{
-    account::CanRegisterAccount, parameter::CanSetParameters, query::CanReadAllLedgerData,
+    account::CanRegisterAccount,
+    parameter::{CanSetHijiriParameters, CanSetParameters},
+    query::CanReadAllLedgerData,
 };
 use iroha_genesis::{
     GenesisBuilder, ManifestCrypto, RawGenesisTransaction, validate_genesis_manifest_json,
@@ -656,6 +658,8 @@ pub fn generate_default(
     );
     let grant_permission_to_set_parameters =
         Grant::account_permission(CanSetParameters, ALICE_ID.clone());
+    let grant_permission_to_set_hijiri_parameters =
+        Grant::account_permission(CanSetHijiriParameters, ALICE_ID.clone());
     let grant_permission_to_read_all_ledger_data =
         Grant::account_permission(CanReadAllLedgerData, ALICE_ID.clone());
     let grant_permission_to_manage_soracloud = Grant::account_permission(
@@ -709,6 +713,7 @@ pub fn generate_default(
         .append_instruction(mint_cabbage)
         .append_instruction(transfer_rose_ownership)
         .append_instruction(grant_permission_to_set_parameters)
+        .append_instruction(grant_permission_to_set_hijiri_parameters)
         .append_instruction(grant_permission_to_read_all_ledger_data)
         .append_instruction(grant_permission_to_manage_soracloud)
         .append_instruction(grant_permission_to_register_accounts);
@@ -935,6 +940,19 @@ mod consensus_manifest_tests {
                 set_parameters.len(),
                 1,
                 "{relative_path} must name exactly one bootstrap parameter operator"
+            );
+            let set_hijiri_parameters: Vec<_> = grants
+                .iter()
+                .filter(|(_, permission)| permission == &Permission::from(CanSetHijiriParameters))
+                .collect();
+            assert_eq!(
+                set_hijiri_parameters.len(),
+                1,
+                "{relative_path} must name exactly one bootstrap Hijiri parameter operator"
+            );
+            assert_eq!(
+                set_hijiri_parameters[0].0, set_parameters[0].0,
+                "{relative_path} must preserve the existing parameter operator as the Hijiri bootstrap root"
             );
             let global_readers: Vec<_> = grants
                 .iter()

@@ -4619,18 +4619,18 @@ impl RollbackArgs {
     }
 }
 define_torii_args! {
-    " Torii base URL to execute rollout against authoritative control-plane APIs.",
+    " Torii base URL to execute a deterministic IVM rollout against authoritative control-plane APIs.",
     " Optional API token sent as `x-api-token` when mutating live control-plane APIs.",
     " HTTP timeout for Torii mutation requests.";
-    /// Arguments for `soracloud service rollout`.
+    /// Arguments for `soracloud service rollout` on deterministic IVM services.
     pub struct RolloutArgs {
-        /// Service name with an active rollout.
+        /// Deterministic IVM service name with an active rollout.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional unpublished Soracloud container workspace used to resolve the service name.
+        /// Optional unpublished deterministic IVM workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
-        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        /// Optional path to its `SoraServiceManifestV1` JSON document.
         #[arg(long, value_name = "PATH")]
         service: Option<PathBuf>,
         /// Rollout handle emitted by `upgrade` output (`rollout_handle`).
@@ -4655,6 +4655,14 @@ impl RolloutArgs {
             ),
             _ => None,
         };
+        if service_plan
+            .as_ref()
+            .is_some_and(|plan| plan.execution_plane == "HttpService" && plan.runtime == "Inrou")
+        {
+            return Err(eyre!(
+                "first-release HttpService + Inrou services use atomic exact-revision upgrades; `iroha soracloud service rollout` does not accept Inrou manifest pairs"
+            ));
+        }
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -6461,10 +6469,9 @@ pub(crate) fn is_taira_inrou_canary_service_version(value: &str) -> bool {
     let Some(digest) = value.strip_prefix(TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1) else {
         return false;
     };
-    digest.len() == 64
-        && digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    digest
+        .parse::<Hash>()
+        .is_ok_and(|hash| hash.to_string() == digest)
 }
 
 fn derive_taira_inrou_canary_service_version(bundle: &SoraDeploymentBundleV1) -> Result<String> {
@@ -6475,8 +6482,7 @@ fn derive_taira_inrou_canary_service_version(bundle: &SoraDeploymentBundleV1) ->
             .wrap_err("encode the canonical Taira Inrou revision identity")?,
     );
     Ok(format!(
-        "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{}",
-        hex::encode(revision_digest.as_ref())
+        "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{revision_digest}"
     ))
 }
 
@@ -8813,16 +8819,18 @@ pub(crate) fn verify_taira_inrou_prepared_transaction_identity_v1(
                 .authority()
                 .try_signatory()
                 .ok_or_else(|| eyre!("prepared Inrou authority must be single-signatory"))?;
-            let (_, authority_bytes) = authority
+            let (authority_algorithm, authority_bytes) = authority
                 .try_to_bytes()
                 .wrap_err("prepared Inrou authority public key is malformed")?;
-            let authority_bytes: [u8; 32] =
-                authority_bytes.try_into().map_err(|bytes: Vec<u8>| {
-                    eyre!(
-                        "prepared Inrou authority must use a 32-byte Ed25519 key, found {} bytes",
-                        bytes.len()
-                    )
-                })?;
+            if authority_algorithm != iroha_crypto::Algorithm::Ed25519 {
+                return Err(eyre!("prepared Inrou authority must use an Ed25519 key"));
+            }
+            let authority_bytes: [u8; 32] = authority_bytes.try_into().map_err(|_| {
+                eyre!(
+                    "prepared Inrou authority must use a 32-byte Ed25519 key, found {} bytes",
+                    authority_bytes.len()
+                )
+            })?;
             if manifest.governance.council_signatures.len() != 1
                 || manifest.governance.council_signatures[0].signer != authority_bytes
             {
@@ -15081,6 +15089,11 @@ impl PreparedSoracloudTransactionV1 {
                 "prepared Soracloud fee quote does not match the signed fee identity"
             ));
         }
+        self.fee_quote
+            .validate_for_signed_payload(transaction.payload())
+            .map_err(|error| {
+                eyre!("prepared Soracloud fee quote is semantically invalid: {error}")
+            })?;
         let expected_metadata = self.binding.metadata(&self.operation)?;
         if transaction.metadata() != &expected_metadata {
             return Err(eyre!(
@@ -20233,12 +20246,16 @@ mod tests {
                 "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{}",
                 "AA".repeat(32)
             ),
+            format!(
+                "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{}",
+                "10".repeat(32)
+            ),
         ] {
             let mut invalid = canonical.clone();
             invalid.service_version = invalid_version;
             assert!(
                 validate_taira_stage_layout(&invalid, MutationMode::Deploy).is_err(),
-                "only artifact- followed by exactly 64 lowercase hex characters is canonical"
+                "only artifact- followed by one exact canonical Iroha hash is accepted"
             );
         }
 
@@ -22362,16 +22379,14 @@ mod tests {
     fn decode_soracloud_tx_instructions_accepts_framed_payloads() {
         use iroha::data_model::{
             domain::Domain,
-            isi::{Instruction, Register, frame_instruction_payload},
+            isi::{Register, framed_instruction_payload},
         };
         let instruction = InstructionBox::from(Register::domain(Domain::new(
             iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
                 .expect("domain id"),
         )));
-        let wire_id = Instruction::id(&*instruction);
-        let payload = Instruction::dyn_encode(&*instruction);
-        let framed =
-            frame_instruction_payload(wire_id, &payload).expect("frame soracloud instruction");
+        let (wire_id, framed) = framed_instruction_payload(&instruction)
+            .expect("frame registered Soracloud instruction");
         let key_pair = soracloud_fixture_key_pair(0x31);
         let response = SoracloudMutationDraftResponse {
             ok: true,
@@ -22386,7 +22401,9 @@ mod tests {
             decode_soracloud_tx_instructions(&response).expect("decode framed instructions");
         let decoded_instruction = decoded.first().expect("single instruction");
         assert_eq!(decoded.len(), 1);
-        assert_eq!(Instruction::id(&**decoded_instruction), wire_id);
+        let (decoded_wire_id, _) = framed_instruction_payload(decoded_instruction)
+            .expect("decoded Soracloud instruction remains registered");
+        assert_eq!(decoded_wire_id, wire_id);
         assert_eq!(
             norito::to_bytes(decoded_instruction).expect("encode decoded"),
             norito::to_bytes(&instruction).expect("encode expected"),
@@ -23120,6 +23137,13 @@ mod tests {
             .decode_and_validate()
             .expect_err("marker-cleared prepared transaction hash must fail closed");
         assert!(error.to_string().contains("Iroha hash marker set"));
+
+        let mut zero_height = prepared;
+        zero_height.fee_quote.observation.next_block_height = 0;
+        let error = zero_height
+            .decode_and_validate()
+            .expect_err("prepared quote with an impossible observation must fail closed");
+        assert!(error.to_string().contains("semantically invalid"));
     }
 
     #[test]
@@ -23757,17 +23781,15 @@ mod tests {
     ) -> norito::json::Value {
         use iroha::data_model::{
             domain::Domain,
-            isi::{Instruction, Register, frame_instruction_payload},
+            isi::{Register, framed_instruction_payload},
         };
 
         let instruction = InstructionBox::from(Register::domain(Domain::new(
             iroha_data_model::domain::DomainId::try_new("soracloud_cli_test", "universal")
                 .expect("canonical mock domain id"),
         )));
-        let wire_id = Instruction::id(&*instruction);
-        let payload = Instruction::dyn_encode(&*instruction);
-        let framed = frame_instruction_payload(wire_id, &payload)
-            .expect("frame canonical Soracloud mock instruction");
+        let (wire_id, framed) = framed_instruction_payload(&instruction)
+            .expect("frame canonical registered Soracloud mock instruction");
         json::to_value(&SoracloudMutationDraftResponse {
             ok: true,
             authority: authority.clone(),
@@ -24070,7 +24092,7 @@ mod tests {
                 service_manifest_hash: Hash::new(b"status-output-service-manifest"),
                 container_manifest_hash: Hash::new(b"status-output-container-manifest"),
                 replicas: 1,
-                execution_plane: SoraServiceExecutionPlaneV1::HttpService,
+                execution_plane: SoraServiceExecutionPlaneV1::DeterministicService,
                 route_host: Some("taira.sora.org".to_owned()),
                 route_path_prefix: Some("/api/v1".to_owned()),
                 route_service_port: Some(8080),
@@ -24090,7 +24112,7 @@ mod tests {
                 lease_volumes: Vec::new(),
                 allow_model_inference: false,
                 allow_model_training: false,
-                runtime: SoraContainerRuntimeV1::Inrou,
+                runtime: SoraContainerRuntimeV1::Ivm,
                 allow_state_writes: false,
                 network: SoraNetworkPolicyV1::Isolated,
                 cpu_millis: 1_000,
@@ -24577,10 +24599,10 @@ mod tests {
         );
     }
     #[test]
-    fn rollout_args_can_resolve_service_name_from_manifest_pair() {
+    fn rollout_args_accept_deterministic_ivm_manifest_pair() {
         let (dir, _) = service_fixture(
-            "rollout_service_name_from_manifest_pair",
-            InitTemplate::HttpService,
+            "rollout_deterministic_ivm_manifest_pair",
+            InitTemplate::Baseline,
         );
         let key_pair = soracloud_fixture_key_pair(0x15);
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -24641,12 +24663,66 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("rollout should succeed");
-        assert_manifest_pair_output(&output, "upgrade", "upgrade.sh");
+        assert_eq!(
+            output
+                .get("service_name")
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+        let service_plan = output
+            .get("service_plan")
+            .and_then(norito::json::Value::as_object)
+            .expect("manifest-backed deterministic IVM service plan");
+        assert_eq!(
+            service_plan
+                .get("execution_plane")
+                .and_then(norito::json::Value::as_str),
+            Some("DeterministicService")
+        );
+        assert_eq!(
+            service_plan
+                .get("runtime")
+                .and_then(norito::json::Value::as_str),
+            Some("Ivm")
+        );
         assert_captured_payload_service_name(
             &server,
             "/v1/soracloud/rollout",
             "rollout request",
             "decode rollout request",
+        );
+    }
+    #[test]
+    fn rollout_args_reject_inrou_manifest_pair_before_network_request() {
+        let (dir, _) = service_fixture(
+            "rollout_rejects_inrou_manifest_pair",
+            InitTemplate::HttpService,
+        );
+        let key_pair = soracloud_fixture_key_pair(0x35);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let server = MockHttpServer::start(BTreeMap::new());
+        install_mock_submission_config(&authority, &key_pair);
+        let error = RolloutArgs {
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            rollout_handle: "echo_console:rollout:2".to_owned(),
+            health: RolloutHealth::Healthy,
+            promote_to_percent: Some(100),
+            governance_tx_hash: Hash::new(b"governance"),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect_err("first-release Inrou rollout must fail locally");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("first-release HttpService + Inrou"));
+        assert!(diagnostic.contains("atomic exact-revision upgrades"));
+        assert!(diagnostic.contains("does not accept Inrou manifest pairs"));
+        assert!(
+            server.requests().is_empty(),
+            "Inrou rollout rejection must happen before any network request"
         );
     }
     #[test]

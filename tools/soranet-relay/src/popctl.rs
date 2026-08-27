@@ -1158,18 +1158,15 @@ mod tests {
         let base = build_template(&TemplateOptions::default());
         let mut config = base.clone();
         let service = config.services[0].clone();
-        config.services = (0..POP_CONFIG_MAX_COLLECTION_ENTRIES_V1)
-            .map(|index| {
+        let base_service_count = config.services.len();
+        config.services.extend(
+            (base_service_count..POP_CONFIG_MAX_COLLECTION_ENTRIES_V1).map(|index| {
                 let mut service = service.clone();
                 service.name = format!("service-{index}");
-                service.role = if index == 0 {
-                    "edge-gateway".to_string()
-                } else {
-                    "worker".to_string()
-                };
+                service.role = "worker".to_string();
                 service
-            })
-            .collect();
+            }),
+        );
         validate_config(&config).expect("exact service count must be admitted");
         config.services.push(ServiceConfig {
             name: "service-plus-one".to_string(),

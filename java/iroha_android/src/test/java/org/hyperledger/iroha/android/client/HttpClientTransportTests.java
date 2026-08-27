@@ -42,8 +42,11 @@ import org.hyperledger.iroha.android.alias.AliasSetupPlanRequestV1;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.alias.EnsureAlias;
 import org.hyperledger.iroha.android.alias.ResolvedAccountAliasV1;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.model.FeeChargeKind;
+import org.hyperledger.iroha.android.model.FeeChargeLimit;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
@@ -140,10 +143,16 @@ public final class HttpClientTransportTests {
     vpnSessionIdNormalizerAccepts16BytesAndRejects32Bytes();
     ed25519KeyRoutesRejectSmallOrderIdentityPoint();
     feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer();
+    feeQuoteUsesControllerIdentityAndAllowsCanonicalAliasAuth();
+    feeQuoteEnforcesExact64KiBActualResponseLimit();
     feePaymentJsonRequiresExplicitNullableGasLimit();
     feeQuoteRejectsLegacyFlatTransactionIdentityKeys();
     feeQuoteRejectsPayerRevisionAndGasSubstitution();
+    feeQuoteValidationBindsComponentsDecisionAndAggregateSponsorCapacity();
     feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle();
+    feeSponsorProgramEnforcesExactJsonAnd64KiBActualResponseLimit();
+    feeSponsorProgramRejectsZeroActivationHeight();
+    feeSponsorProgramRejectsExplicitNullOptionalFields();
     feeSponsorProgramRejectsSubstitutedResponseId();
     vpnSessionAndReceiptRequestsUseNativeLeaseDtos();
     verifierKeyRegisterAndUpdateReturnUnsignedDrafts();
@@ -2255,7 +2264,7 @@ public final class HttpClientTransportTests {
     assert quoteId.equals(quote.leaseIdHex()) : "VPN lease id mismatch";
     assert meteringKey.equals(quote.meteringPublicKeyHex()) : "VPN metering key mismatch";
     assert quote.openLeaseInstruction() != null : "VPN quote must include open lease instruction";
-    assert "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow"
+    assert "iroha.instruction.v1::vpn::OpenVpnLeaseEscrow"
         .equals(quote.openLeaseInstruction().wireId()) : "Open lease wire id mismatch";
 
     final TransportRequest request = executor.lastRequest();
@@ -2321,15 +2330,21 @@ public final class HttpClientTransportTests {
 
   private static void feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer()
       throws Exception {
+    final String authority = TestAccountIds.ed25519Authority(0x18);
     final String responseBody =
         "{\"intent\":{\"payer\":\"authority\",\"value\":{\"charge_limits\":[],"
-            + "\"gas_limit\":9000}},\"observation\":{\"schedule_revision\":4},"
-            + "\"components\":[],\"capacities\":[],\"decision\":{\"accepted\":true}}";
+            + "\"gas_limit\":9000}},\"observation\":{\"ledger_time_ms\":42,"
+            + "\"next_block_height\":7,\"route_dataspace_id\":0},"
+            + "\"components\":[],\"capacities\":[],\"decision\":{\"status\":\"accepted\","
+            + "\"value\":{\"debit_source\":{\"kind\":\"account\",\"value\":\""
+            + authority
+            + "\"},\"program_revision\":null}}}";
     final StubResponseExecutor executor =
-        new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+        feeQuoteResponseExecutor(
+            200, responseBody.getBytes(StandardCharsets.UTF_8), "application/json");
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
-        canonicalAuth("alice@universal", keyPair, 1_700_000_000_020L, "fee-quote-1");
+        canonicalAuth(authority, keyPair, 1_700_000_000_020L, "fee-quote-1");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
@@ -2338,7 +2353,7 @@ public final class HttpClientTransportTests {
     unsignedPayload.put(
         "domain",
         Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
-    unsignedPayload.put("authority", "alice@universal");
+    unsignedPayload.put("authority", authority);
     unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
 
     final FeeQuoteResponse quote = transport.quoteFees(unsignedPayload, auth).join();
@@ -2347,12 +2362,14 @@ public final class HttpClientTransportTests {
         : "fee quote payer must remain authority";
     assert Long.valueOf(9_000L).equals(quote.intent().gasLimit())
         : "fee quote gas bound mismatch";
-    assert ((Number) quote.observation().get("schedule_revision")).longValue() == 4L
+    assert ((Number) quote.observation().get("next_block_height")).longValue() == 7L
         : "fee quote observation mismatch";
     final TransportRequest request = executor.lastRequest();
     assert "POST".equals(request.method()) : "fee quote must use POST";
     assert "https://torii.example/api/v1/fees/quote".equals(request.uri().toString())
         : "fee quote URI mismatch";
+    assert Long.valueOf(64L * 1024L).equals(request.maximumResponseBytes())
+        : "fee quote response limit mismatch";
     @SuppressWarnings("unchecked")
     final Map<String, Object> requestBody =
         (Map<String, Object>) JsonParser.parse(readBody(request));
@@ -2362,9 +2379,126 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             transport.quoteFees(
-                unsignedPayload, canonicalAuth("bob@universal", keyPair, null, null)),
+                unsignedPayload,
+                canonicalAuth(TestAccountIds.ed25519Authority(0x19), keyPair, null, null)),
         "fee quote must reject an auth payer mismatch");
     assert executor.lastRequest() == request : "payer mismatch must fail before dispatch";
+  }
+
+  private static byte[] authorityFeeQuoteResponse(final String debitAccount) {
+    return ("{\"intent\":{\"payer\":\"authority\",\"value\":{\"charge_limits\":[],"
+            + "\"gas_limit\":9000}},\"observation\":{\"ledger_time_ms\":42,"
+            + "\"next_block_height\":7,\"route_dataspace_id\":0},\"components\":[],"
+            + "\"capacities\":[],\"decision\":{\"status\":\"accepted\",\"value\":{"
+            + "\"debit_source\":{\"kind\":\"account\",\"value\":\""
+            + debitAccount
+            + "\"},\"program_revision\":null}}}")
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static StubResponseExecutor feeQuoteResponseExecutor(
+      final int statusCode, final byte[] body, final String contentType) {
+    return new StubResponseExecutor(
+        statusCode,
+        body,
+        "accepted",
+        Map.of("Content-Type", List.of(contentType)));
+  }
+
+  private static void feeQuoteUsesControllerIdentityAndAllowsCanonicalAliasAuth()
+      throws Exception {
+    final String canonicalAuthority = TestAccountIds.ed25519Authority(0x1d);
+    final String alternateAuthority =
+        AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAuthority, null).toI105(42);
+    final StubResponseExecutor executor =
+        feeQuoteResponseExecutor(
+            200, authorityFeeQuoteResponse(canonicalAuthority), "application/json");
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            signedClientConfig("https://torii.example"));
+    final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
+    unsignedPayload.put(
+        "domain",
+        Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
+    unsignedPayload.put("authority", alternateAuthority);
+    unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
+
+    transport
+        .quoteFees(unsignedPayload, canonicalAuth(canonicalAuthority, keyPair, null, null))
+        .join();
+    transport
+        .quoteFees(unsignedPayload, canonicalAuth("wallet@universal", keyPair, null, null))
+        .join();
+
+    assert "wallet@universal".equals(
+        executor
+            .lastRequest()
+            .headers()
+            .get(CanonicalRequestSigner.HEADER_ACCOUNT)
+            .get(0)) : "canonical alias auth must be sent to Torii for resolution";
+  }
+
+  private static void feeQuoteEnforcesExact64KiBActualResponseLimit() throws Exception {
+    final String authority = TestAccountIds.ed25519Authority(0x1e);
+    final byte[] response = authorityFeeQuoteResponse(authority);
+    final byte[] exactResponse = Arrays.copyOf(response, 64 * 1024);
+    Arrays.fill(exactResponse, response.length, exactResponse.length, (byte) ' ');
+    final byte[] oversizedResponse = Arrays.copyOf(response, 64 * 1024 + 1);
+    Arrays.fill(oversizedResponse, response.length, oversizedResponse.length, (byte) ' ');
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth = canonicalAuth(authority, keyPair, null, null);
+    final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
+    unsignedPayload.put(
+        "domain",
+        Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
+    unsignedPayload.put("authority", authority);
+    unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
+    final StubResponseExecutor exactExecutor =
+        feeQuoteResponseExecutor(200, exactResponse, "application/json");
+    final HttpClientTransport exactTransport =
+        HttpClientTransport.withExecutor(
+            exactExecutor,
+            signedClientConfig("https://torii.example"));
+
+    exactTransport.quoteFees(unsignedPayload, auth).join();
+    assert Long.valueOf(64L * 1024L).equals(
+        exactExecutor.lastRequest().maximumResponseBytes())
+        : "fee quote request must carry the exact 64 KiB limit";
+
+    final HttpClientTransport oversizedTransport =
+        HttpClientTransport.withExecutor(
+            feeQuoteResponseExecutor(200, oversizedResponse, "application/json"),
+            signedClientConfig("https://torii.example"));
+    expectCompletionIllegalArgument(
+        oversizedTransport.quoteFees(unsignedPayload, auth),
+        "fee quote must reject a 65,537-byte actual response");
+
+    final HttpClientTransport oversizedErrorTransport =
+        HttpClientTransport.withExecutor(
+            feeQuoteResponseExecutor(400, oversizedResponse, "application/json"),
+            signedClientConfig("https://torii.example"));
+    expectCompletionIllegalArgument(
+        oversizedErrorTransport.quoteFees(unsignedPayload, auth),
+        "fee quote must reject a 65,537-byte error response");
+
+    final HttpClientTransport wrongMediaTransport =
+        HttpClientTransport.withExecutor(
+            feeQuoteResponseExecutor(200, response, "text/plain"),
+            signedClientConfig("https://torii.example"));
+    boolean wrongMediaRejected = false;
+    try {
+      wrongMediaTransport.quoteFees(unsignedPayload, auth).join();
+    } catch (final CompletionException error) {
+      wrongMediaRejected =
+          error.getCause() instanceof IllegalStateException
+              && error
+                  .getCause()
+                  .getMessage()
+                  .contains("Content-Type must be exactly application/json");
+    }
+    assert wrongMediaRejected : "fee quote must reject a non-JSON success response media type";
   }
 
   private static void feePaymentJsonRequiresExplicitNullableGasLimit() {
@@ -2410,9 +2544,11 @@ public final class HttpClientTransportTests {
   private static void feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle()
       throws Exception {
     final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final String responseSponsor =
+        AccountAddress.parseEncodedIgnoringCurveSupport(sponsor, null).toI105(42);
     final String responseBody =
         "{\"id\":{\"sponsor\":\""
-            + sponsor
+            + responseSponsor
             + "\",\"name\":\"wallet_fx\"},"
             + "\"payout_account\":\""
             + sponsor
@@ -2421,7 +2557,11 @@ public final class HttpClientTransportTests {
             + "\"active_revision\":3,\"staged_revision\":4,"
             + "\"scheduled_activation\":{\"revision\":4,\"activate_at_height\":100}}";
     final StubResponseExecutor executor =
-        new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+        new StubResponseExecutor(
+            200,
+            responseBody.getBytes(StandardCharsets.UTF_8),
+            "accepted",
+            Map.of("Content-Type", List.of("application/json")));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
         canonicalAuth("alice@universal", keyPair, 1_700_000_000_021L, "fee-program-1");
@@ -2435,7 +2575,7 @@ public final class HttpClientTransportTests {
             .getFeeSponsorProgram(new FeeSponsorProgramId(sponsor, "wallet_fx"), auth)
             .join();
 
-    assert sponsor.equals(program.id().sponsor()) : "fee sponsor account mismatch";
+    assert responseSponsor.equals(program.id().sponsor()) : "fee sponsor account mismatch";
     assert "wallet_fx".equals(program.id().name()) : "fee sponsor program name mismatch";
     assert sponsor.equals(program.payoutAccount()) : "fee sponsor payout mismatch";
     assert program.lifecycle() == FeeSponsorProgramLifecycle.ACTIVE
@@ -2458,8 +2598,253 @@ public final class HttpClientTransportTests {
     assertCanonicalSignature(request, keyPair.getPublic(), 1_700_000_000_021L, "fee-program-1");
   }
 
+  private static void feeSponsorProgramEnforcesExactJsonAnd64KiBActualResponseLimit()
+      throws Exception {
+    final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final String responseJson =
+        "{\"id\":{\"sponsor\":\""
+            + sponsor
+            + "\",\"name\":\"wallet_fx\"},\"payout_account\":\""
+            + sponsor
+            + "\",\"lifecycle\":{\"state\":\"active\",\"value\":null}}";
+    final byte[] response = responseJson.getBytes(StandardCharsets.UTF_8);
+    final byte[] exactResponse = Arrays.copyOf(response, 64 * 1024);
+    Arrays.fill(exactResponse, response.length, exactResponse.length, (byte) ' ');
+    final byte[] oversizedResponse = Arrays.copyOf(response, 64 * 1024 + 1);
+    Arrays.fill(oversizedResponse, response.length, oversizedResponse.length, (byte) ' ');
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth("alice@universal", keyPair, null, null);
+    final FeeSponsorProgramId programId = new FeeSponsorProgramId(sponsor, "wallet_fx");
+    final StubResponseExecutor exactExecutor =
+        new StubResponseExecutor(
+            200,
+            exactResponse,
+            "accepted",
+            Map.of(
+                "Content-Type",
+                List.of("Application/JSON; charset=utf-8; note=\"\u00e9\"")));
+    final HttpClientTransport exactTransport =
+        HttpClientTransport.withExecutor(
+            exactExecutor,
+            signedClientConfig("https://torii.example"));
+
+    exactTransport.getFeeSponsorProgram(programId, auth).join();
+    assert Long.valueOf(64L * 1024L).equals(
+        exactExecutor.lastRequest().maximumResponseBytes())
+        : "fee sponsor lookup request must carry the exact 64 KiB limit";
+
+    final HttpClientTransport oversizedTransport =
+        HttpClientTransport.withExecutor(
+            new StubResponseExecutor(
+                503,
+                oversizedResponse,
+                "unavailable",
+                Map.of("Content-Type", List.of("application/json"))),
+            signedClientConfig("https://torii.example"));
+    boolean oversizedRejectedBeforeStatus = false;
+    try {
+      oversizedTransport.getFeeSponsorProgram(programId, auth).join();
+    } catch (final CompletionException error) {
+      oversizedRejectedBeforeStatus =
+          error.getCause() instanceof IllegalArgumentException
+              && error
+                  .getCause()
+                  .getMessage()
+                  .contains("response exceeds the 65536 byte limit");
+    }
+    assert oversizedRejectedBeforeStatus
+        : "fee sponsor lookup must enforce the actual-body limit before status handling";
+
+    final List<StubResponseExecutor> invalidMediaExecutors =
+        List.of(
+            new StubResponseExecutor(200, response, "accepted", Map.of()),
+            new StubResponseExecutor(
+                200,
+                response,
+                "accepted",
+                Map.of("Content-Type", List.of("text/plain"))),
+            new StubResponseExecutor(
+                200,
+                response,
+                "accepted",
+                Map.of("Content-Type", List.of("application/json, application/json"))),
+            new StubResponseExecutor(
+                200,
+                response,
+                "accepted",
+                Map.of("Content-Type", List.of("application/json; profile=\"a,b\""))),
+            new StubResponseExecutor(
+                200,
+                response,
+                "accepted",
+                Map.of("Content-Type", List.of("application/j\u017Fon"))),
+            new StubResponseExecutor(
+                200,
+                response,
+                "accepted",
+                Map.of("Content-Type", List.of("appl\u0131cation/json"))),
+            new StubResponseExecutor(
+                200,
+                response,
+                "accepted",
+                Map.of("Content-Type", List.of("application\u000Fjson"))),
+            new StubResponseExecutor(
+                200,
+                response,
+                "accepted",
+                Map.of("Content-Type", List.of("application/json;"))),
+            new StubResponseExecutor(
+                200,
+                response,
+                "accepted",
+                Map.of("Content-Type", List.of("application/json; charset"))),
+            new StubResponseExecutor(
+                200,
+                response,
+                "accepted",
+                Map.of("Content-Type", List.of("application/json; profile=\"unterminated"))),
+            new StubResponseExecutor(
+                200,
+                response,
+                "accepted",
+                Map.of(
+                    "Content-Type",
+                    List.of("application/json", "application/json"))));
+    for (final StubResponseExecutor invalidMediaExecutor : invalidMediaExecutors) {
+      final HttpClientTransport transport =
+          HttpClientTransport.withExecutor(
+              invalidMediaExecutor,
+              signedClientConfig("https://torii.example"));
+      boolean mediaRejected = false;
+      try {
+        transport.getFeeSponsorProgram(programId, auth).join();
+      } catch (final CompletionException error) {
+        mediaRejected =
+            error.getCause() instanceof IllegalStateException
+                && error
+                    .getCause()
+                    .getMessage()
+                    .contains("Content-Type must be exactly application/json");
+      }
+      assert mediaRejected
+          : "fee sponsor lookup must require exactly one application/json Content-Type";
+    }
+
+    final byte[] malformedUtf8 = Arrays.copyOf(response, response.length);
+    final int programNameOffset = responseJson.indexOf("wallet_fx");
+    assert programNameOffset >= 0 : "fee sponsor response fixture must contain the program name";
+    malformedUtf8[programNameOffset] = (byte) 0x80;
+    final HttpClientTransport malformedUtf8Transport =
+        HttpClientTransport.withExecutor(
+            new StubResponseExecutor(
+                200,
+                malformedUtf8,
+                "accepted",
+                Map.of("Content-Type", List.of("application/json"))),
+            signedClientConfig("https://torii.example"));
+    boolean malformedUtf8Rejected = false;
+    try {
+      malformedUtf8Transport.getFeeSponsorProgram(programId, auth).join();
+    } catch (final CompletionException error) {
+      malformedUtf8Rejected =
+          error.getCause() instanceof IllegalArgumentException
+              && error.getCause().getMessage().contains("must be valid UTF-8");
+    }
+    assert malformedUtf8Rejected
+        : "fee sponsor lookup must reject malformed UTF-8 before typed JSON decoding";
+
+    final HttpClientTransport closedDecodeTransport =
+        HttpClientTransport.withExecutor(
+            new StubResponseExecutor(
+                200,
+                (responseJson.substring(0, responseJson.length() - 1) + ",\"legacy\":true}")
+                    .getBytes(StandardCharsets.UTF_8),
+                "accepted",
+                Map.of("Content-Type", List.of("application/json"))),
+            signedClientConfig("https://torii.example"));
+    expectCompletionIllegalArgument(
+        closedDecodeTransport.getFeeSponsorProgram(programId, auth),
+        "fee sponsor lookup must reject retired response fields");
+  }
+
+  private static void feeSponsorProgramRejectsZeroActivationHeight() throws Exception {
+    final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final String responseBody =
+        "{\"id\":{\"sponsor\":\""
+            + sponsor
+            + "\",\"name\":\"wallet_fx\"},\"payout_account\":\""
+            + sponsor
+            + "\",\"lifecycle\":{\"state\":\"staged\",\"value\":null},"
+            + "\"scheduled_activation\":{\"revision\":1,\"activate_at_height\":0}}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            200,
+            responseBody.getBytes(StandardCharsets.UTF_8),
+            "accepted",
+            Map.of("Content-Type", List.of("application/json")));
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            signedClientConfig("https://torii.example"));
+
+    boolean zeroHeightRejected = false;
+    try {
+      transport
+          .getFeeSponsorProgram(
+              new FeeSponsorProgramId(sponsor, "wallet_fx"),
+              canonicalAuth("alice@universal", keyPair, null, null))
+          .join();
+    } catch (final CompletionException error) {
+      zeroHeightRejected =
+          error.getCause() instanceof IllegalArgumentException
+              && error
+                  .getCause()
+                  .getMessage()
+                  .contains("scheduled_activation.activate_at_height must be positive");
+    }
+    assert zeroHeightRejected
+        : "fee sponsor lookup must reject activation at ledger height zero";
+  }
+
+  private static void feeSponsorProgramRejectsExplicitNullOptionalFields() throws Exception {
+    final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final FeeSponsorProgramId programId = new FeeSponsorProgramId(sponsor, "wallet_fx");
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth("alice@universal", keyPair, null, null);
+
+    for (final String field :
+        Arrays.asList("active_revision", "staged_revision", "scheduled_activation")) {
+      final String responseBody =
+          "{\"id\":{\"sponsor\":\""
+              + sponsor
+              + "\",\"name\":\"wallet_fx\"},\"payout_account\":\""
+              + sponsor
+              + "\",\"lifecycle\":{\"state\":\"active\",\"value\":null},\""
+              + field
+              + "\":null}";
+      final StubResponseExecutor executor =
+          new StubResponseExecutor(
+              200,
+              responseBody.getBytes(StandardCharsets.UTF_8),
+              "accepted",
+              Map.of("Content-Type", List.of("application/json")));
+      final HttpClientTransport transport =
+          HttpClientTransport.withExecutor(
+              executor,
+              signedClientConfig("https://torii.example"));
+
+      expectCompletionIllegalArgument(
+          transport.getFeeSponsorProgram(programId, auth),
+          "fee sponsor lookup must reject explicit null for " + field);
+    }
+  }
+
   private static void feeQuoteRejectsPayerRevisionAndGasSubstitution() throws Exception {
     final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final String authority = TestAccountIds.ed25519Authority(0x1b);
     final FeePaymentIntent sponsorIntent =
         FeePaymentIntent.sponsor(
             new FeeSponsorProgramId(sponsor, "wallet_fx"),
@@ -2467,7 +2852,7 @@ public final class HttpClientTransportTests {
             Collections.emptyList(),
             9_000L);
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
-    final ToriiCanonicalRequestAuth auth = canonicalAuth("alice@universal", keyPair, null, null);
+    final ToriiCanonicalRequestAuth auth = canonicalAuth(authority, keyPair, null, null);
 
     final Object[][] cases = {
       {
@@ -2491,10 +2876,15 @@ public final class HttpClientTransportTests {
       final String responseBody =
           "{\"intent\":"
               + entry[1]
-              + ",\"observation\":{},\"components\":[],\"capacities\":[],"
-              + "\"decision\":{}}";
+              + ",\"observation\":{\"ledger_time_ms\":42,\"next_block_height\":7,"
+              + "\"route_dataspace_id\":0},\"components\":[],\"capacities\":[],"
+              + "\"decision\":{\"status\":\"accepted\",\"value\":{\"debit_source\":{"
+              + "\"kind\":\"account\",\"value\":\""
+              + authority
+              + "\"},\"program_revision\":null}}}";
       final StubResponseExecutor executor =
-          new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+          feeQuoteResponseExecutor(
+              200, responseBody.getBytes(StandardCharsets.UTF_8), "application/json");
       final HttpClientTransport transport =
           HttpClientTransport.withExecutor(
               executor,
@@ -2503,7 +2893,7 @@ public final class HttpClientTransportTests {
       unsignedPayload.put(
           "domain",
           Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
-      unsignedPayload.put("authority", "alice@universal");
+      unsignedPayload.put("authority", authority);
       unsignedPayload.put("fee_payment", requested.toJsonMap());
 
       expectCompletionIllegalArgument(
@@ -2512,15 +2902,142 @@ public final class HttpClientTransportTests {
     }
   }
 
+  private static void feeQuoteValidationBindsComponentsDecisionAndAggregateSponsorCapacity()
+      throws Exception {
+    final String authority = TestAccountIds.ed25519Authority(0x1c);
+    final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final String asset = TestAssetDefinitionIds.TERTIARY;
+    final FeePaymentIntent intent =
+        FeePaymentIntent.sponsor(
+            new FeeSponsorProgramId(sponsor, "wallet_fx"),
+            3L,
+            Arrays.asList(
+                new FeeChargeLimit(FeeChargeKind.NEXUS, asset, "3"),
+                new FeeChargeLimit(FeeChargeKind.PIPELINE_GAS, asset, "5")),
+            9_000L);
+
+    FeePaymentJson.parseQuote(
+            sponsoredFeeQuoteResponse(
+                intent, sponsor, asset, 7L, "3", 3L, true, "10", "8", "8", "8"))
+        .validateForDraft(intent, authority);
+    final String alternateSponsor =
+        AccountAddress.parseEncodedIgnoringCurveSupport(sponsor, null).toI105(42);
+    final FeePaymentIntent alternateIntent =
+        FeePaymentIntent.sponsor(
+            new FeeSponsorProgramId(alternateSponsor, "wallet_fx"),
+            3L,
+            intent.chargeLimits(),
+            9_000L);
+    final FeeQuoteResponse controllerEquivalentQuote =
+        FeePaymentJson.parseQuote(
+            sponsoredFeeQuoteResponse(
+                intent,
+                alternateSponsor,
+                asset,
+                7L,
+                "3",
+                3L,
+                true,
+                "10",
+                "8",
+                "8",
+                "8"));
+    controllerEquivalentQuote.validateForDraft(alternateIntent, authority);
+    controllerEquivalentQuote.validateForSignedPayload(
+        TransactionPayload.builder()
+            .setNetworkId(VERIFYING_KEY_NETWORK_ID)
+            .setAuthority(authority)
+            .setFeePayment(alternateIntent)
+            .build());
+    final byte[][] mutations = {
+      sponsoredFeeQuoteResponse(
+          intent, sponsor, asset, 0L, "3", 3L, true, "10", "8", "8", "8"),
+      sponsoredFeeQuoteResponse(
+          intent, sponsor, asset, 7L, "4", 3L, true, "10", "8", "8", "8"),
+      sponsoredFeeQuoteResponse(
+          intent, sponsor, asset, 7L, "3", 4L, true, "10", "8", "8", "8"),
+      sponsoredFeeQuoteResponse(
+          intent, sponsor, asset, 7L, "3", 3L, false, "10", "8", "8", "8"),
+      sponsoredFeeQuoteResponse(
+          intent, sponsor, asset, 7L, "3", 3L, true, "9", "8", "8", "8"),
+      sponsoredFeeQuoteResponse(
+          intent, sponsor, asset, 7L, "3", 3L, true, "10", "7", "8", "8"),
+      sponsoredFeeQuoteResponse(
+          intent, sponsor, asset, 7L, "3", 3L, true, "10", "8", "7", "8"),
+      sponsoredFeeQuoteResponse(
+          intent, sponsor, asset, 7L, "3", 3L, true, "10", "8", "8", "7")
+    };
+    for (final byte[] mutation : mutations) {
+      expectIllegalArgument(
+          () -> FeePaymentJson.parseQuote(mutation).validateForDraft(intent, authority),
+          "fee quote must reject semantically unbound response fields");
+    }
+  }
+
+  private static byte[] sponsoredFeeQuoteResponse(
+      final FeePaymentIntent intent,
+      final String sponsor,
+      final String asset,
+      final long nextBlockHeight,
+      final String nexusAmount,
+      final long programRevision,
+      final boolean includeCapacity,
+      final String vaultBalance,
+      final String blockRemaining,
+      final String programEpochRemaining,
+      final String beneficiaryEpochRemaining) {
+    final String capacity =
+        "{\"asset_definition_id\":\""
+            + asset
+            + "\",\"vault_balance\":\""
+            + vaultBalance
+            + "\",\"reserve_floor\":\"2\",\"block_remaining\":\""
+            + blockRemaining
+            + "\",\"program_epoch_remaining\":\""
+            + programEpochRemaining
+            + "\",\"beneficiary_epoch_remaining\":\""
+            + beneficiaryEpochRemaining
+            + "\"}";
+    final String response =
+        "{\"intent\":"
+            + JsonEncoder.encode(intent.toJsonMap())
+            + ",\"observation\":{\"ledger_time_ms\":42,\"next_block_height\":"
+            + nextBlockHeight
+            + ",\"route_dataspace_id\":0},\"components\":[{\"kind\":{\"kind\":\"nexus\","
+            + "\"value\":null},\"asset_definition_id\":\""
+            + asset
+            + "\",\"max_amount\":\""
+            + nexusAmount
+            + "\"},{\"kind\":{\"kind\":\"pipeline_gas\",\"value\":null},"
+            + "\"asset_definition_id\":\""
+            + asset
+            + "\",\"max_amount\":\"5\"}],\"capacities\":["
+            + (includeCapacity ? capacity : "")
+            + "],\"decision\":{\"status\":\"accepted\",\"value\":{\"debit_source\":{"
+            + "\"kind\":\"sponsor_program\",\"value\":{\"sponsor\":\""
+            + sponsor
+            + "\",\"name\":\"wallet_fx\"}},\"program_revision\":"
+            + programRevision
+            + "}}}";
+    return response.getBytes(StandardCharsets.UTF_8);
+  }
+
   private static void feeSponsorProgramRejectsSubstitutedResponseId() throws Exception {
     final String sponsor = TestAccountIds.ed25519Authority(0x37);
     final String responseBody =
         "{\"id\":{\"sponsor\":\""
             + sponsor
             + "\",\"name\":\"other\"},"
+            + "\"payout_account\":\""
+            + sponsor
+            + "\","
             + "\"lifecycle\":{\"state\":\"active\",\"value\":null}}";
     final StubResponseExecutor executor =
-        new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+        new StubResponseExecutor(
+            200,
+            responseBody.getBytes(StandardCharsets.UTF_8),
+            "accepted",
+            Map.of("Content-Type", List.of("application/json")));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
@@ -2582,7 +3099,7 @@ public final class HttpClientTransportTests {
     assert "250000.125".equals(submitted.refundedFee()) : "VPN refund mismatch";
     assert submitted.settleLeaseInstruction() != null
         : "VPN pending receipt must include settle instruction";
-    assert "iroha_data_model::isi::vpn::SettleVpnLease"
+    assert "iroha.instruction.v1::vpn::SettleVpnLease"
         .equals(submitted.settleLeaseInstruction().wireId()) : "VPN settle wire id mismatch";
     assert receipts.total() == 1L : "VPN receipt list total mismatch";
     assert leaseId.equals(receipts.items().get(0).leaseIdHex()) : "VPN receipt lease id mismatch";
@@ -3335,6 +3852,7 @@ public final class HttpClientTransportTests {
                     .setMemo("QR invoice 42")
                     .setValidationFeePolicyVersion(7L)
                     .setValidationFeePolicyHash("AB".repeat(32))
+                    .setValidationFeeHijiriFeeQuoteHash(repeatText("CD", 32))
                     .setValidationFeeInstructionIndex(1L)
                     .setValidationFeeTransferEntryIndex(2L)
                     .build())
@@ -3375,6 +3893,8 @@ public final class HttpClientTransportTests {
         : "validation_fee_policy_version mismatch";
     assert "ab".repeat(32).equals(payload.get("validation_fee_policy_hash"))
         : "validation_fee_policy_hash mismatch";
+    assert repeatText("cd", 32).equals(payload.get("validation_fee_hijiri_fee_quote_hash"))
+        : "validation_fee_hijiri_fee_quote_hash mismatch";
     assert "1".equals(payload.get("validation_fee_instruction_index"))
         : "validation_fee_instruction_index mismatch";
     assert "2".equals(payload.get("validation_fee_transfer_entry_index"))
@@ -3488,6 +4008,31 @@ public final class HttpClientTransportTests {
                     .setValidationFeePolicyHash("ab".repeat(32))
                     .build()),
         "validation fee policy hash without version must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setValidationFeeHijiriFeeQuoteHash(repeatText("cd", 32))
+                    .build()),
+        "Hijiri quote hash without validation fee policy metadata must be rejected");
+    for (final String invalidHijiriQuoteHash :
+        Arrays.asList(repeatText("cd", 31), repeatText("gg", 32))) {
+      expectIllegalArgument(
+          () ->
+              HttpClientTransport.buildMultisigProposePayload(
+                  MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                      .setMultisigAccountAlias("cbdc@banka")
+                      .setSignerAccountId("alice")
+                      .addInstructionBytes(instruction)
+                      .setValidationFeePolicyVersion(1L)
+                      .setValidationFeePolicyHash(repeatText("ab", 32))
+                      .setValidationFeeHijiriFeeQuoteHash(invalidHijiriQuoteHash)
+                      .build()),
+          "Hijiri quote hash must be exact 32-byte hex");
+    }
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
@@ -6266,6 +6811,14 @@ public final class HttpClientTransportTests {
     return builder.toString();
   }
 
+  private static String repeatText(final String value, final int count) {
+    final StringBuilder builder = new StringBuilder(value.length() * count);
+    for (int index = 0; index < count; index++) {
+      builder.append(value);
+    }
+    return builder.toString();
+  }
+
   private static byte[] hexToBytes(final String hex) {
     final byte[] bytes = new byte[hex.length() / 2];
     for (int index = 0; index < bytes.length; index++) {
@@ -6395,7 +6948,14 @@ public final class HttpClientTransportTests {
     }
     private StubResponseExecutor(
         final int statusCode, final byte[] body, final String message) {
-      this.response = new TransportResponse(statusCode, body, message, Map.of());
+      this(statusCode, body, message, Map.of());
+    }
+    private StubResponseExecutor(
+        final int statusCode,
+        final byte[] body,
+        final String message,
+        final Map<String, List<String>> headers) {
+      this.response = new TransportResponse(statusCode, body, message, headers);
     }
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {

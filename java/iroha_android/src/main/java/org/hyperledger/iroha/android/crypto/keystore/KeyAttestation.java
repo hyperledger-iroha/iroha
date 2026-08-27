@@ -21,7 +21,8 @@ public final class KeyAttestation {
 
   private KeyAttestation(final Builder builder) {
     this.alias = builder.alias;
-    this.certificateChain = Collections.unmodifiableList(new ArrayList<>(builder.certificateChain));
+    this.certificateChain =
+        Collections.unmodifiableList(copyCertificateChain(builder.certificateChain));
   }
 
   public String alias() {
@@ -33,7 +34,7 @@ public final class KeyAttestation {
    * list is an immutable copy.
    */
   public List<byte[]> certificateChain() {
-    return new ArrayList<>(certificateChain);
+    return copyCertificateChain(certificateChain);
   }
 
   public Builder toBuilder() {
@@ -42,6 +43,14 @@ public final class KeyAttestation {
 
   public static Builder builder() {
     return new Builder();
+  }
+
+  private static List<byte[]> copyCertificateChain(final List<byte[]> certificates) {
+    final List<byte[]> copy = new ArrayList<>(certificates.size());
+    for (final byte[] certificate : certificates) {
+      copy.add(Arrays.copyOf(certificate, certificate.length));
+    }
+    return copy;
   }
 
   public static final class Builder {

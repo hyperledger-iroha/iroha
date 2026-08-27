@@ -15,6 +15,7 @@ from ._quantity import (
     _normalize_quantity,
 )
 from ._quantity import _normalize_u128_quantity as _normalize_u128_quantity
+from .address import require_canonical_asset_definition_id
 from .crypto import (
     _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
     ContractCall,
@@ -260,7 +261,7 @@ def _fee_charge_limits(charge_limits: Sequence[Mapping[str, Any]]) -> List[Dict[
         if kind <= previous_kind:
             raise ValueError("charge_limits must be unique and ordered nexus before pipeline_gas")
         previous_kind = kind
-        asset_definition_id = _require_exact_non_empty_string(
+        asset_definition_id = require_canonical_asset_definition_id(
             raw.get("asset_definition_id"),
             f"charge_limits[{index}].asset_definition_id",
         )
@@ -1519,7 +1520,10 @@ class TransactionDraft:
         builder = self.to_builder()
         draft_payload_json = builder.payload_json()
         draft_payload = json.loads(draft_payload_json)
-        from iroha_torii_client.client import ToriiCanonicalRequestAuth
+        from iroha_torii_client.client import (
+            ToriiCanonicalRequestAuth,
+            validate_fee_quote_response_for_draft,
+        )
 
         keypair = Ed25519KeyPair.from_private_key(private_key)
         authority = draft_payload.get("authority")
@@ -1533,6 +1537,7 @@ class TransactionDraft:
                 signer=keypair.sign,
             ),
         )
+        quote = validate_fee_quote_response_for_draft(draft_payload, quote)
         intent = quote.get("intent")
         if not isinstance(intent, Mapping):
             raise RuntimeError("fee quote response is missing an intent object")

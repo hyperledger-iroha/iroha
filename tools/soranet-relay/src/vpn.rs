@@ -4,7 +4,7 @@
 //! accounting works end-to-end while the tunnel runtime handles fixed-size framing,
 //! pacing, and cover injection.
 use crate::{
-    config::{ConfigError, VpnConfig},
+    config::{ConfigError, VPN_MAX_COVER_BURST_CELLS_V1, VpnConfig},
     metrics::Metrics,
     vpn_adapter::{VpnAdapter, VpnBridge},
 };
@@ -510,14 +510,23 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(
     writer: &mut W,
     cell: &PaddedCell,
 ) -> Result<(), VpnFrameIoError> {
-    let bytes = cell.frame.as_ref();
+    write_frame_bytes(writer, cell.frame.as_ref()).await
+}
+async fn write_frame_bytes<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    bytes: &[u8],
+) -> Result<(), VpnFrameIoError> {
     if bytes.len() != VPN_CELL_LEN {
         return Err(VpnFrameIoError::FrameLength {
             expected: VPN_CELL_LEN,
             actual: bytes.len(),
         });
     }
-    writer.write_all(bytes).await.map_err(VpnFrameIoError::Io)
+    writer.write_all(bytes).await.map_err(VpnFrameIoError::Io)?;
+    // A SoraNet `RecordWriter` intentionally buffers the most recently accepted
+    // authenticated record. Flush at the application-cell boundary so a final
+    // or one-cell packet cannot wait for an unrelated later write.
+    writer.flush().await.map_err(VpnFrameIoError::Io)
 }
 fn cover_plan_from_config(
     config: &VpnConfig,
@@ -536,7 +545,10 @@ fn cover_plan_from_config(
     VpnCoverScheduleV1 {
         cover_to_data_per_mille: cover_ratio,
         heartbeat_ms: config.cover.heartbeat_ms,
-        max_cover_burst: config.cover.max_cover_burst,
+        max_cover_burst: config
+            .cover
+            .max_cover_burst
+            .min(VPN_MAX_COVER_BURST_CELLS_V1),
         jitter_ms: config.cover.max_jitter_millis,
     }
     .plan(seed, frames)
@@ -556,14 +568,38 @@ pub fn schedule_frames(
     if seed.iter().all(|byte| *byte == 0) {
         return Err(VpnFrameBuildError::InvalidCoverSeed);
     }
-    let mut total_frames = data_cells.len();
-    let mut plan = cover_plan_from_config(&overlay.config, total_frames, seed);
-    while plan.iter().filter(|entry| !entry.is_cover).count() < data_cells.len() {
-        total_frames = total_frames
-            .checked_add(1)
-            .ok_or(VpnFrameBuildError::SequenceExhausted)?;
-        plan = cover_plan_from_config(&overlay.config, total_frames, seed);
-    }
+    let data_frame_count = data_cells.len();
+    let maximum_frames = if overlay.config.cover.enabled {
+        let cover_burst = overlay
+            .config
+            .cover
+            .max_cover_burst
+            .min(VPN_MAX_COVER_BURST_CELLS_V1);
+        data_frame_count
+            .checked_mul(usize::from(cover_burst) + 1)
+            .ok_or(VpnFrameBuildError::SequenceExhausted)?
+    } else {
+        data_frame_count
+    };
+    // The deterministic plan is prefix-stable. Generate the bounded worst-case
+    // prefix once, then retain the shortest prefix containing every data slot.
+    // Rebuilding every one-frame extension made scheduling quadratic.
+    let mut plan = cover_plan_from_config(&overlay.config, maximum_frames, seed);
+    let total_frames = if data_frame_count == 0 {
+        0
+    } else {
+        let mut data_slots = 0usize;
+        plan.iter()
+            .position(|entry| {
+                if !entry.is_cover {
+                    data_slots = data_slots.saturating_add(1);
+                }
+                data_slots == data_frame_count
+            })
+            .map(|index| index + 1)
+            .ok_or(VpnFrameBuildError::SequenceExhausted)?
+    };
+    plan.truncate(total_frames);
     let frame_count =
         u64::try_from(total_frames).map_err(|_| VpnFrameBuildError::SequenceExhausted)?;
     cover_meta
@@ -636,10 +672,7 @@ pub async fn send_scheduled_frames_with_adapter<W: AsyncWrite + Unpin>(
         } else if let Some(session) = session {
             session.record_egress_sequence(scheduled.sequence)?;
         }
-        writer
-            .write_all(scheduled.frame.as_ref())
-            .await
-            .map_err(VpnFrameIoError::Io)?;
+        write_frame_bytes(writer, scheduled.frame.as_ref()).await?;
         if let Some(adapter) = adapter {
             adapter.record_egress_frame_count(u64::from(scheduled.payload_len), scheduled.is_cover);
         } else if let Some(session) = session {
@@ -1340,9 +1373,37 @@ mod tests {
     use iroha_data_model::soranet::vpn::VpnUsageVoucherBodyV1;
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
+        pin::Pin,
         sync::Arc,
+        task::{Context, Poll},
         time::{Duration, UNIX_EPOCH},
     };
+
+    struct FlushFailWriter;
+
+    impl AsyncWrite for FlushFailWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+            buffer: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buffer.len()))
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Err(std::io::Error::other("fixture flush failure")))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     fn poison<T>(mutex: &Mutex<T>) {
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -1367,6 +1428,33 @@ mod tests {
             Err(VpnSessionStateError::StateUnavailable),
             "clearing the mutex poison must not reopen the session"
         );
+    }
+
+    #[tokio::test]
+    async fn scheduled_frame_flush_failure_burns_sequence_without_accounting() {
+        let session = VpnSession::from_parts(Arc::new(Metrics::new()));
+        let schedule = [ScheduledFrame {
+            deadline: Duration::ZERO,
+            frame: VpnPaddedCellV1::zeroed(),
+            payload_len: 17,
+            sequence: 42,
+            is_cover: false,
+        }];
+        let error = send_scheduled_frames(&schedule, &mut FlushFailWriter, Some(&session))
+            .await
+            .expect_err("a failed transport flush must abort the schedule");
+        assert!(matches!(error, VpnFrameIoError::Io(_)));
+        assert_eq!(
+            *session
+                .state
+                .last_egress_sequence
+                .lock()
+                .expect("sequence fixture lock"),
+            Some(42),
+            "an ambiguously written sequence must never be reused"
+        );
+        assert_eq!(session.state.egress_bytes.load(Ordering::Relaxed), 0);
+        assert_eq!(session.state.cover_bytes.load(Ordering::Relaxed), 0);
     }
 
     #[test]

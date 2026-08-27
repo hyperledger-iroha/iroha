@@ -18,8 +18,9 @@ signals exported by Torii and the SoraFS orchestrator.
 
 1. **Capture the active spool artefacts.** Copy the most recent
    `taikai-anchor-request-*.json`, `taikai-trm-state-*.json`, and
-   `taikai-lineage-*.json` entries from the ingest spool before rotating any
-   worker pods. These files live under
+   `taikai-lineage-*.json` entries, verified `taikai-anchor-*.ok` receipts, and
+   any quarantined `taikai-anchor-*.ok.invalid-*` markers from the ingest spool
+   before rotating any worker pods. These files live under
    `config.da_ingest.manifest_store_dir/taikai/` and are referenced by the
    governance evidence bundle.
 2. **Check alias rotation telemetry.** Hit the Torii status endpoint and record
@@ -83,6 +84,12 @@ signals exported by Torii and the SoraFS orchestrator.
   ```
 - Review the most recent `taikai-anchor-request-<slug>.json` payload to
   confirm `lineage_hint.previous_*` matches the TRM state file.
+- Verify each `taikai-anchor-<slug>.ok` against its exact request capture and
+  the configured `torii.da_ingest.taikai_anchor.receipt_public_key`; an HTTP
+  success or a marker file by itself is not proof of delivery.
+- Treat `taikai-anchor-<slug>.ok.invalid-<blake3>` as evidence of a rejected
+  legacy or invalid acknowledgement. Torii quarantines these markers without
+  retiring the source upload, then continues processing other batch items.
 - If overlap or stale digests are detected, block further ingest for that
   alias and open an SN13-C incident.
 
@@ -148,8 +155,14 @@ signals exported by Torii and the SoraFS orchestrator.
 ## Evidence bundle checklist
 
 - Spool artefacts (`taikai-anchor-request-*`, `taikai-trm-state-*`,
-  `taikai-lineage-*`) copied to the incident bundle directory.
-- Run `cargo xtask taikai-anchor-bundle --spool <manifest_dir>/taikai --copy-dir <bundle_dir> --signing-key <ed25519_hex>` to emit a signed JSON inventory of pending/delivered envelopes and to copy the request/SSM/TRM/lineage files into the drill bundle. The default spool path is `storage/da_manifests/taikai` from `torii.toml`.
+  `taikai-lineage-*`, verified `taikai-anchor-*.ok`, and quarantined
+  `taikai-anchor-*.ok.invalid-*`) copied to the incident bundle directory.
+- Run `cargo xtask taikai-anchor-bundle` with the spool and copy options shown
+  below, the anchor key passed through `--receipt-public-key`, and the optional
+  evidence-bundle signer passed through `--signing-key`. This emits a signed
+  JSON inventory and copies request/SSM/TRM/lineage files into the drill bundle.
+  The receipt key is the same public key configured in Torii. The default spool
+  path is `storage/da_manifests/taikai` from `torii.toml`.
 - `/status` snapshot covering `telemetry.taikai_alias_rotations`.
 - Prometheus exports (raw JSON or CSV) for the metrics listed above during the
   affected window.
@@ -170,12 +183,26 @@ cargo xtask taikai-anchor-bundle \
   --spool config/da_manifests/taikai \
   --copy-dir artifacts/taikai/anchor/<event>/<alias>/<timestamp>/spool \
   --out artifacts/taikai/anchor/<event>/<alias>/<timestamp>/anchor_bundle.json \
-  --signing-key <hex-ed25519-optional>
+  --receipt-public-key <anchor-ed25519-multihash> \
+  --signing-key <ed25519-key-path-optional>
 ```
 
-The summary lists pending vs delivered anchors and records hashes for every
-`taikai-anchor-request-*`, `taikai-trm-state-*`, `taikai-lineage-*`, envelope,
-and sentinel file so governance reviewers can diff the packet quickly.
+The summary records one of four statuses for each anchor:
+
+- `pending`: no `.ok` receipt exists.
+- `receipt_unverified`: a receipt exists, but `--receipt-public-key` was not
+  supplied. This status must never be interpreted as delivered.
+- `invalid_receipt`: the receipt cannot be matched to the canonical `base_id`,
+  exact request capture, schema/version, or pinned signature. The entry includes
+  `receipt_validation_error`.
+- `delivered`: the receipt binds the canonical `base_id`, the BLAKE3 digest of
+  the exact `taikai-anchor-request-*` bytes, and verifies under the supplied
+  Ed25519 key.
+
+The summary also records hashes for every `taikai-anchor-request-*`,
+`taikai-trm-state-*`, `taikai-lineage-*`, envelope, and receipt file so
+governance reviewers can diff the packet quickly. Omitting the receipt key is
+useful for inventory only; it cannot produce a `delivered` classification.
 
 ## Dashboard mirroring & drill cadence
 

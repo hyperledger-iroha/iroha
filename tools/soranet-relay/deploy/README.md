@@ -297,8 +297,8 @@ if another owner is active. Before applying it:
      exceeds 5,242,880 bytes, verify its domain-separated BLAKE3 digest against
      the value distributed through the independent governance channel, set
      mode `0400`, atomically rename it to `/current_snapshot.norito`, and run
-     `sync` before unmounting the claim. Never overwrite the live inode in
-     place.
+     `sync` before unmounting the claim.
+     Never overwrite the live inode in place.
    - Remove the writer pod, update
      `ConfigMap.data["relay.json"].guard_directory.expected_snapshot_digest_hex`
      to that verified digest, and scale the relay back to one. The init

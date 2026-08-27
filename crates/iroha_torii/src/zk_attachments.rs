@@ -13,6 +13,9 @@
 //!   - DELETE `/v1/zk/attachments/{id}` – delete stored attachment and its metadata.
 //! - A background GC task periodically deletes entries older than a TTL;
 //!   TTL and size caps are provided via `iroha_config` (Torii).
+//! - The prover keeps a versioned, content-ID processing receipt separately
+//!   from evictable reports. Per-tenant live-reference shards retain that
+//!   receipt only while at least one matching attachment remains stored.
 use crate::{
     NoritoQuery,
     routing::MaybeTelemetry,
@@ -25,7 +28,7 @@ use iroha_config::parameters::actual::AttachmentSanitizerMode;
 use iroha_data_model::account::AccountId;
 use iroha_logger::prelude::*;
 use norito::json;
-use parking_lot::RwLock;
+use parking_lot::{Mutex as SyncMutex, RwLock};
 use sha2::{Digest as _, Sha256};
 use std::{
     env,
@@ -55,6 +58,11 @@ const ATTACHMENT_SANITIZER_BINARY_STEM: &str = "attachment_sanitizer";
 const SANITIZER_POLL_INTERVAL_MS: u64 = 5;
 const SANITIZER_RESPONSE_OVERHEAD_BYTES: usize = 64 * 1024;
 const ATTACHMENT_META_SCAN_MAX_FILES: usize = 20_000;
+pub(super) const ZK_PROVER_PROCESSING_STATE_VERSION: u16 = 1;
+const ZK_PROVER_PROCESSING_REFERENCE_MARKER: &[u8] = b"iroha-torii-zk-prover-live-reference-v1\n";
+const ZK_PROVER_PROCESSING_RECEIPT_MAX_BYTES: u64 = 16 * 1024;
+const ZK_PROVER_PROCESSING_TEMP_PREFIX: &str = ".tmp";
+static ZK_PROVER_PROCESSING_STATE_LOCK: OnceLock<SyncMutex<()>> = OnceLock::new();
 /// Maximum encoded size of one persisted attachment metadata record.
 pub(super) const ATTACHMENT_META_FILE_MAX_BYTES: u64 = 64 * 1024;
 /// Tenant namespace for the attachments store.
@@ -168,6 +176,29 @@ pub struct AttachmentMeta {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub zk1_tags: Option<Vec<String>>,
 }
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+pub(super) struct ProverProcessingReceipt {
+    pub(super) version: u16,
+    pub(super) id: String,
+    pub(super) processed_ms: u64,
+    pub(super) terminal: bool,
+    pub(super) retry_not_before_ms: Option<u64>,
+    pub(super) retry_count: u32,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProverProcessingDecision {
+    Missing,
+    Suppress,
+    Due { retry_count: u32 },
+}
 pub(crate) fn base_dir() -> PathBuf {
     crate::data_dir::base_dir()
 }
@@ -196,6 +227,215 @@ fn meta_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
 }
 fn bin_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
     attachments_dir(tenant).join(format!("{}.bin", id))
+}
+fn prover_processing_state_dir() -> PathBuf {
+    base_dir()
+        .join("zk_prover")
+        .join(format!("processing_{ZK_PROVER_PROCESSING_STATE_VERSION}"))
+}
+fn prover_processing_receipt_path(id: &str) -> PathBuf {
+    prover_processing_state_dir().join(id).join("receipt.json")
+}
+fn prover_processing_reference_dir(id: &str) -> PathBuf {
+    prover_processing_state_dir().join(id).join("live")
+}
+fn prover_processing_reference_path(tenant_key: &str, id: &str) -> PathBuf {
+    prover_processing_reference_dir(id).join(format!("{tenant_key}.ref"))
+}
+fn prover_processing_state_lock() -> &'static SyncMutex<()> {
+    ZK_PROVER_PROCESSING_STATE_LOCK.get_or_init(|| SyncMutex::new(()))
+}
+fn persist_processing_marker(path: &Path) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        invalid_attachment_file("ZK prover processing marker has no parent directory")
+    })?;
+    fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(ZK_PROVER_PROCESSING_TEMP_PREFIX)
+        .tempfile_in(parent)?;
+    temporary.write_all(ZK_PROVER_PROCESSING_REFERENCE_MARKER)?;
+    temporary.flush()?;
+    temporary
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| error.error)
+}
+fn is_regular_processing_marker(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+}
+/// Ensure the global processing receipt for `id` remains referenced by one live tenant copy.
+pub(super) fn ensure_prover_processing_reference(
+    tenant_key: &str,
+    id: &str,
+) -> std::io::Result<()> {
+    let tenant_key = sanitize_tenant_key(tenant_key)
+        .ok_or_else(|| invalid_attachment_file("invalid processing-reference tenant"))?;
+    let id = sanitize_attachment_id(id)
+        .ok_or_else(|| invalid_attachment_file("invalid processing-reference attachment id"))?;
+    let _guard = prover_processing_state_lock().lock();
+    let tenant = AttachmentTenant(tenant_key.clone());
+    if fs::symlink_metadata(meta_path(&tenant, &id)).is_err()
+        || fs::symlink_metadata(bin_path(&tenant, &id)).is_err()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "processing-reference attachment files are not both live",
+        ));
+    }
+    let path = prover_processing_reference_path(&tenant_key, &id);
+    if is_regular_processing_marker(&path) {
+        return Ok(());
+    }
+    persist_processing_marker(&path)
+}
+fn load_prover_processing_receipt_locked(id: &str) -> Option<ProverProcessingReceipt> {
+    let path = prover_processing_receipt_path(id);
+    let bytes =
+        read_bounded_attachment_regular_file(&path, ZK_PROVER_PROCESSING_RECEIPT_MAX_BYTES).ok()?;
+    let text = std::str::from_utf8(&bytes).ok()?;
+    let receipt = json::from_json::<ProverProcessingReceipt>(text).ok()?;
+    let disposition_valid = if receipt.terminal {
+        receipt.retry_not_before_ms.is_none() && receipt.retry_count == 0
+    } else {
+        receipt.retry_not_before_ms.is_some() && receipt.retry_count > 0
+    };
+    (receipt.version == ZK_PROVER_PROCESSING_STATE_VERSION && receipt.id == id && disposition_valid)
+        .then_some(receipt)
+}
+/// Resolve whether a durable content-ID receipt suppresses work at `now_ms`.
+pub(super) fn prover_processing_decision(id: &str, now_ms: u64) -> ProverProcessingDecision {
+    let Some(id) = sanitize_attachment_id(id) else {
+        return ProverProcessingDecision::Missing;
+    };
+    let _guard = prover_processing_state_lock().lock();
+    let Some(receipt) = load_prover_processing_receipt_locked(&id) else {
+        return ProverProcessingDecision::Missing;
+    };
+    if receipt.terminal
+        || receipt
+            .retry_not_before_ms
+            .is_some_and(|retry_at| now_ms < retry_at)
+    {
+        ProverProcessingDecision::Suppress
+    } else {
+        ProverProcessingDecision::Due {
+            retry_count: receipt.retry_count,
+        }
+    }
+}
+fn processing_reference_dir_has_shards(id: &str) -> std::io::Result<bool> {
+    let entries = match fs::read_dir(prover_processing_reference_dir(id)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.strip_suffix(".ref"))
+                .and_then(sanitize_tenant_key)
+                .is_some()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+/// Persist a completed content-ID receipt only while at least one attachment copy is live.
+pub(super) fn persist_prover_processing_receipt_if_referenced(
+    receipt: &ProverProcessingReceipt,
+) -> std::io::Result<bool> {
+    let id = sanitize_attachment_id(&receipt.id)
+        .ok_or_else(|| invalid_attachment_file("invalid processing-receipt attachment id"))?;
+    let disposition_valid = if receipt.terminal {
+        receipt.retry_not_before_ms.is_none() && receipt.retry_count == 0
+    } else {
+        receipt.retry_not_before_ms.is_some() && receipt.retry_count > 0
+    };
+    if receipt.version != ZK_PROVER_PROCESSING_STATE_VERSION
+        || receipt.id != id
+        || !disposition_valid
+    {
+        return Err(invalid_attachment_file(
+            "invalid ZK prover processing receipt",
+        ));
+    }
+    let _guard = prover_processing_state_lock().lock();
+    if !processing_reference_dir_has_shards(&id)? {
+        return Ok(false);
+    }
+    let body = json::to_json(receipt).map_err(|error| {
+        invalid_attachment_file(format!("encode ZK prover processing receipt: {error}"))
+    })?;
+    if body.len() as u64 > ZK_PROVER_PROCESSING_RECEIPT_MAX_BYTES {
+        return Err(invalid_attachment_file(
+            "ZK prover processing receipt exceeds its persistence limit",
+        ));
+    }
+    let path = prover_processing_receipt_path(&id);
+    let parent = path.parent().ok_or_else(|| {
+        invalid_attachment_file("ZK prover processing receipt has no parent directory")
+    })?;
+    fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(ZK_PROVER_PROCESSING_TEMP_PREFIX)
+        .tempfile_in(parent)?;
+    temporary.write_all(body.as_bytes())?;
+    temporary.flush()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(true)
+}
+fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+fn remove_dir_if_present(path: &Path) -> std::io::Result<()> {
+    match fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+fn remove_processing_temp_files(dir: &Path) -> std::io::Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(ZK_PROVER_PROCESSING_TEMP_PREFIX))
+        {
+            remove_file_if_present(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+fn remove_prover_processing_reference_locked(tenant_key: &str, id: &str) -> std::io::Result<()> {
+    remove_file_if_present(&prover_processing_reference_path(tenant_key, id))?;
+    if processing_reference_dir_has_shards(id)? {
+        return Ok(());
+    }
+    let state_entry_dir = prover_processing_state_dir().join(id);
+    let reference_dir = prover_processing_reference_dir(id);
+    // Atomic persistence can leave its named temporary file behind if the
+    // process stops before rename. Those files are not live-reference shards
+    // and must not permanently pin the attachment or its processing state.
+    remove_processing_temp_files(&reference_dir)?;
+    remove_processing_temp_files(&state_entry_dir)?;
+    remove_dir_if_present(&reference_dir)?;
+    remove_file_if_present(&prover_processing_receipt_path(id))?;
+    remove_dir_if_present(&state_entry_dir)
 }
 fn invalid_attachment_file(message: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message.into())
@@ -399,7 +639,8 @@ fn save_meta(tenant: &AttachmentTenant, meta: &AttachmentMeta) -> std::io::Resul
     let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
     tmp.write_all(body.as_bytes())?;
     tmp.flush()?;
-    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
+    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)?;
+    ensure_prover_processing_reference(tenant.as_str(), &id)
 }
 fn persist_body(tenant: &AttachmentTenant, id: &str, body: &[u8]) -> std::io::Result<()> {
     let id = sanitize_attachment_id(id).ok_or_else(|| {
@@ -416,11 +657,19 @@ fn persist_body(tenant: &AttachmentTenant, id: &str, body: &[u8]) -> std::io::Re
     tmp.flush()?;
     tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
 }
-fn delete_attachment_files(tenant: &AttachmentTenant, id: &str) {
+fn delete_attachment_files(tenant: &AttachmentTenant, id: &str) -> std::io::Result<()> {
     if let Some(clean) = sanitize_attachment_id(id) {
-        let _ = fs::remove_file(meta_path(tenant, &clean));
-        let _ = fs::remove_file(bin_path(tenant, &clean));
+        let _guard = prover_processing_state_lock().lock();
+        // Drop the live reference first. If the process stops before deleting
+        // the attachment files, discovery can safely recreate the reference;
+        // the inverse order could leave a ghost reference after a crash.
+        remove_prover_processing_reference_locked(tenant.as_str(), &clean)?;
+        let meta = meta_path(tenant, &clean);
+        let body = bin_path(tenant, &clean);
+        remove_file_if_present(&meta)?;
+        remove_file_if_present(&body)?;
     }
+    Ok(())
 }
 fn hash_identity_hex(label: &str, value: &str) -> String {
     let mut buf = Vec::with_capacity(label.len() + 1 + value.len());
@@ -1345,7 +1594,11 @@ fn executable_file(path: &Path) -> bool {
     #[cfg(not(unix))]
     true
 }
-fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bool {
+fn enforce_per_tenant_quota(
+    tenant: &AttachmentTenant,
+    incoming_id: &str,
+    incoming_size: u64,
+) -> bool {
     let max_count_raw = per_tenant_max_count_cfg();
     let max_bytes_raw = per_tenant_max_bytes_cfg();
     if max_count_raw == 0 && max_bytes_raw == 0 {
@@ -1355,6 +1608,12 @@ fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bo
         .into_iter()
         .filter_map(|id| load_meta(tenant, &id))
         .collect();
+    let current_count = metas.len();
+    // A content-addressed repost replaces the same tenant-local entry. Do not
+    // count or evict it as if another attachment were being added: doing so
+    // would also discard the durable prover-processing reference for content
+    // that remains live after this request.
+    metas.retain(|meta| meta.id != incoming_id);
     metas.sort_by(|a, b| {
         a.created_ms
             .cmp(&b.created_ms)
@@ -1388,7 +1647,7 @@ fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bo
             tenant = tenant.as_str(),
             max_count,
             max_bytes,
-            current_count = metas.len(),
+            current_count,
             current_bytes = total_bytes,
             incoming_bytes = incoming_size,
             "rejecting attachment: unable to make room within tenant quota"
@@ -1396,7 +1655,15 @@ fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bo
         return false;
     }
     for id in removed_ids.iter() {
-        delete_attachment_files(tenant, id);
+        if let Err(error) = delete_attachment_files(tenant, id) {
+            warn!(
+                tenant = tenant.as_str(),
+                attachment_id = %id,
+                %error,
+                "rejecting attachment: failed to evict an existing attachment safely"
+            );
+            return false;
+        }
     }
     if !removed_ids.is_empty() {
         info!(
@@ -1498,7 +1765,8 @@ pub async fn handle_post_attachment(
         hex::encode::<[u8; 32]>(h.into())
     };
     let _guard = quota_lock().lock().await;
-    if !enforce_per_tenant_quota(&tenant, stored_size) {
+    let replacing_existing = load_meta(&tenant, &id).is_some();
+    if !enforce_per_tenant_quota(&tenant, &id, stored_size) {
         warn!(
             tenant = tenant.as_str(),
             body_bytes = stored_size,
@@ -1542,8 +1810,17 @@ pub async fn handle_post_attachment(
             .into_response();
     }
     if let Err(e) = save_meta(&tenant, &meta) {
-        // Rollback body if meta fails
-        delete_attachment_files(&tenant, &id);
+        // A same-content replacement wrote identical body bytes atomically,
+        // while the old metadata remains intact when its atomic replace fails.
+        // Only a genuinely new attachment needs rollback.
+        if !replacing_existing && let Err(error) = delete_attachment_files(&tenant, &id) {
+            warn!(
+                tenant = tenant.as_str(),
+                attachment_id = %id,
+                %error,
+                "failed to roll back attachment body after metadata persistence failure"
+            );
+        }
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to persist metadata: {e}"),
@@ -1807,7 +2084,19 @@ pub async fn handle_delete_attachment(
             .into_response();
     };
     let existed = meta_path(&tenant, &clean).exists() || bin_path(&tenant, &clean).exists();
-    delete_attachment_files(&tenant, &clean);
+    if let Err(error) = delete_attachment_files(&tenant, &clean) {
+        warn!(
+            tenant = tenant.as_str(),
+            attachment_id = %clean,
+            %error,
+            "failed to delete attachment safely"
+        );
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to delete attachment".to_string(),
+        )
+            .into_response();
+    }
     if existed {
         StatusCode::NO_CONTENT.into_response()
     } else {
@@ -1852,7 +2141,14 @@ pub fn start_gc_worker() {
                             };
                             let meta_time = UNIX_EPOCH + Duration::from_millis(meta.created_ms);
                             if now.duration_since(meta_time).unwrap_or_default() > ttl {
-                                delete_attachment_files(&tenant, id);
+                                if let Err(error) = delete_attachment_files(&tenant, id) {
+                                    warn!(
+                                        tenant = tenant.as_str(),
+                                        attachment_id = %id,
+                                        %error,
+                                        "failed to garbage-collect an expired attachment safely"
+                                    );
+                                }
                             }
                         }
                     }
@@ -2414,6 +2710,222 @@ mod tests {
         );
     }
     #[test]
+    fn prover_processing_receipt_lives_until_the_last_attachment_reference_is_deleted() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let first = super::AttachmentTenant("1".repeat(super::TENANT_KEY_HEX_LEN));
+        let second = super::AttachmentTenant("2".repeat(super::TENANT_KEY_HEX_LEN));
+        let id = "a".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        for tenant in [&first, &second] {
+            super::ensure_dirs(tenant);
+            fs::write(super::meta_path(tenant, &id), b"metadata").expect("write metadata marker");
+            fs::write(super::bin_path(tenant, &id), b"body").expect("write body marker");
+            super::ensure_prover_processing_reference(tenant.as_str(), &id)
+                .expect("register live attachment reference");
+        }
+        let receipt = super::ProverProcessingReceipt {
+            version: super::ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: 1,
+            terminal: true,
+            retry_not_before_ms: None,
+            retry_count: 0,
+        };
+        assert!(
+            super::persist_prover_processing_receipt_if_referenced(&receipt)
+                .expect("persist terminal receipt")
+        );
+        assert_eq!(
+            super::prover_processing_decision(&id, 1),
+            super::ProverProcessingDecision::Suppress
+        );
+        super::delete_attachment_files(&first, &id).expect("delete first attachment copy");
+        assert_eq!(
+            super::prover_processing_decision(&id, 1),
+            super::ProverProcessingDecision::Suppress,
+            "one live duplicate must retain the global receipt"
+        );
+        super::delete_attachment_files(&second, &id).expect("delete final attachment copy");
+        assert_eq!(
+            super::prover_processing_decision(&id, 1),
+            super::ProverProcessingDecision::Missing,
+            "the last attachment deletion must reclaim the receipt"
+        );
+        assert!(
+            super::ensure_prover_processing_reference(second.as_str(), &id).is_err(),
+            "a stale discovery entry must not recreate a reference after deletion"
+        );
+    }
+    #[test]
+    fn attachment_deletion_preserves_files_when_reference_unlink_fails() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant("4".repeat(super::TENANT_KEY_HEX_LEN));
+        let id = "c".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        super::ensure_dirs(&tenant);
+        let meta_path = super::meta_path(&tenant, &id);
+        let body_path = super::bin_path(&tenant, &id);
+        fs::write(&meta_path, b"metadata").expect("write metadata marker");
+        fs::write(&body_path, b"body").expect("write body marker");
+        super::ensure_prover_processing_reference(tenant.as_str(), &id)
+            .expect("register live attachment reference");
+        let receipt = super::ProverProcessingReceipt {
+            version: super::ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: 1,
+            terminal: true,
+            retry_not_before_ms: None,
+            retry_count: 0,
+        };
+        assert!(
+            super::persist_prover_processing_receipt_if_referenced(&receipt)
+                .expect("persist terminal receipt")
+        );
+        let reference_path = super::prover_processing_reference_path(tenant.as_str(), &id);
+        fs::remove_file(&reference_path).expect("remove reference fixture");
+        fs::create_dir(&reference_path).expect("replace reference with an undeletable directory");
+
+        super::delete_attachment_files(&tenant, &id)
+            .expect_err("reference transition failure must abort attachment deletion");
+        assert!(meta_path.is_file());
+        assert!(body_path.is_file());
+        assert_eq!(
+            super::prover_processing_decision(&id, 1),
+            super::ProverProcessingDecision::Suppress,
+            "the receipt must survive an incomplete reference transition"
+        );
+    }
+    #[test]
+    fn attachment_deletion_preserves_files_when_reference_enumeration_fails() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant("5".repeat(super::TENANT_KEY_HEX_LEN));
+        let id = "d".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        super::ensure_dirs(&tenant);
+        let meta_path = super::meta_path(&tenant, &id);
+        let body_path = super::bin_path(&tenant, &id);
+        fs::write(&meta_path, b"metadata").expect("write metadata marker");
+        fs::write(&body_path, b"body").expect("write body marker");
+        super::ensure_prover_processing_reference(tenant.as_str(), &id)
+            .expect("register live attachment reference");
+        let receipt = super::ProverProcessingReceipt {
+            version: super::ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: 1,
+            terminal: true,
+            retry_not_before_ms: None,
+            retry_count: 0,
+        };
+        assert!(
+            super::persist_prover_processing_receipt_if_referenced(&receipt)
+                .expect("persist terminal receipt")
+        );
+        let reference_dir = super::prover_processing_reference_dir(&id);
+        fs::remove_dir_all(&reference_dir).expect("remove reference-directory fixture");
+        fs::write(&reference_dir, b"not a directory")
+            .expect("replace reference directory with a file");
+        assert!(
+            super::processing_reference_dir_has_shards(&id).is_err(),
+            "reference enumeration errors must remain distinguishable from an empty directory"
+        );
+
+        super::delete_attachment_files(&tenant, &id)
+            .expect_err("reference enumeration failure must abort attachment deletion");
+        assert!(meta_path.is_file());
+        assert!(body_path.is_file());
+        assert_eq!(
+            super::prover_processing_decision(&id, 1),
+            super::ProverProcessingDecision::Suppress,
+            "the receipt must survive an unreadable reference directory"
+        );
+    }
+    #[test]
+    fn attachment_deletion_cleans_crash_left_processing_temp_files() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant("6".repeat(super::TENANT_KEY_HEX_LEN));
+        let id = "e".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        super::ensure_dirs(&tenant);
+        let meta_path = super::meta_path(&tenant, &id);
+        let body_path = super::bin_path(&tenant, &id);
+        fs::write(&meta_path, b"metadata").expect("write metadata marker");
+        fs::write(&body_path, b"body").expect("write body marker");
+        super::ensure_prover_processing_reference(tenant.as_str(), &id)
+            .expect("register live attachment reference");
+        let receipt = super::ProverProcessingReceipt {
+            version: super::ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: 1,
+            terminal: true,
+            retry_not_before_ms: None,
+            retry_count: 0,
+        };
+        assert!(
+            super::persist_prover_processing_receipt_if_referenced(&receipt)
+                .expect("persist terminal receipt")
+        );
+        let state_entry_dir = super::prover_processing_state_dir().join(&id);
+        let reference_dir = super::prover_processing_reference_dir(&id);
+        fs::write(
+            reference_dir.join(format!(
+                "{}crashed-reference",
+                super::ZK_PROVER_PROCESSING_TEMP_PREFIX
+            )),
+            b"partial reference",
+        )
+        .expect("write crash-left reference temporary file");
+        fs::write(
+            state_entry_dir.join(format!(
+                "{}crashed-receipt",
+                super::ZK_PROVER_PROCESSING_TEMP_PREFIX
+            )),
+            b"partial receipt",
+        )
+        .expect("write crash-left receipt temporary file");
+
+        super::delete_attachment_files(&tenant, &id)
+            .expect("crash-left processing temporary files must not wedge deletion");
+        assert!(!meta_path.exists());
+        assert!(!body_path.exists());
+        assert!(!state_entry_dir.exists());
+        assert_eq!(
+            super::prover_processing_decision(&id, 1),
+            super::ProverProcessingDecision::Missing
+        );
+    }
+    #[test]
+    fn prover_processing_retry_receipt_suppresses_until_its_deadline() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant("3".repeat(super::TENANT_KEY_HEX_LEN));
+        let id = "b".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        super::ensure_dirs(&tenant);
+        fs::write(super::meta_path(&tenant, &id), b"metadata").expect("write metadata marker");
+        fs::write(super::bin_path(&tenant, &id), b"body").expect("write body marker");
+        super::ensure_prover_processing_reference(tenant.as_str(), &id)
+            .expect("register live attachment reference");
+        let receipt = super::ProverProcessingReceipt {
+            version: super::ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: 10,
+            terminal: false,
+            retry_not_before_ms: Some(1_000),
+            retry_count: 3,
+        };
+        assert!(
+            super::persist_prover_processing_receipt_if_referenced(&receipt)
+                .expect("persist retry receipt")
+        );
+        assert_eq!(
+            super::prover_processing_decision(&id, 999),
+            super::ProverProcessingDecision::Suppress
+        );
+        assert_eq!(
+            super::prover_processing_decision(&id, 1_000),
+            super::ProverProcessingDecision::Due { retry_count: 3 }
+        );
+    }
+    #[test]
     fn sanitize_attachment_id_rejects_bad_inputs() {
         assert!(sanitize_attachment_id("../etc/passwd").is_none());
         assert!(sanitize_attachment_id("not-hex").is_none());
@@ -2955,6 +3467,79 @@ mod tests {
         );
         assert_eq!(provenance.sanitizer.verdict, "accepted");
         assert_eq!(provenance.sanitizer.archive_depth, 0);
+    }
+    #[tokio::test]
+    async fn same_id_repost_at_quota_preserves_processing_receipt() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        ensure_test_config();
+        let tenant = super::AttachmentTenant::anonymous();
+        let mut target: Option<(AttachmentMeta, Vec<u8>)> = None;
+        for index in 0..10 {
+            let body = format!(r#"{{"attachment":{index}}}"#).into_bytes();
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            let response = super::handle_post_attachment(
+                tenant.clone(),
+                headers,
+                axum::body::Bytes::from(body.clone()),
+            )
+            .await
+            .into_response();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let meta_bytes = response
+                .into_body()
+                .collect()
+                .await
+                .expect("attachment response")
+                .to_bytes();
+            let meta: AttachmentMeta = json::from_json(
+                std::str::from_utf8(&meta_bytes).expect("attachment metadata UTF-8"),
+            )
+            .expect("attachment metadata JSON");
+            if index == 0 {
+                target = Some((meta, body));
+            }
+        }
+        let (mut target_meta, target_body) = target.expect("target attachment");
+        target_meta.created_ms = 0;
+        super::save_meta(&tenant, &target_meta).expect("make target the oldest quota entry");
+        assert!(
+            super::persist_prover_processing_receipt_if_referenced(
+                &super::ProverProcessingReceipt {
+                    version: super::ZK_PROVER_PROCESSING_STATE_VERSION,
+                    id: target_meta.id.clone(),
+                    processed_ms: 1,
+                    terminal: true,
+                    retry_not_before_ms: None,
+                    retry_count: 0,
+                }
+            )
+            .expect("persist terminal processing receipt")
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        let response = super::handle_post_attachment(
+            tenant.clone(),
+            headers,
+            axum::body::Bytes::from(target_body),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(super::list_all_ids(&tenant).len(), 10);
+        assert_eq!(
+            super::prover_processing_decision(&target_meta.id, u64::MAX),
+            super::ProverProcessingDecision::Suppress,
+            "reposting identical content must not evict its durable processing state"
+        );
     }
     #[tokio::test]
     async fn post_attachment_rejects_over_cardinality_zk1_before_persistence() {

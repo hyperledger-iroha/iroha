@@ -9,6 +9,18 @@ import java.util.Objects;
 public final class JoinKaigiInstruction implements InstructionTemplate {
 
   private static final String ACTION = "JoinKaigi";
+  private static final java.util.Set<String> ALLOWED_ARGUMENTS =
+      KaigiInstructionUtils.argumentSet(
+          "action",
+          "call.domain_id",
+          "call.call_name",
+          "participant",
+          "commitment.commitment",
+          "commitment.alias_tag",
+          "nullifier.digest",
+          "nullifier.issued_at_ms",
+          "roster_root",
+          "proof");
 
   private final KaigiInstructionUtils.CallId callId;
   private final String participant;
@@ -79,6 +91,7 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
   }
 
   public static JoinKaigiInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireKnownArguments(arguments, ALLOWED_ARGUMENTS);
     KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
@@ -90,7 +103,7 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
     }
     final String commitmentValue = arguments.get("commitment.commitment");
     if (commitmentValue != null) {
-      builder.setCommitmentLiteral(commitmentValue);
+      builder.setCommitment(KaigiInstructionUtils.canonicalizeHash(commitmentValue));
     }
 
     final String nullifier = arguments.get("nullifier.digest");
@@ -105,14 +118,17 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
       throw new IllegalArgumentException("nullifier issuedAtMs requires nullifier digest");
     }
     if (nullifier != null) {
-      builder.setNullifierDigest(nullifier);
+      builder.setNullifierDigest(KaigiInstructionUtils.canonicalizeHash(nullifier));
       builder.setNullifierIssuedAtMs(issuedAt);
     }
 
-    builder.setRosterRootLiteral(arguments.get("roster_root"));
+    final String rosterRoot = arguments.get("roster_root");
+    if (rosterRoot != null) {
+      builder.setRosterRoot(KaigiInstructionUtils.canonicalizeHash(rosterRoot));
+    }
     builder.setProofBase64(arguments.get("proof"));
 
-    return new JoinKaigiInstruction(builder, new LinkedHashMap<>(arguments));
+    return builder.build();
   }
 
   public static Builder builder() {

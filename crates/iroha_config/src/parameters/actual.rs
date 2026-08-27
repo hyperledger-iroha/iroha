@@ -43,7 +43,6 @@ use iroha_data_model::{
         types::{BlobClass, DaRentPolicyV1, RetentionPolicy},
     },
     domain::DomainId,
-    hijiri::HijiriFeePolicy as ModelHijiriFeePolicy,
     jurisdiction::JdgSignatureScheme,
     merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     name::Name,
@@ -166,8 +165,6 @@ pub struct Root {
     pub ivm: Ivm,
     /// Norito codec settings (serialization/compression heuristics).
     pub norito: Norito,
-    /// Hijiri reputation system configuration.
-    pub hijiri: Hijiri,
     /// Fraud monitoring configuration.
     pub fraud_monitoring: FraudMonitoring,
     /// Zero-knowledge proof system settings.
@@ -6094,7 +6091,19 @@ impl_default!(SumeragiQueues => {
             body_source_bytes: defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES,
             chunks: defaults::sumeragi::QUEUE_CHUNK_CAPACITY,
             ready_bodies: defaults::sumeragi::QUEUE_READY_BODY_CAPACITY,
-        }
+    }
+});
+/// Node-local durable storage budgets for Sumeragi v2.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiStorage {
+    /// Aggregate checksummed body-frame bytes retained for one active height.
+    pub body_store_max_bytes_per_height: Bytes<u64>,
+}
+impl_default!(SumeragiStorage => {
+    Self {
+        body_store_max_bytes_per_height:
+            defaults::sumeragi::BODY_STORE_MAX_BYTES_PER_HEIGHT,
+    }
 });
 /// Shared finite runtime bounds for Sumeragi v2 lane, merge, and Native AMX services.
 #[derive(Debug, Clone, Copy)]
@@ -6257,6 +6266,8 @@ pub struct Sumeragi {
     pub queues: SumeragiQueues,
     /// Shared finite lane, merge, recovery, and Native AMX service bounds.
     pub limits: SumeragiV2RuntimeLimits,
+    /// Node-local durable storage budgets excluded from the shared fingerprint.
+    pub storage: SumeragiStorage,
     /// Consensus key-rotation and HSM policy.
     pub keys: SumeragiKeys,
 }
@@ -6269,6 +6280,7 @@ impl_default!(Sumeragi => {
             block: SumeragiBlock::default(),
             queues: SumeragiQueues::default(),
             limits: SumeragiV2RuntimeLimits::default(),
+            storage: SumeragiStorage::default(),
             keys: SumeragiKeys::default(),
         }
 });
@@ -8591,8 +8603,12 @@ pub struct DaTaikaiAnchor {
     pub endpoint: Url,
     /// Optional bearer token supplied to the anchor service.
     pub api_token: Option<String>,
+    /// Ed25519 identity required to sign content-bound anchor receipts.
+    pub receipt_public_key: PublicKey,
     /// Poll interval between spool scans.
     pub poll_interval: Duration,
+    /// Absolute deadline for one upload and signed receipt response.
+    pub request_timeout: Duration,
 }
 impl_default!(DaIngest => {
         Self {
@@ -11038,6 +11054,7 @@ pub struct IsoBridge {
     /// Operator-defined profile overrides or additions.
     pub profiles: Vec<IsoBridgeProfile>,
     /// Directory where ISO bridge message state is persisted.
+    /// Payment queue admission is refused when this is absent.
     pub store_dir: Option<PathBuf>,
     /// Age retention window for durable ISO records (seconds); zero disables age pruning.
     pub store_retention_secs: u64,
@@ -11299,10 +11316,22 @@ pub struct Sccp {
     pub max_bls_signer_contributions_per_transaction: NonZeroU32,
     /// Maximum BLS public-key contributions committed in one block.
     pub max_bls_signer_contributions_per_block: NonZeroU32,
+    /// Maximum Ed25519 signature checks in one transaction.
+    pub max_ed25519_signature_checks_per_transaction: NonZeroU32,
+    /// Maximum Ed25519 signature checks committed in one block.
+    pub max_ed25519_signature_checks_per_block: NonZeroU32,
+    /// Maximum TON Ed25519 validator-key checks in one transaction.
+    pub max_ed25519_validator_key_checks_per_transaction: NonZeroU32,
+    /// Maximum TON Ed25519 validator-key checks committed in one block.
+    pub max_ed25519_validator_key_checks_per_block: NonZeroU32,
     /// Maximum BN254 Groth16 pairing-product checks in one transaction.
     pub max_bn254_pairing_checks_per_transaction: NonZeroU32,
     /// Maximum BN254 Groth16 pairing-product checks committed in one block.
     pub max_bn254_pairing_checks_per_block: NonZeroU32,
+    /// Maximum BLS12-381 Groth16 pairing-product checks in one transaction.
+    pub max_bls12_381_pairing_checks_per_transaction: NonZeroU32,
+    /// Maximum BLS12-381 Groth16 pairing-product checks committed in one block.
+    pub max_bls12_381_pairing_checks_per_block: NonZeroU32,
 }
 impl_default!(Sccp => {
         Self {
@@ -11337,10 +11366,22 @@ impl_default!(Sccp => {
                 defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION,
             max_bls_signer_contributions_per_block:
                 defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK,
+            max_ed25519_signature_checks_per_transaction:
+                defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_TRANSACTION,
+            max_ed25519_signature_checks_per_block:
+                defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_BLOCK,
+            max_ed25519_validator_key_checks_per_transaction:
+                defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION,
+            max_ed25519_validator_key_checks_per_block:
+                defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK,
             max_bn254_pairing_checks_per_transaction:
                 defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION,
             max_bn254_pairing_checks_per_block:
                 defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_BLOCK,
+            max_bls12_381_pairing_checks_per_transaction:
+                defaults::zk::sccp::MAX_BLS12_381_PAIRING_CHECKS_PER_TRANSACTION,
+            max_bls12_381_pairing_checks_per_block:
+                defaults::zk::sccp::MAX_BLS12_381_PAIRING_CHECKS_PER_BLOCK,
         }
 });
 /// CABAC runtime mode compiled into the host.
@@ -11981,18 +12022,6 @@ pub struct Norito {
     pub allow_gpu_compression: bool,
     /// Maximum allowed Norito archive length in bytes (0 = unlimited).
     pub max_archive_len: u64,
-}
-/// Hijiri configuration (actual layer).
-#[derive(Debug, Clone)]
-pub struct Hijiri {
-    /// Optional fee policy derived from Hijiri risk scores.
-    pub fee_policy: Option<ModelHijiriFeePolicy>,
-}
-impl Hijiri {
-    /// Construct a new Hijiri configuration.
-    pub fn new(fee_policy: Option<ModelHijiriFeePolicy>) -> Self {
-        Self { fee_policy }
-    }
 }
 /// Severity bands reported by the fraud-monitoring service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

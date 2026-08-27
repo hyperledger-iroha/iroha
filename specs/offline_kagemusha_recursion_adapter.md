@@ -216,7 +216,9 @@ commitments must match exactly. The terminal path must additionally decide
 `U == MSM(h_coeffs(xi), params.generators)`; checking only the 38-term PLONK
 opening residual is not an IPA decision. Native/in-circuit transcript parity,
 substitution tests, both outer proofs, recursive accumulation, and both terminal
-decisions are mandatory before `CircuitVerifierUnavailable` can be removed.
+decisions are mandatory before a release may report the production proof
+backend available. Runtime availability additionally requires the exact
+authenticated eight-artifact release to be installed.
 
 ## ABI-21/V4 lifecycle and native bridge ABI-23 contract
 

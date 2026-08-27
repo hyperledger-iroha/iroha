@@ -164,10 +164,20 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 
 **Current controls**
 - Monotonic clocks used for pacemaker timers (see `status.md` Sep 1 2025 NTS update).
+- The runtime NTS samples only configured, key-ACL-authorized logical peers,
+  filters high-RTT outliers, requires a health quorum, invalidates state on
+  membership epochs, and can fail closed for time-sensitive admission.
+- Public network time is anchored to a bracket-paired monotonic clock and does
+  not move backwards within a process; a retained floor is reflected in the
+  reported offset and health decision rather than silently bypassing bounds.
+- Transaction admission persists the exact NTS validation instant for durable
+  replay, and supervision cancellation releases sampler ownership.
 - Nodes rely on OS CSPRNG; no custom RNG fallbacks.
 
 **Outstanding gaps**
-- NTS-backed or multi-source time validation not enforced at runtime (**see residual risks: Time and NTP hardening**).
+- NTS is deliberately advisory to consensus. A compromised local clock anchor
+  or a quorum of configured malicious time authorities remains an operational
+  risk; operators must retain independent host-clock monitoring.
 
 ## Residual Risks and Tracking
 
@@ -183,7 +193,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 | Membership registry reconciliation | Open | Enforce view-hash checks and halt on mismatch (`SUM-203` follow-up) | Consensus WG | 2025-10-25 |
 | Pre-auth DoS controls | Open | Connection gating and handshake caps implemented (`preauth_*` config, `torii_pre_auth_reject_total`), continue tuning via follow-up ticket | Torii WG & Core WG | 2025-10-31 |
 | Telemetry redaction policy | Closed | Strict redaction + allow-list guard + integrity chain shipped; see `specs/telemetry.md`. | Observability WG | 2025-12-31 |
-| Time and NTP hardening | Open | NTS or multi-source bounds (status tracked in `status.md` Time Service section) | Runtime WG & Ops | 2025-11-10 |
+| Time and NTP hardening | Closed | Runtime NTS health bounds, membership epochs, monotonic output, and reject-mode admission shipped; retain independent host-clock monitoring (see `specs/references/nts.md`). | Runtime WG & Ops | 2025-11-10 |
 | Membership mismatch telemetry | Open | `sumeragi_membership_mismatch_total` metric landed; wire alerting and operational runbook | Consensus WG | 2025-10-15 |
 | Attachment sanitisation | Closed | Magic-byte sniffing + bounded decompression + subprocess sanitizer mode + export re‑sanitization shipped (see `specs/security_hardening_requirements.md`). | Runtime WG | 2025-11-30 |
 | Witness retention audit | Open | Automate witness shredding verification (requirements captured in `security_hardening_requirements.md`) | ZK WG | 2025-11-05 |
@@ -208,7 +218,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 | Data Model WG | data-model@iroha | Pending | Confirm Norito/Kotodama coverage and fuzz corpus maintenance. |
 | ZK WG | zk@iroha | Pending | Verify circuit governance (`ZK-077`) and witness retention audit plan. |
 | Observability WG | observability@iroha | Pending | Redaction policy enforcement and tamper-evident logging roadmap. |
-| Ops | ops@iroha | Pending | HSM rollout for validators and NTP/NTS implementation plan. |
+| Ops | ops@iroha | Pending | HSM rollout for validators and independent host-clock monitoring. |
 
 ## References
 

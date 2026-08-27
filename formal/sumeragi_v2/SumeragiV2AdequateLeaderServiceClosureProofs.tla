@@ -6623,8 +6623,7 @@ AdequateLeaderFrozenCandidateItemPayload(item, leaderView) ==
                   requestHash |->
                     AdequateLeaderFrozenCertifiedRequestHashPayload(
                       item.envelope.requestHash, leaderView),
-                  archiveServer |-> item.envelope.archiveServer,
-                  citedResponder |-> item.envelope.citedResponder,
+                  responder |-> item.envelope.responder,
                   signatureOwner |-> item.envelope.signatureOwner]
             [] item.kind = "CommitCertificateResponse" ->
                  [recipient |-> item.envelope.recipient,
@@ -6815,8 +6814,7 @@ AdequateLeaderFrozenNetworkItemCarrier(leaderView) ==
       view |-> roundView,
       subject |-> responseSubject,
       requestHash |-> requestHash,
-      archiveServer |-> archiveServer,
-      citedResponder |-> citedResponder,
+      responder |-> responder,
       signatureOwner |-> signatureOwner]):
      source \in AsyncIngressSources,
      recipient \in ValidatorIds,
@@ -6825,8 +6823,7 @@ AdequateLeaderFrozenNetworkItemCarrier(leaderView) ==
      responseSubject \in Subjects,
      requestHash \in
        AdequateLeaderFrozenCertifiedRequestHashCarrier(leaderView),
-     archiveServer \in AsyncArchiveServerIds,
-     citedResponder \in ValidatorIds,
+     responder \in AsyncArchiveServerIds,
      signatureOwner \in AsyncCertifiedResponseSignatureOwners}
   \cup
   {AsyncNetworkItem(
@@ -7454,9 +7451,9 @@ AdequateLeaderFrozenTargetWireIdentity(
   /\ DeliverySubject(item) = subject
   /\ LeaderWireCarriesContext(item, leaderContext)
   /\ IF item.kind = "CertifiedResponse"
-     THEN /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+     THEN /\ item.envelope.responder \in AsyncArchiveServerIds
           /\ item.envelope.signatureOwner =
-               item.envelope.archiveServer
+               item.envelope.responder
      ELSE TRUE
 
 AdequateLeaderTargetWireIdentity(
@@ -7481,7 +7478,7 @@ AdequateLeaderFrozenWirePayloadIdentity(item) ==
      ELSE item.source,
    detail |->
      CASE item.kind = "CertifiedResponse" ->
-            item.envelope.archiveServer
+            item.envelope.responder
        [] item.kind = "Chunk" -> item.envelope.chunk
        [] OTHER -> NoAsyncChunk]
 

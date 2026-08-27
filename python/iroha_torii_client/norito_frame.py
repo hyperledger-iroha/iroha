@@ -53,6 +53,7 @@ def _validate_norito_frame(
     context: str,
     expected_type_name: Optional[str],
     expected_padding_length: Optional[int] = None,
+    expected_flags: Optional[int] = None,
     require_nonempty_payload: bool = True,
 ) -> None:
     """Validate one uncompressed Norito frame without decoding its payload."""
@@ -64,6 +65,8 @@ def _validate_norito_frame(
     major, minor = body[4], body[5]
     if major != 0 or minor != 0:
         raise ValueError(f"{context} uses unsupported NRT0 version {major}.{minor}")
+    if body[6:22] == bytes(16):
+        raise ValueError(f"{context} must advertise a non-zero Norito schema hash")
     if (
         expected_type_name is not None
         and body[6:22] != schema_hash_for_type_name(expected_type_name)
@@ -82,6 +85,11 @@ def _validate_norito_frame(
     required_bitset_flags = _PACKED_STRUCT_FLAG | _COMPACT_LEN_FLAG
     if flags & _FIELD_BITSET_FLAG and flags & required_bitset_flags != required_bitset_flags:
         raise ValueError(f"{context} uses an invalid Norito header flag combination")
+    if expected_flags is not None and flags != expected_flags:
+        raise ValueError(
+            f"{context} uses Norito layout flags 0x{flags:02x}; "
+            f"the exact type requires 0x{expected_flags:02x}"
+        )
 
     padding_length = len(body) - _HEADER_BYTES - payload_length
     if padding_length < 0:
@@ -112,6 +120,7 @@ def validate_norito_frame(
     context: str,
     expected_type_name: str,
     expected_padding_length: Optional[int] = None,
+    expected_flags: Optional[int] = None,
     require_nonempty_payload: bool = True,
 ) -> None:
     """Validate one exact-schema, uncompressed Norito frame."""
@@ -121,6 +130,7 @@ def validate_norito_frame(
         context=context,
         expected_type_name=expected_type_name,
         expected_padding_length=expected_padding_length,
+        expected_flags=expected_flags,
         require_nonempty_payload=require_nonempty_payload,
     )
 

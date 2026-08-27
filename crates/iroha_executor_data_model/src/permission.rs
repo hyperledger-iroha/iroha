@@ -353,7 +353,9 @@ pub mod account {
         ///
         /// An alias scope authorizes one exact alias. A domain scope authorizes only that
         /// fully-qualified domain, while a dataspace scope authorizes only dataspace-root aliases;
-        /// the three scope kinds are independent.
+        /// the three scope kinds are independent. Exact possession authorizes resolution only;
+        /// delegation remains controlled by the matching [`CanDelegateAccountAliasResolution`]
+        /// token or the scope owner.
         pub struct CanResolveAccountAlias {
             /// Alias permission scope.
             pub scope: AccountAliasPermissionScope,
@@ -702,6 +704,11 @@ pub mod parameter {
         #[derive(Copy)]
         pub struct CanSetParameters;
     }
+    permission! {
+        /// Permission to update the consensus-owned Hijiri fee policy and account-risk records.
+        #[derive(Copy)]
+        pub struct CanSetHijiriParameters;
+    }
 }
 /// Permission tokens for governed SCCP consensus state.
 pub mod sccp {
@@ -780,6 +787,8 @@ pub mod settlement {
     }
     permission! {
         /// Permission to publish the next revision of one FX corridor policy.
+        ///
+        /// Only a [`CanManageFxCorridors`] holder may delegate or revoke this scoped permission.
         pub struct CanSetFxCorridorPolicy {
             /// Stable corridor policy identifier.
             pub policy_id: Name,
@@ -888,6 +897,8 @@ pub mod nexus {
     }
     permission! {
         /// Permission to manage fee sponsor programs owned by one sponsor account.
+        ///
+        /// Only the sponsor account may delegate or revoke this management permission.
         pub struct CanManageFeeSponsorProgram {
             /// Sponsor account whose programs may be created and revised.
             pub sponsor: AccountId,

@@ -16,7 +16,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -447,20 +446,10 @@ def run_java_parity_checks() -> None:
 
     print("[norito] Running Java binding parity checks...", file=sys.stderr)
 
-    javac_path = ensure_java_tool("javac")
-    if not javac_path:
-        if java_checks_are_strict():
-            raise CheckError("javac not found; install JDK 21+ to run tests")
-        print(
-            "[norito-java] javac not found; skipping JVM parity checks outside strict mode.",
-            file=sys.stderr,
-        )
-        return
-
     java_path = ensure_java_tool("java")
     if not java_path:
         if java_checks_are_strict():
-            raise CheckError("java runtime not found; install JDK 21+ or set JAVA_HOME")
+            raise CheckError("java runtime not found; install JDK 21+ to run tests")
         print(
             "[norito-java] java runtime not found; skipping JVM parity checks outside strict mode.",
             file=sys.stderr,
@@ -468,43 +457,15 @@ def run_java_parity_checks() -> None:
         return
 
     root = REPO_ROOT / "java" / "norito_java"
-    build_root = REPO_ROOT / "target" / "norito_java"
-    build_root.mkdir(parents=True, exist_ok=True)
-    keep_build = os.environ.get("NORITO_JAVA_KEEP_BUILD") == "1"
+    gradlew_name = "gradlew.bat" if os.name == "nt" else "gradlew"
+    gradlew_path = REPO_ROOT / "java" / "iroha_android" / gradlew_name
+    if not gradlew_path.exists():
+        raise CheckError(f"Java Gradle wrapper not found at {gradlew_path}")
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="classes_", dir=build_root))
-    classes_dir = temp_dir / "classes"
-    classes_dir.mkdir(parents=True, exist_ok=True)
-
-    main_sources = [str(path) for path in (root / "src" / "main" / "java").rglob("*.java")]
-    test_sources = [str(path) for path in (root / "src" / "test" / "java").rglob("*.java")]
-
-    javac_flags = ["-d", str(classes_dir)]
-    try:
-        run_command(
-            [javac_path, "--release", "21", "-version"],
-            check=True,
-            capture_output=True,
-        )
-    except subprocess.CalledProcessError:
-        pass
-    else:
-        javac_flags = ["--release", "21", "-d", str(classes_dir)]
-
-    try:
-        run_command([javac_path, *javac_flags, *main_sources, *test_sources], cwd=root)
-        run_command(
-            [java_path, "-ea", "-cp", str(classes_dir), "org.hyperledger.iroha.norito.NoritoTests"],
-            cwd=root,
-        )
-    finally:
-        if keep_build:
-            print(
-                f"[norito-java] Preserving compiled classes under {classes_dir}",
-                file=sys.stderr,
-            )
-        else:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+    run_command(
+        [gradlew_path, "-p", root, "runNoritoTests", "--console=plain"],
+        cwd=root,
+    )
 
 
 def run_kotlin_parity_checks() -> None:

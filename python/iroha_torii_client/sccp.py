@@ -199,8 +199,14 @@ class SccpResourceLimits:
     max_bls_aggregate_checks_per_block: int
     max_bls_signer_contributions_per_transaction: int
     max_bls_signer_contributions_per_block: int
+    max_ed25519_signature_checks_per_transaction: int
+    max_ed25519_signature_checks_per_block: int
+    max_ed25519_validator_key_checks_per_transaction: int
+    max_ed25519_validator_key_checks_per_block: int
     max_bn254_pairing_checks_per_transaction: int
     max_bn254_pairing_checks_per_block: int
+    max_bls12_381_pairing_checks_per_transaction: int
+    max_bls12_381_pairing_checks_per_block: int
 
 
 @dataclass(frozen=True)
@@ -904,8 +910,14 @@ def _normalize_resource_limits(value: Any) -> SccpResourceLimits:
             "max_bls_aggregate_checks_per_block",
             "max_bls_signer_contributions_per_transaction",
             "max_bls_signer_contributions_per_block",
+            "max_ed25519_signature_checks_per_transaction",
+            "max_ed25519_signature_checks_per_block",
+            "max_ed25519_validator_key_checks_per_transaction",
+            "max_ed25519_validator_key_checks_per_block",
             "max_bn254_pairing_checks_per_transaction",
             "max_bn254_pairing_checks_per_block",
+            "max_bls12_381_pairing_checks_per_transaction",
+            "max_bls12_381_pairing_checks_per_block",
         }
     )
     byte_fields = frozenset(
@@ -970,8 +982,20 @@ def _normalize_resource_limits(value: Any) -> SccpResourceLimits:
             limits.max_bls_signer_contributions_per_block,
         ),
         (
+            limits.max_ed25519_signature_checks_per_transaction,
+            limits.max_ed25519_signature_checks_per_block,
+        ),
+        (
+            limits.max_ed25519_validator_key_checks_per_transaction,
+            limits.max_ed25519_validator_key_checks_per_block,
+        ),
+        (
             limits.max_bn254_pairing_checks_per_transaction,
             limits.max_bn254_pairing_checks_per_block,
+        ),
+        (
+            limits.max_bls12_381_pairing_checks_per_transaction,
+            limits.max_bls12_381_pairing_checks_per_block,
         ),
     )
     if any(transaction > block for transaction, block in ordered_pairs):

@@ -40,6 +40,13 @@ fn sample_account() -> ivm::mock_wsv::AccountId {
             .expect("public key"),
     )
 }
+fn alternate_account() -> ivm::mock_wsv::AccountId {
+    ivm::mock_wsv::AccountId::new(
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
+            .parse()
+            .expect("alternate public key"),
+    )
+}
 fn set_and_get_program() -> Vec<u8> {
     common::assemble_bytes_state_contract_syscalls(
         &[
@@ -183,6 +190,41 @@ fn checkpoint_restore_flushes_persisted_wsv_state() {
         .sc_get("counter")
         .expect("restored persisted state");
     assert_eq!(stored, b"1");
+    let _ = fs::remove_dir_all(&tmp_dir);
+}
+#[test]
+fn checkpoint_restore_persistence_failure_is_reported_without_panicking() {
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "ivm_overlay_restore_failure_{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+    ));
+    let store_dir = tmp_dir.join("store");
+    fs::create_dir_all(&store_dir).expect("state store directory");
+    let persist_path = store_dir.join("state.json");
+    let original_caller = sample_account();
+    let mut wsv =
+        MockWorldStateView::with_state_store(persist_path).expect("persisted WSV available");
+    wsv.sc_set("counter", b"1".to_vec())
+        .expect("seed durable state");
+    let mut host = WsvHost::new_with_subject(wsv, original_caller.clone(), HashMap::new());
+    let snapshot = host.checkpoint().expect("checkpoint captured");
+    host.wsv
+        .sc_set("counter", b"9".to_vec())
+        .expect("persist updated state");
+    host.set_caller_subject(alternate_account());
+
+    fs::remove_dir_all(&store_dir).expect("remove state store directory");
+    fs::write(&store_dir, b"block parent directory creation").expect("install blocker file");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        host.restore(snapshot.as_ref())
+    }));
+
+    assert!(matches!(outcome, Ok(false)));
+    assert_eq!(host.wsv.sc_get("counter"), Some(b"1".to_vec()));
+    assert_eq!(host.caller, original_caller);
     let _ = fs::remove_dir_all(&tmp_dir);
 }
 #[test]

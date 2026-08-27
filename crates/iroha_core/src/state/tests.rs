@@ -172,6 +172,32 @@ fn blank_state() -> State {
         LiveQueryStore::start_test(),
     )
 }
+state_test! { sync internal_event_publication_preserves_internal_order_without_external_retention
+    let state = blank_test_state();
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    let public_domain = DomainId::try_new("public_event", "universal").expect("domain id");
+    let internal_domain = DomainId::try_new("internal_event", "universal").expect("domain id");
+
+    transaction
+        .world
+        .emit_events(Some(data_pre::DomainEvent::Deleted(public_domain.clone())));
+    transaction
+        .world
+        .emit_internal_events(Some(data_pre::DomainEvent::Deleted(internal_domain.clone())));
+
+    assert_eq!(transaction.world.external_event_buf.len(), 1);
+    assert_eq!(transaction.world.internal_event_buf.len(), 2);
+    assert!(matches!(
+        transaction.world.internal_event_buf[0].as_ref(),
+        DataEvent::Domain(data_pre::DomainEvent::Deleted(domain)) if domain == &public_domain
+    ));
+    assert!(matches!(
+        transaction.world.internal_event_buf[1].as_ref(),
+        DataEvent::Domain(data_pre::DomainEvent::Deleted(domain)) if domain == &internal_domain
+    ));
+}
 macro_rules! autoscale_state_with_add_plan {
     ($state:ident, $add_plan:ident) => {
         let mut $state = blank_test_state();
@@ -1455,6 +1481,9 @@ fn set_sccp_route_revision_for_testing(
             unreachable!("state helper constructs EVM routes")
         }
         iroha_data_model::bridge::SccpSourceEmitterV1::Solana(_) => {
+            unreachable!("state helper constructs EVM routes")
+        }
+        iroha_data_model::bridge::SccpSourceEmitterV1::Ton(_) => {
             unreachable!("state helper constructs EVM routes")
         }
     }
@@ -17744,6 +17773,32 @@ state_test! { sync restored_runtime_catalog_must_match_the_authenticated_snapsho
     );
     assert_eq!(state.nexus_snapshot().configured_lane_catalog, configured);
 }
+state_test! { sync emergency_fast_restored_config_rejects_dataspace_catalog_replacement
+    let restored = iroha_config::parameters::actual::Nexus::default();
+    let mut requested = restored.clone();
+    requested.dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata {
+            id: DataSpaceId::UNIVERSAL,
+            alias: "universal".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+        DataSpaceMetadata {
+            id: DataSpaceId::new(7),
+            alias: "replacement".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("replacement dataspace catalog");
+    let error = State::ensure_emergency_fast_restored_catalogs_match(&restored, &requested)
+        .expect_err("emergency Fast must preserve snapshot dataspace identity");
+    assert!(matches!(
+        error,
+        LaneLifecycleError::ConfiguredCatalogBaseline(message)
+            if message.contains("dataspace catalog")
+    ));
+}
 state_test! { sync restored_runtime_geometry_is_recovered_before_later_catalog_replay
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let_row! { configured = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "snapshot-lane".to_owned(), ..LaneConfig::default() }, ], ) .expect("configured snapshot catalog") };
@@ -18688,6 +18743,70 @@ state_test! { sync set_nexus_removes_uaid_binding_when_all_dataspaces_are_pruned
     assert!(
         state.world.uaid_dataspaces.view().get(&uaid).is_none(),
         "uaid binding should be removed when all dataspaces become stale"
+    );
+}
+state_test! { sync set_nexus_prunes_removed_dataspace_permissions_from_accounts_and_roles
+    let mut state = blank_test_state();
+    let retained = DataSpaceId::UNIVERSAL;
+    let removed = DataSpaceId::new(7);
+    state
+        .set_nexus(dataspace_retirement_nexus!(initial retained, removed))
+        .expect("install initial dataspace catalog");
+    let stale_read: Permission =
+        iroha_executor_data_model::permission::query::CanReadRestrictedDataspace {
+            dataspace: removed,
+        }
+        .into();
+    let retained_read: Permission =
+        iroha_executor_data_model::permission::query::CanReadRestrictedDataspace {
+            dataspace: retained,
+        }
+        .into();
+    let stale_daily_limit: Permission =
+        iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit {
+            asset_definition: AssetDefinitionId::derive_from_components(
+                DomainId::try_new("issuer", "universal").expect("asset domain"),
+                "coin".parse().expect("asset name"),
+            ),
+            account_domain: "retail".parse().expect("account alias domain"),
+            account_dataspace: removed,
+        }
+        .into();
+    let role_id: RoleId = "DATASPACE_PERMISSION_CLEANUP".parse().expect("role id");
+    let role = Role::new(role_id.clone(), ALICE_ID.clone())
+        .add_permission(stale_read.clone())
+        .add_permission(retained_read.clone())
+        .add_permission(stale_daily_limit.clone())
+        .build(&ALICE_ID);
+    let mut world = state.world.block();
+    world.account_permissions.insert(
+        ALICE_ID.clone(),
+        BTreeSet::from([
+            stale_read.clone(),
+            retained_read.clone(),
+            stale_daily_limit.clone(),
+        ]),
+    );
+    world.roles.insert(role_id.clone(), role);
+    world.commit();
+    state
+        .set_nexus(dataspace_retirement_nexus!(retained retained))
+        .expect("retire dataspace");
+    let account_permissions = state.world.account_permissions.view();
+    let direct = account_permissions
+        .get(&ALICE_ID)
+        .expect("retained direct permission");
+    assert!(direct.contains(&retained_read));
+    assert!(!direct.contains(&stale_read));
+    assert!(!direct.contains(&stale_daily_limit));
+    let roles = state.world.roles.view();
+    let role = roles.get(&role_id).expect("role remains");
+    assert!(role.permissions().any(|permission| permission == &retained_read));
+    assert!(!role.permissions().any(|permission| permission == &stale_read));
+    assert!(
+        !role
+            .permissions()
+            .any(|permission| permission == &stale_daily_limit)
     );
 }
 state_test! { sync set_nexus_prunes_axt_policies_for_removed_dataspaces
@@ -32037,11 +32156,35 @@ state_test! { sync zk_policy_hash_tracks_every_sccp_resource_limit
         core::num::NonZeroU32::new(526_853).expect("526,853 is nonzero")
     );
     assert_field_bound!(
+        max_ed25519_signature_checks_per_transaction,
+        core::num::NonZeroU32::new(65_535).expect("65,535 is nonzero")
+    );
+    assert_field_bound!(
+        max_ed25519_signature_checks_per_block,
+        core::num::NonZeroU32::new(262_145).expect("262,145 is nonzero")
+    );
+    assert_field_bound!(
+        max_ed25519_validator_key_checks_per_transaction,
+        core::num::NonZeroU32::new(198_655).expect("198,655 is nonzero")
+    );
+    assert_field_bound!(
+        max_ed25519_validator_key_checks_per_block,
+        core::num::NonZeroU32::new(794_625).expect("794,625 is nonzero")
+    );
+    assert_field_bound!(
         max_bn254_pairing_checks_per_transaction,
         core::num::NonZeroU32::new(2).expect("two is nonzero")
     );
     assert_field_bound!(
         max_bn254_pairing_checks_per_block,
+        core::num::NonZeroU32::new(5).expect("five is nonzero")
+    );
+    assert_field_bound!(
+        max_bls12_381_pairing_checks_per_transaction,
+        core::num::NonZeroU32::new(2).expect("two is nonzero")
+    );
+    assert_field_bound!(
+        max_bls12_381_pairing_checks_per_block,
         core::num::NonZeroU32::new(5).expect("five is nonzero")
     );
 }
@@ -32071,14 +32214,20 @@ fn set_uniform_sccp_test_limits(
     limits.max_bls_aggregate_checks_per_block = block_count;
     limits.max_bls_signer_contributions_per_transaction = transaction_count;
     limits.max_bls_signer_contributions_per_block = block_count;
+    limits.max_ed25519_signature_checks_per_transaction = transaction_count;
+    limits.max_ed25519_signature_checks_per_block = block_count;
+    limits.max_ed25519_validator_key_checks_per_transaction = transaction_count;
+    limits.max_ed25519_validator_key_checks_per_block = block_count;
     limits.max_bn254_pairing_checks_per_transaction = transaction_count;
     limits.max_bn254_pairing_checks_per_block = block_count;
+    limits.max_bls12_381_pairing_checks_per_transaction = transaction_count;
+    limits.max_bls12_381_pairing_checks_per_block = block_count;
 }
 state_test! { sync sccp_verifier_work_accepts_every_exact_boundary_and_commits_atomically
     let state = blank_state();
     let block = new_dummy_block();
     let mut state_block = state.block(block.as_ref().header());
-    let_row! { expected = SccpVerifierWorkV1 { proofs: 1, proof_bytes: 1, native_headers: 1, ethereum_light_client_updates: 1, native_header_bytes: 1, secp256k1_recoveries: 1, bls_aggregate_checks: 1, bls_signer_contributions: 1, bn254_pairing_checks: 1, } };
+    let_row! { expected = SccpVerifierWorkV1 { proofs: 1, proof_bytes: 1, native_headers: 1, ethereum_light_client_updates: 1, native_header_bytes: 1, secp256k1_recoveries: 1, bls_aggregate_checks: 1, bls_signer_contributions: 1, ed25519_signature_checks: 1, ed25519_validator_key_checks: 1, bn254_pairing_checks: 1, bls12_381_pairing_checks: 1, } };
     {
         let mut transaction = state_block.transaction();
         set_uniform_sccp_test_limits(&mut transaction.zk.sccp, 1, 1);
@@ -32195,9 +32344,27 @@ state_test! { sync sccp_verifier_work_rejects_every_transaction_limit_without_pa
         NonZeroU32
     );
     assert_work_limit!(
+        ed25519_signature_checks,
+        max_ed25519_signature_checks_per_transaction,
+        "Ed25519 signature checks",
+        NonZeroU32
+    );
+    assert_work_limit!(
+        ed25519_validator_key_checks,
+        max_ed25519_validator_key_checks_per_transaction,
+        "Ed25519 validator-key checks",
+        NonZeroU32
+    );
+    assert_work_limit!(
         bn254_pairing_checks,
         max_bn254_pairing_checks_per_transaction,
         "BN254 pairing checks",
+        NonZeroU32
+    );
+    assert_work_limit!(
+        bls12_381_pairing_checks,
+        max_bls12_381_pairing_checks_per_transaction,
+        "BLS12-381 pairing checks",
         NonZeroU32
     );
 }
@@ -32278,9 +32445,27 @@ fn sccp_verifier_work_rejects_every_block_limit_and_abandoned_transactions_do_no
         NonZeroU32
     );
     assert_block_work_limit!(
+        ed25519_signature_checks,
+        max_ed25519_signature_checks_per_block,
+        "Ed25519 signature checks",
+        NonZeroU32
+    );
+    assert_block_work_limit!(
+        ed25519_validator_key_checks,
+        max_ed25519_validator_key_checks_per_block,
+        "Ed25519 validator-key checks",
+        NonZeroU32
+    );
+    assert_block_work_limit!(
         bn254_pairing_checks,
         max_bn254_pairing_checks_per_block,
         "BN254 pairing checks",
+        NonZeroU32
+    );
+    assert_block_work_limit!(
+        bls12_381_pairing_checks,
+        max_bls12_381_pairing_checks_per_block,
+        "BLS12-381 pairing checks",
         NonZeroU32
     );
 }

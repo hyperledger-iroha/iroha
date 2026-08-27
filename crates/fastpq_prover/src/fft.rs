@@ -298,14 +298,27 @@ impl Planner {
         );
         let gpu_result = thread::scope(|scope| {
             let cpu_handle = scope.spawn(|| self.fft_columns_cpu(cpu_slice, trace_len, trace_log));
-            let guard = backend::acquire_gpu_lane();
-            let result = gpu::fft_columns(
-                gpu_slice,
-                trace_log,
-                self.trace_domain(trace_log).generator,
-                backend,
-            );
-            drop(guard);
+            let result = if let Some(guard) = backend::try_acquire_gpu_lane() {
+                let result = gpu::fft_columns(
+                    gpu_slice,
+                    trace_log,
+                    self.trace_domain(trace_log).generator,
+                    backend,
+                );
+                drop(guard);
+                result
+            } else {
+                debug!(
+                    target: "fastpq::planner",
+                    parameter = self.params.name,
+                    trace_len,
+                    columns = gpu_slice.len(),
+                    trace_log,
+                    "gpu lane remained busy during split fft; cpu handled gpu partition"
+                );
+                self.fft_columns_cpu(gpu_slice, trace_len, trace_log);
+                Ok(())
+            };
             cpu_handle.join().expect("split FFT CPU worker panicked");
             result
         });
@@ -479,14 +492,27 @@ impl Planner {
         );
         let gpu_result = thread::scope(|scope| {
             let cpu_handle = scope.spawn(|| self.ifft_columns_cpu(cpu_slice, trace_len, trace_log));
-            let guard = backend::acquire_gpu_lane();
-            let result = gpu::ifft_columns(
-                gpu_slice,
-                trace_log,
-                self.trace_domain(trace_log).generator,
-                backend,
-            );
-            drop(guard);
+            let result = if let Some(guard) = backend::try_acquire_gpu_lane() {
+                let result = gpu::ifft_columns(
+                    gpu_slice,
+                    trace_log,
+                    self.trace_domain(trace_log).generator,
+                    backend,
+                );
+                drop(guard);
+                result
+            } else {
+                debug!(
+                    target: "fastpq::planner",
+                    parameter = self.params.name,
+                    trace_len,
+                    columns = gpu_slice.len(),
+                    trace_log,
+                    "gpu lane remained busy during split ifft; cpu handled gpu partition"
+                );
+                self.ifft_columns_cpu(gpu_slice, trace_len, trace_log);
+                Ok(())
+            };
             cpu_handle.join().expect("split IFFT CPU worker panicked");
             result
         });
@@ -531,16 +557,32 @@ impl Planner {
         );
         let (cpu_part, gpu_result) = thread::scope(|scope| {
             let cpu_handle = scope.spawn(|| self.lde_columns(&coeffs[..split]));
-            let guard = backend::acquire_gpu_lane();
-            let result = gpu::lde_columns(
-                &coeffs[split..],
-                trace_log,
-                self.blowup_log,
-                self.lde_domain(lde_log).generator,
-                self.params.omega_coset,
-                backend,
+            let result = backend::try_acquire_gpu_lane().map_or_else(
+                || {
+                    debug!(
+                        target: "fastpq::planner",
+                        parameter = self.params.name,
+                        trace_len,
+                        columns = gpu_columns,
+                        trace_log,
+                        lde_log,
+                        "gpu lane remained busy during split lde; cpu handled gpu partition"
+                    );
+                    Ok(Some(self.lde_columns(&coeffs[split..])))
+                },
+                |guard| {
+                    let result = gpu::lde_columns(
+                        &coeffs[split..],
+                        trace_log,
+                        self.blowup_log,
+                        self.lde_domain(lde_log).generator,
+                        self.params.omega_coset,
+                        backend,
+                    );
+                    drop(guard);
+                    result
+                },
             );
-            drop(guard);
             (
                 cpu_handle.join().expect("split LDE CPU worker panicked"),
                 result,
@@ -1516,6 +1558,71 @@ mod tests {
             backend::GpuBackend::Cuda,
         );
         assert_eq!(cpu, split);
+    }
+    #[test]
+    fn busy_gpu_lane_split_paths_complete_on_cpu_without_waiting() {
+        let params = CANONICAL_PARAMETER_SETS[0];
+        let planner = Planner::new(&params);
+        let trace_log = params.trace_log_size.min(3);
+        let trace_len = 1usize << trace_log;
+        let columns: Vec<Vec<u64>> = (0..4)
+            .map(|column| {
+                (0..trace_len)
+                    .map(|index| {
+                        (index as u64)
+                            .wrapping_mul(17 + column as u64 * 2)
+                            .wrapping_add(11 + column as u64)
+                            % FIELD_MODULUS
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let mut expected_fft = columns.clone();
+        planner.fft_columns(&mut expected_fft);
+        let mut expected_ifft = columns.clone();
+        planner.ifft_columns(&mut expected_ifft);
+        let expected_lde = planner.lde_columns(&columns);
+
+        let lane = backend::acquire_gpu_lane();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut actual_fft = columns.clone();
+            planner.split_fft_gpu_cpu(
+                &mut actual_fft,
+                trace_len,
+                trace_log,
+                backend::GpuBackend::OpenCl,
+            );
+            let mut actual_ifft = columns.clone();
+            planner.split_ifft_gpu_cpu(
+                &mut actual_ifft,
+                trace_len,
+                trace_log,
+                backend::GpuBackend::OpenCl,
+            );
+            let actual_lde = planner.split_lde_gpu_cpu(
+                &columns,
+                trace_len,
+                trace_log,
+                trace_log + planner.blowup_log(),
+                backend::GpuBackend::OpenCl,
+            );
+            sender
+                .send((actual_fft, actual_ifft, actual_lde))
+                .expect("busy-lane result receiver should remain available");
+        });
+
+        let observed = receiver.recv_timeout(std::time::Duration::from_secs(5));
+        drop(lane);
+        worker
+            .join()
+            .expect("busy-lane split worker should not panic");
+        let (actual_fft, actual_ifft, actual_lde) =
+            observed.expect("split paths must complete while the GPU lane remains held");
+        assert_eq!(actual_fft, expected_fft);
+        assert_eq!(actual_ifft, expected_ifft);
+        assert_eq!(actual_lde, expected_lde);
     }
     #[test]
     fn lde_is_deterministic() {

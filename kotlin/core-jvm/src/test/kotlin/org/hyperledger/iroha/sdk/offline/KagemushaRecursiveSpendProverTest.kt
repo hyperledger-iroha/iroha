@@ -1151,6 +1151,21 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue(redeem.noritoEncoded().isNotEmpty())
         assertTrue(topUpSubmission.noritoEncoded().isNotEmpty())
         assertTrue(redeemSubmission.noritoEncoded().isNotEmpty())
+        for (schema in listOf(
+            "iroha.torii.v1.offline.top_up.request",
+            "iroha.torii.v1.offline.redeem.request",
+        )) {
+            val canonical = archive(schema)
+            val missingPadding = canonical.copyOfRange(0, NoritoHeader.HEADER_LENGTH) +
+                canonical.copyOfRange(NoritoHeader.HEADER_LENGTH + 8, canonical.size)
+            assertFailsWith<IllegalArgumentException> {
+                if (schema.contains("top_up")) {
+                    KagemushaRecursiveSpendProver.decodeTopUpRequest(missingPadding)
+                } else {
+                    KagemushaRecursiveSpendProver.decodeRedeemSubmissionRequest(missingPadding)
+                }
+            }
+        }
         assertTrue(opening.noritoEncoded().isNotEmpty())
         assertTrue(
             KagemushaRecursiveSpendProver.decodeInitResultV4(
@@ -1677,6 +1692,11 @@ class KagemushaRecursiveSpendProverTest {
                                 "content-type",
                                 if (capability) "application/json" else "application/x-norito",
                             )
+                            .addHeader(
+                                "Location",
+                                "/v1/offline/operations/${"11".repeat(32)}",
+                            )
+                            .addHeader("Retry-After", "1")
                             .setBody(
                                 if (capability) {
                                     """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true}"""
@@ -1790,6 +1810,137 @@ class KagemushaRecursiveSpendProverTest {
 
         client.getOperation(operationId).join()
         assertEquals("/api/v1/offline/operations/$operationId", captured.get().uri.path)
+    }
+
+    @Test
+    fun operationStatusProjectionRejectsZeroTimesAndUnstableCodes() {
+        val digest = ByteArray(32) { 1 }
+        fun projection(
+            state: KagemushaRecursiveSpendProver.OperationState,
+            kind: KagemushaRecursiveSpendProver.OperationKind,
+            submittedAt: Long? = null,
+            finalizedHeight: Long? = null,
+            serverTime: Long? = null,
+            rejection: KagemushaRecursiveSpendProver.OperationRejection? = null,
+        ) = KagemushaRecursiveSpendProver.OperationStatusProjection(
+            state,
+            kind,
+            digest,
+            digest,
+            submittedAt,
+            finalizedHeight,
+            serverTime,
+            null,
+            rejection,
+        )
+
+        assertEquals(
+            1,
+            projection(
+                KagemushaRecursiveSpendProver.OperationState.PENDING,
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                submittedAt = 1,
+            ).submittedAtMilliseconds,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            projection(
+                KagemushaRecursiveSpendProver.OperationState.PENDING,
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                submittedAt = 0,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            projection(
+                KagemushaRecursiveSpendProver.OperationState.APPLIED,
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                finalizedHeight = 0,
+                serverTime = 1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            projection(
+                KagemushaRecursiveSpendProver.OperationState.APPLIED,
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                finalizedHeight = 1,
+                serverTime = 0,
+            )
+        }
+        for (code in listOf("_invalid", "UPPER", "bad-code", "a".repeat(65))) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.OperationRejection(code, "rejected")
+            }
+        }
+        val rejection = KagemushaRecursiveSpendProver.OperationRejection(
+            "offline_operation_rejected",
+            "rejected",
+        )
+        assertEquals(
+            1_024,
+            KagemushaRecursiveSpendProver.OperationRejection(
+                "offline_operation_rejected",
+                "😀".repeat(1_024),
+            ).message.codePointCount(0, "😀".repeat(1_024).length),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.OperationRejection(
+                "offline_operation_rejected",
+                "x".repeat(1_025),
+            )
+        }
+        assertEquals(
+            rejection,
+            projection(
+                KagemushaRecursiveSpendProver.OperationState.REJECTED,
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                rejection = rejection,
+            ).rejection,
+        )
+    }
+
+    @Test
+    fun toriiCommandsRejectNoncanonicalRecoveryHeaders() {
+        val operationId = "11".repeat(32)
+        val expectedLocation = "/v1/offline/operations/$operationId"
+        val networkId = org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        )
+        val request = KagemushaRecursiveSpendProver.TopUpRequest(
+            archive("iroha.torii.v1.offline.top_up.request"),
+        )
+        fun client(
+            locations: List<String>,
+            retryAfter: List<String>,
+        ): KagemushaRecursiveSpendProver.ToriiClient =
+            KagemushaRecursiveSpendProver.newToriiClient(
+                URI.create("https://torii.example"),
+                object : TransportExecutor {
+                    override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+                        val response = TransportResponse.builder()
+                            .setStatusCode(202)
+                            .addHeader("Content-Type", "application/x-norito")
+                            .setBody(archive("OfflineOperationReference"))
+                        locations.forEach { response.addHeader("Location", it) }
+                        retryAfter.forEach { response.addHeader("Retry-After", it) }
+                        return CompletableFuture.completedFuture(response.build())
+                    }
+                },
+                LocalSigningContext(networkId),
+            )
+
+        val invalidHeaders = listOf(
+            emptyList<String>() to listOf("1"),
+            listOf("/v1/offline/operations/${"22".repeat(32)}") to listOf("1"),
+            listOf(expectedLocation) to emptyList(),
+            listOf(expectedLocation) to listOf("0"),
+            listOf(expectedLocation) to listOf("18446744073709551616"),
+            listOf(expectedLocation) to listOf("9".repeat(10_000)),
+            listOf(expectedLocation) to listOf("1", "2"),
+        )
+        invalidHeaders.forEach { (locations, retryAfter) ->
+            assertFailsWith<RuntimeException> {
+                client(locations, retryAfter).submitTopUp(request, operationId).join()
+            }
+        }
     }
 
     @Test
@@ -1912,7 +2063,9 @@ class KagemushaRecursiveSpendProverTest {
         )
         val padding = when (schema) {
             "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" ->
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4",
+            "iroha.torii.v1.offline.top_up.request",
+            "iroha.torii.v1.offline.redeem.request" ->
                 ByteArray(8)
             else -> byteArrayOf()
         }

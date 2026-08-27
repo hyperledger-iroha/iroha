@@ -17,11 +17,161 @@ use crate::{
 };
 use core::{fmt, str::FromStr};
 use derive_more::Display;
-use iroha_crypto::{PublicKey, SignatureOf};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
+/// Exact schema identifier for a Taikai anchor acknowledgement.
+pub const TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1: &str = "iroha.taikai.anchor-receipt.v1";
+/// Current Taikai anchor acknowledgement version.
+pub const TAIKAI_ANCHOR_RECEIPT_VERSION_V1: u16 = 1;
+/// Maximum UTF-8 bytes accepted in a Taikai anchor artefact identifier.
+pub const TAIKAI_ANCHOR_RECEIPT_BASE_ID_MAX_BYTES_V1: usize = 256;
+/// Maximum number of segment sequences covered by one first-release routing window.
+pub const TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1: u64 = 120;
+/// Return whether a Taikai spool identifier has the canonical five-field layout.
+#[must_use]
+pub fn is_canonical_taikai_anchor_base_id(base_id: &str) -> bool {
+    let mut fields = base_id.split('-');
+    let Some(lane_hex) = fields.next() else {
+        return false;
+    };
+    let Some(epoch_hex) = fields.next() else {
+        return false;
+    };
+    let Some(sequence_hex) = fields.next() else {
+        return false;
+    };
+    let Some(ticket_hex) = fields.next() else {
+        return false;
+    };
+    let Some(fingerprint_hex) = fields.next() else {
+        return false;
+    };
+    fields.next().is_none()
+        && fixed_hex(lane_hex, 8)
+        && fixed_hex(epoch_hex, 16)
+        && fixed_hex(sequence_hex, 16)
+        && fixed_hex(ticket_hex, 64)
+        && fixed_hex(fingerprint_hex, 64)
+}
+
+fn fixed_hex(value: &str, width: usize) -> bool {
+    value.len() == width && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Statement signed by a Taikai anchor after durably accepting one exact upload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct TaikaiAnchorReceiptBodyV1 {
+    /// Exact schema domain separating this receipt from other signed objects.
+    pub schema: String,
+    /// Receipt layout version.
+    pub version: u16,
+    /// Canonical Taikai spool artefact identifier acknowledged by the anchor.
+    pub base_id: String,
+    /// BLAKE3 digest of the exact JSON request bytes accepted by the anchor.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub request_digest: [u8; 32],
+    /// Anchor-observed acceptance time in Unix seconds.
+    pub acknowledged_unix_secs: u64,
+}
+impl TaikaiAnchorReceiptBodyV1 {
+    /// Validate the bounded, canonical first-release receipt statement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema/version, malformed artefact
+    /// identifier, zero digest, or zero acceptance time.
+    pub fn validate(&self) -> Result<(), TaikaiAnchorReceiptError> {
+        if self.schema != TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1
+            || self.version != TAIKAI_ANCHOR_RECEIPT_VERSION_V1
+        {
+            return Err(TaikaiAnchorReceiptError::UnsupportedSchema);
+        }
+        if self.base_id.len() > TAIKAI_ANCHOR_RECEIPT_BASE_ID_MAX_BYTES_V1
+            || !is_canonical_taikai_anchor_base_id(&self.base_id)
+        {
+            return Err(TaikaiAnchorReceiptError::InvalidBaseId);
+        }
+        if self.request_digest == [0; 32] {
+            return Err(TaikaiAnchorReceiptError::ZeroRequestDigest);
+        }
+        if self.acknowledged_unix_secs == 0 {
+            return Err(TaikaiAnchorReceiptError::ZeroAcknowledgedTime);
+        }
+        Ok(())
+    }
+}
+/// Anchor-authenticated acknowledgement for one exact Taikai upload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct TaikaiAnchorReceiptV1 {
+    /// Complete content-bound acknowledgement statement.
+    pub body: TaikaiAnchorReceiptBodyV1,
+    /// Ed25519 signature over `body` made by the configured anchor identity.
+    pub signature: SignatureOf<TaikaiAnchorReceiptBodyV1>,
+}
+impl TaikaiAnchorReceiptV1 {
+    /// Sign a structurally valid acknowledgement with an Ed25519 anchor key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the body is malformed, the key is not Ed25519,
+    /// or signing fails.
+    pub fn try_sign(
+        body: TaikaiAnchorReceiptBodyV1,
+        anchor: &KeyPair,
+    ) -> Result<Self, TaikaiAnchorReceiptError> {
+        body.validate()?;
+        if !matches!(anchor.public_key().try_algorithm(), Ok(Algorithm::Ed25519)) {
+            return Err(TaikaiAnchorReceiptError::NonEd25519Key);
+        }
+        let signature = SignatureOf::try_new(anchor.private_key(), &body)
+            .map_err(|_| TaikaiAnchorReceiptError::InvalidSignature)?;
+        Ok(Self { body, signature })
+    }
+    /// Verify the statement and its signature against the pinned anchor key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the statement is malformed, the pinned key is
+    /// not Ed25519, or the signature is invalid.
+    pub fn verify(&self, anchor: &PublicKey) -> Result<(), TaikaiAnchorReceiptError> {
+        self.body.validate()?;
+        if !matches!(anchor.try_algorithm(), Ok(Algorithm::Ed25519)) {
+            return Err(TaikaiAnchorReceiptError::NonEd25519Key);
+        }
+        self.signature
+            .verify(anchor, &self.body)
+            .map_err(|_| TaikaiAnchorReceiptError::InvalidSignature)
+    }
+}
+/// Validation failures for signed Taikai anchor acknowledgements.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum TaikaiAnchorReceiptError {
+    /// Schema name or version is not the first-release contract.
+    #[error("unsupported Taikai anchor receipt schema or version")]
+    UnsupportedSchema,
+    /// Artefact identifier is empty, oversized, or contains non-canonical bytes.
+    #[error("Taikai anchor receipt base_id is invalid")]
+    InvalidBaseId,
+    /// The exact request commitment must not be all zero.
+    #[error("Taikai anchor receipt request digest must not be zero")]
+    ZeroRequestDigest,
+    /// The anchor acceptance time must be positive.
+    #[error("Taikai anchor receipt acknowledgement time must be positive")]
+    ZeroAcknowledgedTime,
+    /// First-release anchor receipts require Ed25519.
+    #[error("Taikai anchor receipt key must use Ed25519")]
+    NonEd25519Key,
+    /// The receipt signature could not be created or verified.
+    #[error("Taikai anchor receipt signature is invalid")]
+    InvalidSignature,
+}
 /// Identifier assigned to a Taikai event (e.g., a live stream or conference day).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[repr(transparent)]
@@ -895,13 +1045,27 @@ impl TaikaiSegmentWindow {
     /// Validate the inclusive range encoded by this window.
     ///
     /// # Errors
-    /// Returns [`TaikaiSegmentWindowError::StartExceedsEnd`] when `start_sequence` exceeds
-    /// `end_sequence`.
+    /// Returns an error when the range is reversed, terminal, or wider than
+    /// [`TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1`].
     pub fn validate(&self) -> Result<(), TaikaiSegmentWindowError> {
         if self.start_sequence > self.end_sequence {
             return Err(TaikaiSegmentWindowError::StartExceedsEnd {
                 start_sequence: self.start_sequence,
                 end_sequence: self.end_sequence,
+            });
+        }
+        if self.end_sequence == u64::MAX {
+            return Err(TaikaiSegmentWindowError::TerminalEndSequence);
+        }
+        let sequences = self
+            .end_sequence
+            .checked_sub(self.start_sequence)
+            .and_then(|distance| distance.checked_add(1))
+            .expect("ordered non-terminal Taikai window width fits u64");
+        if sequences > TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1 {
+            return Err(TaikaiSegmentWindowError::TooWide {
+                sequences,
+                maximum: TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1,
             });
         }
         Ok(())
@@ -922,6 +1086,17 @@ pub enum TaikaiSegmentWindowError {
         start_sequence: u64,
         /// Inclusive upper bound of the invalid window.
         end_sequence: u64,
+    },
+    /// The inclusive upper bound would leave no successor window.
+    #[error("segment window end must be less than u64::MAX")]
+    TerminalEndSequence,
+    /// The inclusive window exceeded the first-release routing bound.
+    #[error("segment window covers {sequences} sequences; maximum is {maximum}")]
+    TooWide {
+        /// Inclusive sequence count in the window.
+        sequences: u64,
+        /// First-release maximum inclusive sequence count.
+        maximum: u64,
     },
 }
 /// Identifier referencing a `SoraNet` guard directory circuit.
@@ -1064,16 +1239,23 @@ impl TaikaiRoutingManifestV1 {
         self.segment_window.contains(sequence)
     }
     /// Validate manifest invariants:
+    /// - the format version is supported
     /// - windows are ordered
     /// - rendition ranges fall within the manifest window
     /// - rendition identifiers are unique
     ///
     /// # Errors
-    /// Returns [`TaikaiRoutingManifestValidationError::SegmentWindow`] when the manifest
-    /// window is invalid, [`TaikaiRoutingManifestValidationError::RenditionWindowOutOfRange`]
-    /// when a rendition window extends outside that range, or
-    /// [`TaikaiRoutingManifestValidationError::DuplicateRendition`] when identifiers repeat.
+    /// Returns [`TaikaiRoutingManifestValidationError::UnsupportedVersion`] when the manifest is
+    /// not V1, [`TaikaiRoutingManifestValidationError::SegmentWindow`] when its window is invalid,
+    /// [`TaikaiRoutingManifestValidationError::RenditionWindowOutOfRange`] when a rendition window
+    /// extends outside that range, or [`TaikaiRoutingManifestValidationError::DuplicateRendition`]
+    /// when identifiers repeat.
     pub fn validate(&self) -> Result<(), TaikaiRoutingManifestValidationError> {
+        if self.version != Self::VERSION {
+            return Err(TaikaiRoutingManifestValidationError::UnsupportedVersion {
+                actual: self.version,
+            });
+        }
         self.segment_window.validate()?;
         let mut seen = BTreeSet::new();
         for route in &self.renditions {
@@ -1101,6 +1283,12 @@ impl TaikaiRoutingManifestV1 {
 /// Errors emitted when validating a [`TaikaiRoutingManifestV1`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TaikaiRoutingManifestValidationError {
+    /// The decoded routing manifest advertises an unsupported format version.
+    #[error("unsupported Taikai routing manifest version {actual} (expected 1)")]
+    UnsupportedVersion {
+        /// Version found in the decoded manifest.
+        actual: u16,
+    },
     /// Wrapper for underlying window errors.
     #[error(transparent)]
     SegmentWindow(#[from] TaikaiSegmentWindowError),
@@ -1393,6 +1581,51 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes.fill(value);
         BlobDigest::new(bytes)
+    }
+    fn sample_anchor_receipt_body() -> TaikaiAnchorReceiptBodyV1 {
+        TaikaiAnchorReceiptBodyV1 {
+            schema: TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1.to_owned(),
+            version: TAIKAI_ANCHOR_RECEIPT_VERSION_V1,
+            base_id: "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+            request_digest: [0xA5; 32],
+            acknowledged_unix_secs: 1_750_000_000,
+        }
+    }
+    #[test]
+    fn anchor_receipt_binds_body_and_pinned_signer() {
+        let signer = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("derive anchor signer");
+        let receipt = TaikaiAnchorReceiptV1::try_sign(sample_anchor_receipt_body(), &signer)
+            .expect("sign receipt");
+        receipt.verify(signer.public_key()).expect("verify receipt");
+
+        let wrong_signer = KeyPair::try_from_seed(vec![0xB8; 32], Algorithm::Ed25519)
+            .expect("derive unrelated signer");
+        assert_eq!(
+            receipt.verify(wrong_signer.public_key()),
+            Err(TaikaiAnchorReceiptError::InvalidSignature)
+        );
+        let mut tampered = receipt;
+        tampered.body.request_digest[0] ^= 1;
+        assert_eq!(
+            tampered.verify(signer.public_key()),
+            Err(TaikaiAnchorReceiptError::InvalidSignature)
+        );
+    }
+    #[test]
+    fn anchor_receipt_body_rejects_unbounded_or_empty_bindings() {
+        let mut body = sample_anchor_receipt_body();
+        body.base_id = "x".repeat(TAIKAI_ANCHOR_RECEIPT_BASE_ID_MAX_BYTES_V1 + 1);
+        assert_eq!(
+            body.validate(),
+            Err(TaikaiAnchorReceiptError::InvalidBaseId)
+        );
+        let mut body = sample_anchor_receipt_body();
+        body.request_digest = [0; 32];
+        assert_eq!(
+            body.validate(),
+            Err(TaikaiAnchorReceiptError::ZeroRequestDigest)
+        );
     }
     #[test]
     fn event_id_wrapper_round_trip() {
@@ -1832,6 +2065,23 @@ mod tests {
         ));
     }
     #[test]
+    fn segment_window_validation_rejects_terminal_and_oversized_ranges() {
+        TaikaiSegmentWindow::new(0, TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1 - 1)
+            .validate()
+            .expect("the exact first-release window bound is valid");
+        assert_eq!(
+            TaikaiSegmentWindow::new(0, TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1).validate(),
+            Err(TaikaiSegmentWindowError::TooWide {
+                sequences: TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1 + 1,
+                maximum: TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1,
+            })
+        );
+        assert_eq!(
+            TaikaiSegmentWindow::new(u64::MAX - 1, u64::MAX).validate(),
+            Err(TaikaiSegmentWindowError::TerminalEndSequence)
+        );
+    }
+    #[test]
     fn routing_manifest_validation_rejects_out_of_range_rendition() {
         let mut manifest = sample_routing_manifest();
         manifest.segment_window = TaikaiSegmentWindow::new(10, 20);
@@ -1841,6 +2091,15 @@ mod tests {
             err,
             TaikaiRoutingManifestValidationError::RenditionWindowOutOfRange { .. }
         ));
+    }
+    #[test]
+    fn routing_manifest_validation_rejects_unsupported_version() {
+        let mut manifest = sample_routing_manifest();
+        manifest.version = TaikaiRoutingManifestV1::VERSION + 1;
+        assert_eq!(
+            manifest.validate(),
+            Err(TaikaiRoutingManifestValidationError::UnsupportedVersion { actual: 2 })
+        );
     }
     #[test]
     fn routing_manifest_validation_rejects_duplicate_renditions() {

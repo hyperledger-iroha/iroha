@@ -1272,7 +1272,7 @@ impl LaunchedProductionLifecycleV1 {
             )) => {
                 iroha_logger::error!(
                     %error,
-                    "ordinary certified-Fetch durable ingress terminal requires cold restart"
+                    "ordinary certified-Fetch post-commit terminal requires cold restart"
                 );
                 services
                     .lifecycle_output_guard()
@@ -2362,13 +2362,16 @@ impl LaunchedProductionLifecycleV1 {
 }
 
 impl ActivatedProductionLifecycleV1 {
-    /// Reconcile only current-height Serve owners retained across a terminal barrier.
+    /// Reconcile current-height capacity observations retained across a terminal barrier.
     ///
     /// A capacity-blocked Serve has not committed its fair-ingress dequeue, so the direct
     /// decided-lane recovery driver remains its sole consumer after this handoff. This includes
     /// repair of a terminal-ready executor whose process-local claim returned to `Eligible`.
     /// A completed Serve, by contrast, must publish its lifecycle terminal before finalization.
-    /// No ordinary Completion, Runtime, Ingress, or Fetch owner is admitted by this transition.
+    /// An ordinary capacity-blocked Fetch likewise has not committed its dequeue or admitted a
+    /// new durable row, so its service-generation observation can be dropped while sealed height
+    /// retirement owns the queued occurrence and any older recovered row. A recovered Decision
+    /// Fetch already owns a durable row before capacity capture and therefore remains fail-closed.
     pub(in crate::sumeragi) fn reconcile_decided_lane_certified_serve(
         &mut self,
         _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
@@ -2436,10 +2439,10 @@ impl ActivatedProductionLifecycleV1 {
                 match wait.capacity_status(&self.launched.services) {
                     ProductionIngressCapacityStatus::Pending
                     | ProductionIngressCapacityStatus::Released => {
-                        // Ordinary Fetch capacity is captured before durable
-                        // admission. The fair-ingress occurrence was never
-                        // dequeued, so sealed height retirement remains its
-                        // sole terminal owner after this observation is dropped.
+                        // This attempt captured capacity before admitting a new
+                        // durable row and never dequeued fair ingress. Sealed
+                        // height retirement owns both that occurrence and any
+                        // pre-existing row after this observation is dropped.
                         drop(wait);
                         Ok(true)
                     }

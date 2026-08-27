@@ -13,6 +13,8 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /** Encodes the atomic {@code CommitContractDeployment} transaction instruction. */
 public final class CommitContractDeploymentWirePayloadEncoder {
   public static final String WIRE_NAME =
+      "iroha.instruction.v1::smart_contract_code::CommitContractDeployment";
+  private static final String SCHEMA_NAME =
       "iroha_data_model::isi::smart_contract_code::CommitContractDeployment";
   private static final BigInteger U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
   private static final TypeAdapter<String> STRING = NoritoAdapters.stringAdapter();
@@ -42,7 +44,7 @@ public final class CommitContractDeploymentWirePayloadEncoder {
             Optional.ofNullable(expectedPreviousContractAddress)
                 .map(value -> exact(value, "expectedPreviousContractAddress")));
     return InstructionBox.fromWirePayload(
-        WIRE_NAME, NoritoCodec.encode(payload, WIRE_NAME, new PayloadAdapter()));
+        WIRE_NAME, NoritoCodec.encode(payload, SCHEMA_NAME, new PayloadAdapter()));
   }
 
   private static String exact(final String value, final String field) {

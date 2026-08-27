@@ -37,7 +37,10 @@ import {
   buildRecordKaigiUsageInstruction,
   buildSetKaigiRelayManifestInstruction,
   buildRegisterKaigiRelayInstruction,
+  buildUnregisterKaigiRelayInstruction,
   buildReportKaigiRelayHealthInstruction,
+  KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
+  KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
   buildRemoveSmartContractBytesInstruction,
@@ -292,6 +295,24 @@ function readCompactFieldPayload(buffer, offset, context) {
     throw new RangeError(`${context} payload overruns its buffer`);
   }
   return { payload: buffer.subarray(cursor, end), next: end };
+}
+
+function readInstructionEnvelopeWireId(encoded, context) {
+  const outer = validateNoritoFrame(encoded);
+  const wire = readCompactFieldPayload(outer.payload, 0, `${context}.wire`);
+  const wireValue = readCompactFieldPayload(
+    wire.payload,
+    0,
+    `${context}.wire.value`,
+  );
+  assert.equal(wireValue.next, wire.payload.length);
+  const inner = readCompactFieldPayload(
+    outer.payload,
+    wire.next,
+    `${context}.inner`,
+  );
+  assert.equal(inner.next, outer.payload.length);
+  return wireValue.payload.toString("utf8");
 }
 
 function encodeAndDecode(instruction) {
@@ -1174,6 +1195,16 @@ const THIRD_RELAY_ACCOUNT_ID = exportedNormalizeAccountId(
     publicKey: hexToBytes(SEED_11_ED25519_PUBLIC_KEY_HEX),
   }).toI105(SORA_I105_DISCRIMINANT),
 );
+const KAIGI_RELAY_PUBLIC_KEYS_HEX = Object.freeze([
+  "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+  "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+  "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c",
+  "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+  "8a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17",
+  "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+  "1398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca",
+]);
 
 function kaigiRelayHops() {
   return [
@@ -1202,6 +1233,166 @@ function normalizedKaigiRelayHops() {
     weight: hop.weight,
   }));
 }
+
+function maximumKaigiRelayHops() {
+  return KAIGI_RELAY_PUBLIC_KEYS_HEX.map((publicKey, index) => ({
+    relayId: exportedNormalizeAccountId(
+      AccountAddress.fromAccount({ publicKey: hexToBytes(publicKey) }).toI105(
+        SORA_I105_DISCRIMINANT,
+      ),
+    ),
+    hpkePublicKey: Buffer.alloc(
+      index === 0 ? KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 : 1,
+      index + 1,
+    ),
+    weight: 1,
+  }));
+}
+
+baseTest("Kaigi relay builders enforce the V1 hop and decoded-key bounds", () => {
+  assert.equal(KAIGI_RELAY_MANIFEST_MAX_HOPS_V1, 8);
+  assert.equal(KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1, 4_096);
+
+  const hops = maximumKaigiRelayHops();
+  const acceptedManifest = buildSetKaigiRelayManifestInstruction({
+    callId: "wonderland.sora:bounded-relays",
+    relayManifest: { hops, expiryMs: 1 },
+  });
+  assert.equal(
+    acceptedManifest.Kaigi.SetKaigiRelayManifest.relay_manifest.hops.length,
+    8,
+  );
+  assert.equal(
+    Buffer.from(
+      acceptedManifest.Kaigi.SetKaigiRelayManifest.relay_manifest.hops[0]
+        .hpke_public_key,
+      "base64",
+    ).length,
+    4_096,
+  );
+
+  assert.throws(
+    () =>
+      buildSetKaigiRelayManifestInstruction({
+        callId: "wonderland.sora:too-many-relays",
+        relayManifest: { hops: [...hops, hops[0]], expiryMs: 1 },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.equal(error?.path, "setKaigiRelayManifest.relayManifest.hops");
+      return true;
+    },
+  );
+
+  const acceptedRegistration = buildRegisterKaigiRelayInstruction({
+    relayId: RELAY_ACCOUNT_ID,
+    hpkePublicKey: Buffer.alloc(4_096, 0xA5).toString("base64"),
+    bandwidthClass: 1,
+  });
+  assert.equal(
+    Buffer.from(
+      acceptedRegistration.Kaigi.RegisterKaigiRelay.relay.hpke_public_key,
+      "base64",
+    ).length,
+    4_096,
+  );
+
+  const oversizedKey = Buffer.alloc(4_097, 0xA5);
+  assert.throws(
+    () =>
+      buildSetKaigiRelayManifestInstruction({
+        callId: "wonderland.sora:oversized-hop-key",
+        relayManifest: {
+          hops: [
+            { ...hops[0], hpkePublicKey: oversizedKey },
+            hops[1],
+            hops[2],
+          ],
+          expiryMs: 1,
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.equal(
+        error?.path,
+        "setKaigiRelayManifest.relayManifest.hops[0].hpkePublicKey",
+      );
+      return true;
+    },
+  );
+  assert.throws(
+    () =>
+      buildRegisterKaigiRelayInstruction({
+        relayId: RELAY_ACCOUNT_ID,
+        hpkePublicKey: oversizedKey.toString("base64"),
+        bandwidthClass: 1,
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.equal(error?.path, "registerKaigiRelay.hpkePublicKey");
+      return true;
+    },
+  );
+});
+
+baseTest("Kaigi instruction envelopes use the exact V1 registry wire IDs", () => {
+  const callId = "wonderland.sora:wire-id";
+  const cases = [
+    [
+      "CreateKaigi",
+      buildCreateKaigiInstruction({ id: callId, host: ACCOUNT_ID }),
+    ],
+    [
+      "JoinKaigi",
+      buildJoinKaigiInstruction({ callId, participant: ACCOUNT_ID }),
+    ],
+    [
+      "LeaveKaigi",
+      buildLeaveKaigiInstruction({ callId, participant: ACCOUNT_ID }),
+    ],
+    ["EndKaigi", buildEndKaigiInstruction({ callId })],
+    [
+      "RecordKaigiUsage",
+      buildRecordKaigiUsageInstruction({
+        callId,
+        durationMs: 1,
+        billedGas: 2,
+      }),
+    ],
+    [
+      "SetKaigiRelayManifest",
+      buildSetKaigiRelayManifestInstruction({ callId, relayManifest: null }),
+    ],
+    [
+      "RegisterKaigiRelay",
+      buildRegisterKaigiRelayInstruction({
+        relayId: RELAY_ACCOUNT_ID,
+        hpkePublicKey: Buffer.alloc(32, 0xa5),
+        bandwidthClass: 1,
+      }),
+    ],
+    [
+      "ReportKaigiRelayHealth",
+      buildReportKaigiRelayHealthInstruction({
+        callId,
+        relayId: RELAY_ACCOUNT_ID,
+        status: "Healthy",
+        reportedAtMs: 3,
+      }),
+    ],
+  ];
+
+  withPureJsInstructionCodec(() => {
+    for (const [name, instruction] of cases) {
+      const encoded = noritoEncodeInstruction(instruction);
+      assert.equal(
+        readInstructionEnvelopeWireId(encoded, `Kaigi.${name}`),
+        `iroha.instruction.v1::kaigi::${name}`,
+      );
+      assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+    }
+  });
+});
 
 function assertKaigiManifestRejected(relayManifest, code, path) {
   assert.throws(
@@ -1712,6 +1903,25 @@ test("buildRegisterKaigiRelayInstruction encodes hpke key", () => {
   );
 });
 
+test("buildUnregisterKaigiRelayInstruction encodes the canonical relay id", () => {
+  const instruction = buildUnregisterKaigiRelayInstruction({
+    relayId: RELAY_ACCOUNT_ID,
+  });
+  const expected = {
+    Kaigi: {
+      UnregisterKaigiRelay: {
+        relay_id: RELAY_ACCOUNT_ID,
+      },
+    },
+  };
+  assert.deepEqual(instruction, expected);
+  assert.deepEqual(encodeAndDecode(instruction), expected);
+  assertNativeAndPureInstructionParity(
+    instruction,
+    "Kaigi.UnregisterKaigiRelay",
+  );
+});
+
 baseTest("RegisterKaigiRelay requires a non-zero bandwidth class", () => {
   const baseRelay = {
     relayId: RELAY_ACCOUNT_ID,
@@ -1836,7 +2046,7 @@ baseTest("ReportKaigiRelayHealth validates status, timestamp, and notes", () => 
     ],
     [
       { reportedAtMs: -1 },
-      ValidationErrorCode.INVALID_NUMERIC,
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
       "reportKaigiRelayHealth.reportedAtMs",
     ],
     [
@@ -1886,7 +2096,7 @@ baseTest("ReportKaigiRelayHealth pure-JS codec preserves canonical field order",
     assert.equal(wireValue.next, wire.payload.length);
     assert.equal(
       wireValue.payload.toString("utf8"),
-      "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth",
+      "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth",
     );
     const innerField = readCompactFieldPayload(
       outer.payload,

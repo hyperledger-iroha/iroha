@@ -16,6 +16,10 @@ use iroha_crypto::Hash;
 pub const VECTOR_BASE_LANES: usize = 2;
 /// Default byte multiplier for syscall host-work gas families.
 pub const SYSCALL_GAS_PER_BYTE: u64 = 1;
+/// Version of the V1 direct signature-opcode byte gas formula.
+pub const SIGNATURE_OPCODE_GAS_FORMULA_VERSION_V1: u64 = 1;
+/// Gas charged for each payload byte consumed by a direct signature opcode.
+pub const SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE: u64 = SYSCALL_GAS_PER_BYTE;
 /// Fixed gas for `transfer_v1` FastPQ batch begin/end scope operations.
 pub const G_FASTPQ_BATCH: u64 = 16;
 /// Fixed gas for governance/admin contract-management bridge syscalls.
@@ -98,6 +102,21 @@ pub const fn ed25519_batch_extra_gas(payload_bytes: u64, entries: u64) -> u64 {
     ED25519_BATCH_GAS_PER_PAYLOAD_BYTE
         .saturating_mul(payload_bytes)
         .saturating_add(ED25519_BATCH_GAS_PER_ENTRY.saturating_mul(entries))
+}
+/// Compute the byte-linear surcharge for one direct signature opcode.
+///
+/// Aliased operands are charged independently because the opcode validates
+/// each message, signature, and public-key TLV independently.
+#[must_use]
+pub fn signature_opcode_extra_gas(
+    message_bytes: u64,
+    signature_bytes: u64,
+    public_key_bytes: u64,
+) -> Option<u64> {
+    message_bytes
+        .checked_add(signature_bytes)?
+        .checked_add(public_key_bytes)?
+        .checked_mul(SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE)
 }
 /// Fixed durable-state syscall charge before path, value, scan, or response bytes.
 pub const STATE_QUERY_GAS_BASE: u64 = 16;
@@ -611,6 +630,14 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
     let values = [
         ("vector_base_lanes", VECTOR_BASE_LANES as u64),
         ("syscall_per_byte", SYSCALL_GAS_PER_BYTE),
+        (
+            "signature_opcode_formula_version",
+            SIGNATURE_OPCODE_GAS_FORMULA_VERSION_V1,
+        ),
+        (
+            "signature_opcode_per_payload_byte",
+            SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE,
+        ),
         ("fastpq_batch_base", G_FASTPQ_BATCH),
         ("contract_admin_base", G_CONTRACT_ADMIN),
         ("call_contract_base", G_CALL_CONTRACT),
@@ -1160,6 +1187,36 @@ mod tests {
             ed25519_batch_extra_gas(123, 2),
             123 * ED25519_BATCH_GAS_PER_PAYLOAD_BYTE + 2 * ED25519_BATCH_GAS_PER_ENTRY,
         );
+    }
+    #[test]
+    fn schedule_hash_binds_the_complete_live_signature_opcode_formula() {
+        let expected = [
+            (
+                "signature_opcode_formula_version",
+                SIGNATURE_OPCODE_GAS_FORMULA_VERSION_V1,
+            ),
+            (
+                "signature_opcode_per_payload_byte",
+                SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE,
+            ),
+        ];
+        let canonical = canonical_gas_schedule_descriptor();
+        for (name, value) in expected {
+            let matches = canonical
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, parameter)| parameter.name == name)
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1, "descriptor coverage for {name}");
+            let (index, parameter) = matches[0];
+            assert_eq!(parameter.value, value, "descriptor value for {name}");
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.parameters[index].value = changed.parameters[index].value.wrapping_add(1);
+            });
+        }
+        assert_eq!(signature_opcode_extra_gas(11, 64, 32), Some(107));
+        assert_eq!(signature_opcode_extra_gas(u64::MAX, 1, 0), None);
     }
     #[test]
     fn schedule_hash_binds_the_complete_live_vrf_formula() {

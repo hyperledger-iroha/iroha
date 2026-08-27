@@ -1,13 +1,19 @@
 package org.hyperledger.iroha.sdk.alias
 
+import java.io.ByteArrayOutputStream
 import java.math.BigDecimal
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AccountAddressException
+import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.client.FeePaymentJson
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
 /** Secret-free intent accepted by the sponsored account-onboarding planner. */
 class AccountOnboardingPlanRequestV1(
@@ -175,6 +181,8 @@ class TairaPublicResetMutationBindingV1(
 class AccountOnboardingPrepareRequestV1(
     /** Exact reset binding. */ @JvmField val binding: TairaPublicResetMutationBindingV1,
     /** Exact signed plan receipt. */ @JvmField val receipt: AccountOnboardingPlanReceiptV1,
+    /** Exact payer, sponsor revision, and gas bound Torii may quote. */
+    @JvmField val feePayment: FeePaymentIntent,
     schema: String = SCHEMA,
 ) : AliasJsonValue() {
     @JvmField val schema: String = schema.also { require(it == SCHEMA) { "unsupported onboarding prepare schema" } }
@@ -189,10 +197,256 @@ class AccountOnboardingPrepareRequestV1(
         "schema" to schema,
         "binding" to binding.toJsonMap(),
         "receipt" to receipt.toJsonMap(),
+        "fee_payment" to feePayment.toJsonMap(),
     )
 
     companion object {
         const val SCHEMA: String = "iroha.accounts.onboard.prepare.v1"
+    }
+}
+
+/** Canonical account-faucet claim prepared into one exact transaction. */
+class AccountFaucetClaimV1(
+    accountId: String,
+    powAnchorHeight: BigInteger,
+    powNonceHex: String,
+) : AliasJsonValue() {
+    /** Canonical domainless destination account. */
+    @JvmField
+    val accountId: String = requireCanonicalI105Address(accountId, "accountId")
+
+    /** Positive committed block height anchoring proof-of-work. */
+    @JvmField
+    val powAnchorHeight: BigInteger = requireU64(powAnchorHeight, "powAnchorHeight").also {
+        require(it.signum() > 0) { "powAnchorHeight must be positive" }
+    }
+
+    /** Non-empty, even-length canonical lowercase hexadecimal nonce. */
+    @JvmField
+    val powNonceHex: String = requireLowerHex(powNonceHex, "powNonceHex").also {
+        require(it.length <= 64) { "powNonceHex must not exceed 32 bytes" }
+    }
+
+    /** Domain-separated semantic hash committed by a prepared faucet transaction. */
+    fun semanticHashHex(): String {
+        val encoded = ByteArrayOutputStream()
+        writeNoritoField(encoded, encodeNoritoString(accountId))
+        writeNoritoField(encoded, encodeU64LittleEndian(powAnchorHeight))
+        writeNoritoField(encoded, encodeNoritoString(powNonceHex))
+        return lowerHex(IrohaHash.prehash(FAUCET_CLAIM_HASH_DOMAIN + encoded.toByteArray()))
+    }
+
+    override fun toJsonMap(): Map<String, Any?> = linkedMapOf(
+        "account_id" to accountId,
+        "pow_anchor_height" to powAnchorHeight,
+        "pow_nonce_hex" to powNonceHex,
+    )
+
+    companion object {
+        private val FAUCET_CLAIM_HASH_DOMAIN =
+            "iroha:accounts:faucet:claim:v1\u0000".toByteArray(StandardCharsets.UTF_8)
+
+        private fun encodeNoritoString(value: String): ByteArray = ByteArrayOutputStream().also { output ->
+            val bytes = value.toByteArray(StandardCharsets.UTF_8)
+            writeCompactLength(output, bytes.size.toLong())
+            output.write(bytes)
+        }.toByteArray()
+
+        private fun encodeU64LittleEndian(value: BigInteger): ByteArray = ByteArray(8) { index ->
+            value.shiftRight(index * 8).and(BigInteger.valueOf(0xffL)).toByte()
+        }
+
+        private fun writeNoritoField(output: ByteArrayOutputStream, value: ByteArray) {
+            writeCompactLength(output, value.size.toLong())
+            output.write(value)
+        }
+
+        private fun writeCompactLength(output: ByteArrayOutputStream, raw: Long) {
+            var value = raw
+            do {
+                var next = (value and 0x7fL).toInt()
+                value = value ushr 7
+                if (value != 0L) next = next or 0x80
+                output.write(next)
+            } while (value != 0L)
+        }
+
+        private fun lowerHex(bytes: ByteArray): String {
+            val digits = "0123456789abcdef"
+            return buildString(bytes.size * 2) {
+                bytes.forEach { byte ->
+                    val value = byte.toInt() and 0xff
+                    append(digits[value ushr 4])
+                    append(digits[value and 0x0f])
+                }
+            }
+        }
+    }
+}
+
+/** Non-mutating prepare body consuming one exact faucet claim. */
+class AccountFaucetPrepareRequestV1(
+    /** Exact reset binding. */ @JvmField val binding: TairaPublicResetMutationBindingV1,
+    /** Exact solved faucet claim. */ @JvmField val claim: AccountFaucetClaimV1,
+    /** Exact payer, sponsor revision, and gas bound Torii may quote. */
+    @JvmField val feePayment: FeePaymentIntent,
+    schema: String = SCHEMA,
+) : AliasJsonValue() {
+    /** Exact immutable request schema. */
+    @JvmField
+    val schema: String = schema.also { require(it == SCHEMA) { "unsupported faucet prepare schema" } }
+
+    init {
+        require(binding.kind == TairaPublicResetMutationBindingV1.FAUCET) {
+            "faucet prepare requires a faucet binding"
+        }
+    }
+
+    override fun toJsonMap(): Map<String, Any?> = linkedMapOf(
+        "schema" to schema,
+        "binding" to binding.toJsonMap(),
+        "claim" to claim.toJsonMap(),
+        "fee_payment" to feePayment.toJsonMap(),
+    )
+
+    companion object {
+        /** Current and only first-release faucet prepare schema. */
+        const val SCHEMA: String = "iroha.accounts.faucet.prepare.v1"
+    }
+}
+
+/** Independently trusted first-release faucet identity and exact issuance policy. */
+class AccountFaucetPolicyV1(
+    faucetAuthority: String,
+    assetDefinitionId: String,
+    /** Exact positive quantity one accepted claim may receive. */ @JvmField val amount: KotodamaQuantity,
+) {
+    /** Trusted single-signatory faucet authority. */
+    @JvmField
+    val faucetAuthority: String = requireCanonicalI105Address(faucetAuthority, "faucetAuthority").also {
+        val parsed = try {
+            AccountAddress.parseEncoded(it, null)
+        } catch (error: AccountAddressException) {
+            throw IllegalArgumentException("faucetAuthority must be a canonical single-signatory account", error)
+        }
+        require(parsed.singleKeyPayloadIgnoringCurveSupport() != null) {
+            "faucetAuthority must be a single-signatory account"
+        }
+    }
+
+    /** Exact canonical asset definition the faucet may issue. */
+    @JvmField
+    val assetDefinitionId: String = assetDefinitionId.also {
+        require(AssetDefinitionIdEncoder.isCanonicalAddress(it)) {
+            "assetDefinitionId must be a canonical asset-definition address"
+        }
+    }
+
+    init {
+        require(amount.mantissa.signum() > 0) { "faucet policy amount must be positive" }
+    }
+}
+
+/** Authenticated exact faucet transaction prepared by Torii. */
+class AccountFaucetPreparedTransactionV1(
+    /** Exact reset binding. */ @JvmField val binding: TairaPublicResetMutationBindingV1,
+    /** Exact solved claim consumed during preparation. */ @JvmField val claim: AccountFaucetClaimV1,
+    semanticHashHex: String,
+    accountId: String,
+    assetDefinitionId: String,
+    assetId: String,
+    /** Exact issuance quantity. */ @JvmField val amount: KotodamaQuantity,
+    transactionHashHex: String,
+    signedTransactionWireHex: String,
+    signedTransactionWireSha256: String,
+    /** Exact signature-bound fee intent. */ @JvmField val feePayment: FeePaymentIntent,
+    serverSignature: String,
+    schema: String = SCHEMA,
+    operation: String = OPERATION,
+) : AliasJsonValue() {
+    /** Exact immutable prepared-envelope schema. */
+    @JvmField
+    val schema: String = schema.also { require(it == SCHEMA) { "unsupported prepared transaction schema" } }
+
+    /** Exact immutable operation label. */
+    @JvmField
+    val operation: String = operation.also { require(it == OPERATION) { "prepared faucet operation must be faucet" } }
+
+    /** Domain-separated claim hash. */
+    @JvmField
+    val semanticHashHex: String = requireLowerHex32(semanticHashHex, "semanticHashHex")
+
+    /** Canonical destination account. */
+    @JvmField
+    val accountId: String = requireCanonicalI105Address(accountId, "accountId")
+
+    /** Canonical issued asset definition. */
+    @JvmField
+    val assetDefinitionId: String = assetDefinitionId.also {
+        require(AssetDefinitionIdEncoder.isCanonicalAddress(it)) {
+            "assetDefinitionId must be a canonical asset-definition address"
+        }
+    }
+
+    /** Canonical destination asset balance. */
+    @JvmField
+    val assetId: String = assetId
+
+    /** Hash of the exact signed transaction. */
+    @JvmField
+    val transactionHashHex: String = requireTransactionHash(transactionHashHex, "transactionHashHex")
+
+    /** Canonical fixed-V1 signed transaction wire as lowercase hexadecimal. */
+    @JvmField
+    val signedTransactionWireHex: String = requireLowerHex(signedTransactionWireHex, "signedTransactionWireHex")
+
+    /** SHA-256 of the exact canonical transaction wire. */
+    @JvmField
+    val signedTransactionWireSha256: String = requireLowerHex32(
+        signedTransactionWireSha256,
+        "signedTransactionWireSha256",
+    )
+
+    /** Faucet-authority signature authenticating every preceding prepared field. */
+    @JvmField
+    val serverSignature: String = requireHex(serverSignature, "serverSignature")
+
+    init {
+        require(binding.kind == TairaPublicResetMutationBindingV1.FAUCET) {
+            "prepared faucet requires a faucet binding"
+        }
+        require(claim.accountId == this.accountId) {
+            "prepared faucet account must equal the claim account"
+        }
+        require(assetId == "$assetDefinitionId#${this.accountId}") {
+            "prepared faucet asset must be the exact destination balance"
+        }
+        require(amount.mantissa.signum() > 0) { "prepared faucet amount must be positive" }
+    }
+
+    override fun toJsonMap(): Map<String, Any?> = linkedMapOf(
+        "schema" to schema,
+        "binding" to binding.toJsonMap(),
+        "operation" to operation,
+        "claim" to claim.toJsonMap(),
+        "semantic_hash_hex" to semanticHashHex,
+        "account_id" to accountId,
+        "asset_definition_id" to assetDefinitionId,
+        "asset_id" to assetId,
+        "amount" to amount.toString(),
+        "transaction_hash_hex" to transactionHashHex,
+        "signed_transaction_wire_hex" to signedTransactionWireHex,
+        "signed_transaction_wire_sha256" to signedTransactionWireSha256,
+        "fee_payment" to feePayment.toJsonMap(),
+        "server_signature" to serverSignature,
+    )
+
+    companion object {
+        /** Current and only first-release prepared-envelope schema. */
+        const val SCHEMA: String = "iroha.taira.prepared-transaction.v1"
+
+        /** Exact faucet operation label. */
+        const val OPERATION: String = "faucet"
     }
 }
 
@@ -535,6 +789,13 @@ object AccountOnboardingJsonParser {
         }
     }
 
+    /** Parses one exact authenticated faucet prepared transaction. */
+    @JvmStatic
+    fun parseFaucetPrepareResponse(payload: ByteArray): AccountFaucetPreparedTransactionV1 {
+        val root = root(payload, "account faucet prepare response")
+        return parseFaucetPrepared(root)
+    }
+
     /** Parses one closed atomic account-onboarding current-state response. */
     @JvmStatic
     fun parseCurrentStateResponse(payload: ByteArray): AccountOnboardingCurrentStateResponseV1 {
@@ -684,6 +945,46 @@ object AccountOnboardingJsonParser {
             parser.stringField(root, "account_id", "$path.account_id"),
             parser.stringField(root, "alias", "$path.alias"),
             parseDisposition(parser.objectField(root, "disposition", "$path.disposition"), "$path.disposition"),
+            parser.stringField(root, "transaction_hash_hex", "$path.transaction_hash_hex"),
+            parser.stringField(root, "signed_transaction_wire_hex", "$path.signed_transaction_wire_hex"),
+            parser.stringField(root, "signed_transaction_wire_sha256", "$path.signed_transaction_wire_sha256"),
+            FeePaymentJson.parse(root["fee_payment"], "$path.fee_payment"),
+            parser.stringField(root, "server_signature", "$path.server_signature"),
+            parser.stringField(root, "schema", "$path.schema"),
+            parser.stringField(root, "operation", "$path.operation"),
+        )
+    }
+
+    private fun parseFaucetPrepared(root: Map<String, Any?>): AccountFaucetPreparedTransactionV1 {
+        val path = "prepared faucet transaction"
+        parser.exactKeys(
+            root,
+            setOf(
+                "schema", "binding", "operation", "claim", "semantic_hash_hex", "account_id",
+                "asset_definition_id", "asset_id", "amount", "transaction_hash_hex",
+                "signed_transaction_wire_hex", "signed_transaction_wire_sha256", "fee_payment",
+                "server_signature",
+            ),
+            path,
+        )
+        val claimRoot = parser.objectField(root, "claim", "$path.claim")
+        parser.exactKeys(
+            claimRoot,
+            setOf("account_id", "pow_anchor_height", "pow_nonce_hex"),
+            "$path.claim",
+        )
+        return AccountFaucetPreparedTransactionV1(
+            parseBinding(parser.objectField(root, "binding", "$path.binding")),
+            AccountFaucetClaimV1(
+                parser.stringField(claimRoot, "account_id", "$path.claim.account_id"),
+                positiveU64(claimRoot["pow_anchor_height"], "$path.claim.pow_anchor_height"),
+                parser.stringField(claimRoot, "pow_nonce_hex", "$path.claim.pow_nonce_hex"),
+            ),
+            parser.stringField(root, "semantic_hash_hex", "$path.semantic_hash_hex"),
+            parser.stringField(root, "account_id", "$path.account_id"),
+            parser.stringField(root, "asset_definition_id", "$path.asset_definition_id"),
+            parser.stringField(root, "asset_id", "$path.asset_id"),
+            KotodamaQuantity.parseCanonical(parser.stringField(root, "amount", "$path.amount")),
             parser.stringField(root, "transaction_hash_hex", "$path.transaction_hash_hex"),
             parser.stringField(root, "signed_transaction_wire_hex", "$path.signed_transaction_wire_hex"),
             parser.stringField(root, "signed_transaction_wire_sha256", "$path.signed_transaction_wire_sha256"),

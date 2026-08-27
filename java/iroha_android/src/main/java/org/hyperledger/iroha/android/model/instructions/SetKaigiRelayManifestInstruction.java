@@ -11,6 +11,12 @@ import java.util.Objects;
 public final class SetKaigiRelayManifestInstruction implements InstructionTemplate {
 
   private static final String ACTION = "SetKaigiRelayManifest";
+  private static final java.util.Set<String> ALLOWED_ARGUMENTS =
+      KaigiInstructionUtils.argumentSet(
+          "action",
+          "call.domain_id",
+          "call.call_name",
+          "relay_manifest.expiry_ms");
 
   private final KaigiInstructionUtils.CallId callId;
   private final KaigiInstructionUtils.RelayManifest relayManifest;
@@ -46,11 +52,13 @@ public final class SetKaigiRelayManifestInstruction implements InstructionTempla
   }
 
   public static SetKaigiRelayManifestInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireKnownArguments(
+        arguments, ALLOWED_ARGUMENTS, "relay_manifest.hop.");
     KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
     builder.setRelayManifest(KaigiInstructionUtils.parseRelayManifest(arguments, "relay_manifest"));
-    return new SetKaigiRelayManifestInstruction(builder, new LinkedHashMap<>(arguments));
+    return builder.build();
   }
 
   public static Builder builder() {
@@ -111,8 +119,15 @@ public final class SetKaigiRelayManifestInstruction implements InstructionTempla
       if (relayId == null || relayId.isBlank()) {
         throw new IllegalArgumentException("relayId must not be blank");
       }
+      if (relayManifestHops.size() >= KaigiInstructionUtils.KAIGI_RELAY_MANIFEST_MAX_HOPS_V1) {
+        throw new IllegalArgumentException(
+            "relay manifest must not contain more than "
+                + KaigiInstructionUtils.KAIGI_RELAY_MANIFEST_MAX_HOPS_V1
+                + " hops");
+      }
       final String normalizedKey =
-          KaigiInstructionUtils.requireBase64(hpkePublicKeyBase64, "hpkePublicKey");
+          KaigiInstructionUtils.requireHpkePublicKeyBase64(
+              hpkePublicKeyBase64, "hpkePublicKey");
       if (weight < 1 || weight > 0xFF) {
         throw new IllegalArgumentException("relay hop weight must be between 1 and 255");
       }
@@ -127,7 +142,9 @@ public final class SetKaigiRelayManifestInstruction implements InstructionTempla
     public Builder addRelayManifestHop(
         final String relayId, final byte[] hpkePublicKey, final int weight) {
       return addRelayManifestHop(
-          relayId, KaigiInstructionUtils.toBase64(hpkePublicKey), weight);
+          relayId,
+          KaigiInstructionUtils.toHpkePublicKeyBase64(hpkePublicKey, "hpkePublicKey"),
+          weight);
     }
 
     public Builder setRelayManifest(final KaigiInstructionUtils.RelayManifest manifest) {

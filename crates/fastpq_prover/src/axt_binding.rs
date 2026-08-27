@@ -1,7 +1,10 @@
 use crate::{
     Error, OperationKind, ProofSemantics, PublicInputs, Result, StateTransition, TransitionBatch,
     gadgets::transfer::decode_transcripts,
-    proof::{Proof, Prover, verify_with_semantics},
+    proof::{
+        Proof, Prover, VerifyLimits, enforce_default_verify_batch_limits,
+        enforce_default_verify_limits, verify_with_semantics,
+    },
     validate_batch_semantics,
 };
 use iroha_crypto::Hash;
@@ -201,15 +204,19 @@ impl Prover {
     ///
     /// Returns an error when `binding` is not canonical, the proof-bound batch
     /// does not exactly match it, the batch shape is invalid for the selected
-    /// AXT claim, or proof generation fails.
+    /// AXT claim, the batch or generated proof exceeds the paired AXT verifier's
+    /// default resource limits, or proof generation fails.
     pub fn prove_axt_bound(
         &self,
         batch: &TransitionBatch,
         binding: &AxtFastpqBinding,
     ) -> Result<Proof> {
+        enforce_default_verify_batch_limits(batch)?;
         let canonical = require_canonical_binding(binding)?;
         verify_batch_matches_binding(batch, &canonical)?;
-        self.prove_with_semantics(batch, axt_proof_semantics(&canonical)?)
+        let proof = self.prove_with_semantics(batch, axt_proof_semantics(&canonical)?)?;
+        enforce_default_verify_limits(batch, &proof)?;
+        Ok(proof)
     }
 }
 
@@ -245,14 +252,16 @@ pub fn validate_axt_transfer_claim_binding(binding: &AxtFastpqBinding) -> Result
 ///
 /// # Errors
 ///
-/// Returns an error when `binding` is not canonical, the batch does not
-/// exactly match it, the selected AXT semantic profile rejects the batch, or
+/// Returns an error when the batch or proof exceeds the default verifier
+/// resource limits, `binding` is not canonical, the batch does not exactly
+/// match it, the selected AXT semantic profile rejects the batch, or
 /// cryptographic proof verification fails.
 pub fn verify_axt_bound_batch(
     batch: &TransitionBatch,
     proof: &Proof,
     binding: &AxtFastpqBinding,
 ) -> Result<()> {
+    enforce_default_verify_limits(batch, proof)?;
     let canonical = require_canonical_binding(binding)?;
     verify_batch_matches_binding(batch, &canonical)?;
     verify_with_semantics(batch, proof, axt_proof_semantics(&canonical)?)
@@ -501,15 +510,37 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
         .ok_or_else(|| Error::InvalidAxtBinding {
             details: "AXT proof envelope is missing fastpq_binding".into(),
         })?;
+    enforce_axt_fastpq_payload_limit(&envelope.proof)?;
     require_canonical_binding(binding)?;
     if binding.source_dsid != envelope.dsid.as_u64() {
         return Err(Error::InvalidAxtBinding {
             details: "AXT proof envelope source_dsid does not match dsid".into(),
         });
     }
-    enforce_axt_fastpq_payload_limit(&envelope.proof)?;
-    let payload = decode_canonical_axt_fastpq_payload(&envelope.proof)?;
-    let batch = transition_batch_from_model(&payload.batch);
+    let payload = decode_axt_fastpq_payload(&envelope.proof)?;
+    let AxtFastpqProofPayload {
+        batch: batch_model,
+        proof,
+    } = payload;
+    let transition_count = batch_model.transitions.len();
+    let max_transitions = VerifyLimits::default().max_transitions;
+    if transition_count > max_transitions {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_transitions",
+            actual: transition_count,
+            max: max_transitions,
+        });
+    }
+    let batch = transition_batch_from_model_owned(batch_model);
+    enforce_default_verify_limits(&batch, &proof)?;
+
+    // Canonical re-encoding and the model clone are deliberately delayed until
+    // the decoded batch and proof have passed their verifier resource limits.
+    let payload = AxtFastpqProofPayload {
+        batch: transition_batch_to_model(&batch),
+        proof,
+    };
+    require_canonical_axt_fastpq_payload(&envelope.proof, &payload)?;
     verify_batch_matches_binding(&batch, binding)?;
     let proof_bound_amount = proof_bound_committed_amount(&batch)?;
     let proof_bound_expiry = proof_bound_expiry_slot(&batch)?;
@@ -662,6 +693,35 @@ pub fn transition_batch_from_model(dto: &FastpqTransitionBatch) -> TransitionBat
     batch.metadata = dto.metadata.clone();
     batch
 }
+fn transition_batch_from_model_owned(dto: FastpqTransitionBatch) -> TransitionBatch {
+    let FastpqTransitionBatch {
+        parameter,
+        public_inputs,
+        transitions,
+        metadata,
+    } = dto;
+    let mut batch = TransitionBatch::new(
+        parameter,
+        PublicInputs {
+            dsid: public_inputs.dsid,
+            slot: public_inputs.slot,
+            old_root: public_inputs.old_root,
+            new_root: public_inputs.new_root,
+            perm_root: public_inputs.perm_root,
+            tx_set_hash: public_inputs.tx_set_hash,
+        },
+    );
+    for transition in transitions {
+        batch.push(StateTransition::new(
+            transition.key,
+            transition.pre_value,
+            transition.post_value,
+            operation_from_model_owned(transition.operation),
+        ));
+    }
+    batch.metadata = metadata;
+    batch
+}
 fn operation_to_model(operation: &OperationKind) -> FastpqOperationKind {
     match operation {
         OperationKind::Transfer => FastpqOperationKind::Transfer,
@@ -701,6 +761,24 @@ fn operation_from_model(operation: &FastpqOperationKind) -> OperationKind {
         FastpqOperationKind::RoleRevoke(delta) => OperationKind::RoleRevoke {
             role_id: delta.role_id.clone(),
             permission_id: delta.permission_id.clone(),
+            epoch: delta.epoch,
+        },
+        FastpqOperationKind::MetaSet => OperationKind::MetaSet,
+    }
+}
+fn operation_from_model_owned(operation: FastpqOperationKind) -> OperationKind {
+    match operation {
+        FastpqOperationKind::Transfer => OperationKind::Transfer,
+        FastpqOperationKind::Mint => OperationKind::Mint,
+        FastpqOperationKind::Burn => OperationKind::Burn,
+        FastpqOperationKind::RoleGrant(delta) => OperationKind::RoleGrant {
+            role_id: delta.role_id,
+            permission_id: delta.permission_id,
+            epoch: delta.epoch,
+        },
+        FastpqOperationKind::RoleRevoke(delta) => OperationKind::RoleRevoke {
+            role_id: delta.role_id,
+            permission_id: delta.permission_id,
             epoch: delta.epoch,
         },
         FastpqOperationKind::MetaSet => OperationKind::MetaSet,
@@ -1091,6 +1169,11 @@ fn require_remote_spend_transcript_linkage(
     Ok(())
 }
 fn canonical_remote_account(value: &str, field: &str) -> Result<AccountId> {
+    if value.trim() != value {
+        return Err(Error::InvalidAxtBinding {
+            details: format!("remote-spend {field} account must use canonical I105 text"),
+        });
+    }
     let parsed = AccountId::parse_encoded(value).map_err(|error| Error::InvalidAxtBinding {
         details: format!("remote-spend {field} account is not canonical I105: {error}"),
     })?;
@@ -1322,17 +1405,21 @@ fn decode_canonical_binding(encoded: &[u8]) -> Result<AxtFastpqBinding> {
     }
     require_canonical_binding(&binding)
 }
-fn decode_canonical_axt_fastpq_payload(encoded: &[u8]) -> Result<AxtFastpqProofPayload> {
+fn decode_axt_fastpq_payload(encoded: &[u8]) -> Result<AxtFastpqProofPayload> {
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let payload: AxtFastpqProofPayload =
-        decode_from_bytes(encoded).map_err(|source| Error::AxtProofPayloadDecode { source })?;
-    if encode_canonical_norito(&payload)?.as_slice() != encoded {
+    decode_from_bytes(encoded).map_err(|source| Error::AxtProofPayloadDecode { source })
+}
+fn require_canonical_axt_fastpq_payload(
+    encoded: &[u8],
+    payload: &AxtFastpqProofPayload,
+) -> Result<()> {
+    if encode_canonical_norito(payload)?.as_slice() != encoded {
         return Err(Error::InvalidAxtBinding {
             details: "AXT FastPQ proof payload must use canonical Norito bytes".into(),
         });
     }
-    Ok(payload)
+    Ok(())
 }
 fn dsid_bytes(source_dsid: u64) -> [u8; 16] {
     let mut output = [0_u8; 16];
@@ -1436,6 +1523,20 @@ mod tests {
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
         batch
+    }
+    fn oversized_unbound_axt_batch(binding: &AxtFastpqBinding) -> (TransitionBatch, usize) {
+        let mut batch = unbound_axt_batch(binding);
+        let row_count = VerifyLimits::default().max_transitions + 1;
+        for index in 0..row_count {
+            batch.push(StateTransition::new(
+                format!("account/real/axt-authorized-{index:04}").into_bytes(),
+                b"pending".to_vec(),
+                b"authorized".to_vec(),
+                OperationKind::MetaSet,
+            ));
+        }
+        batch.sort();
+        (batch, row_count)
     }
     fn real_authorization_batch(binding: &AxtFastpqBinding) -> TransitionBatch {
         let mut batch = unbound_axt_batch(binding);
@@ -1835,6 +1936,12 @@ mod tests {
             },
         );
         batch.push(StateTransition::new(
+            b"asset/xor/transfer".to_vec(),
+            3_u64.to_le_bytes().to_vec(),
+            2_u64.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        ));
+        batch.push(StateTransition::new(
             b"asset/xor/alice".to_vec(),
             0_u64.to_le_bytes().to_vec(),
             1_u64.to_le_bytes().to_vec(),
@@ -1845,6 +1952,16 @@ mod tests {
             2_u64.to_le_bytes().to_vec(),
             1_u64.to_le_bytes().to_vec(),
             OperationKind::Burn,
+        ));
+        batch.push(StateTransition::new(
+            b"role/grant".to_vec(),
+            vec![0],
+            vec![1],
+            OperationKind::RoleGrant {
+                role_id: vec![0xCC; 32],
+                permission_id: vec![0xDD; 32],
+                epoch: 8,
+            },
         ));
         batch.push(StateTransition::new(
             b"role/revoke".to_vec(),
@@ -1865,8 +1982,11 @@ mod tests {
         batch
             .metadata
             .insert("fixture".to_owned(), b"roundtrip".to_vec());
-        let roundtrip = transition_batch_from_model(&transition_batch_to_model(&batch));
-        assert_eq!(roundtrip, batch);
+        let model = transition_batch_to_model(&batch);
+        let borrowed_roundtrip = transition_batch_from_model(&model);
+        let owned_roundtrip = transition_batch_from_model_owned(model);
+        assert_eq!(borrowed_roundtrip, batch);
+        assert_eq!(owned_roundtrip, batch);
     }
     #[test]
     fn verify_axt_envelope_rejects_mismatched_verifier_label() {
@@ -1901,6 +2021,72 @@ mod tests {
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("fastpq_binding"))
         );
+    }
+    #[test]
+    fn prove_axt_bound_checks_limits_before_missing_binding_metadata() {
+        let binding = sample_binding();
+        let (batch, row_count) = oversized_unbound_axt_batch(&binding);
+        let limits = VerifyLimits::default();
+
+        let err = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove_axt_bound(&batch, &binding)
+            .expect_err("limits must take precedence over missing AXT binding metadata");
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_transitions",
+                actual,
+                max,
+            } if actual == row_count && max == limits.max_transitions
+        ));
+    }
+    #[test]
+    fn verify_axt_bound_batch_checks_limits_before_missing_binding_metadata() {
+        let binding = sample_binding();
+        let proof_batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove_axt_bound(&proof_batch, &binding)
+            .expect("proof");
+        let (batch, row_count) = oversized_unbound_axt_batch(&binding);
+        let limits = VerifyLimits::default();
+
+        let err = verify_axt_bound_batch(&batch, &proof, &binding)
+            .expect_err("limits must take precedence over missing AXT binding metadata");
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_transitions",
+                actual,
+                max,
+            } if actual == row_count && max == limits.max_transitions
+        ));
+    }
+    #[test]
+    fn verify_axt_envelope_checks_decoded_limits_before_missing_batch_binding() {
+        let binding = sample_binding();
+        let proof_batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove_axt_bound(&proof_batch, &binding)
+            .expect("proof");
+        let (batch, row_count) = oversized_unbound_axt_batch(&binding);
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        assert!(payload.len() <= DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES);
+        let envelope = envelope_with_payload(binding, payload);
+        let limits = VerifyLimits::default();
+
+        let err = verify_axt_proof_envelope(&envelope)
+            .expect_err("decoded limits must take precedence over missing batch binding metadata");
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_transitions",
+                actual,
+                max,
+            } if actual == row_count && max == limits.max_transitions
+        ));
     }
     #[test]
     fn bind_axt_batch_rejects_empty_execution_batch() {
@@ -2835,8 +3021,9 @@ mod tests {
         verify_axt_proof_envelope(&envelope).expect("empty corridor binding verifies");
     }
     #[test]
-    fn verify_axt_envelope_rejects_oversized_payload_before_decode() {
-        let binding = sample_binding();
+    fn verify_axt_envelope_rejects_oversized_payload_before_binding_or_decode() {
+        let mut binding = sample_binding();
+        binding.verifier_id = " FASTPQ ".to_owned();
         let oversized = vec![0xA5; DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES + 1];
         let envelope = envelope_with_payload(binding, oversized);
         let err = verify_axt_proof_envelope(&envelope).expect_err("oversized payload must fail");

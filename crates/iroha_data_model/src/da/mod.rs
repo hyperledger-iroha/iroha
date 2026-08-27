@@ -27,8 +27,10 @@ pub mod prelude {
         confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
         ingest::{
             DA_INGEST_REQUEST_CONTENT_DOMAIN_V1, DA_INGEST_REQUEST_SIGNING_DOMAIN_V1,
+            DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyError, DaIngestAdmissionPolicyV1,
             DaIngestAuthorizationV1, DaIngestReceipt, DaIngestRequest, DaIngestRequestIntentV1,
-            DaIngestSignatureV1, DaStripeLayout,
+            DaIngestSignatureV1, DaStripeLayout, MAX_DA_INGEST_ADMISSION_LANES_V1,
+            MAX_DA_INGEST_ADMISSION_PRODUCERS_V1, MAX_DA_INGEST_ADMISSION_WINDOWS_V1,
         },
         manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
         pin_intent::{DaPinIntent, DaPinIntentBundle, DaPinIntentWithLocation},

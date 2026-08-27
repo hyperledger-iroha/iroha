@@ -22,6 +22,7 @@ public final class MultisigProposeRequest {
   private final String memo;
   private final Long validationFeePolicyVersion;
   private final String validationFeePolicyHash;
+  private final String validationFeeHijiriFeeQuoteHash;
   private final Long validationFeeInstructionIndex;
   private final Long validationFeeTransferEntryIndex;
 
@@ -37,6 +38,7 @@ public final class MultisigProposeRequest {
     this.memo = builder.memo;
     this.validationFeePolicyVersion = builder.validationFeePolicyVersion;
     this.validationFeePolicyHash = builder.validationFeePolicyHash;
+    this.validationFeeHijiriFeeQuoteHash = builder.validationFeeHijiriFeeQuoteHash;
     this.validationFeeInstructionIndex = builder.validationFeeInstructionIndex;
     this.validationFeeTransferEntryIndex = builder.validationFeeTransferEntryIndex;
   }
@@ -56,6 +58,7 @@ public final class MultisigProposeRequest {
   public String memo() { return memo; }
   public Long validationFeePolicyVersion() { return validationFeePolicyVersion; }
   public String validationFeePolicyHash() { return validationFeePolicyHash; }
+  public String validationFeeHijiriFeeQuoteHash() { return validationFeeHijiriFeeQuoteHash; }
   public Long validationFeeInstructionIndex() { return validationFeeInstructionIndex; }
   public Long validationFeeTransferEntryIndex() { return validationFeeTransferEntryIndex; }
 
@@ -81,6 +84,7 @@ public final class MultisigProposeRequest {
     private String memo;
     private Long validationFeePolicyVersion;
     private String validationFeePolicyHash;
+    private String validationFeeHijiriFeeQuoteHash;
     private Long validationFeeInstructionIndex;
     private Long validationFeeTransferEntryIndex;
 
@@ -156,6 +160,11 @@ public final class MultisigProposeRequest {
 
     public Builder setValidationFeePolicyHash(final String value) {
       this.validationFeePolicyHash = value;
+      return this;
+    }
+
+    public Builder setValidationFeeHijiriFeeQuoteHash(final String value) {
+      this.validationFeeHijiriFeeQuoteHash = value;
       return this;
     }
 

@@ -1,4 +1,6 @@
-use soranet_relay::config::{ConfigError, VpnConfig, VpnCoverTrafficConfig};
+use soranet_relay::config::{
+    ConfigError, VPN_MAX_COVER_BURST_CELLS_V1, VpnConfig, VpnCoverTrafficConfig,
+};
 fn secure_receipt_spool() -> tempfile::TempDir {
     let directory = tempfile::tempdir().expect("create receipt spool");
     #[cfg(unix)]
@@ -120,6 +122,19 @@ fn vpn_cover_jitter_guardrails() {
         ),
         other => panic!("unexpected error {other:?}"),
     }
+}
+
+#[test]
+fn vpn_cover_burst_is_bounded() {
+    let mut cfg = VpnConfig::default();
+    cfg.cover.enabled = true;
+    cfg.cover.max_cover_burst = VPN_MAX_COVER_BURST_CELLS_V1 + 1;
+    let error = cfg
+        .validate()
+        .expect_err("oversized cover burst must fail before scheduling");
+    assert!(
+        matches!(error, ConfigError::Vpn(message) if message.contains("max_cover_burst") && message.contains("64"))
+    );
 }
 #[test]
 fn vpn_runtime_available_allows_enable() {

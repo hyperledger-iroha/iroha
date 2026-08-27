@@ -300,7 +300,7 @@ public final class CancelAssetLockInstructionTests {
   private static byte[] legacyOneFieldFrame() {
     return NoritoCodec.encode(
         hexToBytes(FIXTURE_ESCROW_ID.substring(5, 69)),
-        CancelAssetLockInstruction.WIRE_NAME,
+        CancelAssetLockInstruction.SCHEMA_NAME,
         new TypeAdapter<byte[]>() {
           @Override
           public void encode(final NoritoEncoder encoder, final byte[] value) {

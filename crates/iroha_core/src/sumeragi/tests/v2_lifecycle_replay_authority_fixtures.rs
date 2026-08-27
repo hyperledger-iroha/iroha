@@ -1055,7 +1055,7 @@ impl CertifiedServeRecoveredReplayFixture {
             request_hash: authenticated.request_hash(),
             manifest: manifest.clone(),
             body: body.clone(),
-            responder: 0,
+            responder: context.roster[0].validator.clone(),
             signature: Vec::new(),
         };
         response.signature = Signature::new(keys[0].private_key(), &response.signature_preimage())

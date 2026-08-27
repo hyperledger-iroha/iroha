@@ -43,3 +43,7 @@ harness = false
 [[test]]
 name = "vega_engine_reachability"
 path = "tests/vega_engine_reachability.rs"
+
+[[test]]
+name = "ipa_minimum_dimension"
+path = "tests/ipa_minimum_dimension.rs"

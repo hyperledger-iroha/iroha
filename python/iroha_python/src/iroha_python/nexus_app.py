@@ -11,13 +11,13 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Protocol, Union
 
 from .address import (
-    BASE58_ALPHABET,
     AccountAddress,
     AccountAddressError,
-    decode_base_n,
-    encode_base_n,
     i105_discriminant_from_sentinel,
     normalize_i105_discriminant,
+)
+from .address import (
+    require_canonical_asset_definition_id as _strict_exact_asset_definition_id,
 )
 from .crypto import NetworkId, _require_network_id, hash_blake2b_32
 from .numeric_v1 import NumericV1Codec
@@ -98,44 +98,6 @@ def _strict_exact_i105_account_id(value: Any, context: str) -> str:
         raise ValueError(
             f"{context} must be an exact canonical I105 account id"
         ) from error
-    return value
-
-
-def _strict_exact_asset_definition_id(value: Any, context: str) -> str:
-    if (
-        not isinstance(value, str)
-        or not value
-        or value.strip() != value
-        or any(character.isspace() for character in value)
-    ):
-        raise ValueError(
-            f"{context} must be an exact canonical asset definition address"
-        )
-    alphabet_index = {character: index for index, character in enumerate(BASE58_ALPHABET)}
-    try:
-        digits = [alphabet_index[character] for character in value]
-        payload = decode_base_n(digits, len(BASE58_ALPHABET))
-    except (KeyError, AccountAddressError) as error:
-        raise ValueError(
-            f"{context} must be an exact canonical asset definition address"
-        ) from error
-    canonical = "".join(
-        BASE58_ALPHABET[digit]
-        for digit in encode_base_n(payload, len(BASE58_ALPHABET))
-    )
-    # The native typed instruction constructor performs the authoritative BLAKE3 checksum check.
-    # Keep this pure-Python preflight independent of an optional native BLAKE3 wheel while still
-    # rejecting aliases, noncanonical Base58, wrong layouts, and non-UUIDv4 identifiers.
-    if (
-        canonical != value
-        or len(payload) != 21
-        or payload[0] != 1
-        or payload[7] >> 4 != 0b0100
-        or payload[9] & 0b11000000 != 0b10000000
-    ):
-        raise ValueError(
-            f"{context} must be an exact canonical asset definition address"
-        )
     return value
 
 

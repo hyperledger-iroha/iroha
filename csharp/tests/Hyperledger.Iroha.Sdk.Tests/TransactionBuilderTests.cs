@@ -1215,7 +1215,7 @@ public sealed class TransactionBuilderTests
         var instructions = ReadEncodedInstructions(envelope.PayloadBytes);
         Assert.Equal(2, instructions.Count);
 
-        Assert.Equal("iroha_data_model::isi::transparent::SetAssetKeyValue", instructions[0].WireId);
+        Assert.Equal("iroha.instruction.v1::transparent::SetAssetKeyValue", instructions[0].WireId);
         var setPayload = SkipNoritoHeader(instructions[0].Payload);
         _ = ReadField(setPayload, out var setOffsetAfterAsset);
         var setKey = ReadNoritoString(ReadField(setPayload[setOffsetAfterAsset..], out var setOffsetAfterKey));
@@ -1223,7 +1223,7 @@ public sealed class TransactionBuilderTests
         Assert.Equal("display_name", setKey);
         Assert.Equal("\"Treasury buffer\"", setValue);
 
-        Assert.Equal("iroha_data_model::isi::transparent::RemoveAssetKeyValue", instructions[1].WireId);
+        Assert.Equal("iroha.instruction.v1::transparent::RemoveAssetKeyValue", instructions[1].WireId);
         var removePayload = SkipNoritoHeader(instructions[1].Payload);
         _ = ReadField(removePayload, out var removeOffsetAfterAsset);
         var removeKey = ReadNoritoString(ReadField(removePayload[removeOffsetAfterAsset..], out _));

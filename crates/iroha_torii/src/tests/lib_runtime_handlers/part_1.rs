@@ -1907,6 +1907,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         da_replay_cache,
         da_replay_store,
         da_receipt_log,
+        da_replay_lifecycle_lock: Arc::new(parking_lot::Mutex::new(())),
         da_receipt_signer,
         torii_proxy_bridge_signer: checked_torii_test_ed25519_keypair(
             0xb5,

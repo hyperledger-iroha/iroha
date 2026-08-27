@@ -154,10 +154,6 @@ use iroha_data_model::{
         prelude::DaStripeLayout,
         types::{BlobClass, DaRentPolicyV1, GovernanceTag, RetentionPolicy},
     },
-    hijiri::{
-        FeeMultiplierBand as ModelFeeMultiplierBand, FeePolicyError as ModelFeePolicyError,
-        HijiriFeePolicy as ModelHijiriFeePolicy, Q16 as ModelQ16,
-    },
     jurisdiction::JdgSignatureScheme,
     name::Name,
     nexus::{
@@ -946,8 +942,6 @@ pub struct Root {
     #[config(nested)]
     norito: Norito,
     #[config(nested)]
-    hijiri: Hijiri,
-    #[config(nested)]
     fraud_monitoring: FraudMonitoring,
     #[config(nested)]
     zk: Zk,
@@ -982,9 +976,6 @@ pub enum ParseError {
     /// Sumeragi consensus parameters failed validation.
     #[error("Invalid Sumeragi consensus configuration")]
     InvalidSumeragiConfig,
-    /// Hijiri-specific parameters were inconsistent or malformed.
-    #[error("Invalid Hijiri configuration")]
-    InvalidHijiriConfig,
     /// Streaming configuration block lacked required or valid values.
     #[error("Invalid streaming configuration")]
     InvalidStreamingConfig,
@@ -1024,6 +1015,9 @@ pub enum ParseError {
     /// Snapshot configuration contained an invalid audited-bootstrap policy.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
+    /// Network Time Service configuration contained invalid or unsafe values.
+    #[error("Invalid network time service configuration")]
+    InvalidNtsConfig,
     /// Genesis trust-root configuration was absent, ambiguous, or invalid.
     #[error("Invalid genesis trust-root configuration")]
     InvalidGenesisConfig,
@@ -1458,7 +1452,7 @@ impl Root {
             gov_provider_binding_valid = false;
         }
         let gov = gov_provider_binding_valid.then(|| self.gov.parse());
-        let nts = self.nts.parse();
+        let nts = self.nts.parse(&mut emitter);
         let nexus = self.nexus.parse(&mut emitter);
         let confidential = self.confidential.parse();
         let streaming = if let Some(ref key_pair) = key_pair {
@@ -1479,7 +1473,6 @@ impl Root {
         }
         let crypto = self.crypto.parse(&mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
-        let hijiri = self.hijiri.parse(&mut emitter);
         if let Err(err) = concurrency.validate() {
             emitter.emit(err);
         }
@@ -1514,7 +1507,6 @@ impl Root {
         let sumeragi =
             sumeragi.expect("sumeragi configuration should be valid when emitter succeeds");
         let nexus = nexus.expect("nexus configuration should be valid when emitter succeeds");
-        let hijiri = hijiri.expect("Hijiri configuration should be valid when emitter succeeds");
         let streaming =
             streaming.expect("streaming configuration should be valid when emitter succeeds");
         let compute = compute.expect("compute configuration should be valid when emitter succeeds");
@@ -1559,7 +1551,6 @@ impl Root {
             oracle,
             ivm,
             norito: self.norito.parse(),
-            hijiri,
             fraud_monitoring: self.fraud_monitoring.parse(),
             zk,
             gov,
@@ -3467,17 +3458,51 @@ impl Acceleration {
     }
 }
 impl Nts {
-    fn parse(self) -> actual::Nts {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Nts {
+        let emit = |emitter: &mut Emitter<ParseError>, message: &'static str| {
+            emitter.emit(Report::new(ParseError::InvalidNtsConfig).attach(message));
+        };
+        if self.sample_cap_per_round == 0 {
+            emit(
+                emitter,
+                "nts.sample_cap_per_round must be greater than zero",
+            );
+        }
+        if self.max_rtt_ms == 0 {
+            emit(emitter, "nts.max_rtt_ms must be greater than zero");
+        }
+        if self.trim_percent > 45 {
+            emit(
+                emitter,
+                "nts.trim_percent must be in the inclusive range 0..=45",
+            );
+        }
+        if self.per_peer_buffer == 0 {
+            emit(emitter, "nts.per_peer_buffer must be greater than zero");
+        }
+        if self.min_samples == 0 {
+            emit(emitter, "nts.min_samples must be greater than zero");
+        }
+        if !self.smoothing_alpha.is_finite() || !(0.0..=1.0).contains(&self.smoothing_alpha) {
+            emit(
+                emitter,
+                "nts.smoothing_alpha must be finite and in the inclusive range 0..=1",
+            );
+        }
         actual::Nts {
             sample_interval: self.sample_interval_ms.get().max(MIN_TIMER_INTERVAL),
-            sample_cap_per_round: self.sample_cap_per_round,
-            max_rtt_ms: self.max_rtt_ms,
-            trim_percent: self.trim_percent,
-            per_peer_buffer: self.per_peer_buffer,
+            sample_cap_per_round: self.sample_cap_per_round.max(1),
+            max_rtt_ms: self.max_rtt_ms.max(1),
+            trim_percent: self.trim_percent.min(45),
+            per_peer_buffer: self.per_peer_buffer.max(1),
             smoothing_enabled: self.smoothing_enabled,
-            smoothing_alpha: self.smoothing_alpha,
+            smoothing_alpha: if self.smoothing_alpha.is_finite() {
+                self.smoothing_alpha.clamp(0.0, 1.0)
+            } else {
+                defaults::time::NTS_SMOOTHING_ALPHA
+            },
             max_adjust_ms_per_min: self.max_adjust_ms_per_min,
-            min_samples: self.min_samples,
+            min_samples: self.min_samples.max(1),
             max_offset_ms: self.max_offset_ms,
             max_confidence_ms: self.max_confidence_ms,
             enforcement_mode: self.enforcement_mode.into_actual(),
@@ -4672,12 +4697,30 @@ pub struct Sccp {
     /// Maximum BLS public-key contributions committed in one block.
     #[config(default = "defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK")]
     pub max_bls_signer_contributions_per_block: NonZeroU32,
+    /// Maximum Ed25519 signature checks in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_TRANSACTION")]
+    pub max_ed25519_signature_checks_per_transaction: NonZeroU32,
+    /// Maximum Ed25519 signature checks committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_BLOCK")]
+    pub max_ed25519_signature_checks_per_block: NonZeroU32,
+    /// Maximum TON Ed25519 validator-key checks in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION")]
+    pub max_ed25519_validator_key_checks_per_transaction: NonZeroU32,
+    /// Maximum TON Ed25519 validator-key checks committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK")]
+    pub max_ed25519_validator_key_checks_per_block: NonZeroU32,
     /// Maximum BN254 Groth16 pairing-product checks in one transaction.
     #[config(default = "defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION")]
     pub max_bn254_pairing_checks_per_transaction: NonZeroU32,
     /// Maximum BN254 Groth16 pairing-product checks committed in one block.
     #[config(default = "defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_BLOCK")]
     pub max_bn254_pairing_checks_per_block: NonZeroU32,
+    /// Maximum BLS12-381 Groth16 pairing-product checks in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_BLS12_381_PAIRING_CHECKS_PER_TRANSACTION")]
+    pub max_bls12_381_pairing_checks_per_transaction: NonZeroU32,
+    /// Maximum BLS12-381 Groth16 pairing-product checks committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_BLS12_381_PAIRING_CHECKS_PER_BLOCK")]
+    pub max_bls12_381_pairing_checks_per_block: NonZeroU32,
 }
 impl Default for Sccp {
     fn default() -> Self {
@@ -4713,10 +4756,22 @@ impl Default for Sccp {
                 defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION,
             max_bls_signer_contributions_per_block:
                 defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK,
+            max_ed25519_signature_checks_per_transaction:
+                defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_TRANSACTION,
+            max_ed25519_signature_checks_per_block:
+                defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_BLOCK,
+            max_ed25519_validator_key_checks_per_transaction:
+                defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION,
+            max_ed25519_validator_key_checks_per_block:
+                defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK,
             max_bn254_pairing_checks_per_transaction:
                 defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION,
             max_bn254_pairing_checks_per_block:
                 defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_BLOCK,
+            max_bls12_381_pairing_checks_per_transaction:
+                defaults::zk::sccp::MAX_BLS12_381_PAIRING_CHECKS_PER_TRANSACTION,
+            max_bls12_381_pairing_checks_per_block:
+                defaults::zk::sccp::MAX_BLS12_381_PAIRING_CHECKS_PER_BLOCK,
         }
     }
 }
@@ -4814,10 +4869,28 @@ impl Sccp {
             "max_bls_signer_contributions_per_block",
         );
         require_order(
+            self.max_ed25519_signature_checks_per_transaction,
+            self.max_ed25519_signature_checks_per_block,
+            "max_ed25519_signature_checks_per_transaction",
+            "max_ed25519_signature_checks_per_block",
+        );
+        require_order(
+            self.max_ed25519_validator_key_checks_per_transaction,
+            self.max_ed25519_validator_key_checks_per_block,
+            "max_ed25519_validator_key_checks_per_transaction",
+            "max_ed25519_validator_key_checks_per_block",
+        );
+        require_order(
             self.max_bn254_pairing_checks_per_transaction,
             self.max_bn254_pairing_checks_per_block,
             "max_bn254_pairing_checks_per_transaction",
             "max_bn254_pairing_checks_per_block",
+        );
+        require_order(
+            self.max_bls12_381_pairing_checks_per_transaction,
+            self.max_bls12_381_pairing_checks_per_block,
+            "max_bls12_381_pairing_checks_per_transaction",
+            "max_bls12_381_pairing_checks_per_block",
         );
         actual::Sccp {
             max_pending_outbound_messages: self.pending_outbound_messages,
@@ -4842,8 +4915,18 @@ impl Sccp {
             max_bls_signer_contributions_per_transaction: self
                 .max_bls_signer_contributions_per_transaction,
             max_bls_signer_contributions_per_block: self.max_bls_signer_contributions_per_block,
+            max_ed25519_signature_checks_per_transaction: self
+                .max_ed25519_signature_checks_per_transaction,
+            max_ed25519_signature_checks_per_block: self.max_ed25519_signature_checks_per_block,
+            max_ed25519_validator_key_checks_per_transaction: self
+                .max_ed25519_validator_key_checks_per_transaction,
+            max_ed25519_validator_key_checks_per_block: self
+                .max_ed25519_validator_key_checks_per_block,
             max_bn254_pairing_checks_per_transaction: self.max_bn254_pairing_checks_per_transaction,
             max_bn254_pairing_checks_per_block: self.max_bn254_pairing_checks_per_block,
+            max_bls12_381_pairing_checks_per_transaction: self
+                .max_bls12_381_pairing_checks_per_transaction,
+            max_bls12_381_pairing_checks_per_block: self.max_bls12_381_pairing_checks_per_block,
         }
     }
 }
@@ -5552,154 +5635,6 @@ impl StreamingCodec {
         Some(accel)
     }
 }
-#[derive(Debug, thiserror::Error)]
-enum ParseQ16Error {
-    #[error("value must not be empty")]
-    Empty,
-    #[error("negative values are not supported")]
-    Negative,
-    #[error("invalid fixed-point format")]
-    InvalidFormat,
-    #[error("integer part exceeds 65535")]
-    IntegerOverflow,
-    #[error("fractional part exceeds 9 digits")]
-    TooManyFractionDigits,
-    #[error("fractional component overflows the Q16 range")]
-    FractionOverflow,
-}
-fn parse_q16_decimal(value: &str) -> std::result::Result<ModelQ16, ParseQ16Error> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(ParseQ16Error::Empty);
-    }
-    if trimmed.starts_with('-') {
-        return Err(ParseQ16Error::Negative);
-    }
-    let normalized = trimmed.replace('_', "");
-    let mut parts = normalized.split('.');
-    let int_part = parts.next().ok_or(ParseQ16Error::InvalidFormat)?;
-    let frac_part = parts.next();
-    if parts.next().is_some() {
-        return Err(ParseQ16Error::InvalidFormat);
-    }
-    let integer = if int_part.is_empty() {
-        0u32
-    } else {
-        int_part
-            .parse::<u32>()
-            .map_err(|_| ParseQ16Error::InvalidFormat)?
-    };
-    if integer > 0xFFFF {
-        return Err(ParseQ16Error::IntegerOverflow);
-    }
-    let mut raw = integer << 16;
-    if let Some(frac_str) = frac_part {
-        if frac_str.is_empty() {
-            return Err(ParseQ16Error::InvalidFormat);
-        }
-        if !frac_str.chars().all(|c| c.is_ascii_digit()) {
-            return Err(ParseQ16Error::InvalidFormat);
-        }
-        let digits = frac_str.len();
-        if digits > 9 {
-            return Err(ParseQ16Error::TooManyFractionDigits);
-        }
-        let frac_value = frac_str
-            .parse::<u128>()
-            .map_err(|_| ParseQ16Error::InvalidFormat)?;
-        let pow = u32::try_from(digits).unwrap_or_else(|_| unreachable!("digits <= 9"));
-        let denom = 10_u128.pow(pow);
-        let numerator = frac_value
-            .checked_mul(1u128 << 16)
-            .ok_or(ParseQ16Error::FractionOverflow)?;
-        let rounded = (numerator + denom / 2) / denom;
-        if rounded > 0xFFFF {
-            return Err(ParseQ16Error::FractionOverflow);
-        }
-        let rounded_u32 = u32::try_from(rounded).map_err(|_| ParseQ16Error::FractionOverflow)?;
-        raw |= rounded_u32;
-    }
-    Ok(ModelQ16::from_raw(raw))
-}
-#[derive(Debug, thiserror::Error)]
-enum HijiriPolicyError {
-    #[error("invalid penalty cap: {0}")]
-    PenaltyCap(#[source] ParseQ16Error),
-    #[error("band {index}: invalid max_risk value: {source}")]
-    MaxRisk {
-        index: usize,
-        #[source]
-        source: ParseQ16Error,
-    },
-    #[error("band {index}: invalid multiplier value: {source}")]
-    Multiplier {
-        index: usize,
-        #[source]
-        source: ParseQ16Error,
-    },
-    #[error("band {index}: {source}")]
-    Band {
-        index: usize,
-        #[source]
-        source: ModelFeePolicyError,
-    },
-    #[error("invalid fee policy: {0}")]
-    Policy(#[source] ModelFeePolicyError),
-}
-/// User-level configuration container for `FeeMultiplierBandConfig`.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct FeeMultiplierBandConfig {
-    /// Upper bound on borrower risk (encoded as Q16) covered by this band.
-    pub max_risk: String,
-    /// Multiplicative fee adjustment (Q16) applied within this band.
-    pub multiplier: String,
-}
-/// User-level configuration container for `HijiriFeePolicyConfig`.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct HijiriFeePolicyConfig {
-    #[config(default)]
-    /// Ordered set of fee multiplier bands.
-    pub bands: Vec<FeeMultiplierBandConfig>,
-    /// Maximum penalty multiplier allowed for delinquent borrowers.
-    pub penalty_cap: String,
-}
-impl HijiriFeePolicyConfig {
-    fn into_actual(self) -> std::result::Result<ModelHijiriFeePolicy, HijiriPolicyError> {
-        let penalty_cap =
-            parse_q16_decimal(&self.penalty_cap).map_err(HijiriPolicyError::PenaltyCap)?;
-        let mut bands_actual = Vec::with_capacity(self.bands.len());
-        for (index, band) in self.bands.into_iter().enumerate() {
-            let max_risk = parse_q16_decimal(&band.max_risk)
-                .map_err(|source| HijiriPolicyError::MaxRisk { index, source })?;
-            let multiplier = parse_q16_decimal(&band.multiplier)
-                .map_err(|source| HijiriPolicyError::Multiplier { index, source })?;
-            let actual_band = ModelFeeMultiplierBand::new(max_risk, multiplier)
-                .map_err(|source| HijiriPolicyError::Band { index, source })?;
-            bands_actual.push(actual_band);
-        }
-        ModelHijiriFeePolicy::new(bands_actual, penalty_cap).map_err(HijiriPolicyError::Policy)
-    }
-}
-/// User-level configuration container for `Hijiri`.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct Hijiri {
-    /// Optional Hijiri fee policy that overrides the default pricing.
-    pub fee_policy: Option<HijiriFeePolicyConfig>,
-}
-impl Hijiri {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Hijiri> {
-        let fee_policy = self
-            .fee_policy
-            .map(|policy| {
-                policy.into_actual().map_err(|err| {
-                    Report::new(ParseError::InvalidHijiriConfig).attach(err.to_string())
-                })
-            })
-            .transpose()
-            .ok_or_emit(emitter)?;
-        Some(actual::Hijiri::new(fee_policy))
-    }
-}
 /// User-level enumeration translating `FraudRiskBand` settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
 #[strum(serialize_all = "snake_case")]
@@ -6192,6 +6127,13 @@ pub struct SumeragiQueues {
     #[config(default = "defaults::sumeragi::QUEUE_READY_BODY_CAPACITY")]
     pub ready_bodies: NonZeroUsize,
 }
+/// User-level durable storage budgets for Sumeragi v2.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiStorage {
+    /// Aggregate checksummed body-frame bytes retained for one active height.
+    #[config(default = "defaults::sumeragi::BODY_STORE_MAX_BYTES_PER_HEIGHT")]
+    pub body_store_max_bytes_per_height: Bytes<u64>,
+}
 /// User-facing finite runtime bounds for Sumeragi v2 lane, merge, and Native AMX services.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiV2RuntimeLimits {
@@ -6324,6 +6266,9 @@ pub struct Sumeragi {
     /// Shared finite lane, merge, recovery, and Native AMX service bounds.
     #[config(nested)]
     pub limits: SumeragiV2RuntimeLimits,
+    /// Node-local durable storage budgets.
+    #[config(nested)]
+    pub storage: SumeragiStorage,
     /// Consensus key-rotation and HSM policy.
     #[config(nested)]
     pub keys: SumeragiKeys,
@@ -6425,6 +6370,7 @@ impl Sumeragi {
             block,
             queues,
             limits,
+            storage,
             keys,
         } = self;
         let mut valid = true;
@@ -6458,6 +6404,18 @@ impl Sumeragi {
                 Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
                     "sumeragi.queues.commands must be at least {}",
                     defaults::sumeragi::MIN_RUNTIME_COMMAND_CAPACITY,
+                )),
+            );
+            valid = false;
+        }
+        if storage.body_store_max_bytes_per_height.get()
+            < defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "sumeragi.storage.body_store_max_bytes_per_height must hold one maximum durable body frame (minimum {}, configured {})",
+                    defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT,
+                    storage.body_store_max_bytes_per_height.get(),
                 )),
             );
             valid = false;
@@ -6644,6 +6602,9 @@ impl Sumeragi {
                     .native_amx_signing_guard_record_capacity,
                 native_amx_signing_guard_record_bytes: limits.native_amx_signing_guard_record_bytes,
                 native_amx_signing_guard_anchor_bytes: limits.native_amx_signing_guard_anchor_bytes,
+            },
+            storage: actual::SumeragiStorage {
+                body_store_max_bytes_per_height: storage.body_store_max_bytes_per_height,
             },
             keys: actual::SumeragiKeys {
                 activation_lead_blocks: keys.activation_lead_blocks,
@@ -16705,6 +16666,7 @@ impl AccountOnboarding {
             "CanActivateKagemushaRecursiveReleaseV4",
             "CanManageOfflineDeviceAttestationPolicy",
             "CanSetParameters",
+            "CanSetHijiriParameters",
             "CanManageSccpGovernance",
             "CanProposeSccpRouteGovernance",
             "CanManageRoles",
@@ -17686,6 +17648,7 @@ pub struct IsoBridge {
     /// Operator-defined ISO bridge profile overrides or additions.
     pub profiles: Vec<IsoBridgeProfile>,
     /// Directory where ISO bridge message state is persisted.
+    /// Payment queue admission is refused when this is absent.
     pub store_dir: Option<PathBuf>,
     #[config(default = "defaults::torii::ISO_BRIDGE_STORE_RETENTION_SECS")]
     #[norito(default)]
@@ -18400,19 +18363,47 @@ pub struct DaTaikaiAnchor {
     pub endpoint: String,
     /// Optional bearer token for the remote service.
     pub api_token: Option<String>,
+    /// Ed25519 public key required to authenticate anchor receipts.
+    pub receipt_public_key: PublicKey,
     #[config(default = "defaults::torii::DA_TAIKAI_ANCHOR_POLL_INTERVAL_SECS")]
     /// Poll interval in seconds between spool scans.
     pub poll_interval_secs: u64,
+    #[config(default = "defaults::torii::DA_TAIKAI_ANCHOR_REQUEST_TIMEOUT_SECS")]
+    /// Absolute upload and response deadline in seconds.
+    pub request_timeout_secs: u64,
 }
 impl DaTaikaiAnchor {
     fn parse(self) -> actual::DaTaikaiAnchor {
         let endpoint = url::Url::parse(&self.endpoint).unwrap_or_else(|err| {
             panic!("invalid Taikai anchor endpoint `{}`: {err}", self.endpoint)
         });
+        let loopback = match endpoint.host() {
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+            None => false,
+        };
+        if endpoint.scheme() != "https" && !(endpoint.scheme() == "http" && loopback) {
+            panic!(
+                "Taikai anchor endpoint `{}` must use HTTPS (HTTP is allowed only for loopback)",
+                self.endpoint
+            );
+        }
+        if !matches!(
+            self.receipt_public_key.try_algorithm(),
+            Ok(Algorithm::Ed25519)
+        ) {
+            panic!("Taikai anchor receipt_public_key must use Ed25519");
+        }
+        if self.request_timeout_secs == 0 {
+            panic!("Taikai anchor request_timeout_secs must be positive");
+        }
         actual::DaTaikaiAnchor {
             endpoint,
             api_token: self.api_token,
+            receipt_public_key: self.receipt_public_key,
             poll_interval: Duration::from_secs(self.poll_interval_secs),
+            request_timeout: Duration::from_secs(self.request_timeout_secs),
         }
     }
 }
@@ -18429,6 +18420,15 @@ impl json::JsonSerialize for DaTaikaiAnchor {
         map.insert(
             "poll_interval_secs".to_string(),
             Value::from(self.poll_interval_secs),
+        );
+        map.insert(
+            "receipt_public_key".to_string(),
+            json::to_value(&self.receipt_public_key)
+                .expect("validated public key must serialize as Norito JSON"),
+        );
+        map.insert(
+            "request_timeout_secs".to_string(),
+            Value::from(self.request_timeout_secs),
         );
         Value::Object(map).json_serialize(out);
     }
@@ -18456,11 +18456,111 @@ impl json::JsonDeserialize for DaTaikaiAnchor {
             .remove("poll_interval_secs")
             .ok_or_else(|| json::Error::Message("missing field `poll_interval_secs`".into()))
             .and_then(json::from_value)?;
+        let receipt_public_key = map
+            .remove("receipt_public_key")
+            .ok_or_else(|| json::Error::Message("missing field `receipt_public_key`".into()))
+            .and_then(json::from_value)?;
+        let request_timeout_secs = match map.remove("request_timeout_secs") {
+            Some(value) => json::from_value(value)?,
+            None => defaults::torii::DA_TAIKAI_ANCHOR_REQUEST_TIMEOUT_SECS,
+        };
+        if let Some(field) = map.keys().next() {
+            return Err(json::Error::Message(format!(
+                "unknown field `{field}` in Taikai anchor configuration"
+            )));
+        }
         Ok(Self {
             endpoint,
             api_token,
+            receipt_public_key,
             poll_interval_secs,
+            request_timeout_secs,
         })
+    }
+}
+#[cfg(test)]
+mod da_taikai_anchor_config_tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    fn anchor_config(
+        endpoint: &str,
+        algorithm: Algorithm,
+        request_timeout_secs: u64,
+    ) -> DaTaikaiAnchor {
+        let receipt_public_key = KeyPair::try_from_seed(
+            b"iroha:config:test:taikai-anchor-receipt".to_vec(),
+            algorithm,
+        )
+        .expect("derive deterministic anchor receipt key")
+        .public_key()
+        .clone();
+        DaTaikaiAnchor {
+            endpoint: endpoint.to_owned(),
+            api_token: None,
+            receipt_public_key,
+            poll_interval_secs: 30,
+            request_timeout_secs,
+        }
+    }
+
+    #[test]
+    fn endpoint_requires_https_except_for_loopback() {
+        for endpoint in [
+            "https://anchor.example/v1/taikai",
+            "http://localhost:8080/v1/taikai",
+            "http://127.0.0.1:8080/v1/taikai",
+            "http://[::1]:8080/v1/taikai",
+        ] {
+            let parsed = anchor_config(endpoint, Algorithm::Ed25519, 15).parse();
+            assert_eq!(parsed.endpoint.as_str(), endpoint);
+        }
+
+        for endpoint in [
+            "http://anchor.example/v1/taikai",
+            "ftp://anchor.example/v1/taikai",
+        ] {
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    anchor_config(endpoint, Algorithm::Ed25519, 15).parse()
+                }))
+                .is_err(),
+                "insecure non-loopback endpoint must fail closed: {endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn receipt_key_requires_ed25519() {
+        let parsed =
+            anchor_config("https://anchor.example/v1/taikai", Algorithm::Ed25519, 15).parse();
+        assert!(matches!(
+            parsed.receipt_public_key.try_algorithm(),
+            Ok(Algorithm::Ed25519)
+        ));
+
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                anchor_config("https://anchor.example/v1/taikai", Algorithm::Secp256k1, 15).parse()
+            }))
+            .is_err(),
+            "non-Ed25519 receipt key must fail closed"
+        );
+    }
+
+    #[test]
+    fn request_timeout_must_be_nonzero() {
+        let parsed =
+            anchor_config("https://anchor.example/v1/taikai", Algorithm::Ed25519, 9).parse();
+        assert_eq!(parsed.request_timeout, Duration::from_secs(9));
+
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                anchor_config("https://anchor.example/v1/taikai", Algorithm::Ed25519, 0).parse()
+            }))
+            .is_err(),
+            "zero request timeout must fail closed"
+        );
     }
 }
 /// User-level configuration container for SoraFS discovery, storage, repair, and GC subsystems.
@@ -34524,6 +34624,34 @@ publish_delay_seconds = 17
         assert!(
             report.contains(&format!(
                 "aggregate canonical outer-ingress wire-byte capacity {underbudget} is below the roster-aware minimum {required}"
+            )),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_body_store_budget_must_hold_one_maximum_frame() {
+        let mut table = four_validator_roster_table();
+        let underbudget = defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT - 1;
+        table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table")
+            .entry("storage")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi storage table")
+            .insert(
+                "body_store_max_bytes_per_height".into(),
+                Value::Integer(i64::try_from(underbudget).expect("fixture budget fits TOML")),
+            );
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("a durable-body budget below one maximum frame must be rejected");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(&format!(
+                "must hold one maximum durable body frame (minimum {}",
+                defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT,
             )),
             "{report}",
         );

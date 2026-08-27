@@ -226,6 +226,16 @@ fn prover_self_check_limits(batch: &TransitionBatch, proof: &Proof) -> VerifyLim
         ..VerifyLimits::default()
     }
 }
+/// Enforce the batch-only portion of the default verifier limits before expensive proof work.
+pub fn enforce_default_verify_batch_limits(batch: &TransitionBatch) -> Result<()> {
+    let limits = VerifyLimits::default();
+    enforce_transition_limit(batch, limits)?;
+    enforce_batch_size_limit(batch, limits)
+}
+/// Enforce every default verifier resource limit on an already generated proof.
+pub fn enforce_default_verify_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
+    enforce_verify_limits(batch, proof, VerifyLimits::default())
+}
 /// FASTPQ prover wiring canonical STARK parameters to the backend.
 #[derive(Debug, Clone)]
 pub struct Prover {
@@ -899,13 +909,7 @@ fn enforce_verify_limits(
     proof: &Proof,
     limits: VerifyLimits,
 ) -> Result<()> {
-    if batch.transitions.len() > limits.max_transitions {
-        return Err(Error::VerifierLimitExceeded {
-            limit: "max_transitions",
-            actual: batch.transitions.len(),
-            max: limits.max_transitions,
-        });
-    }
+    enforce_transition_limit(batch, limits)?;
     if proof.fri_layers.len() > limits.max_fri_layers {
         return Err(Error::VerifierLimitExceeded {
             limit: "max_fri_layers",
@@ -960,14 +964,7 @@ fn enforce_verify_limits(
         }
     }
     // Only scan variable-size payloads after their enclosing collection counts are bounded.
-    let batch_bytes = batch_size_hint(batch);
-    if batch_bytes > limits.max_batch_bytes {
-        return Err(Error::VerifierLimitExceeded {
-            limit: "max_batch_bytes",
-            actual: batch_bytes,
-            max: limits.max_batch_bytes,
-        });
-    }
+    enforce_batch_size_limit(batch, limits)?;
     let proof_bytes = proof_size_hint(proof);
     if proof_bytes > limits.max_proof_bytes {
         return Err(Error::VerifierLimitExceeded {
@@ -1031,6 +1028,27 @@ fn enforce_verify_limits(
                 });
             }
         }
+    }
+    Ok(())
+}
+fn enforce_transition_limit(batch: &TransitionBatch, limits: VerifyLimits) -> Result<()> {
+    if batch.transitions.len() > limits.max_transitions {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_transitions",
+            actual: batch.transitions.len(),
+            max: limits.max_transitions,
+        });
+    }
+    Ok(())
+}
+fn enforce_batch_size_limit(batch: &TransitionBatch, limits: VerifyLimits) -> Result<()> {
+    let batch_bytes = batch_size_hint(batch);
+    if batch_bytes > limits.max_batch_bytes {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_batch_bytes",
+            actual: batch_bytes,
+            max: limits.max_batch_bytes,
+        });
     }
     Ok(())
 }

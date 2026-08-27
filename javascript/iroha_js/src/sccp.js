@@ -2073,8 +2073,14 @@ function normalizeResourceLimits(value) {
     "max_bls_aggregate_checks_per_block",
     "max_bls_signer_contributions_per_transaction",
     "max_bls_signer_contributions_per_block",
+    "max_ed25519_signature_checks_per_transaction",
+    "max_ed25519_signature_checks_per_block",
+    "max_ed25519_validator_key_checks_per_transaction",
+    "max_ed25519_validator_key_checks_per_block",
     "max_bn254_pairing_checks_per_transaction",
     "max_bn254_pairing_checks_per_block",
+    "max_bls12_381_pairing_checks_per_transaction",
+    "max_bls12_381_pairing_checks_per_block",
   ]);
   const byteFields = new Set([
     "max_outbound_message_payload_bytes",
@@ -2132,8 +2138,20 @@ function normalizeResourceLimits(value) {
       limits.max_bls_signer_contributions_per_block,
     ],
     [
+      limits.max_ed25519_signature_checks_per_transaction,
+      limits.max_ed25519_signature_checks_per_block,
+    ],
+    [
+      limits.max_ed25519_validator_key_checks_per_transaction,
+      limits.max_ed25519_validator_key_checks_per_block,
+    ],
+    [
       limits.max_bn254_pairing_checks_per_transaction,
       limits.max_bn254_pairing_checks_per_block,
+    ],
+    [
+      limits.max_bls12_381_pairing_checks_per_transaction,
+      limits.max_bls12_381_pairing_checks_per_block,
     ],
   ];
   if (orderedPairs.some(([transaction, block]) => transaction > block)) {

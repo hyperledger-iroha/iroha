@@ -2049,7 +2049,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 )),
                 manifest: manifest.clone(),
                 body: canonical_wire.clone(),
-                responder: 0,
+                responder: local_peer.clone(),
                 signature: Vec::new(),
             };
             let invalid_response_message = wire::ConsensusMessageV2::new(

@@ -65,6 +65,8 @@ public final class KagemushaRecursiveSpendProverTest {
     qrNfcAndNearbyGoldenVectorsAreExact();
     nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade();
     toriiLifecycleRoutesAndHeadersAreExact();
+    toriiCommandsRejectNoncanonicalRecoveryHeaders();
+    operationStatusProjectionRejectsZeroTimesAndUnstableCodes();
     offlineCapabilityRejectsRetiredReadinessClaims();
     publicSurfaceIsKagemushaOnly();
   }
@@ -77,6 +79,16 @@ public final class KagemushaRecursiveSpendProverTest {
   @org.junit.Test
   public void toriiLifecycleRoutesAndHeadersAreExactUnderJUnit() {
     toriiLifecycleRoutesAndHeadersAreExact();
+  }
+
+  @org.junit.Test
+  public void toriiCommandsRejectNoncanonicalRecoveryHeadersUnderJUnit() {
+    toriiCommandsRejectNoncanonicalRecoveryHeaders();
+  }
+
+  @org.junit.Test
+  public void operationStatusProjectionRejectsZeroTimesAndUnstableCodesUnderJUnit() {
+    operationStatusProjectionRejectsZeroTimesAndUnstableCodes();
   }
 
   @org.junit.Test
@@ -1007,6 +1019,34 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.decodeInitResultV4(
             archive("KagemushaRecursiveSpendInitResultV4"))
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
+    for (final String schema : Arrays.asList(
+        "iroha.torii.v1.offline.top_up.request",
+        "iroha.torii.v1.offline.redeem.request")) {
+      final byte[] canonical = archive(schema);
+      if (schema.contains("top_up")) {
+        assert KagemushaRecursiveSpendProver.decodeTopUpRequest(canonical)
+            .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
+      } else {
+        assert KagemushaRecursiveSpendProver.decodeRedeemSubmissionRequest(canonical)
+            .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
+      }
+      final byte[] missingPadding = new byte[canonical.length - 8];
+      System.arraycopy(canonical, 0, missingPadding, 0, NoritoHeader.HEADER_LENGTH);
+      System.arraycopy(
+          canonical,
+          NoritoHeader.HEADER_LENGTH + 8,
+          missingPadding,
+          NoritoHeader.HEADER_LENGTH,
+          canonical.length - NoritoHeader.HEADER_LENGTH - 8);
+      assertThrowsIllegalArgument(
+          () -> {
+            if (schema.contains("top_up")) {
+              KagemushaRecursiveSpendProver.decodeTopUpRequest(missingPadding);
+            } else {
+              KagemushaRecursiveSpendProver.decodeRedeemSubmissionRequest(missingPadding);
+            }
+          });
+    }
 
     boolean wrongSchemaRejected = false;
     try {
@@ -1230,6 +1270,8 @@ public final class KagemushaRecursiveSpendProverTest {
             "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2")
         || schema.equals(
             "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4")
+        || schema.equals("iroha.torii.v1.offline.top_up.request")
+        || schema.equals("iroha.torii.v1.offline.redeem.request")
         ? 8 : 0;
     final byte[] archive = new byte[NoritoHeader.HEADER_LENGTH + padding + payload.length];
     System.arraycopy(header.encode(), 0, archive, 0, NoritoHeader.HEADER_LENGTH);
@@ -1504,6 +1546,9 @@ public final class KagemushaRecursiveSpendProverTest {
                       .addHeader(
                           "content-type",
                           capability ? "application/json" : "application/x-norito")
+                      .addHeader(
+                          "Location", "/v1/offline/operations/" + repeat("11", 32))
+                      .addHeader("Retry-After", "1")
                       .setBody(
                           capability
                               ? universalOfflineCapabilityJson().getBytes(StandardCharsets.UTF_8)
@@ -1633,6 +1678,134 @@ public final class KagemushaRecursiveSpendProverTest {
   private static String universalOfflineCapabilityJson() {
     return "{\"cash_handoff_capability\":\"cash_handoff_v1\","
         + "\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true}";
+  }
+
+  private static void toriiCommandsRejectNoncanonicalRecoveryHeaders() {
+    final String operationId = repeat("11", 32);
+    final String expectedLocation = "/v1/offline/operations/" + operationId;
+    final NetworkId networkId = NetworkId.parse(
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+    final KagemushaRecursiveSpendProver.TopUpRequest request =
+        new KagemushaRecursiveSpendProver.TopUpRequest(
+            archive("iroha.torii.v1.offline.top_up.request"));
+    final List<List<String>> locations = Arrays.asList(
+        Collections.emptyList(),
+        Arrays.asList("/v1/offline/operations/" + repeat("22", 32)),
+        Arrays.asList(expectedLocation),
+        Arrays.asList(expectedLocation),
+        Arrays.asList(expectedLocation),
+        Arrays.asList(expectedLocation),
+        Arrays.asList(expectedLocation));
+    final List<List<String>> retryAfter = Arrays.asList(
+        Arrays.asList("1"),
+        Arrays.asList("1"),
+        Collections.emptyList(),
+        Arrays.asList("0"),
+        Arrays.asList("18446744073709551616"),
+        Arrays.asList(repeat("9", 10_000)),
+        Arrays.asList("1", "2"));
+    for (int index = 0; index < locations.size(); index++) {
+      final int caseIndex = index;
+      final KagemushaRecursiveSpendProver.ToriiClient client =
+          KagemushaRecursiveSpendProver.newToriiClient(
+              URI.create("https://torii.example"),
+              ignored -> {
+                final TransportResponse.Builder response = TransportResponse.builder()
+                    .setStatusCode(202)
+                    .addHeader("Content-Type", "application/x-norito")
+                    .setBody(archive("OfflineOperationReference"));
+                locations.get(caseIndex).forEach(value -> response.addHeader("Location", value));
+                retryAfter.get(caseIndex).forEach(
+                    value -> response.addHeader("Retry-After", value));
+                return CompletableFuture.completedFuture(response.build());
+              },
+              new LocalSigningContext(networkId));
+      boolean rejected = false;
+      try {
+        client.submitTopUp(request, operationId).join();
+      } catch (final RuntimeException expected) {
+        rejected = true;
+      }
+      assert rejected : "accepted non-canonical recovery headers at case " + index;
+    }
+  }
+
+  private static void operationStatusProjectionRejectsZeroTimesAndUnstableCodes() {
+    final byte[] digest = new byte[32];
+    Arrays.fill(digest, (byte) 1);
+    assert operationProjection(
+            KagemushaRecursiveSpendProver.OperationState.PENDING,
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            digest, 1L, null, null, null)
+        .submittedAtMilliseconds() == 1L;
+    assertThrowsIllegalArgument(() -> operationProjection(
+        KagemushaRecursiveSpendProver.OperationState.PENDING,
+        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        digest, 0L, null, null, null));
+    assertThrowsIllegalArgument(() -> operationProjection(
+        KagemushaRecursiveSpendProver.OperationState.APPLIED,
+        KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+        digest, null, 0L, 1L, null));
+    assertThrowsIllegalArgument(() -> operationProjection(
+        KagemushaRecursiveSpendProver.OperationState.APPLIED,
+        KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+        digest, null, 1L, 0L, null));
+    for (final String code : Arrays.asList("_invalid", "UPPER", "bad-code", repeat("a", 65))) {
+      assertThrowsIllegalArgument(() -> operationRejection(code, "rejected"));
+    }
+    final KagemushaRecursiveSpendProver.OperationRejection rejection =
+        operationRejection("offline_operation_rejected", "rejected");
+    final String maximumUnicodeMessage = repeat("😀", 1024);
+    assert operationRejection("offline_operation_rejected", maximumUnicodeMessage)
+        .message().codePointCount(0, maximumUnicodeMessage.length()) == 1024;
+    assertThrowsIllegalArgument(
+        () -> operationRejection("offline_operation_rejected", repeat("x", 1025)));
+    assert operationProjection(
+            KagemushaRecursiveSpendProver.OperationState.REJECTED,
+            KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+            digest, null, null, null, rejection)
+        .rejection() == rejection;
+  }
+
+  private static KagemushaRecursiveSpendProver.OperationRejection operationRejection(
+      final String code, final String message) {
+    return construct(
+        KagemushaRecursiveSpendProver.OperationRejection.class,
+        new Class<?>[] {String.class, String.class},
+        code,
+        message);
+  }
+
+  private static KagemushaRecursiveSpendProver.OperationStatusProjection operationProjection(
+      final KagemushaRecursiveSpendProver.OperationState state,
+      final KagemushaRecursiveSpendProver.OperationKind kind,
+      final byte[] digest,
+      final Long submittedAt,
+      final Long finalizedHeight,
+      final Long serverTime,
+      final KagemushaRecursiveSpendProver.OperationRejection rejection) {
+    return construct(
+        KagemushaRecursiveSpendProver.OperationStatusProjection.class,
+        new Class<?>[] {
+            KagemushaRecursiveSpendProver.OperationState.class,
+            KagemushaRecursiveSpendProver.OperationKind.class,
+            byte[].class,
+            byte[].class,
+            Long.class,
+            Long.class,
+            Long.class,
+            KagemushaRecursiveSpendProver.FinalizedTopUp.class,
+            KagemushaRecursiveSpendProver.OperationRejection.class,
+        },
+        state,
+        kind,
+        digest,
+        digest,
+        submittedAt,
+        finalizedHeight,
+        serverTime,
+        null,
+        rejection);
   }
 
   private static String unexpectedToriiRoute(final TransportRequest request) {

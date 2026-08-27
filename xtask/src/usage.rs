@@ -267,10 +267,10 @@ fn print_usage() {
         "    Package Taikai cache profiles (JSON + Norito + manifest) into artifacts/taikai_cache or the provided directory."
     );
     eprintln!(
-        "  cargo xtask taikai-anchor-bundle [--spool <dir>] [--copy-dir <dir>] [--signing-key <path>] [--out <path|->]"
+        "  cargo xtask taikai-anchor-bundle [--spool <dir>] [--copy-dir <dir>] [--receipt-public-key <multihash>] [--signing-key <path>] [--out <path|->]"
     );
     eprintln!(
-        "    Scan the Taikai spool for anchor artefacts, emit a JSON summary (pending + delivered), optionally copy files into a bundle dir, and sign the report with an Ed25519 key."
+        "    Scan the Taikai spool for anchor artefacts, verify content-bound receipts when an Ed25519 anchor key is supplied, optionally copy files into a bundle dir, and sign the report. Receipts are never reported as delivered without verification."
     );
     eprintln!(
         "  cargo xtask taikai-rpt-verify --envelope <path> --gar <path> --cek-receipt <path> --bundle <path> [--json-out <path|->]"

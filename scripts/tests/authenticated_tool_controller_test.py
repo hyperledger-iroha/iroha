@@ -26,24 +26,32 @@ SOURCE = (
 CONTRACT = "iroha.authenticated-tool-os-isolation.v1"
 
 
+def controller_rustc_command(output: Path, host_platform: str) -> list[str]:
+    """Build the direct qualification binary with platform-scoped lints."""
+
+    command = [
+        "rustc",
+        "--edition",
+        "2024",
+        "-D",
+        "warnings",
+        "-D",
+        "unsafe-code",
+    ]
+    if host_platform != "darwin":
+        # Non-macOS builds retain only the fail-closed unavailable entrypoint.
+        command.extend(["-A", "dead-code"])
+    command.extend([str(SOURCE), "-o", str(output)])
+    return command
+
+
 @pytest.fixture(scope="module")
 def controller(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Compile the dependency-free controller source as one authenticated file."""
 
     output = tmp_path_factory.mktemp("authenticated-tool-controller") / "controller"
     subprocess.run(
-        [
-            "rustc",
-            "--edition",
-            "2024",
-            "-D",
-            "warnings",
-            "-D",
-            "unsafe-code",
-            str(SOURCE),
-            "-o",
-            str(output),
-        ],
+        controller_rustc_command(output, sys.platform),
         cwd=ROOT,
         check=True,
         stdin=subprocess.DEVNULL,
@@ -51,6 +59,20 @@ def controller(tmp_path_factory: pytest.TempPathFactory) -> Path:
         stderr=subprocess.PIPE,
     )
     return output.resolve(strict=True)
+
+
+@pytest.mark.parametrize(
+    ("host_platform", "allows_dead_code"),
+    [("darwin", False), ("linux", True), ("win32", True)],
+)
+def test_controller_compile_lints_are_platform_scoped(
+    tmp_path: Path, host_platform: str, allows_dead_code: bool
+) -> None:
+    command = controller_rustc_command(tmp_path / "controller", host_platform)
+
+    assert ("dead-code" in command) is allows_dead_code
+    assert command.count("warnings") == 1
+    assert command.count("unsafe-code") == 1
 
 
 def exact_environment(temporary: Path) -> dict[str, str]:

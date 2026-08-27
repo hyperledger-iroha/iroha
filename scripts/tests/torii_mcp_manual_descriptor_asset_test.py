@@ -13,23 +13,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 90_497
-EXPECTED_ASSET_SHA256 = "3824da4db1b62ec71699a848af56799973ea34b39b02946d5dd966133a980360"
-EXPECTED_SEMANTIC_SHA256 = "15b25b1dd0c32f8ef3344156ce4e277a5ffaeaf37727d0dc59571d08515251eb"
+EXPECTED_ASSET_LENGTH = 125_474
+EXPECTED_ASSET_SHA256 = "8c285ae2dff53b70e8a21ab3b16ce3d99b3e6ff51ef0ea280254c972ae514f95"
+EXPECTED_SEMANTIC_SHA256 = "549d467470c7fce9840842a6c96a82d2a6b6d5839ffe12e970895671de66139b"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
 EXPECTED_RETAINED_DIRECT_SHA256 = (
-    "bbdf826ac238ed1424403f2719ff8407b3e0f4de282131c7eb83876293ff58d8"
+    "af338fada6916a39d324e9c907abebf5137bec028e9d88ad75f91c4ae3d4ffb3"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "3daf953f0a00cb40e58246b5318973baa79ba6057ff962636867622c41c6a618"
+    "6d1a744a01060c53c5e7a0a0a49fabb35e7a3e091f160dabca14c43934cccfe3"
 )
 EXPECTED_BLAKE3_BYTES = (
-    0x25, 0x2D, 0x29, 0xCD, 0x02, 0xE7, 0x48, 0x41,
-    0x25, 0x87, 0xFC, 0x2B, 0x39, 0x43, 0x62, 0x94,
-    0x94, 0x89, 0x2A, 0x39, 0x11, 0x3F, 0xC6, 0xF6,
-    0x8B, 0x16, 0x96, 0xAB, 0x1F, 0x87, 0x8E, 0x52,
+    0xB2, 0x01, 0xDE, 0xA2, 0x7D, 0xCE, 0xF7, 0x28,
+    0xC4, 0x86, 0xBD, 0x20, 0x21, 0x3B, 0x68, 0xD5,
+    0x31, 0xB4, 0xCE, 0xF5, 0xF1, 0xAC, 0x5C, 0xDA,
+    0x04, 0xDC, 0xEB, 0xD1, 0x27, 0xB8, 0x48, 0x14,
 )
 EXPECTED_WRAPPERS = (
     ('connect_ws_ticket_tool', 'connect.ws.ticket'),
@@ -461,6 +461,83 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
 
     def test_current_asset_and_source_match_the_historical_inventory(self) -> None:
         validate(self.source, self.asset)
+
+    def test_prepared_account_schemas_are_closed_and_fully_typed(self) -> None:
+        asset = json.loads(self.asset)
+        descriptors = {
+            descriptor["name"]: descriptor for descriptor in asset["descriptors"]
+        }
+        names = (
+            "iroha.accounts.onboard.prepare",
+            "iroha.accounts.onboard.submit",
+            "iroha.accounts.faucet.prepare",
+            "iroha.accounts.faucet.submit",
+        )
+
+        def assert_exact_schema(schema: object, path: str) -> None:
+            self.assertIsInstance(schema, dict, f"{path} schema must be an object")
+            assert isinstance(schema, dict)
+            self.assertTrue(schema, f"{path} must not admit arbitrary JSON")
+            if schema.get("type") == "object":
+                self.assertIs(
+                    schema.get("additionalProperties"),
+                    False,
+                    f"{path} must reject unknown fields",
+                )
+                properties = schema.get("properties")
+                required = schema.get("required")
+                self.assertIsInstance(properties, dict, f"{path}.properties")
+                self.assertIsInstance(required, list, f"{path}.required")
+                assert isinstance(properties, dict)
+                assert isinstance(required, list)
+                self.assertEqual(
+                    set(required),
+                    set(properties),
+                    f"{path} must require every first-release slot",
+                )
+                for field, child in properties.items():
+                    assert_exact_schema(child, f"{path}.{field}")
+            if "items" in schema:
+                assert_exact_schema(schema["items"], f"{path}.items")
+            for keyword in ("oneOf", "anyOf", "allOf"):
+                if keyword not in schema:
+                    continue
+                branches = schema[keyword]
+                self.assertIsInstance(branches, list, f"{path}.{keyword}")
+                self.assertTrue(branches, f"{path}.{keyword} must not be empty")
+                for index, branch in enumerate(branches):
+                    assert_exact_schema(branch, f"{path}.{keyword}[{index}]")
+
+        for name in names:
+            schema = descriptors[name]["input_schema"]
+            self.assertIs(schema.get("x-iroha-mcp-strict-body"), True)
+            body = schema["properties"]["body"]
+            assert_exact_schema(body, f"{name}.body")
+            fee = body["properties"]["fee_payment"]
+            payer_branches = fee.get("oneOf")
+            self.assertEqual(
+                [branch["properties"]["payer"]["const"] for branch in payer_branches],
+                ["authority", "sponsor"],
+            )
+
+        for name in names[:2]:
+            receipt_body = descriptors[name]["input_schema"]["properties"]["body"][
+                "properties"
+            ]["receipt"]["properties"]["body"]
+            resource = receipt_body["properties"]["resource"]["properties"]
+            self.assertEqual(
+                resource["intent"]["properties"]["kind"]["const"],
+                "account_alias",
+            )
+            for nullable in (
+                resource["quote"],
+                resource["instruction_index"],
+                receipt_body["properties"]["acquisition"]["properties"][
+                    "pricing_class_hint"
+                ],
+                receipt_body["properties"]["owner_auto_renew_instruction"],
+            ):
+                self.assertIn("null", {branch.get("type") for branch in nullable["oneOf"]})
 
     def test_source_mutations_fail_closed(self) -> None:
         mutations = (

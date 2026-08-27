@@ -15,6 +15,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeyProvider;
+import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.client.ClientConfig.ExportOptions;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
@@ -22,6 +23,7 @@ import org.hyperledger.iroha.android.crypto.keystore.KeyAttestation;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationResult;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerificationException;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifier;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifierTests;
 import org.hyperledger.iroha.android.telemetry.DeviceProfile;
 import org.hyperledger.iroha.android.telemetry.DeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
@@ -43,10 +45,10 @@ public final class ClientConfigKeystoreTelemetryTests {
         configWithExportOptions(sink, new SuccessfulAttestationProvider());
     final IrohaKeyManager keyManager = config.exportOptions().keyManager();
 
-    final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(new StubCertificate()).build();
+    final AttestationVerifier verifier = AttestationVerifierTests.fixtureVerifier();
     final Optional<AttestationResult> result =
-        keyManager.verifyAttestation("retail-wallet", verifier, null);
+        keyManager.verifyAttestation(
+            "retail-wallet", verifier, AttestationVerifierTests.fixtureChallenge());
     assert result.isPresent() : "verification result expected";
 
     final RecordingTelemetrySink.SignalEvent event =
@@ -54,7 +56,7 @@ public final class ClientConfigKeystoreTelemetryTests {
     assert event != null : "attestation result event missing";
     assert hashedAlias().equals(event.fields.get("alias_label"));
     assert "trusted-provider".equals(event.fields.get("provider"));
-    assert "trusted_environment".equals(event.fields.get("security_level"));
+    assert "strong_box".equals(event.fields.get("security_level"));
     assert "enterprise".equals(event.fields.get("device_brand_bucket"));
     final String digest = (String) event.fields.get("attestation_digest");
     assert digest != null && digest.length() == 64 : "digest must be hex encoded";
@@ -66,12 +68,12 @@ public final class ClientConfigKeystoreTelemetryTests {
         configWithExportOptions(sink, new FailingAttestationProvider());
     final IrohaKeyManager keyManager = config.exportOptions().keyManager();
 
-    final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(new StubCertificate()).build();
+    final AttestationVerifier verifier = AttestationVerifierTests.fixtureVerifier();
 
     boolean threw = false;
     try {
-      keyManager.verifyAttestation("retail-wallet", verifier, null);
+      keyManager.verifyAttestation(
+          "retail-wallet", verifier, AttestationVerifierTests.fixtureChallenge());
     } catch (final AttestationVerificationException expected) {
       threw = true;
     }
@@ -124,8 +126,17 @@ public final class ClientConfigKeystoreTelemetryTests {
 
   private static final class SuccessfulAttestationProvider implements KeyProvider {
     @Override
-    public Optional<KeyPair> load(final String alias) {
-      return Optional.empty();
+    public Optional<KeyPair> load(final String alias) throws KeyManagementException {
+      try {
+        return Optional.of(
+            new KeyPair(
+                AttestationVerifierTests.fixtureResult(alias)
+                    .leafCertificate()
+                    .getPublicKey(),
+                null));
+      } catch (final Exception ex) {
+        throw new KeyManagementException("failed to load fixture key", ex);
+      }
     }
 
     @Override
@@ -150,19 +161,15 @@ public final class ClientConfigKeystoreTelemetryTests {
 
     @Override
     public Optional<AttestationResult> verifyAttestation(
-        final String alias, final AttestationVerifier verifier, final byte[] expectedChallenge) {
-      final AttestationResult result =
-          new AttestationResult(
-              alias,
-              List.of(new StubCertificate()),
-              AttestationResult.SecurityLevel.TRUSTED_ENVIRONMENT,
-              AttestationResult.SecurityLevel.TRUSTED_ENVIRONMENT,
-              new byte[] {0x01},
-              new byte[] {0x02},
-              true,
-              true,
-              false);
-      return Optional.of(result);
+        final String alias, final AttestationVerifier verifier, final byte[] expectedChallenge)
+        throws AttestationVerificationException {
+      try {
+        return Optional.of(AttestationVerifierTests.fixtureResult(alias));
+      } catch (final AttestationVerificationException ex) {
+        throw ex;
+      } catch (final Exception ex) {
+        throw new AttestationVerificationException("fixture_verification_failed", ex);
+      }
     }
 
     @Override

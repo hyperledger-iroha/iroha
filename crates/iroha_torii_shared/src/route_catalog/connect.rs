@@ -18,6 +18,7 @@ pub const SESSION_CREATE: RouteDescriptor = RouteDescriptor::new(
 .with_path_policy(PathPolicy::ProtocolException {
     reason: "Connect session bootstrap derives the protocol principal and role tokens",
 })
+.with_private_no_store()
 .with_cors_options(true);
 /// Delete a wallet-pairing session using its management token.
 pub const SESSION_DELETE: RouteDescriptor = RouteDescriptor::new(
@@ -69,6 +70,7 @@ pub const SESSION_STATUS: RouteDescriptor = RouteDescriptor::new(
 .with_path_policy(PathPolicy::ProtocolException {
     reason: "Connect management-token session status endpoint",
 })
+.with_private_no_store()
 .with_implicit_head(true)
 .with_cors_options(true);
 /// Read aggregate node-local Connect status as an authenticated operator.
@@ -120,5 +122,10 @@ mod tests {
         );
         assert_eq!(RouteEffect::ReadOnly, SESSION_STATUS.effect());
         assert_eq!(RouteEffect::ReadOnly, STATUS.effect());
+        assert!(SESSION_CREATE.requires_private_no_store());
+        assert!(SESSION_STATUS.requires_private_no_store());
+        assert!(STATUS.requires_private_no_store());
+        assert!(!SESSION_DELETE.requires_private_no_store());
+        assert!(!WEBSOCKET.requires_private_no_store());
     }
 }

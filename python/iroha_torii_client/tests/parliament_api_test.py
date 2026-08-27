@@ -7,6 +7,7 @@ import copy
 import hashlib
 from typing import Any, List, Optional
 
+import iroha_torii_client.parliament_api as parliament_api_module
 import pytest
 import requests
 from client_test_support import CANONICAL_OWNER
@@ -26,7 +27,10 @@ from iroha_torii_client import (
     ToriiCanonicalRequestAuth,
     ToriiClient,
 )
-from iroha_torii_client.norito_frame import schema_hash_for_type_name
+from iroha_torii_client.norito_frame import (
+    schema_hash_for_type_name,
+    validate_opaque_norito_frame,
+)
 from sumeragi_exact_json_test_support import RecordingSession, StubResponse
 
 NETWORK_ID = "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
@@ -37,6 +41,14 @@ BODY_ID = "33" * 32
 BALLOT_ID = "44" * 32
 KEY_SESSION_ID = "55" * 32
 PARAMETER_HASH = bytes([0x66]) * 32
+ATTEMPT_INSTRUCTION_TYPE_NAME = (
+    "iroha_data_model::isi::governance::parliament::"
+    "CreateParliamentGovernanceAttemptV1"
+)
+TRANSITION_INSTRUCTION_TYPE_NAME = (
+    "iroha_data_model::isi::governance::parliament::"
+    "SubmitParliamentLifecycleTransitionV1"
+)
 
 
 def _auth(
@@ -88,6 +100,14 @@ def _frame(
             payload,
         )
     )
+
+
+def _instruction_frame(payload: bytes, wire_id: str) -> bytes:
+    type_names = {
+        PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1: ATTEMPT_INSTRUCTION_TYPE_NAME,
+        PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1: TRANSITION_INSTRUCTION_TYPE_NAME,
+    }
+    return _frame(payload, type_names[wire_id])
 
 
 def _json_response(payload: Any, **headers: str) -> StubResponse:
@@ -518,7 +538,10 @@ def test_all_canonical_routes_are_authenticated_bounded_and_bound() -> None:
                 "tx_instructions": [
                     {
                         "wire_id": PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1,
-                        "payload_hex": _frame(b"attempt instruction").hex(),
+                        "payload_hex": _instruction_frame(
+                            b"attempt instruction",
+                            PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1,
+                        ).hex(),
                     }
                 ],
             }
@@ -541,7 +564,10 @@ def test_all_canonical_routes_are_authenticated_bounded_and_bound() -> None:
                 "tx_instructions": [
                     {
                         "wire_id": PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
-                        "payload_hex": _frame(b"transition instruction").hex(),
+                        "payload_hex": _instruction_frame(
+                            b"transition instruction",
+                            PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
+                        ).hex(),
                     }
                 ],
             }
@@ -833,7 +859,10 @@ def test_freeze_timed_ovn_corpus_enforces_the_32_record_call_boundary() -> None:
                 "tx_instructions": [
                     {
                         "wire_id": PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
-                        "payload_hex": _frame(b"bounded freeze instruction").hex(),
+                        "payload_hex": _instruction_frame(
+                            b"bounded freeze instruction",
+                            PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
+                        ).hex(),
                     }
                 ],
             }
@@ -909,6 +938,54 @@ def test_instruction_payload_must_be_a_canonical_norito_frame() -> None:
             canonical_auth=_auth(),
         )
     assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("wire_id", "type_name", "foreign_type_name"),
+    [
+        (
+            PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1,
+            ATTEMPT_INSTRUCTION_TYPE_NAME,
+            TRANSITION_INSTRUCTION_TYPE_NAME,
+        ),
+        (
+            PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
+            TRANSITION_INSTRUCTION_TYPE_NAME,
+            ATTEMPT_INSTRUCTION_TYPE_NAME,
+        ),
+    ],
+)
+def test_instruction_payload_requires_the_exact_rust_schema_hash(
+    wire_id: str,
+    type_name: str,
+    foreign_type_name: str,
+) -> None:
+    context = "tx_instructions"
+    valid = _frame(b"instruction", type_name)
+    parsed = parliament_api_module._instruction(
+        [{"wire_id": wire_id, "payload_hex": valid.hex()}],
+        wire_id,
+        context,
+    )
+    assert parsed.payload_hex == valid.hex()
+
+    zero_schema = bytearray(valid)
+    zero_schema[6:22] = bytes(16)
+    for invalid in (bytes(zero_schema), _frame(b"instruction", foreign_type_name)):
+        with pytest.raises(ValueError, match="schema hash"):
+            parliament_api_module._instruction(
+                [{"wire_id": wire_id, "payload_hex": invalid.hex()}],
+                wire_id,
+                context,
+            )
+
+
+def test_opaque_norito_frame_still_requires_an_advertised_schema_hash() -> None:
+    frame = bytearray(_frame(b"opaque payload"))
+    frame[6:22] = bytes(16)
+
+    with pytest.raises(ValueError, match="non-zero Norito schema hash"):
+        validate_opaque_norito_frame(bytes(frame), context="opaque carrier")
 
 
 def test_attempt_certificate_rejects_unknown_nested_sortition_fields() -> None:
@@ -1188,7 +1265,63 @@ def test_environment_netrc_cannot_add_ambient_authorization(monkeypatch: Any) ->
     assert "Authorization" not in session.calls[0]["headers"]
 
 
-def test_environment_proxy_and_ca_bundle_are_not_merged(monkeypatch: Any) -> None:
+def test_ambient_environment_proxy_is_rejected_before_dispatch(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(
+        requests.sessions,
+        "get_environ_proxies",
+        lambda _url, **_kwargs: {
+            "https": "https://ambient-proxy.test:8443"
+        },
+    )
+    session = RecordingSession()
+    session.trust_env = True
+
+    with pytest.raises(ValueError, match="ambient environment proxies"):
+        ToriiClient(
+            "https://node.test", session=session
+        ).get_governance_capabilities_v1(canonical_auth=_auth())
+
+    assert session.calls == []
+
+
+def test_environment_proxy_authentication_is_rejected_before_dispatch(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(
+        requests.sessions,
+        "get_environ_proxies",
+        lambda _url, **_kwargs: {
+            "https": "https://ambient-user:ambient-password@ambient-proxy.test:8443"
+        },
+    )
+    session = RecordingSession()
+    session.trust_env = True
+
+    with pytest.raises(ValueError, match="proxy authentication"):
+        ToriiClient(
+            "https://node.test", session=session
+        ).get_governance_capabilities_v1(canonical_auth=_auth())
+
+    assert session.calls == []
+
+
+def test_explicit_proxy_authentication_is_rejected_before_dispatch() -> None:
+    session = RecordingSession()
+    session.proxies["https"] = (
+        "https://explicit-user:explicit-password@explicit-proxy.test:8443"
+    )
+
+    with pytest.raises(ValueError, match="proxy authentication"):
+        ToriiClient(
+            "https://node.test", session=session
+        ).get_governance_capabilities_v1(canonical_auth=_auth())
+
+    assert session.calls == []
+
+
+def test_environment_ca_bundle_is_not_merged(monkeypatch: Any) -> None:
     class TransportRecordingSession(RecordingSession):
         send_settings: dict[str, Any]
 
@@ -1200,9 +1333,10 @@ def test_environment_proxy_and_ca_bundle_are_not_merged(monkeypatch: Any) -> Non
             self.send_settings = dict(kwargs)
             return super().send(request, **kwargs)
 
-    monkeypatch.setenv(
-        "HTTPS_PROXY",
-        "https://ambient-user:ambient-password@ambient-proxy.test:8443",
+    monkeypatch.setattr(
+        requests.sessions,
+        "get_environ_proxies",
+        lambda _url, **_kwargs: {},
     )
     monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/ambient/ca-bundle.pem")
     session = TransportRecordingSession()

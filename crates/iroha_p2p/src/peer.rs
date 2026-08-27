@@ -1,11 +1,12 @@
 //! Tokio actor Peer
+#[cfg(test)]
+use crate::puzzle_work_admission::{
+    DEFAULT_INBOUND_VERIFY_CAPACITY, DEFAULT_OUTBOUND_MINT_CAPACITY,
+};
 use crate::{
     ConsensusConfigCaps, ConsensusHandshakeCaps, ConsensusMode, Error, RelayRole,
     boilerplate::*,
-    puzzle_work_admission::{
-        DEFAULT_INBOUND_VERIFY_CAPACITY, DEFAULT_OUTBOUND_MINT_CAPACITY,
-        SoranetPuzzleWorkAdmission, run_soranet_admission_work,
-    },
+    puzzle_work_admission::{SoranetPuzzleWorkAdmission, run_soranet_admission_work},
 };
 use bytes::{Buf, BufMut, BytesMut};
 use iroha_config::parameters::actual::SoranetPow as ActualSoranetPow;
@@ -235,6 +236,27 @@ impl Drop for PendingTicketReplayReservation {
         std::hint::black_box(&mut self.fingerprint[..]);
     }
 }
+/// Process-owned state that must remain identical across handshake-policy reloads.
+#[derive(Debug, Clone)]
+pub(crate) struct SoranetHandshakeSharedState {
+    revocation_store: Arc<Mutex<TicketRevocationStore>>,
+    pending_ticket_replays: Arc<PendingTicketReplays>,
+    puzzle_work_admission: Arc<SoranetPuzzleWorkAdmission>,
+}
+impl SoranetHandshakeSharedState {
+    pub(crate) fn new(
+        revocation_store: Arc<Mutex<TicketRevocationStore>>,
+        puzzle_work_admission: Arc<SoranetPuzzleWorkAdmission>,
+    ) -> Self {
+        Self {
+            revocation_store,
+            pending_ticket_replays: Arc::new(PendingTicketReplays {
+                fingerprints: Mutex::new(HashSet::new()),
+            }),
+            puzzle_work_admission,
+        }
+    }
+}
 /// Runtime configuration shared across `SoraNet` handshake attempts.
 #[derive(Debug, Clone)]
 pub struct SoranetHandshakeConfig {
@@ -254,6 +276,7 @@ pub struct SoranetHandshakeConfig {
     puzzle_work_admission: Arc<SoranetPuzzleWorkAdmission>,
 }
 impl SoranetHandshakeConfig {
+    #[cfg(test)]
     pub(crate) fn new(
         descriptor_commit: Vec<u8>,
         client_capabilities: Vec<u8>,
@@ -267,6 +290,43 @@ impl SoranetHandshakeConfig {
         puzzle_params: Option<PuzzleParameters>,
         pow_ticket_ttl: Duration,
         revocation_store: Arc<Mutex<TicketRevocationStore>>,
+    ) -> Result<Self, Error> {
+        let shared_state = SoranetHandshakeSharedState::new(
+            revocation_store,
+            Arc::new(SoranetPuzzleWorkAdmission::new(
+                DEFAULT_OUTBOUND_MINT_CAPACITY,
+                DEFAULT_INBOUND_VERIFY_CAPACITY,
+            )),
+        );
+        Self::new_with_shared_state(
+            descriptor_commit,
+            client_capabilities,
+            relay_capabilities,
+            trust_gossip,
+            kem_id,
+            sig_id,
+            resume_hash,
+            pow_required,
+            pow_params,
+            puzzle_params,
+            pow_ticket_ttl,
+            shared_state,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_shared_state(
+        descriptor_commit: Vec<u8>,
+        client_capabilities: Vec<u8>,
+        relay_capabilities: Vec<u8>,
+        trust_gossip: bool,
+        kem_id: u8,
+        sig_id: u8,
+        resume_hash: Option<Vec<u8>>,
+        pow_required: bool,
+        pow_params: PowParameters,
+        puzzle_params: Option<PuzzleParameters>,
+        pow_ticket_ttl: Duration,
+        shared_state: SoranetHandshakeSharedState,
     ) -> Result<Self, Error> {
         if MlKemSuite::from_kem_id(kem_id).is_none() {
             return Err(Error::HandshakeSoranet(format!(
@@ -337,22 +397,16 @@ impl SoranetHandshakeConfig {
             pow_params: Arc::new(pow_params),
             pow_ticket_ttl,
             puzzle_params: puzzle_params.map(Arc::new),
-            revocation_store,
-            pending_ticket_replays: Arc::new(PendingTicketReplays {
-                fingerprints: Mutex::new(HashSet::new()),
-            }),
-            puzzle_work_admission: Arc::new(SoranetPuzzleWorkAdmission::new(
-                DEFAULT_OUTBOUND_MINT_CAPACITY,
-                DEFAULT_INBOUND_VERIFY_CAPACITY,
-            )),
+            revocation_store: shared_state.revocation_store,
+            pending_ticket_replays: shared_state.pending_ticket_replays,
+            puzzle_work_admission: shared_state.puzzle_work_admission,
         })
     }
-    pub(crate) fn with_puzzle_work_admission(
-        mut self,
-        admission: Arc<SoranetPuzzleWorkAdmission>,
-    ) -> Self {
-        self.puzzle_work_admission = admission;
-        self
+    #[cfg(test)]
+    pub(crate) fn shares_security_state_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.revocation_store, &other.revocation_store)
+            && Arc::ptr_eq(&self.pending_ticket_replays, &other.pending_ticket_replays)
+            && Arc::ptr_eq(&self.puzzle_work_admission, &other.puzzle_work_admission)
     }
     #[cfg(test)]
     pub(crate) fn puzzle_work_capacities(&self) -> (NonZeroUsize, NonZeroUsize) {

@@ -258,11 +258,14 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
         .await
         .expect("bind upstream listener");
     let addr = listener.local_addr().expect("upstream addr");
+    let captured_upstream_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured_upstream_requests_for_task = Arc::clone(&captured_upstream_requests);
     let upstream_task = tokio::spawn(async move {
         loop {
             let Ok((mut socket, _addr)) = listener.accept().await else {
                 break;
             };
+            let captured_upstream_requests = Arc::clone(&captured_upstream_requests_for_task);
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut buf = [0u8; 1024];
@@ -280,6 +283,10 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
                         }
                     }
                 }
+                captured_upstream_requests
+                    .lock()
+                    .expect("capture lock")
+                    .push(request);
                 if socket
                         .write_all(
                             b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nx-iroha-soracloud-served-service-name: spoofed-service\r\nx-iroha-soracloud-served-service-version: stale-version\r\nx-iroha-soracloud-served-replica-slot: 999\r\nx-iroha-soracloud-served-process-generation: 999\r\nx-iroha-soracloud-served-materialized-bundle-hash: hash:spoofed\r\ntransfer-encoding: chunked\r\n\r\n",
@@ -529,12 +536,42 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
         target.materialized_bundle_hash,
         expected_materialized_bundle_hash
     );
+    let mut direct_headers = HeaderMap::new();
+    direct_headers.insert(
+        axum::http::header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer tenant-token"),
+    );
+    direct_headers.insert("x-tenant-header", HeaderValue::from_static("visible"));
+    direct_headers.insert(
+        HEADER_API_TOKEN,
+        HeaderValue::from_static("listener-secret"),
+    );
+    direct_headers.insert(
+        "x-iroha-operator-token",
+        HeaderValue::from_static("operator-secret"),
+    );
+    direct_headers.insert(
+        "x-sorafs-stream-token",
+        HeaderValue::from_static("stream-secret"),
+    );
+    direct_headers.insert(
+        "sora-pop-authorization",
+        HeaderValue::from_static("PopV1 credential-secret"),
+    );
+    direct_headers.insert(
+        axum::http::header::CONNECTION,
+        HeaderValue::from_static("x-hop-secret"),
+    );
+    direct_headers.insert(
+        "x-hop-secret",
+        HeaderValue::from_static("connection-secret"),
+    );
     let direct_response = tokio::time::timeout(
         Duration::from_secs(3),
         super::proxy_soracloud_public_hosted_http_locally(
             &HttpMethod::GET,
             &"/app/v1/search/search_1/events".parse().expect("uri"),
-            &HeaderMap::new(),
+            &direct_headers,
             Bytes::new(),
             &route_match,
             &listen_base_url,
@@ -545,6 +582,24 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
     .expect("direct native proxy response");
     assert_eq!(direct_response.status(), StatusCode::OK);
     drop(direct_response);
+    let captured = captured_upstream_requests.lock().expect("capture lock");
+    let direct_request = String::from_utf8_lossy(&captured[0]).to_ascii_lowercase();
+    assert!(direct_request.contains("authorization: bearer tenant-token\r\n"));
+    assert!(direct_request.contains("x-tenant-header: visible\r\n"));
+    for removed in [
+        HEADER_API_TOKEN,
+        "x-iroha-operator-token",
+        "x-sorafs-stream-token",
+        "sora-pop-authorization",
+        "connection",
+        "x-hop-secret",
+    ] {
+        assert!(
+            !direct_request.contains(&format!("{removed}:")),
+            "hosted tenant must not receive `{removed}`"
+        );
+    }
+    drop(captured);
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     {
@@ -554,21 +609,54 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
             Duration::from_secs(3),
             super::execute_incoming_torii_proxy_request(
                 &app,
-                ToriiProxyRequestV6 {
-                    schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+                ToriiProxyRequestV1 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V1,
                     request_id: Hash::new(b"incoming-hosted-sse-served-revision"),
                     deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
                     hop_count: 1,
                     max_hops: 3,
                     visited_peer_ids: vec![ingress_peer_id],
-                    request: ToriiProxyRequestKindV4::HostedHttp(ToriiHostedHttpProxyRequestV1 {
+                    request: ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
                         service_name: "web_portal".to_owned(),
                         service_version: "2026.02.0".to_owned(),
                         replica_slot: 1,
                         request_path: "/v1/search/search_1/events".to_owned(),
                         method: "GET".to_owned(),
                         query_string: None,
-                        headers: Vec::new(),
+                        headers: vec![
+                            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                                name: "authorization".to_owned(),
+                                value: b"Bearer remote-tenant-token".to_vec(),
+                            },
+                            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                                name: "x-tenant-header".to_owned(),
+                                value: b"remote-visible".to_vec(),
+                            },
+                            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                                name: HEADER_API_TOKEN.to_owned(),
+                                value: b"forged-listener-secret".to_vec(),
+                            },
+                            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                                name: "x-iroha-operator-token".to_owned(),
+                                value: b"forged-operator-secret".to_vec(),
+                            },
+                            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                                name: "x-sorafs-evidence-grant".to_owned(),
+                                value: b"forged-evidence-secret".to_vec(),
+                            },
+                            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                                name: "sora-pop-authorization".to_owned(),
+                                value: b"PopV1 forged-credential-secret".to_vec(),
+                            },
+                            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                                name: "connection".to_owned(),
+                                value: b"x-hop-secret".to_vec(),
+                            },
+                            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                                name: "x-hop-secret".to_owned(),
+                                value: b"forged-connection-secret".to_vec(),
+                            },
+                        ],
                         body: Vec::new(),
                         remote_ip: Some("127.0.0.1".to_owned()),
                     }),
@@ -617,6 +705,29 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
             );
         }
         drop(incoming_response);
+        let captured = captured_upstream_requests.lock().expect("capture lock");
+        let incoming_request = String::from_utf8_lossy(
+            captured
+                .last()
+                .expect("incoming proxy request must reach the hosted tenant"),
+        )
+        .to_ascii_lowercase();
+        assert!(incoming_request.contains("authorization: bearer remote-tenant-token\r\n"));
+        assert!(incoming_request.contains("x-tenant-header: remote-visible\r\n"));
+        for removed in [
+            HEADER_API_TOKEN,
+            "x-iroha-operator-token",
+            "x-sorafs-evidence-grant",
+            "sora-pop-authorization",
+            "connection",
+            "x-hop-secret",
+        ] {
+            assert!(
+                !incoming_request.contains(&format!("{removed}:")),
+                "peer envelope must not inject `{removed}` into the hosted tenant"
+            );
+        }
+        drop(captured);
     }
 
     let router = axum::Router::new()
@@ -714,7 +825,7 @@ fn hosted_http_health_route(app: &SharedAppState) -> soracloud::HostedHttpRouteM
         other => panic!("expected hosted route match, got {other:?}"),
     }
 }
-fn mutate_hosted_http_rollout_deployment(
+fn mutate_hosted_http_deployment(
     app: &mut SharedAppState,
     mutate: impl FnOnce(&mut iroha_data_model::soracloud::SoraServiceDeploymentStateV1),
 ) {
@@ -773,36 +884,33 @@ fn mutate_authoritative_hosted_http_runtime(
     mutate(&mut runtime);
     runtimes.insert(key, runtime);
 }
-fn assert_invalid_hosted_http_rollout(
-    mutate: impl FnOnce(&mut iroha_data_model::soracloud::SoraServiceDeploymentStateV1),
-    expected_message: &str,
-) {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let mut app = seed_public_hosted_http_rollout_app(
-        &temp,
-        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-    );
-    mutate_hosted_http_rollout_deployment(&mut app, mutate);
-    let state_view = app.state.view();
-    let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
-    let error = super::authoritative_weighted_hosted_http_versions(
-        state_view.world(),
-        current_height,
-        "web_portal",
-    )
-    .expect_err("noncanonical authoritative rollout must fail closed");
-    assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Internal);
-    assert!(
-        error.message.contains(expected_message),
-        "unexpected error: {}",
-        error.message
-    );
+fn inject_hosted_http_active_rollout(app: &mut SharedAppState) {
+    mutate_hosted_http_deployment(app, |deployment| {
+        let rollout = iroha_data_model::soracloud::SoraServiceRolloutStateV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+            rollout_handle: "retired-inrou-canary".to_owned(),
+            baseline_version: "2026.03.0".to_owned(),
+            candidate_version: deployment.current_service_version.clone(),
+            canary_percent: 20,
+            traffic_percent: 20,
+            stage: iroha_data_model::soracloud::SoraRolloutStageV1::Canary,
+            health_failures: 0,
+            max_health_failures: 3,
+            health_window_secs: 60,
+            created_sequence: 1,
+            updated_sequence: 1,
+        };
+        deployment.active_rollout = Some(rollout.clone());
+        deployment.last_rollout = Some(rollout);
+        deployment
+            .validate()
+            .expect("injected rollout must remain structurally valid");
+    });
 }
 #[test]
 fn authoritative_hosted_http_version_uses_the_single_current_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = seed_public_hosted_http_rollout_app(
+    let app = seed_public_hosted_http_current_app(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
@@ -811,83 +919,71 @@ fn authoritative_hosted_http_version_uses_the_single_current_revision() {
     let world = state_view.world();
     let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
     assert_eq!(
-        super::authoritative_weighted_hosted_http_versions(world, current_height, "web_portal")
-            .expect("canonical hosted rollout"),
-        (
-            vec![("2026.03.0".to_owned(), 20), ("2026.02.0".to_owned(), 80)],
-            1,
-        )
+        super::authoritative_hosted_http_revision(world, current_height, "web_portal")
+            .expect("canonical hosted revision"),
+        ("2026.02.0".to_owned(), 1)
     );
 }
 #[test]
-fn authoritative_hosted_http_versions_reject_noncanonical_active_rollouts() {
-    for (traffic_percent, expected_message) in [
-        (
-            0_u8,
-            "canary traffic must stay at or above canary_percent and below 100",
-        ),
-        (
-            100,
-            "canary traffic must stay at or above canary_percent and below 100",
-        ),
-        (101, "must be within 0..=100"),
-    ] {
-        assert_invalid_hosted_http_rollout(
-            move |deployment| {
-                deployment
-                    .active_rollout
-                    .as_mut()
-                    .expect("active rollout")
-                    .traffic_percent = traffic_percent;
-            },
-            expected_message,
+fn authoritative_hosted_http_revision_rejects_active_inrou_canary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = seed_public_hosted_http_current_app(
+        &temp,
+        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+    );
+    inject_hosted_http_active_rollout(&mut app);
+    let state_view = app.state.view();
+    let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+    let error =
+        super::authoritative_hosted_http_revision(state_view.world(), current_height, "web_portal")
+            .expect_err("first-release Inrou must reject an active canary");
+    assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Internal);
+    assert!(
+        error.message.contains("unsupported active Inrou canary")
+            && error.message.contains("require one active revision"),
+        "unexpected error: {}",
+        error.message
+    );
+}
+
+#[test]
+fn hosted_http_ingress_and_exact_peer_reject_active_inrou_canary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = seed_public_hosted_http_current_app(
+        &temp,
+        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+    );
+    inject_hosted_http_active_rollout(&mut app);
+    let route_match = hosted_http_health_route(&app);
+    let method = HttpMethod::GET;
+    let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
+    let ingress_error = super::resolve_hosted_http_runtime_target(
+        &app,
+        &route_match,
+        Some(IpAddr::from([203, 0, 113, 7])),
+        &method,
+        &uri,
+    )
+    .expect_err("public ingress must reject an active Inrou canary");
+    let exact_error =
+        super::resolve_exact_hosted_http_runtime_target(&app, "web_portal", "2026.02.0", 1)
+            .expect_err("authenticated exact-peer execution must reject an active Inrou canary");
+    for error in [ingress_error, exact_error] {
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Internal);
+        assert!(
+            error.message.contains("unsupported active Inrou canary")
+                && error.message.contains("require one active revision"),
+            "unexpected error: {}",
+            error.message
         );
     }
-    assert_invalid_hosted_http_rollout(
-        |deployment| {
-            let rollout = deployment.active_rollout.as_mut().expect("active rollout");
-            rollout.stage = iroha_data_model::soracloud::SoraRolloutStageV1::Promoted;
-            rollout.traffic_percent = 100;
-        },
-        "active_rollout may only track canary progress",
-    );
-    assert_invalid_hosted_http_rollout(
-        |deployment| {
-            deployment
-                .active_rollout
-                .as_mut()
-                .expect("active rollout")
-                .candidate_version = "2026.04.0".to_owned();
-        },
-        "must match current_service_version",
-    );
-    assert_invalid_hosted_http_rollout(
-        |deployment| {
-            deployment
-                .active_rollout
-                .as_mut()
-                .expect("active rollout")
-                .baseline_version
-                .clear();
-        },
-        "field `baseline_version` must not be empty",
-    );
-    assert_invalid_hosted_http_rollout(
-        |deployment| {
-            let current = deployment.current_service_version.clone();
-            deployment
-                .active_rollout
-                .as_mut()
-                .expect("active rollout")
-                .baseline_version = current;
-        },
-        "must differ from candidate_version",
-    );
 }
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_routes_only_the_current_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = seed_public_hosted_http_rollout_app(
+    let app = seed_public_hosted_http_current_app(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
@@ -914,10 +1010,30 @@ async fn resolve_hosted_http_runtime_target_routes_only_the_current_revision() {
     .expect("healthy current target for another client");
     assert_eq!(other_target.route_match.service_version, "2026.02.0");
 }
+
+#[test]
+fn resolve_exact_hosted_http_runtime_target_rejects_inactive_revision() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = seed_public_hosted_http_current_app(
+        &temp,
+        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+    );
+    let error = super::resolve_exact_hosted_http_runtime_target(&app, "web_portal", "2026.03.0", 1)
+        .expect_err("an authenticated peer must not pin a retained inactive revision");
+    assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+    assert!(
+        error
+            .message
+            .contains("is not the current revision `2026.02.0`"),
+        "unexpected error: {}",
+        error.message
+    );
+}
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_does_not_fall_back_to_an_inactive_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = seed_public_hosted_http_rollout_app(
+    let app = seed_public_hosted_http_current_app(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
@@ -937,57 +1053,18 @@ async fn resolve_hosted_http_runtime_target_does_not_fall_back_to_an_inactive_re
     assert!(
         error
             .message
-            .contains("authoritative hosted Soracloud revision `2026.03.0`")
-            && error.message.contains("has no healthy replica"),
+            .contains("hosted Soracloud current revision `2026.02.0`")
+            && error
+                .message
+                .contains("has no healthy authoritative replica"),
         "unexpected error: {}",
         error.message
     );
 }
 #[tokio::test]
-async fn resolve_hosted_http_runtime_target_never_promotes_canary_when_baseline_is_unhealthy() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let app = seed_public_hosted_http_rollout_app(
-        &temp,
-        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
-        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-    );
-    let route_match = hosted_http_health_route(&app);
-    let method = HttpMethod::GET;
-    let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-    let candidate_ip =
-        hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket < 20);
-    let candidate_target = super::resolve_hosted_http_runtime_target(
-        &app,
-        &route_match,
-        Some(candidate_ip),
-        &method,
-        &uri,
-    )
-    .expect("the candidate may serve only its allocated canary bucket");
-    assert_eq!(candidate_target.route_match.service_version, "2026.03.0");
-
-    let baseline_ip =
-        hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
-    let error = super::resolve_hosted_http_runtime_target(
-        &app,
-        &route_match,
-        Some(baseline_ip),
-        &method,
-        &uri,
-    )
-    .expect_err("an unavailable baseline must not implicitly promote the candidate");
-    assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
-    assert!(
-        error
-            .message
-            .contains("authoritative hosted Soracloud revision `2026.02.0`")
-            && error.message.contains("has no healthy replica")
-    );
-}
-#[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_without_any_healthy_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut app = seed_public_hosted_http_rollout_app(
+    let mut app = seed_public_hosted_http_current_app(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1008,7 +1085,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_any_healthy_rev
     assert!(
         error
             .message
-            .contains("no healthy authoritative hosted Soracloud revision"),
+            .contains("has no healthy authoritative replica"),
         "unexpected error: {}",
         error.message
     );
@@ -1096,7 +1173,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_any_healthy_rev
 async fn hosted_http_runtime_target_rejects_cross_keyed_and_invalid_placement_records() {
     for cross_keyed in [true, false] {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = seed_public_hosted_http_rollout_app(
+        let mut app = seed_public_hosted_http_current_app(
             &temp,
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1120,8 +1197,7 @@ async fn hosted_http_runtime_target_rejects_cross_keyed_and_invalid_placement_re
         let route_match = hosted_http_health_route(&app);
         let method = HttpMethod::GET;
         let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-        let baseline_ip =
-            hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
+        let baseline_ip = IpAddr::from([203, 0, 113, 7]);
         let error = super::resolve_hosted_http_runtime_target(
             &app,
             &route_match,
@@ -1158,7 +1234,7 @@ async fn hosted_http_runtime_target_rejects_cross_keyed_and_invalid_placement_re
 async fn hosted_http_runtime_target_rejects_missing_or_expired_host_capability() {
     for remove_capability in [true, false] {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = seed_public_hosted_http_rollout_app(
+        let mut app = seed_public_hosted_http_current_app(
             &temp,
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1192,8 +1268,7 @@ async fn hosted_http_runtime_target_rejects_missing_or_expired_host_capability()
         let route_match = hosted_http_health_route(&app);
         let method = HttpMethod::GET;
         let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-        let baseline_ip =
-            hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
+        let baseline_ip = IpAddr::from([203, 0, 113, 7]);
         let error = super::resolve_hosted_http_runtime_target(
             &app,
             &route_match,
@@ -1221,7 +1296,7 @@ async fn hosted_http_runtime_target_rejects_missing_or_expired_host_capability()
 #[tokio::test]
 async fn hosted_http_runtime_target_rejects_inactive_validator_with_live_capability() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut app = seed_public_hosted_http_rollout_app(
+    let mut app = seed_public_hosted_http_current_app(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1251,8 +1326,7 @@ async fn hosted_http_runtime_target_rejects_inactive_validator_with_live_capabil
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-    let baseline_ip =
-        hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
+    let baseline_ip = IpAddr::from([203, 0, 113, 7]);
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -1279,7 +1353,7 @@ async fn hosted_http_runtime_target_rejects_inactive_validator_with_live_capabil
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_without_service_lease() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut app = seed_public_hosted_http_rollout_app_with_service_lease(
+    let mut app = seed_public_hosted_http_current_app_with_service_lease(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
@@ -1331,7 +1405,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_service_lease()
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_expires() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = seed_public_hosted_http_rollout_app_with_service_lease(
+    let app = seed_public_hosted_http_current_app_with_service_lease(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
@@ -1366,7 +1440,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_expi
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_is_exhausted() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = seed_public_hosted_http_rollout_app_with_service_lease(
+    let app = seed_public_hosted_http_current_app_with_service_lease(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
@@ -1402,7 +1476,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_is_e
 async fn resolve_hosted_http_runtime_target_balances_across_distinct_healthy_hosts_within_revision()
 {
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = seed_public_hosted_http_rollout_app_with_replica_plans(
+    let app = seed_public_hosted_http_current_app_with_replica_plans(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1434,7 +1508,7 @@ async fn resolve_hosted_http_runtime_target_balances_across_distinct_healthy_hos
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
     let first_ip =
-        hosted_http_baseline_replica_test_ip("web_portal", "2026.02.0", &method, &uri, |bucket| {
+        hosted_http_replica_test_ip("web_portal", "2026.02.0", &method, &uri, |bucket| {
             bucket % 2 == 0
         });
     let first_target = super::resolve_hosted_http_runtime_target(
@@ -1449,12 +1523,9 @@ async fn resolve_hosted_http_runtime_target_balances_across_distinct_healthy_hos
         first_target.local_listen_base_url.as_deref(),
         Some("http://127.0.0.1:18080")
     );
-    assert_eq!(
-        first_target.assigned_peer_id,
-        hosted_http_rollout_local_peer_id()
-    );
+    assert_eq!(first_target.assigned_peer_id, hosted_http_local_peer_id());
     let second_ip =
-        hosted_http_baseline_replica_test_ip("web_portal", "2026.02.0", &method, &uri, |bucket| {
+        hosted_http_replica_test_ip("web_portal", "2026.02.0", &method, &uri, |bucket| {
             bucket % 2 == 1
         });
     let second_target = super::resolve_hosted_http_runtime_target(
@@ -1474,7 +1545,7 @@ async fn resolve_hosted_http_runtime_target_balances_across_distinct_healthy_hos
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_when_authoritative_runtime_state_lags() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut app = seed_public_hosted_http_rollout_app(
+    let mut app = seed_public_hosted_http_current_app(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1496,7 +1567,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_authoritative_runt
             baseline_bundle.service.replicas.get(),
             &[(
                 1,
-                hosted_http_rollout_local_identity().0,
+                hosted_http_local_identity().0,
                 app_mut
                     .local_peer_id
                     .as_ref()
@@ -1528,7 +1599,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_authoritative_runt
 #[tokio::test]
 async fn hosted_http_runtime_target_rejects_matching_forged_runtime_and_local_bundle_hashes() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut app = seed_public_hosted_http_rollout_app(
+    let mut app = seed_public_hosted_http_current_app(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1573,8 +1644,7 @@ async fn hosted_http_runtime_target_rejects_matching_forged_runtime_and_local_bu
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-    let baseline_ip =
-        hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
+    let baseline_ip = IpAddr::from([203, 0, 113, 7]);
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -1607,7 +1677,7 @@ async fn hosted_http_runtime_target_rejects_matching_forged_runtime_and_local_bu
 #[tokio::test]
 async fn hosted_http_runtime_target_rejects_unadmitted_bundle_for_remote_replica() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut app = seed_public_hosted_http_rollout_app(
+    let mut app = seed_public_hosted_http_current_app(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1656,8 +1726,7 @@ async fn hosted_http_runtime_target_rejects_unadmitted_bundle_for_remote_replica
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-    let baseline_ip =
-        hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
+    let baseline_ip = IpAddr::from([203, 0, 113, 7]);
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -1672,7 +1741,7 @@ async fn hosted_http_runtime_target_rejects_unadmitted_bundle_for_remote_replica
 #[tokio::test]
 async fn hosted_http_runtime_target_rejects_local_snapshot_bundle_mismatch() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut app = seed_public_hosted_http_rollout_app(
+    let mut app = seed_public_hosted_http_current_app(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1696,8 +1765,7 @@ async fn hosted_http_runtime_target_rejects_local_snapshot_bundle_mismatch() {
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-    let baseline_ip =
-        hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
+    let baseline_ip = IpAddr::from([203, 0, 113, 7]);
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -1728,7 +1796,7 @@ async fn hosted_http_runtime_target_rejects_local_snapshot_bundle_mismatch() {
 #[tokio::test]
 async fn hosted_http_runtime_target_rejects_stale_local_process_generation() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut app = seed_public_hosted_http_rollout_app(
+    let mut app = seed_public_hosted_http_current_app(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1750,8 +1818,7 @@ async fn hosted_http_runtime_target_rejects_stale_local_process_generation() {
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-    let baseline_ip =
-        hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
+    let baseline_ip = IpAddr::from([203, 0, 113, 7]);
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -1848,7 +1915,7 @@ async fn hosted_http_runtime_target_rejects_stale_local_process_generation() {
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_without_snapshot_replica_targets() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = seed_public_hosted_http_rollout_app_with_replica_plans(
+    let app = seed_public_hosted_http_current_app_with_replica_plans(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
@@ -1879,7 +1946,7 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_snapshot_replic
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_rejects_snapshot_without_peer_identity() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = seed_public_hosted_http_rollout_app_with_replica_plans_and_snapshot_peer_id(
+    let app = seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -1926,7 +1993,7 @@ async fn resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer
         0x4c,
         "derive canonical hosted HTTP local snapshot host fixture key",
     );
-    let mut app = seed_public_hosted_http_rollout_app_with_replica_plans_and_snapshot_peer_id(
+    let mut app = seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -2059,7 +2126,7 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
         checked_torii_test_bls_keypair(0x52, "derive hosted HTTP remote fallback peer fixture key");
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
-    let mut app = seed_public_hosted_http_rollout_app_with_replica_plans_and_snapshot_peer_id(
+    let mut app = seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
         &temp,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,

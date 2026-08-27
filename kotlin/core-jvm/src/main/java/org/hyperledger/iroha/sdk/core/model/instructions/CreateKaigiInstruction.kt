@@ -1,6 +1,29 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 private const val CREATE_KAIGI_ACTION = "CreateKaigi"
+private val CREATE_KAIGI_ARGUMENTS = setOf(
+    "action",
+    "call.domain_id",
+    "call.call_name",
+    "host",
+    "title",
+    "description",
+    "max_participants",
+    "gas_rate_per_minute",
+    "scheduled_start_ms",
+    "billing_account",
+    "privacy.mode",
+    "privacy.state",
+    "room_policy.policy",
+    "room_policy.state",
+    "relay_manifest.expiry_ms",
+    "commitment.commitment",
+    "commitment.alias_tag",
+    "nullifier.digest",
+    "nullifier.issued_at_ms",
+    "roster_root",
+    "proof",
+)
 
 /** Typed representation of `CreateKaigi` instructions. */
 class CreateKaigiInstruction internal constructor(
@@ -25,7 +48,8 @@ class CreateKaigiInstruction internal constructor(
     private val _arguments: Map<String, String>,
 ) : InstructionTemplate {
 
-    private val _metadata: Map<String, String> = metadata.toMap()
+    private val _metadata: Map<String, String> =
+        KaigiInstructionUtils.immutableArguments(metadata.toSortedMap())
 
     val metadata: Map<String, String> get() = _metadata
 
@@ -109,6 +133,12 @@ class CreateKaigiInstruction internal constructor(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): CreateKaigiInstruction {
+            KaigiInstructionUtils.requireKnownArguments(
+                arguments,
+                CREATE_KAIGI_ARGUMENTS,
+                "metadata.",
+                "relay_manifest.hop.",
+            )
             KaigiInstructionUtils.requireAction(arguments, CREATE_KAIGI_ACTION)
             val callId = KaigiInstructionUtils.parseCallId(arguments, "call")
             val host = KaigiInstructionUtils.require(arguments, "host")
@@ -129,10 +159,12 @@ class CreateKaigiInstruction internal constructor(
             val roomPolicy = KaigiInstructionUtils.parseRoomPolicy(arguments, "room_policy")
             val relayManifest = KaigiInstructionUtils.parseRelayManifest(arguments, "relay_manifest")
             val commitment = arguments["commitment.commitment"]
+                ?.let(KaigiInstructionUtils::canonicalizeHash)
             require(arguments["commitment.alias_tag"] == null) {
                 "commitment aliasTag is off-chain only and must be omitted"
             }
             val nullifier = arguments["nullifier.digest"]
+                ?.let(KaigiInstructionUtils::canonicalizeHash)
             val parsedNullifierIssuedAt = KaigiInstructionUtils.parseOptionalUnsignedLong(
                 arguments["nullifier.issued_at_ms"], "nullifier.issued_at_ms",
             )
@@ -144,7 +176,7 @@ class CreateKaigiInstruction internal constructor(
             }
             val nullifierIssuedAt = parsedNullifierIssuedAt.takeIf { nullifier != null }
 
-            return CreateKaigiInstruction(
+            return create(
                 callId = callId,
                 host = host,
                 title = title,
@@ -161,9 +193,8 @@ class CreateKaigiInstruction internal constructor(
                 commitmentAliasTag = null,
                 nullifierDigest = nullifier,
                 nullifierIssuedAtMs = nullifierIssuedAt,
-                rosterRoot = arguments["roster_root"],
+                rosterRoot = arguments["roster_root"]?.let(KaigiInstructionUtils::canonicalizeHash),
                 proofBase64 = arguments["proof"],
-                _arguments = LinkedHashMap(arguments),
             )
         }
 
@@ -187,32 +218,39 @@ class CreateKaigiInstruction internal constructor(
             nullifierIssuedAtMs: Long? = null,
             rosterRoot: String? = null,
             proofBase64: String? = null,
-        ): CreateKaigiInstruction = CreateKaigiInstruction(
-            callId = callId,
-            host = host,
-            title = title,
-            description = description,
-            maxParticipants = maxParticipants,
-            gasRatePerMinute = gasRatePerMinute,
-            metadata = metadata,
-            scheduledStartMs = scheduledStartMs,
-            billingAccount = billingAccount,
-            privacyMode = privacyMode,
-            roomPolicy = roomPolicy,
-            relayManifest = relayManifest,
-            commitment = commitment,
-            commitmentAliasTag = commitmentAliasTag,
-            nullifierDigest = nullifierDigest,
-            nullifierIssuedAtMs = nullifierIssuedAtMs,
-            rosterRoot = rosterRoot,
-            proofBase64 = proofBase64,
-            _arguments = buildCanonicalArguments(
+        ): CreateKaigiInstruction {
+            val canonicalCommitment = KaigiInstructionUtils.canonicalizeOptionalHash(commitment)
+            val canonicalNullifier = KaigiInstructionUtils.canonicalizeOptionalHash(nullifierDigest)
+            val canonicalRosterRoot = KaigiInstructionUtils.canonicalizeOptionalHash(rosterRoot)
+            val canonicalRelayManifest = relayManifest?.let(KaigiInstructionUtils::validateRelayManifest)
+            val canonicalArguments = buildCanonicalArguments(
                 callId, host, title, description, maxParticipants,
                 gasRatePerMinute, metadata, scheduledStartMs, billingAccount,
-                privacyMode, roomPolicy, relayManifest, commitment,
-                nullifierDigest, nullifierIssuedAtMs, rosterRoot, proofBase64,
-            ),
-        )
+                privacyMode, roomPolicy, canonicalRelayManifest, canonicalCommitment,
+                canonicalNullifier, nullifierIssuedAtMs, canonicalRosterRoot, proofBase64,
+            )
+            return CreateKaigiInstruction(
+                callId = callId,
+                host = host,
+                title = title,
+                description = description,
+                maxParticipants = maxParticipants,
+                gasRatePerMinute = gasRatePerMinute,
+                metadata = metadata,
+                scheduledStartMs = scheduledStartMs,
+                billingAccount = billingAccount,
+                privacyMode = privacyMode,
+                roomPolicy = roomPolicy,
+                relayManifest = canonicalRelayManifest,
+                commitment = canonicalCommitment,
+                commitmentAliasTag = commitmentAliasTag,
+                nullifierDigest = canonicalNullifier,
+                nullifierIssuedAtMs = nullifierIssuedAtMs,
+                rosterRoot = canonicalRosterRoot,
+                proofBase64 = proofBase64,
+                _arguments = KaigiInstructionUtils.immutableArguments(canonicalArguments),
+            )
+        }
 
         private fun buildCanonicalArguments(
             callId: KaigiInstructionUtils.CallId,

@@ -84,6 +84,10 @@ fn require_registered_syscall_metering(
 ) -> Result<SyscallMetering, VMError> {
     metering.ok_or(VMError::UnknownSyscall(number))
 }
+fn host_allows_syscall_masked(host: &dyn IVMHost, policy: SyscallPolicy, number: u32) -> bool {
+    let _host_logger_mask = zk::RegLoggerGuard::mask();
+    host.allows_syscall(policy, number)
+}
 fn resolve_syscall_metering(
     host: &dyn IVMHost,
     policy: SyscallPolicy,
@@ -98,7 +102,7 @@ fn resolve_syscall_metering(
     // reserved path so the host must provide a deterministic quote before it
     // can perform work. Public ABI calls still fail closed above when their
     // mandatory registry entry is missing.
-    host.allows_syscall(policy, number)
+    host_allows_syscall_masked(host, policy, number)
         .then_some(SyscallMetering::Reserved)
         .ok_or(VMError::UnknownSyscall(number))
 }
@@ -218,6 +222,13 @@ struct SavedSyscallOutputRegisters {
     values: [u64; 5],
     private: [bool; 5],
     len: usize,
+}
+struct HostRegisterLogIsolation {
+    invocation_log: zk::SharedRegLog,
+    detached_log: zk::SharedRegLog,
+    proof_state_epoch: u64,
+    code_hash: [u8; 32],
+    zk_mode: bool,
 }
 include!(concat!(env!("OUT_DIR"), "/syscall_signatures.rs"));
 fn default_vector_length() -> usize {
@@ -1219,63 +1230,91 @@ pub struct RuntimeTemplate {
     memory: Memory,
     registers: Registers,
     private_memory_bytes: PrivateMemoryRanges,
+    code_hash: [u8; 32],
     pc: u64,
     gas_limit: u64,
     max_cycles: u64,
     trace_mode: TraceMode,
+    zk_mode: bool,
     zk_trace_enabled: bool,
     entrypoint_pc: Option<u64>,
     input_bump_next: u64,
 }
-/// A warmed VM cannot be reset from a baseline with different memory geometry.
+/// A warmed VM cannot be reset from a different program or memory geometry.
 ///
 /// Runtime pools must discard the mismatched VM instead of replacing its full
 /// memory image. A subsequent checkout can construct a correctly sized VM.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeTemplateResetError {
-    current_memory_bytes: usize,
-    template_memory_bytes: usize,
-    current_stack_limit: u64,
-    template_stack_limit: u64,
-    current_heap_max_limit: u64,
-    template_heap_max_limit: u64,
-    current_merkle_chunk_bytes: usize,
-    template_merkle_chunk_bytes: usize,
-    current_merkle_leaves: usize,
-    template_merkle_leaves: usize,
+    kind: RuntimeTemplateResetErrorKind,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeTemplateResetErrorKind {
+    ProgramIdentity {
+        current: [u8; 32],
+        template: [u8; 32],
+    },
+    MemoryGeometry {
+        current_memory_bytes: usize,
+        template_memory_bytes: usize,
+        current_stack_limit: u64,
+        template_stack_limit: u64,
+        current_heap_max_limit: u64,
+        template_heap_max_limit: u64,
+        current_merkle_chunk_bytes: usize,
+        template_merkle_chunk_bytes: usize,
+        current_merkle_leaves: usize,
+        template_merkle_leaves: usize,
+    },
 }
 impl RuntimeTemplateResetError {
+    fn from_program_identity(current: [u8; 32], template: [u8; 32]) -> Self {
+        Self {
+            kind: RuntimeTemplateResetErrorKind::ProgramIdentity { current, template },
+        }
+    }
     fn from_memory(error: MemoryTemplateMismatch) -> Self {
         Self {
-            current_memory_bytes: error.current.bytes,
-            template_memory_bytes: error.template.bytes,
-            current_stack_limit: error.current.stack_limit,
-            template_stack_limit: error.template.stack_limit,
-            current_heap_max_limit: error.current.heap_max_limit,
-            template_heap_max_limit: error.template.heap_max_limit,
-            current_merkle_chunk_bytes: error.current.merkle_chunk_bytes,
-            template_merkle_chunk_bytes: error.template.merkle_chunk_bytes,
-            current_merkle_leaves: error.current.merkle_leaves,
-            template_merkle_leaves: error.template.merkle_leaves,
+            kind: RuntimeTemplateResetErrorKind::MemoryGeometry {
+                current_memory_bytes: error.current.bytes,
+                template_memory_bytes: error.template.bytes,
+                current_stack_limit: error.current.stack_limit,
+                template_stack_limit: error.template.stack_limit,
+                current_heap_max_limit: error.current.heap_max_limit,
+                template_heap_max_limit: error.template.heap_max_limit,
+                current_merkle_chunk_bytes: error.current.merkle_chunk_bytes,
+                template_merkle_chunk_bytes: error.template.merkle_chunk_bytes,
+                current_merkle_leaves: error.current.merkle_leaves,
+                template_merkle_leaves: error.template.merkle_leaves,
+            },
         }
     }
 }
 impl std::fmt::Display for RuntimeTemplateResetError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "runtime-template memory geometry mismatch: VM has {} bytes, {} stack bytes, {} heap-ceiling bytes, {}-byte Merkle chunks, and {} Merkle leaves; template has {} bytes, {} stack bytes, {} heap-ceiling bytes, {}-byte Merkle chunks, and {} Merkle leaves",
-            self.current_memory_bytes,
-            self.current_stack_limit,
-            self.current_heap_max_limit,
-            self.current_merkle_chunk_bytes,
-            self.current_merkle_leaves,
-            self.template_memory_bytes,
-            self.template_stack_limit,
-            self.template_heap_max_limit,
-            self.template_merkle_chunk_bytes,
-            self.template_merkle_leaves
-        )
+        match self.kind {
+            RuntimeTemplateResetErrorKind::ProgramIdentity { current, template } => write!(
+                formatter,
+                "runtime-template program mismatch: VM has code hash {}, template has code hash {}",
+                hex::encode(current),
+                hex::encode(template)
+            ),
+            RuntimeTemplateResetErrorKind::MemoryGeometry {
+                current_memory_bytes,
+                template_memory_bytes,
+                current_stack_limit,
+                template_stack_limit,
+                current_heap_max_limit,
+                template_heap_max_limit,
+                current_merkle_chunk_bytes,
+                template_merkle_chunk_bytes,
+                current_merkle_leaves,
+                template_merkle_leaves,
+            } => write!(
+                formatter,
+                "runtime-template memory geometry mismatch: VM has {current_memory_bytes} bytes, {current_stack_limit} stack bytes, {current_heap_max_limit} heap-ceiling bytes, {current_merkle_chunk_bytes}-byte Merkle chunks, and {current_merkle_leaves} Merkle leaves; template has {template_memory_bytes} bytes, {template_stack_limit} stack bytes, {template_heap_max_limit} heap-ceiling bytes, {template_merkle_chunk_bytes}-byte Merkle chunks, and {template_merkle_leaves} Merkle leaves"
+            ),
+        }
     }
 }
 impl std::error::Error for RuntimeTemplateResetError {}
@@ -1314,7 +1353,21 @@ pub struct IVM {
     contract_abort_code: Option<u64>,
     constraints: zk::ConstraintLog,
     mem_log: MemLog,
-    reg_log: zk::RegLog,
+    reg_log: zk::SharedRegLog,
+    /// Whether a host callback currently owns `&mut IVM` with a detached
+    /// register log.
+    host_trace_log_detached: bool,
+    /// Invocation log retained while [`Self::reg_log`] is detached for a host
+    /// callback. This also gives trace-policy setters an exact TLS identity to
+    /// match instead of trusting a sticky boolean after unwinding.
+    host_trace_invocation_log: Option<zk::SharedRegLog>,
+    /// Changes whenever proof-facing state is discarded or replaced.
+    ///
+    /// Host callbacks may invoke public VM lifecycle methods. Capturing this
+    /// epoch while the register logger is detached prevents a callback from
+    /// resetting and then reconstructing the same apparent program identity
+    /// before the logger is reattached.
+    proof_state_epoch: u64,
     trace_log: DeltaTraceLog,
     step_log: zk::StepLog,
     trace_mode: TraceMode,
@@ -1363,7 +1416,7 @@ pub struct IVM {
     /// Is CUDA GPU acceleration available?
     use_cuda: bool,
     /// Flag indicating if zero-knowledge mode is active.
-    pub zk_mode: bool,
+    zk_mode: bool,
     /// Collect formal proof traces while preserving ZK-mode execution semantics.
     zk_trace_enabled: bool,
     entrypoint_pc: Option<u64>,
@@ -1399,7 +1452,10 @@ impl Clone for IVM {
             contract_abort_code: self.contract_abort_code,
             constraints: self.constraints.clone(),
             mem_log: self.mem_log.clone(),
-            reg_log: self.reg_log.clone(),
+            reg_log: Arc::new(parking_lot::Mutex::new(self.reg_log.lock().clone())),
+            host_trace_log_detached: false,
+            host_trace_invocation_log: None,
+            proof_state_epoch: self.proof_state_epoch,
             trace_log: self.trace_log.clone(),
             step_log: self.step_log.clone(),
             trace_mode: self.trace_mode,
@@ -1695,7 +1751,10 @@ impl IVM {
             contract_abort_code: None,
             constraints: zk::ConstraintLog::default(),
             mem_log: MemLog::default(),
-            reg_log: zk::RegLog::default(),
+            reg_log: Arc::new(parking_lot::Mutex::new(zk::RegLog::default())),
+            host_trace_log_detached: false,
+            host_trace_invocation_log: None,
+            proof_state_epoch: 0,
             trace_log: DeltaTraceLog::default(),
             step_log: zk::StepLog::default(),
             trace_mode: TraceMode::Off,
@@ -1797,7 +1856,8 @@ impl IVM {
     /// When enabled and no explicit cycle limit has been set, the default
     /// [`zk::MAX_CYCLES`] value is used. Disabling ZK clears the cycle limit.
     pub fn set_zk_mode(&mut self, enabled: bool) {
-        if self.zk_mode && !enabled && !self.scrub_private_memory() {
+        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
+        if !enabled && !self.scrub_private_state() {
             return;
         }
         self.zk_mode = enabled;
@@ -1813,10 +1873,22 @@ impl IVM {
     ///
     /// This does not change ZK-mode execution semantics: ZK opcodes, privacy
     /// tags, assertion handling, max-cycle padding, and gas accounting remain
-    /// active. Disabling this only suppresses proof/telemetry artifacts.
+    /// active. Disabling this only suppresses proof/telemetry artifacts. A
+    /// change made by a host during execution applies to the next invocation;
+    /// the current invocation keeps the trace policy selected at its start.
     pub fn set_zk_trace_enabled(&mut self, enabled: bool) {
         self.zk_trace_enabled = enabled;
-        if !enabled {
+        let scoped_invocation_log = zk::scoped_reg_logger();
+        let invocation_owns_this_log = scoped_invocation_log
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, &self.reg_log));
+        let active_callback_owns_this_log = self.host_trace_log_detached
+            && scoped_invocation_log.as_ref().is_some_and(|active| {
+                self.host_trace_invocation_log
+                    .as_ref()
+                    .is_some_and(|invocation| Arc::ptr_eq(active, invocation))
+            });
+        if !enabled && !invocation_owns_this_log && !active_callback_owns_this_log {
             self.clear_zk_trace_logs();
         }
     }
@@ -1827,6 +1899,10 @@ impl IVM {
     }
     /// Set the maximum cycle count used for zero-knowledge padding and enforcement.
     pub fn set_max_cycles(&mut self, max: u64) {
+        // The active trace shape is fixed at invocation start. A host callback
+        // may configure a later invocation, but it must not silently truncate
+        // or backfill the proof that is currently being collected.
+        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
         self.max_cycles = max;
     }
     /// Load raw code bytes under the default non-ZK, non-vector execution profile.
@@ -1837,7 +1913,7 @@ impl IVM {
         if code.len() > Memory::HEAP_START as usize {
             return Err(VMError::MemoryOutOfBounds);
         }
-        if !self.scrub_private_memory() {
+        if !self.scrub_private_state() {
             return Err(VMError::PrivacyViolation);
         }
         self.metadata = ProgramMetadata::default();
@@ -1984,7 +2060,7 @@ impl IVM {
         if code_len > Memory::HEAP_START || image.entry_pc > code_len {
             return Err(VMError::InvalidMetadata);
         }
-        if !self.scrub_private_memory() {
+        if !self.scrub_private_state() {
             return Err(VMError::PrivacyViolation);
         }
         self.metadata = image.metadata.clone();
@@ -2025,7 +2101,9 @@ impl IVM {
         self.contract_abort_code = None;
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
-        self.reg_log = zk::RegLog::default();
+        self.reg_log.lock().scrub();
+        self.host_trace_log_detached = false;
+        self.host_trace_invocation_log = None;
         self.trace_log = DeltaTraceLog::default();
         self.step_log = zk::StepLog::default();
         self.pc_trace.clear();
@@ -2259,14 +2337,22 @@ impl IVM {
     }
     #[inline]
     fn zk_trace_collection_enabled(&self) -> bool {
-        self.zk_mode && self.zk_trace_enabled
+        zk::scoped_reg_logger_enabled().unwrap_or(self.zk_mode && self.zk_trace_enabled)
     }
     fn clear_zk_trace_logs(&mut self) {
-        self.constraints = zk::ConstraintLog::default();
-        self.mem_log = MemLog::default();
-        self.reg_log = zk::RegLog::default();
-        self.trace_log = DeltaTraceLog::default();
-        self.step_log = zk::StepLog::default();
+        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
+        self.constraints.list.clear();
+        self.mem_log.scrub();
+        self.reg_log.lock().scrub();
+        if let Some(invocation_log) = &self.host_trace_invocation_log
+            && !Arc::ptr_eq(invocation_log, &self.reg_log)
+        {
+            invocation_log.lock().scrub();
+        }
+        self.trace_log.scrub();
+        self.step_log.steps.clear();
+        self.pc_trace.clear();
+        self.delta_trace.scrub();
     }
     #[inline]
     fn zk_match_tags(&self, rs1: usize, rs2: usize) -> Result<Option<bool>, VMError> {
@@ -2391,6 +2477,18 @@ impl IVM {
             }
         }
         self.private_memory_bytes.is_empty()
+    }
+    /// Scrub every private value before a mode transition or program replacement.
+    fn scrub_private_state(&mut self) -> bool {
+        let had_private_context =
+            self.zk_mode || self.registers.has_private() || !self.private_memory_bytes.is_empty();
+        let memory_scrubbed = self.scrub_private_memory();
+        self.registers.scrub_private();
+        if had_private_context {
+            self.clear_zk_trace_logs();
+            self.memory.clear_tracking();
+        }
+        memory_scrubbed
     }
     /// Detect a direct value or complete owned TLV that overlaps private bytes.
     ///
@@ -2705,34 +2803,81 @@ impl IVM {
             .binary_search(&address)
             .is_ok()
     }
-    fn inspect_owned_public_tlv_payload_len(&self, ptr: u64) -> Result<usize, VMError> {
+    fn inspect_owned_public_tlv_header(&self, ptr: u64) -> Result<(u64, u8), VMError> {
+        ptr.checked_add(7).ok_or(VMError::NoritoInvalid)?;
         self.ensure_public_memory(ptr, 7)?;
         let hdr = self
             .memory
             .load_region(ptr, 7)
             .map_err(|_| VMError::NoritoInvalid)?;
-        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
-        let total = 7usize
+        let len = u64::from(u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]));
+        let total = 7_u64
             .checked_add(len)
-            .and_then(|size| size.checked_add(iroha_crypto::Hash::LENGTH))
+            .and_then(|size| {
+                size.checked_add(
+                    u64::try_from(iroha_crypto::Hash::LENGTH)
+                        .expect("digest length always fits u64"),
+                )
+            })
             .ok_or(VMError::NoritoInvalid)?;
-        let total = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
+        ptr.checked_add(total).ok_or(VMError::NoritoInvalid)?;
         // Privacy is a public-boundary invariant, not an owned-region
         // side-effect. Check the complete self-described range before
         // rejecting invalid provenance so stack-shaped envelopes cannot
         // declassify a private payload through a boolean decoder result.
         self.ensure_public_memory(ptr, total)?;
         self.ensure_owned_tlv_range(ptr, total)?;
-        Ok(len)
+        Ok((len, hdr[2]))
+    }
+    /// Charge the byte-linear portion of a direct signature opcode before
+    /// checksum hashing or cryptographic verification.
+    ///
+    /// All operands are inspected even after a malformed public pointer so a
+    /// later private operand still fails with `PrivacyViolation`. Aliased
+    /// operands are charged independently because validation scans each role.
+    fn preflight_signature_opcode_payloads(&mut self, pointers: [u64; 3]) -> Result<bool, VMError> {
+        let mut payload_lengths = [0_u64; 3];
+        let mut malformed = false;
+        for (index, pointer) in pointers.into_iter().enumerate() {
+            match self.inspect_owned_public_tlv_header(pointer) {
+                Ok((length, version)) => {
+                    if version == 1 {
+                        payload_lengths[index] = length;
+                    } else {
+                        // Version rejection is fixed-header work. It precedes
+                        // checksum hashing, so it must not receive the
+                        // byte-linear surcharge.
+                        malformed = true;
+                    }
+                }
+                Err(VMError::PrivacyViolation) => return Err(VMError::PrivacyViolation),
+                Err(_) => malformed = true,
+            }
+        }
+        if malformed {
+            return Ok(false);
+        }
+        let extra_gas = crate::gas::signature_opcode_extra_gas(
+            payload_lengths[0],
+            payload_lengths[1],
+            payload_lengths[2],
+        )
+        .ok_or(VMError::GasCostOverflow)?;
+        self.debit_gas(extra_gas)?;
+        Ok(true)
     }
     /// Validate a pointer-ABI TLV in any owned public region and return its decoded view.
     pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
-        let len = self.inspect_owned_public_tlv_payload_len(ptr)?;
-        let total = 7usize
+        let (len, _) = self.inspect_owned_public_tlv_header(ptr)?;
+        let total = 7_u64
             .checked_add(len)
-            .and_then(|size| size.checked_add(iroha_crypto::Hash::LENGTH))
+            .and_then(|size| {
+                size.checked_add(
+                    u64::try_from(iroha_crypto::Hash::LENGTH)
+                        .expect("digest length always fits u64"),
+                )
+            })
             .ok_or(VMError::NoritoInvalid)?;
-        let total = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
         let envelope = self
             .memory
             .load_region(ptr, total)
@@ -3039,7 +3184,7 @@ impl IVM {
     }
     /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
     pub fn reset(&mut self) {
-        let _ = self.scrub_private_memory();
+        let _ = self.scrub_private_state();
         let resume_pc = self
             .entrypoint_pc
             .or_else(|| self.prepared.as_ref().map(|prepared| prepared.first_pc))
@@ -3053,7 +3198,11 @@ impl IVM {
         self.contract_abort_code = None;
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
-        self.reg_log = zk::RegLog::default();
+        self.reg_log.lock().scrub();
+        self.host_trace_log_detached = false;
+        if let Some(invocation_log) = self.host_trace_invocation_log.take() {
+            invocation_log.lock().scrub();
+        }
         self.trace_log = DeltaTraceLog::default();
         self.step_log = zk::StepLog::default();
         self.pc_trace.clear();
@@ -3082,10 +3231,12 @@ impl IVM {
             memory: self.memory.clone(),
             registers: self.registers.clone(),
             private_memory_bytes: self.private_memory_bytes.clone(),
+            code_hash: self.code_hash,
             pc: self.pc,
             gas_limit: self.gas_limit,
             max_cycles: self.max_cycles,
             trace_mode: self.trace_mode,
+            zk_mode: self.zk_mode,
             zk_trace_enabled: self.zk_trace_enabled,
             entrypoint_pc: self.entrypoint_pc,
             input_bump_next: self.input_bump_next,
@@ -3099,13 +3250,20 @@ impl IVM {
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeTemplateResetError`] when the VM and template memory
-    /// geometries differ. The VM is left unchanged so a runtime pool can
-    /// discard it without performing a full-memory clone.
+    /// Returns [`RuntimeTemplateResetError`] when the VM and template refer to
+    /// different programs or their memory geometries differ. The VM is left
+    /// unchanged so a runtime pool can discard it without performing a
+    /// full-memory clone.
     pub fn reset_from_runtime_template(
         &mut self,
         template: &RuntimeTemplate,
     ) -> Result<(), RuntimeTemplateResetError> {
+        if self.code_hash != template.code_hash {
+            return Err(RuntimeTemplateResetError::from_program_identity(
+                self.code_hash,
+                template.code_hash,
+            ));
+        }
         // The template restores dirty memory chunks, so stale tags must not
         // cause reset() to scrub bytes restored from that baseline.
         self.memory
@@ -3123,6 +3281,7 @@ impl IVM {
         self.input_bump_next = template.input_bump_next;
         self.set_host(DefaultHost::default());
         self.reset();
+        self.zk_mode = template.zk_mode;
         self.registers = template.registers.clone();
         self.private_memory_bytes = template.private_memory_bytes.clone();
         self.pc = template.pc;
@@ -3319,9 +3478,20 @@ impl IVM {
     pub fn memory_log(&self) -> &[MemEvent] {
         &self.mem_log.events
     }
-    /// Access the log of register events collected during the last run.
-    pub fn register_log(&self) -> &[zk::RegEvent] {
-        &self.reg_log.events
+    /// Return an owned snapshot of register events collected during the last run.
+    ///
+    /// The snapshot cannot alias the active logger while a host callback reads
+    /// registers or replaces the VM.
+    pub fn register_log(&self) -> Vec<zk::RegEvent> {
+        self.reg_log.lock().events.clone()
+    }
+    fn proof_register_log_handle(&self) -> zk::SharedRegLog {
+        if self.host_trace_log_detached
+            && let Some(invocation_log) = &self.host_trace_invocation_log
+        {
+            return Arc::clone(invocation_log);
+        }
+        Arc::clone(&self.reg_log)
     }
     fn finish_digest(hasher: Sha256) -> [u8; 32] {
         hasher.finalize().into()
@@ -3473,17 +3643,20 @@ impl IVM {
     /// Count trace/log events priced by the execution-proof syscall without
     /// materializing or hashing the proof summary.
     pub(crate) fn execution_proof_event_count(&self) -> u64 {
+        let register_log = self.proof_register_log_handle();
         u64::try_from(self.pc_trace.len())
             .unwrap_or(u64::MAX)
             .saturating_add(u64::try_from(self.delta_trace.entries.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.trace_log.entries.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.constraints.list.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.mem_log.events.len()).unwrap_or(u64::MAX))
-            .saturating_add(u64::try_from(self.reg_log.events.len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(register_log.lock().events.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.step_log.steps.len()).unwrap_or(u64::MAX))
     }
     /// Build a deterministic proof summary for the current execution state.
     pub fn execution_proof(&mut self) -> ExecutionProof {
+        let register_log = self.proof_register_log_handle();
+        let register_log = register_log.lock();
         let output = self.memory.read_output();
         let mut output_hasher = Sha256::new();
         output_hasher.update(b"ivm-proof:output:v1");
@@ -3501,7 +3674,7 @@ impl IVM {
             register_trace_hash: Self::hash_delta_trace(&self.trace_log.entries),
             constraint_hash: Self::hash_constraints(&self.constraints.list),
             memory_log_hash: Self::hash_memory_log(&self.mem_log.events),
-            register_log_hash: Self::hash_register_log(&self.reg_log.events),
+            register_log_hash: Self::hash_register_log(&register_log.events),
             step_log_hash: Self::hash_step_log(&self.step_log.steps),
             cycles: self.cycles,
             max_cycles: self.max_cycles,
@@ -3512,7 +3685,7 @@ impl IVM {
             register_trace_len: self.trace_log.entries.len() as u64,
             constraint_len: self.constraints.list.len() as u64,
             memory_log_len: self.mem_log.events.len() as u64,
-            register_log_len: self.reg_log.events.len() as u64,
+            register_log_len: register_log.events.len() as u64,
             step_log_len: self.step_log.steps.len() as u64,
             zk_mode: self.zk_mode,
             halted: self.halted,
@@ -3527,9 +3700,10 @@ impl IVM {
         self.trace_mode
     }
     pub fn set_trace_mode(&mut self, mode: TraceMode) {
+        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
         self.trace_mode = mode;
         self.pc_trace.clear();
-        self.delta_trace = zk::DeltaTraceLog::default();
+        self.delta_trace.scrub();
     }
     pub fn trace_pcs(&self) -> &[u64] {
         &self.pc_trace
@@ -3710,7 +3884,26 @@ impl IVM {
         debug_assert!(self.staged_syscall.is_none());
         self.validate_syscall_privacy(number)?;
         let saved_outputs = self.sanitize_syscall_output_privacy(number);
-        let quoted = match host.prepare_syscall(number, self) {
+        let prepare_isolation = self.isolate_host_register_log()?;
+        let prepared = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Host code may create or inspect unrelated VMs on this thread.
+            // Mask the invocation logger so those accesses cannot contaminate
+            // or disclose values through this VM's proof log.
+            let _host_logger_mask = zk::RegLoggerGuard::mask();
+            host.prepare_syscall(number, self)
+        })) {
+            Ok(prepared) => prepared,
+            Err(payload) => {
+                {
+                    let _host_logger_mask = zk::RegLoggerGuard::mask();
+                    self.restore_syscall_output_privacy(saved_outputs);
+                }
+                self.abort_host_register_log_isolation(prepare_isolation);
+                std::panic::resume_unwind(payload);
+            }
+        };
+        self.restore_host_register_log(prepare_isolation)?;
+        let quoted = match prepared {
             Ok(quoted) => quoted,
             Err(error) => {
                 self.restore_syscall_output_privacy(saved_outputs);
@@ -3726,7 +3919,41 @@ impl IVM {
             return Err(error);
         }
         self.syscall_gas_reserve = quoted;
-        let (actual, outcome) = match host.syscall(number, self) {
+        let register_values_before = self.registers.snapshot();
+        let register_tags_before = self.registers.snapshot_tags();
+        let syscall_isolation = match self.isolate_host_register_log() {
+            Ok(isolation) => isolation,
+            Err(error) => {
+                self.syscall_gas_reserve = 0;
+                return Err(error);
+            }
+        };
+        let host_result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _host_logger_mask = zk::RegLoggerGuard::mask();
+            host.syscall(number, self)
+        })) {
+            Ok(host_result) => host_result,
+            Err(payload) => {
+                {
+                    let _host_logger_mask = zk::RegLoggerGuard::mask();
+                    self.restore_syscall_output_privacy(saved_outputs);
+                }
+                self.syscall_gas_reserve = 0;
+                self.abort_host_register_log_isolation(syscall_isolation);
+                std::panic::resume_unwind(payload);
+            }
+        };
+        match self.restore_host_register_log(syscall_isolation) {
+            Ok(true) => {
+                self.record_host_register_changes(&register_values_before, &register_tags_before);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.syscall_gas_reserve = 0;
+                return Err(error);
+            }
+        }
+        let (actual, outcome) = match host_result {
             Ok(actual) => (actual, Ok(())),
             Err(error) => {
                 let (metered_gas, source) = error.split_metered();
@@ -3777,7 +4004,36 @@ impl IVM {
             return Err(error);
         }
         self.sanitize_syscall_output_privacy(number);
-        let host_result = host.syscall(number, self);
+        let register_values_before = self.registers.snapshot();
+        let register_tags_before = self.registers.snapshot_tags();
+        let syscall_isolation = match self.isolate_host_register_log() {
+            Ok(isolation) => isolation,
+            Err(error) => {
+                self.finish_staged_syscall(SyscallCompletion::Trap);
+                return Err(error);
+            }
+        };
+        let host_result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _host_logger_mask = zk::RegLoggerGuard::mask();
+            host.syscall(number, self)
+        })) {
+            Ok(host_result) => host_result,
+            Err(payload) => {
+                self.finish_staged_syscall(SyscallCompletion::Trap);
+                self.abort_host_register_log_isolation(syscall_isolation);
+                std::panic::resume_unwind(payload);
+            }
+        };
+        match self.restore_host_register_log(syscall_isolation) {
+            Ok(true) => {
+                self.record_host_register_changes(&register_values_before, &register_tags_before);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.finish_staged_syscall(SyscallCompletion::Trap);
+                return Err(error);
+            }
+        }
         match host_result {
             Ok(0) => {
                 let completion = self
@@ -3816,12 +4072,91 @@ impl IVM {
             self.last_staged_syscall = Some(context);
         }
     }
+    fn isolate_host_register_log(&mut self) -> Result<Option<HostRegisterLogIsolation>, VMError> {
+        let Some(invocation_log) = zk::event_reg_logger() else {
+            return Ok(None);
+        };
+        if !Arc::ptr_eq(&self.reg_log, &invocation_log) {
+            invocation_log.lock().scrub();
+            self.host_trace_log_detached = false;
+            if let Some(stale_log) = self.host_trace_invocation_log.take() {
+                stale_log.lock().scrub();
+            }
+            self.clear_zk_trace_logs();
+            return Err(VMError::PrivacyViolation);
+        }
+        let detached_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
+        self.reg_log = Arc::clone(&detached_log);
+        self.host_trace_log_detached = true;
+        self.host_trace_invocation_log = Some(Arc::clone(&invocation_log));
+        Ok(Some(HostRegisterLogIsolation {
+            invocation_log,
+            detached_log,
+            proof_state_epoch: self.proof_state_epoch,
+            code_hash: self.code_hash,
+            zk_mode: self.zk_mode,
+        }))
+    }
+    fn restore_host_register_log(
+        &mut self,
+        isolation: Option<HostRegisterLogIsolation>,
+    ) -> Result<bool, VMError> {
+        let Some(isolation) = isolation else {
+            return Ok(false);
+        };
+        if !self.host_trace_log_detached
+            || !Arc::ptr_eq(&self.reg_log, &isolation.detached_log)
+            || !self
+                .host_trace_invocation_log
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, &isolation.invocation_log))
+            || self.proof_state_epoch != isolation.proof_state_epoch
+            || self.code_hash != isolation.code_hash
+            || self.zk_mode != isolation.zk_mode
+        {
+            isolation.invocation_log.lock().scrub();
+            isolation.detached_log.lock().scrub();
+            self.host_trace_log_detached = false;
+            self.clear_zk_trace_logs();
+            self.host_trace_invocation_log = None;
+            return Err(VMError::PrivacyViolation);
+        }
+        isolation.detached_log.lock().scrub();
+        self.host_trace_log_detached = false;
+        self.host_trace_invocation_log = None;
+        self.reg_log = isolation.invocation_log;
+        Ok(true)
+    }
+    fn abort_host_register_log_isolation(&mut self, isolation: Option<HostRegisterLogIsolation>) {
+        // A caught host panic must leave the VM safe for an outer
+        // `catch_unwind` caller to inspect or reuse. Restore ownership when it
+        // is still valid, then scrub every proof-facing artifact before
+        // resuming the original panic.
+        let _host_logger_mask = zk::RegLoggerGuard::mask();
+        let _ = self.restore_host_register_log(isolation);
+        self.host_trace_log_detached = false;
+        if let Some(invocation_log) = self.host_trace_invocation_log.take() {
+            invocation_log.lock().scrub();
+        }
+        self.clear_zk_trace_logs();
+    }
+    fn record_host_register_changes(&self, values_before: &[u64; 256], tags_before: &[bool; 256]) {
+        let values_after = self.registers.snapshot();
+        let tags_after = self.registers.snapshot_tags();
+        for index in 1..values_after.len() {
+            if values_before[index] != values_after[index]
+                || tags_before[index] != tags_after[index]
+            {
+                self.registers.record_write_proof(index);
+            }
+        }
+    }
     pub(crate) fn execute_metered_syscall_with_host(
         &mut self,
         host: &mut dyn IVMHost,
         number: u32,
     ) -> Result<(), VMError> {
-        if !host.allows_syscall(self.syscall_policy(), number) {
+        if !host_allows_syscall_masked(host, self.syscall_policy(), number) {
             return Err(VMError::UnknownSyscall(number));
         }
         self.execute_syscall(host, number)
@@ -3852,6 +4187,38 @@ impl IVM {
         }
     }
     fn run_with_host_ref(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
+        if self.host_trace_log_detached || self.host_trace_invocation_log.is_some() {
+            // A VM moved out of a host callback still borrows both logger
+            // allocations from the active outer invocation. Do not scrub or
+            // adopt those shared allocations here: sever the aliases, clear
+            // this VM's independent proof state, and make the attempted reuse
+            // fail closed. The owning isolation guard scrubs its logs.
+            self.host_trace_log_detached = false;
+            self.host_trace_invocation_log = None;
+            self.reg_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
+            self.clear_zk_trace_logs();
+            self.memory.clear_tracking();
+            return Err(VMError::PrivacyViolation);
+        }
+        self.host_trace_log_detached = false;
+        self.reg_log.lock().scrub();
+        self.reg_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
+        // Select this invocation's policy from the VM configuration, not from
+        // a possibly active outer VM's thread-local scope. Install the scope
+        // before any register access and retain it through trap diagnostics.
+        let invocation_log = if self.zk_mode && self.zk_trace_enabled {
+            Some(Arc::clone(&self.reg_log))
+        } else {
+            None
+        };
+        let _reg_logger_guard = zk::RegLoggerGuard::install(invocation_log);
+        // Proof-facing accessors describe the most recent invocation. Clear
+        // prior artifacts even when this run has tracing disabled.
+        self.clear_zk_trace_logs();
+        if !self.zk_mode && (self.registers.has_private() || !self.private_memory_bytes.is_empty())
+        {
+            return Err(VMError::PrivacyViolation);
+        }
         self.last_diagnostic = None;
         self.halted = false;
         self.constraint_failed = false;
@@ -3864,22 +4231,9 @@ impl IVM {
             let raw_target = self.registers.get(1);
             ((raw_target.wrapping_sub(self.pc_alignment)) & !3) | self.pc_alignment
         });
-        let result = (|| {
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _pointer_policy_guard =
                 PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
-            let _reg_logger_guard = if self.zk_trace_collection_enabled() {
-                // SAFETY: `run_with_host_ref` exclusively borrows the VM and neither moves nor
-                // replaces `reg_log` before this guard is dropped.
-                Some(unsafe {
-                    zk::RegLoggerGuard::install(std::ptr::NonNull::from(&mut self.reg_log))
-                })
-            } else {
-                None
-            };
-            if self.zk_trace_collection_enabled() {
-                self.trace_log = DeltaTraceLog::default();
-                self.step_log = zk::StepLog::default();
-            }
             self.pc_trace.clear();
             self.delta_trace = zk::DeltaTraceLog::default();
             let mut last_logged_cycle = 0;
@@ -3943,7 +4297,7 @@ impl IVM {
                     }
                     instruction::wide::system::SCALL => {
                         let imm8 = instruction::wide::imm8(instr) as u8 as u32;
-                        if !host.allows_syscall(self.syscall_policy(), imm8) {
+                        if !host_allows_syscall_masked(host, self.syscall_policy(), imm8) {
                             return Err(VMError::UnknownSyscall(imm8));
                         }
                         self.execute_syscall(host, imm8)?;
@@ -3953,7 +4307,7 @@ impl IVM {
                     }
                     instruction::wide::system::SYSTEM => {
                         let number = crate::encoding::wide::decode_syscallx(instr);
-                        if !host.allows_syscall(self.syscall_policy(), number) {
+                        if !host_allows_syscall_masked(host, self.syscall_policy(), number) {
                             return Err(VMError::UnknownSyscall(number));
                         }
                         self.execute_syscall(host, number)?;
@@ -5569,20 +5923,20 @@ impl IVM {
                         }
                         let mut fail_index = 0u64;
                         let request_ptr = self.registers.get(rs1);
-                        let payload_len =
-                            match self.inspect_owned_public_tlv_payload_len(request_ptr) {
-                                Ok(payload_len) => Some(payload_len),
-                                Err(VMError::PrivacyViolation) => {
-                                    return Err(VMError::PrivacyViolation);
-                                }
-                                Err(_) => None,
-                            };
+                        let payload_len = match self.inspect_owned_public_tlv_header(request_ptr) {
+                            Ok((payload_len, _)) => Some(payload_len),
+                            Err(VMError::PrivacyViolation) => {
+                                return Err(VMError::PrivacyViolation);
+                            }
+                            Err(_) => None,
+                        };
                         let ok = if let Some(payload_len) = payload_len {
-                            if payload_len > crate::gas::ED25519_BATCH_MAX_PAYLOAD_BYTES {
+                            if payload_len
+                                > u64::try_from(crate::gas::ED25519_BATCH_MAX_PAYLOAD_BYTES)
+                                    .expect("batch payload limit always fits u64")
+                            {
                                 false
                             } else {
-                                let payload_len = u64::try_from(payload_len)
-                                    .map_err(|_| VMError::GasCostOverflow)?;
                                 self.debit_gas(crate::gas::ed25519_batch_extra_gas(
                                     payload_len,
                                     0,
@@ -5675,11 +6029,14 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                            self.validate_public_crypto_tlv(msg_ptr)?,
-                            self.validate_public_crypto_tlv(sig_ptr)?,
-                            self.validate_public_crypto_tlv(pk_ptr)?,
-                        ) {
+                        let operands_ready =
+                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
+                        let ok = if operands_ready
+                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                                self.validate_public_crypto_tlv(msg_ptr)?,
+                                self.validate_public_crypto_tlv(sig_ptr)?,
+                                self.validate_public_crypto_tlv(pk_ptr)?,
+                            ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                                 && tlv_sig.type_id_raw()
@@ -5718,11 +6075,14 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                            self.validate_public_crypto_tlv(msg_ptr)?,
-                            self.validate_public_crypto_tlv(sig_ptr)?,
-                            self.validate_public_crypto_tlv(pk_ptr)?,
-                        ) {
+                        let operands_ready =
+                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
+                        let ok = if operands_ready
+                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                                self.validate_public_crypto_tlv(msg_ptr)?,
+                                self.validate_public_crypto_tlv(sig_ptr)?,
+                                self.validate_public_crypto_tlv(pk_ptr)?,
+                            ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                                 && tlv_sig.type_id_raw()
@@ -5761,11 +6121,14 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                            self.validate_public_crypto_tlv(msg_ptr)?,
-                            self.validate_public_crypto_tlv(sig_ptr)?,
-                            self.validate_public_crypto_tlv(pk_ptr)?,
-                        ) {
+                        let operands_ready =
+                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
+                        let ok = if operands_ready
+                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                                self.validate_public_crypto_tlv(msg_ptr)?,
+                                self.validate_public_crypto_tlv(sig_ptr)?,
+                                self.validate_public_crypto_tlv(pk_ptr)?,
+                            ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                                 && tlv_sig.type_id_raw()
@@ -5980,8 +6343,23 @@ impl IVM {
             } else {
                 Ok(())
             }
-        })();
+        })) {
+            Ok(result) => result,
+            Err(payload) => {
+                // Policy probes such as `allows_syscall` run before syscall
+                // callback isolation. If any host hook panics, discard the
+                // partial invocation proof before preserving the original
+                // unwind behavior for the caller.
+                self.abort_host_register_log_isolation(None);
+                std::panic::resume_unwind(payload);
+            }
+        };
         if let Err(err) = &result {
+            // Diagnostics are outside the guest execution trace. In
+            // particular, an isolation failure may already have scrubbed an
+            // invocation log retained by a replaced VM; diagnostic register
+            // reads must not repopulate that detached allocation.
+            let _host_logger_mask = zk::RegLoggerGuard::mask();
             self.last_diagnostic = Some(self.build_execution_diagnostic(err));
         }
         result
@@ -7192,6 +7570,28 @@ mod tests {
                 .as_ptr(),
             mismatched_allocation
         ));
+    }
+    #[test]
+    fn runtime_template_rejects_a_different_program_before_mutating_the_vm() {
+        let mut template_vm = quiet_vm(u64::MAX);
+        template_vm
+            .load_program(&program_with_imm(7))
+            .expect("template program loads");
+        let template = template_vm.runtime_template();
+
+        let mut vm = quiet_vm(u64::MAX);
+        vm.load_program(&program_with_imm(8))
+            .expect("worker program loads");
+        vm.set_register(7, 99);
+        let code_hash = vm.code_hash();
+
+        let error = vm
+            .reset_from_runtime_template(&template)
+            .expect_err("a template for another program must be rejected");
+
+        assert!(error.to_string().contains("program mismatch"));
+        assert_eq!(vm.code_hash(), code_hash);
+        assert_eq!(vm.register(7), 99, "failed reset must not touch VM state");
     }
     #[test]
     fn runtime_template_rejects_a_different_heap_authority() {

@@ -60,7 +60,7 @@ public final class SubscriptionToriiClientTests {
     getSubscriptionHandlesNotFound();
     getSubscriptionParsesResponse();
     subscriptionActionsAndUsagePostBodies();
-    listParamsRejectInvalidStatus();
+    listParamsUseTypedStatus();
     usageRequestUsesCanonicalQuantityBoundary();
     propagatesNon2xxResponses();
     configBuildsSubscriptionToriiClient();
@@ -452,13 +452,11 @@ public final class SubscriptionToriiClientTests {
                 .join());
   }
 
-  private static void listParamsRejectInvalidStatus() {
-    try {
-      SubscriptionListParams.builder().status("unknown").build();
-      throw new AssertionError("expected invalid status to throw");
-    } catch (final IllegalArgumentException expected) {
-      // expected
-    }
+  private static void listParamsUseTypedStatus() {
+    final SubscriptionListParams params =
+        SubscriptionListParams.builder().status(SubscriptionStatus.PAUSED).build();
+    assert params.status() == SubscriptionStatus.PAUSED;
+    assert "paused".equals(params.toQueryParameters().get("status"));
   }
 
   private static void usageRequestUsesCanonicalQuantityBoundary() {

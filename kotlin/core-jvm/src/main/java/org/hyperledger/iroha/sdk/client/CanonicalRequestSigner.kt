@@ -264,7 +264,7 @@ object CanonicalRequestSigner {
     }
 
     // This is wire-safe structural admission only. Torii owns UTS-46 and alias resolution.
-    private fun isCanonicalAsciiAccountAlias(value: String): Boolean {
+    internal fun isCanonicalAsciiAccountAlias(value: String): Boolean {
         val separator = value.indexOf('@')
         if (
             value.startsWith("0x") ||

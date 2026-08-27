@@ -228,6 +228,14 @@ exact old-round Commit intent can rebuild that old quorum; otherwise the
 retained body feeds the later unchanged re-proposal path instead of leaving a
 lock with no executable owner.
 
+A locked-candidate load that reaches the durable body store before recovery
+finishes may observe the body as unavailable and park in `Waiting`. Both the
+ordinary body-store completion and certified-Fetch Phase B must wake that exact
+matching acquisition after the bytes become durable. The replacement load
+retains the original consumer tag, round, and subject, so recovery cannot leave
+a later leader permanently waiting or deliver a different body to its
+re-proposal.
+
 Proposal replay joins two independently fsynced authorities before startup
 effects run: the safety WAL supplies the exact proposal intent and the body
 store supplies its canonical body plus deterministic execution commitment.
@@ -489,6 +497,25 @@ This changes when the existing request is scheduled, not its request identity,
 authentication, exact frozen context, certificate checks, or reducer
 transition. It therefore avoids one full quiet-round delay per missing height
 during sequential catch-up without creating permanent normal-height fanout.
+The height-only request is deliberately exempt from view cleanup, so its exact
+output has two authoritative retirement points instead: successful reducer
+admission cancels every retained fanout before clearing the discovery marker,
+and a Decision reached through ordinary consensus cancels both the outstanding
+tracker entry and retained fanout before further exact-output retry or height
+rollover. Actor backpressure therefore cannot carry an obsolete discovery
+request into later heights or consume corridor capacity needed by body recovery.
+An unchanged signed body or CommitQC request retains at most one archive-batch
+fanout. An identical batch reuses the incumbent network-actor admission
+tickets and FIFO ranks. A different rotated batch stays with the durable
+task/discovery source while that incumbent owns a ranked actor ticket, so cursor
+rotation cannot fill the corridor or displace an older waiter. A CommitQC
+topology attempt returned without a ticket owns no actor rank; exact output
+releases that target back to the still-outstanding discovery source instead of
+letting a removed peer suppress every later rotated batch. Fair actor admission
+releases ranked incumbent capacity, while ticketless release and continued
+source retries rotate to later archives, including a responsive peer beyond the
+original corridor capacity. Either authoritative cancellation path removes the
+retained request fanout and drops any actor ticket it owns.
 
 Certified-body request capacity is independent from the retryable general
 pending-work boundary. When that request bound alone is full, only a
@@ -580,18 +607,20 @@ Authenticated non-validator lanes are created on demand and removed when empty.
 A semantic duplicate carrying an alternate authenticated reply route is merged
 into the existing request before a new-lane `H` admission check; only a
 semantically distinct request requiring a new source lane consumes another
-lane. Ordinary
-Progress includes Commit votes, PrepareQCs, certified-body requests, and both
+lane. Ordinary Progress includes Commit votes, PrepareQCs, certified-body
+requests, and both
 Commit-certificate request/response directions. Proposals, Prepare votes, and
 manifests remain ordinary; TimeoutVote uses its own signer-bounded corridor;
 TC, direct CommitQC, and a Commit-certificate response carrying CommitQC use a
 separate certified-fence-escape corridor;
 `PayloadChunk`, `CertifiedBodyResponse`, and
-`LaneHistoricalRecoveryResponse` share TransportCompletion. The first two
-require a current-roster semantic origin. The historical response may instead
-come from an authenticated predecessor signer, but the lane adapter admits it
-only for an outstanding exact request whose frozen CommitQC or READY
-certificate authorizes that signer. Relay
+`LaneHistoricalRecoveryResponse` share TransportCompletion. `PayloadChunk`
+requires a current-roster semantic origin. The two request-bound historical
+responses are the bounded exceptions: a certified-body response may come from
+the authenticated current archive peer named in its signed response, while a
+lane recovery response may come from an authenticated predecessor signer. The
+adapters admit either exception only for its outstanding exact request and
+revalidate the corresponding frozen certificate or finality artifact. Relay
 delivery keeps semantic origin separate from authenticated transport via: the
 reducer and equivocation checks use origin, while count, bytes, and fair service
 are charged exclusively to the via lane. Pending exact retransmissions
@@ -869,7 +898,11 @@ pending. If the corridor cannot accept an exact fanout and returns
 `SourceRetained`, the reducer keeps the retransmittable semantic source and an
 active proposal keeps its producer fence; only exact service acceptance may
 release that fence. A timeout therefore cannot prune a proposal merely because
-its first fanout met bounded corridor pressure. The corridor freezes
+its first fanout met bounded corridor pressure. Once a Proposal control/chunk
+batch is accepted, a periodic retransmission that finds either atomic component
+still actor-backpressured remains source-owned until that incumbent drains; it
+does not allocate another control or chunk fanout, including when the chunk
+target set expands from fast-path Set A to all voters. The corridor freezes
 `roster × {Safety, Lane, Bulk}` reservations for
 the height, one `SidecarTopologyProgress` Lane reservation for topology-routed
 Request/Close traffic, and one independent `SidecarReplyControl` Lane
@@ -893,11 +926,24 @@ CommitQC response is a singleton target-bound claim whose source height,
 context, responder, certificate, response hash, signature, and chain are
 revalidated against an independently reread Kura finality artifact. A
 historical certified-body response likewise rereads the source finality
-artifact and canonical Kura block, then rechecks its historical responder,
-signature, subject, body bytes, payload hash, manifest, target, and response
-hash. A historical lane-certificate response rereads the exact certified Kura
-lane artifact and requires the same lane/height, proposal, PrepareQC, CommitQC,
-target, and certificate hash. Cached claims alone are never sufficient.
+artifact and canonical Kura block, then rechecks its authenticated current
+responder, signature, subject, body bytes, payload hash, manifest, target, and
+response hash. A historical lane-certificate response rereads the exact
+certified Kura lane artifact and requires the same lane/height, proposal,
+PrepareQC, CommitQC, target, and certificate hash. Cached claims alone are
+never sufficient.
+
+The chain-scoped block-sync server retains one coarse logical slot per
+requester/context request and separately fingerprints the signed request's
+complete unsigned preimage. This distinction is required for randomized
+request schemes such as ML-DSA: after a requester restart, a new valid
+signature over the same immutable request receives a freshly
+request-hash-bound and responder-signed projection of the cached canonical
+response. It does not conflict indefinitely with the pre-restart signature or
+wait for unrelated FIFO eviction. Exact same-signature retransmissions still
+return the byte-identical cached response. A change to any authenticated
+unsigned field in the same logical slot retains the conflict rejection instead
+of multiplying cached entries or canonical-history reads.
 
 For current-height output, global V2 traffic validates its protocol version and
 binds to the exact finality artifact. Winning lane output requires its exact
@@ -919,6 +965,13 @@ If historical recovery remains pending or a winning certificate/application
 witness is absent, ordinary and PendingKura runners publish status, wait for a
 finite wake interval, and retry under the same predecessor owner. They do not
 construct a volatile successor owner.
+
+After readiness, both runner paths close new physical ingress before consuming
+the predecessor lifecycle. They drain the finite already-admitted terminal
+recovery prefix, dispatch any work it creates, and require an authenticated
+empty closed-ingress cut before rollover. An interrupted-tip restart therefore
+cannot park and discard a response which won admission immediately before its
+durable successor was constructed.
 
 Only after this preflight succeeds does rollover build the complete durable
 lane authority, reject conflicting quorum evidence, prune proposal-only losers,
@@ -956,6 +1009,14 @@ both its transport endpoint and that move-only receipt only after every
 committed lane output and undispatched effect has crossed the worker boundary.
 It then binds the retained transport to one exact immediate successor context.
 An error at any of these post-finality checks is fail-stop.
+
+Autonomous lane pacemaker output has one bounded NewView progress occurrence
+beyond the configured ordinary lane-effect capacity. A due NewView vote or
+certificate can therefore acquire retry ownership even while ordinary lane
+delivery keeps that queue full. While the progress occurrence is queued, an
+ordinary source returned by downstream backpressure may re-enter beside it;
+the combined queue remains bounded at `effect_capacity + 1`, and draining the
+NewView occurrence restores the ordinary configured bound.
 
 A successor adapter treats every moved earlier-height proposal, vote, QC,
 certificate, executable payload, and NewView artifact as historical work. Each

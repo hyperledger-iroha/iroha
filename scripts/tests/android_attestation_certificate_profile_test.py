@@ -73,14 +73,25 @@ class AndroidAttestationCertificateProfileTest(unittest.TestCase):
         self.assertGreaterEqual(evaluation_time_ms, root_not_before)
         self.assertLessEqual(evaluation_time_ms, root_not_after)
         errors: list[str] = []
-        with mock.patch.object(
-            device_lab.time,
-            "time_ns",
-            return_value=evaluation_time_ms * 1_000_000,
-        ):
-            count = device_lab._validate_android_attestation_certificate_chain(
-                "attestation/chain.pem", chain, metadata, errors
-            )
+        authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
+        assert authority is not None
+        receipt = authority["attestation_status_capture_receipt"]
+        original_response_date = receipt["snapshot"]["response_date_ms"]
+        original_fresh_until = receipt["payload"]["fresh_until_ms"]
+        try:
+            receipt["snapshot"]["response_date_ms"] = evaluation_time_ms - 1
+            receipt["payload"]["fresh_until_ms"] = evaluation_time_ms + 1
+            with mock.patch.object(
+                device_lab.time,
+                "time_ns",
+                return_value=evaluation_time_ms * 1_000_000,
+            ):
+                count = device_lab._validate_android_attestation_certificate_chain(
+                    "attestation/chain.pem", chain, metadata, errors
+                )
+        finally:
+            receipt["snapshot"]["response_date_ms"] = original_response_date
+            receipt["payload"]["fresh_until_ms"] = original_fresh_until
         self.assertEqual(count, 2, errors)
         self.assertEqual(errors, [])
 
@@ -106,16 +117,28 @@ class AndroidAttestationCertificateProfileTest(unittest.TestCase):
             "factory",
         )
         errors: list[str] = []
-        with mock.patch.object(
-            device_lab.time,
-            "time_ns",
-            return_value=(root_not_before - 1) * 1_000_000,
-        ):
-            self.assertIsNone(
-                device_lab._validate_android_attestation_certificate_chain(
-                    "attestation/chain.pem", chain, metadata, errors
+        evaluation_time_ms = root_not_before - 1
+        authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
+        assert authority is not None
+        receipt = authority["attestation_status_capture_receipt"]
+        original_response_date = receipt["snapshot"]["response_date_ms"]
+        original_fresh_until = receipt["payload"]["fresh_until_ms"]
+        try:
+            receipt["snapshot"]["response_date_ms"] = evaluation_time_ms - 1
+            receipt["payload"]["fresh_until_ms"] = evaluation_time_ms + 1
+            with mock.patch.object(
+                device_lab.time,
+                "time_ns",
+                return_value=evaluation_time_ms * 1_000_000,
+            ):
+                self.assertIsNone(
+                    device_lab._validate_android_attestation_certificate_chain(
+                        "attestation/chain.pem", chain, metadata, errors
+                    )
                 )
-            )
+        finally:
+            receipt["snapshot"]["response_date_ms"] = original_response_date
+            receipt["payload"]["fresh_until_ms"] = original_fresh_until
         self.assertTrue(any("not yet valid" in error for error in errors), errors)
 
     def test_android_factory_expiration_exception_is_exactly_legacy_root(self) -> None:

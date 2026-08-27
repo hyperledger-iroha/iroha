@@ -568,9 +568,10 @@ enum SingleInstructionSwiftNoritoEncoder {
         payload.writeField(try CanonicalNorito.encodeOption(leaseExpiryMs, encode: CanonicalNorito.encodeUInt64))
         payload.writeField(try CanonicalNorito.encodeOption(expectedPreviousContractAddress, encode: CanonicalNorito.encodeString))
         let typeName = "iroha_data_model::isi::smart_contract_code::CommitContractDeployment"
+        let wireId = "iroha.instruction.v1::smart_contract_code::CommitContractDeployment"
         let framed = noritoEncode(typeName: typeName, payload: payload.data, flags: 0)
         var wire = CompactNoritoWriter()
-        wire.writeField(CompactNorito.encodeString(typeName))
+        wire.writeField(CompactNorito.encodeString(wireId))
         wire.writeField(CompactNorito.encodeBytesVec(framed))
         let transactionPayload = try encodeNetworkTransactionPayload(
             networkId: networkId, authority: authority, creationTimeMs: creationTimeMs,

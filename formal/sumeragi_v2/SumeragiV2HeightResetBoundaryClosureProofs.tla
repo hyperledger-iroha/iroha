@@ -1982,7 +1982,7 @@ part of the temporal residual below.
 OutstandingRequestCertifiedResponseAuthorized(item) ==
   /\ item.kind = "CertifiedResponse"
   /\ CertifiedResponseAuthenticatedOccurrence(item)
-  /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+  /\ item.envelope.responder \in AsyncArchiveServerIds
   /\ MatchingCertifiedRequests(item) # {}
   /\ \E request \in MatchingCertifiedRequests(item):
        FrozenCertifiedResponseBinding(item, request)

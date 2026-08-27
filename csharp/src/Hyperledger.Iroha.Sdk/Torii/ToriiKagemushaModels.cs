@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hyperledger.Iroha.Norito;
 
 namespace Hyperledger.Iroha.Torii;
 
@@ -34,6 +35,7 @@ public sealed class ToriiKagemushaTopUpRequestV4
         this.norito = ToriiKagemushaTransport.RequireNoritoArchive(
             norito,
             ToriiKagemushaTransport.MaxTopUpNoritoRequestBytes,
+            ToriiKagemushaTransport.TopUpRequestSchemaName,
             nameof(norito));
     }
 
@@ -57,6 +59,7 @@ public sealed class ToriiKagemushaRedeemRequestV4
         this.norito = ToriiKagemushaTransport.RequireNoritoArchive(
             norito,
             ToriiKagemushaTransport.MaxRedeemNoritoRequestBytes,
+            ToriiKagemushaTransport.RedeemRequestSchemaName,
             nameof(norito));
     }
 
@@ -166,8 +169,13 @@ internal static class ToriiKagemushaTransport
     internal const int BridgeAbiVersion = 23;
     internal const int ManifestVersion = 4;
     internal const int MaxHops = 8;
+    internal const int MaxJsonResponseBytes = 256 * 1024;
     internal const int MaxTopUpNoritoRequestBytes = 512 * 1024;
     internal const int MaxRedeemNoritoRequestBytes = 48 * 1024 * 1024;
+    internal const string TopUpRequestSchemaName = "iroha.torii.v1.offline.top_up.request";
+    internal const string RedeemRequestSchemaName = "iroha.torii.v1.offline.redeem.request";
+
+    private const int RequiredHeaderPaddingBytes = 8;
 
     internal static string RequireOperationId(string? value, string parameterName)
     {
@@ -187,13 +195,35 @@ internal static class ToriiKagemushaTransport
     internal static byte[] RequireNoritoArchive(
         ReadOnlySpan<byte> value,
         int maximumBytes,
+        string expectedSchemaName,
         string parameterName)
     {
-        if (value.Length < 40 || value.Length > maximumBytes
-            || !value[..4].SequenceEqual("NRT0"u8))
+        if (value.Length < NoritoHeader.EncodedLength || value.Length > maximumBytes)
         {
             throw new ArgumentException(
-                $"Kagemusha V4 request must be a Norito archive between 40 and {maximumBytes} bytes.",
+                $"Kagemusha V4 request must be a canonical Norito archive between {NoritoHeader.EncodedLength} and {maximumBytes} bytes.",
+                parameterName);
+        }
+
+        byte[] payload;
+        byte flags;
+        try
+        {
+            (payload, flags) = NoritoCodec.Decode(expectedSchemaName, value);
+        }
+        catch (ArgumentException error)
+        {
+            throw new ArgumentException(
+                "Kagemusha V4 request must be a schema-bound canonical Norito archive.",
+                parameterName,
+                error);
+        }
+        if (payload.Length == 0
+            || flags != NoritoCodec.CanonicalLayoutFlags
+            || value.Length != NoritoHeader.EncodedLength + RequiredHeaderPaddingBytes + payload.Length)
+        {
+            throw new ArgumentException(
+                "Kagemusha V4 request must use the schema-bound compact layout with exactly eight zero padding bytes and a non-empty payload.",
                 parameterName);
         }
 

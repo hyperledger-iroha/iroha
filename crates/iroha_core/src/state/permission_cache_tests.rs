@@ -70,6 +70,22 @@ fn trigger_permission_payload_with_whitespace_is_rejected() {
         .expect_err("permission payload aliases must fail at the Json boundary");
 }
 #[test]
+fn alias_valued_trigger_registration_permission_is_not_cached() {
+    let mut summary = AccountPermissionSummary::default();
+    let alias_valued = Permission::new(
+        "CanRegisterTrigger".to_owned(),
+        Json::from_raw_json(r#"{"authority":"customer@aliasbank.universal"}"#.to_owned())
+            .expect("valid raw permission payload"),
+    );
+
+    summary.apply_grant(&alias_valued);
+
+    assert!(
+        summary.reg_trigger_authorities.is_empty(),
+        "permission-cache hydration must not resolve an alias-valued authority"
+    );
+}
+#[test]
 fn permission_deserialization_rejects_alias_and_matches_canonical_payload() {
     let alias = r#"{
             "name": "CanManageAccountAlias",
@@ -514,20 +530,8 @@ fn permission_cache_rebuilds_after_restart_impl() {
         let mut block = state.block(next_header);
         let mut stx = block.transaction();
         let mut summary = AccountPermissionSummary::default();
-        summary.apply_grant(
-            &stx.world,
-            &stx.nexus.dataspace_catalog,
-            &registrar,
-            &Permission::from(permission_register.clone()),
-            stx.block_unix_timestamp_ms(),
-        );
-        summary.apply_grant(
-            &stx.world,
-            &stx.nexus.dataspace_catalog,
-            &registrar,
-            &Permission::from(permission_execute.clone()),
-            stx.block_unix_timestamp_ms(),
-        );
+        summary.apply_grant(&Permission::from(permission_register.clone()));
+        summary.apply_grant(&Permission::from(permission_execute.clone()));
         stx.perm_cache.insert_summary(registrar.clone(), summary);
         assert!(
             stx.can_register_trigger_for(&registrar, &owner),

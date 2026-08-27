@@ -104,11 +104,11 @@ const MAX_CONTRACT_ENTRYPOINT_BYTES = 1024;
 const DEFAULT_TRANSACTION_TTL_MS = 100_000;
 const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
 const SMART_CONTRACT_DEPLOYMENT_WIRE_IDS = new Set([
-  "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
-  "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
-  "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload",
-  "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode",
-  "iroha_data_model::isi::smart_contract_code::CommitContractDeployment",
+  "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk",
+  "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload",
+  "iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload",
+  "iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode",
+  "iroha.instruction.v1::smart_contract_code::CommitContractDeployment",
 ]);
 const TRANSFER_INPUT_FIELDS = new Set([
   "networkId",

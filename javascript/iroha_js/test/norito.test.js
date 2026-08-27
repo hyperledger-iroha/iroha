@@ -1458,6 +1458,7 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
     fee_payment: authorityFeePayment(),
     validation_fee_policy_version: "7",
     validation_fee_policy_hash: "ab".repeat(32),
+    validation_fee_hijiri_fee_quote_hash: "CD".repeat(32),
     validation_fee_instruction_index: "1",
     validation_fee_transfer_entry_index: "2",
     instructions: [instruction],
@@ -1491,6 +1492,27 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
       outerUsesCompactLengths,
     ).offset;
   }
+  const hijiriFeeQuoteHash = readNoritoFieldPayload(
+    outer.payload,
+    offset,
+    "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash",
+    outerUsesCompactLengths,
+  );
+  assert.equal(hijiriFeeQuoteHash.payload[0], 1);
+  const hijiriFeeQuoteHashValue = readNoritoFieldPayload(
+    hijiriFeeQuoteHash.payload,
+    1,
+    "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash.value",
+    outerUsesCompactLengths,
+  );
+  const hijiriFeeQuoteHashString = readNoritoFieldPayload(
+    hijiriFeeQuoteHashValue.payload,
+    0,
+    "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash.value.string",
+    outerUsesCompactLengths,
+  );
+  assert.equal(hijiriFeeQuoteHashString.payload.toString("utf8"), "cd".repeat(32));
+  offset = hijiriFeeQuoteHash.offset;
   const instructions = readNoritoFieldPayload(
     outer.payload,
     offset,
@@ -1628,6 +1650,7 @@ test("native multisig proposal DTO rejects malformed validation-fee metadata", (
   for (const [fieldName, value] of Object.entries({
     validationFeePolicyVersion: "7",
     validationFeePolicyHash: "ab".repeat(32),
+    validationFeeHijiriFeeQuoteHash: "cd".repeat(32),
     validationFeeInstructionIndex: "1",
     validationFeeTransferEntryIndex: "2",
   })) {
@@ -1645,9 +1668,27 @@ test("native multisig proposal DTO rejects malformed validation-fee metadata", (
     () =>
       noritoEncodeMultisigProposeRequest({
         ...request,
+        validation_fee_hijiri_fee_quote_hash: "cd".repeat(32),
+      }),
+    /requires validation fee policy metadata/,
+  );
+  assert.throws(
+    () =>
+      noritoEncodeMultisigProposeRequest({
+        ...request,
         validation_fee_instruction_index: "1",
       }),
     /requires validation fee policy metadata/,
+  );
+  assert.throws(
+    () =>
+      noritoEncodeMultisigProposeRequest({
+        ...request,
+        validation_fee_policy_version: "7",
+        validation_fee_policy_hash: "ab".repeat(32),
+        validation_fee_hijiri_fee_quote_hash: "not-a-hash",
+      }),
+    /32-byte hex string/,
   );
   assert.throws(
     () =>

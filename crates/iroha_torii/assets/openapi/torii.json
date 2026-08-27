@@ -21,6 +21,34 @@
         ],
         "type": "object"
       },
+      "AccountAliasName": {
+        "additionalProperties": false,
+        "description": "Canonical component form of one account alias. The domain slot is mandatory and null only for a dataspace-root alias.",
+        "properties": {
+          "dataspace": {
+            "$ref": "#/components/schemas/CanonicalAliasSegment"
+          },
+          "domain": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalAliasSegment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "$ref": "#/components/schemas/CanonicalAliasSegment"
+          }
+        },
+        "required": [
+          "label",
+          "domain",
+          "dataspace"
+        ],
+        "type": "object"
+      },
       "AccountAliasLease": {
         "additionalProperties": false,
         "properties": {
@@ -82,6 +110,97 @@
           "grace_expires_at_ms",
           "redemption_expires_at_ms",
           "auto_renew_enabled"
+        ],
+        "type": "object"
+      },
+      "AccountOnboardingAliasIntentV1": {
+        "additionalProperties": false,
+        "description": "Exact account-alias intent embedded in a sponsored onboarding receipt.",
+        "properties": {
+          "intent": {
+            "additionalProperties": false,
+            "properties": {
+              "alias": {
+                "$ref": "#/components/schemas/ResolvedAccountAliasV1"
+              },
+              "provision": {
+                "$ref": "#/components/schemas/AccountOnboardingCreateProvisionV1"
+              },
+              "role": {
+                "$ref": "#/components/schemas/AccountOnboardingPrimaryAliasRoleV1"
+              },
+              "target_account": {
+                "$ref": "#/components/schemas/CanonicalAccountId"
+              }
+            },
+            "required": [
+              "alias",
+              "target_account",
+              "provision",
+              "role"
+            ],
+            "type": "object"
+          },
+          "kind": {
+            "const": "account_alias",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "intent"
+        ],
+        "type": "object"
+      },
+      "AccountOnboardingAliasTargetV1": {
+        "additionalProperties": false,
+        "description": "Exact account-alias target embedded in an onboarding lease quote.",
+        "properties": {
+          "kind": {
+            "const": "account_alias",
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResolvedAccountAliasV1"
+          }
+        },
+        "required": [
+          "kind",
+          "resource"
+        ],
+        "type": "object"
+      },
+      "AccountOnboardingCreateProvisionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "create",
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AccountOnboardingPrimaryAliasRoleV1": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "primary",
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
         ],
         "type": "object"
       },
@@ -197,18 +316,23 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountId"
           },
           "pow_anchor_height": {
+            "format": "uint64",
+            "minimum": 1,
             "type": "integer"
           },
           "pow_nonce_hex": {
-            "pattern": "^[0-9a-f]*$",
+            "maxLength": 64,
+            "pattern": "^(?:[0-9a-f]{2})+$",
             "type": "string"
           }
         },
         "required": [
-          "account_id"
+          "account_id",
+          "pow_anchor_height",
+          "pow_nonce_hex"
         ],
         "type": "object"
       },
@@ -216,10 +340,13 @@
         "additionalProperties": false,
         "properties": {
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/TairaPublicResetFaucetMutationBinding"
           },
           "claim": {
             "$ref": "#/components/schemas/AccountFaucetClaim"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "schema": {
             "const": "iroha.accounts.faucet.prepare.v1",
@@ -229,7 +356,8 @@
         "required": [
           "schema",
           "binding",
-          "claim"
+          "claim",
+          "fee_payment"
         ],
         "type": "object"
       },
@@ -237,25 +365,27 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountId"
           },
           "amount": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/Quantity"
           },
           "asset_definition_id": {
+            "minLength": 1,
             "type": "string"
           },
           "asset_id": {
+            "minLength": 1,
             "type": "string"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/TairaPublicResetFaucetMutationBinding"
           },
           "claim": {
             "$ref": "#/components/schemas/AccountFaucetClaim"
           },
           "fee_payment": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "operation": {
             "const": "faucet",
@@ -270,10 +400,10 @@
             "type": "string"
           },
           "server_signature": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/CanonicalSignature"
           },
           "signed_transaction_wire_hex": {
-            "pattern": "^[0-9a-f]+$",
+            "pattern": "^(?:[0-9a-f]{2})+$",
             "type": "string"
           },
           "signed_transaction_wire_sha256": {
@@ -443,19 +573,86 @@
         ],
         "type": "object"
       },
+      "AccountOnboardingPlanBody": {
+        "additionalProperties": false,
+        "description": "Canonical V1 body committed and signed by a stateless sponsored-onboarding receipt.",
+        "properties": {
+          "acquisition": {
+            "$ref": "#/components/schemas/AliasLeaseAcquisitionV1"
+          },
+          "anchor": {
+            "$ref": "#/components/schemas/AliasPlanAnchorV1"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "instructions": {
+            "items": {
+              "$ref": "#/components/schemas/AliasFramedInstructionV1"
+            },
+            "type": "array"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "owner_auto_renew_instruction": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AliasFramedInstructionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quote_guard": {
+            "$ref": "#/components/schemas/AliasQuoteGuardV1"
+          },
+          "request": {
+            "$ref": "#/components/schemas/AccountOnboardingPlanRequest"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/AliasPlanResourceV1"
+          },
+          "valid_until_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "const": 1,
+            "format": "uint8",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "request",
+          "authority",
+          "network_id",
+          "anchor",
+          "resource",
+          "acquisition",
+          "quote_guard",
+          "instructions",
+          "owner_auto_renew_instruction",
+          "valid_until_ms"
+        ],
+        "type": "object"
+      },
       "AccountOnboardingPlanReceipt": {
         "additionalProperties": false,
         "properties": {
           "body": {
-            "description": "Canonical request, authority, chain/anchor, resolved intent, live disposition, guarded quote, exact server instruction frames, optional owner-signed auto-renew follow-up, and expiry.",
-            "type": "object"
+            "$ref": "#/components/schemas/AccountOnboardingPlanBody",
+            "description": "Canonical request, authority, chain/anchor, resolved intent, live disposition, guarded quote, exact server instruction frames, optional owner-signed auto-renew follow-up, and expiry."
           },
           "plan_hash": {
-            "description": "Domain-separated hash of the canonical Norito body.",
-            "type": "string"
+            "$ref": "#/components/schemas/Hash",
+            "description": "Domain-separated hash of the canonical Norito body."
           },
           "signature": {
-            "$ref": "#/components/schemas/JsonValue",
+            "$ref": "#/components/schemas/CanonicalSignature",
             "description": "Onboarding-authority signature over plan_hash."
           }
         },
@@ -471,28 +668,33 @@
         "properties": {
           "account_id": {
             "description": "Canonical domainless I105 AccountId.",
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountId"
           },
           "alias": {
-            "description": "Canonical catalog-free alias `label@dataspace` or `label@domain.dataspace`.",
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountAliasLiteral",
+            "description": "Canonical catalog-free alias `label@dataspace` or `label@domain.dataspace`."
           },
           "permissions": {
-            "description": "Optional names selected from configured additional_permissions.",
+            "description": "Mandatory V1 list of permission names selected from configured additional_permissions; an empty array requests none.",
             "items": {
+              "maxLength": 255,
+              "minLength": 1,
+              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F@#$]+$",
               "type": "string"
             },
             "type": "array"
           },
           "version": {
             "const": 1,
+            "format": "uint8",
             "type": "integer"
           }
         },
         "required": [
           "version",
           "alias",
-          "account_id"
+          "account_id",
+          "permissions"
         ],
         "type": "object"
       },
@@ -500,7 +702,10 @@
         "additionalProperties": false,
         "properties": {
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "receipt": {
             "$ref": "#/components/schemas/AccountOnboardingPlanReceipt"
@@ -513,7 +718,8 @@
         "required": [
           "schema",
           "binding",
-          "receipt"
+          "receipt",
+          "fee_payment"
         ],
         "type": "object"
       },
@@ -521,19 +727,19 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountId"
           },
           "alias": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountAliasLiteral"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
           },
           "disposition": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/AliasPlanDispositionV1"
           },
           "fee_payment": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "operation": {
             "const": "onboarding",
@@ -551,10 +757,10 @@
             "type": "string"
           },
           "server_signature": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/CanonicalSignature"
           },
           "signed_transaction_wire_hex": {
-            "pattern": "^[0-9a-f]+$",
+            "pattern": "^(?:[0-9a-f]{2})+$",
             "type": "string"
           },
           "signed_transaction_wire_sha256": {
@@ -587,16 +793,16 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountId"
           },
           "alias": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountAliasLiteral"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
           },
           "disposition": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/AliasPlanDispositionV1"
           },
           "operation": {
             "const": "onboarding",
@@ -619,7 +825,7 @@
             "type": "string"
           },
           "server_signature": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/CanonicalSignature"
           }
         },
         "required": [
@@ -2367,6 +2573,266 @@
           "request_id",
           "asset_definition",
           "amount"
+        ],
+        "type": "object"
+      },
+      "CanonicalAccountAliasLiteral": {
+        "description": "Canonical account alias in `label@dataspace` or `label@domain.dataspace` form. Runtime admission also verifies exact UTS-46/NFC canonicalization.",
+        "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)?$",
+        "type": "string"
+      },
+      "CanonicalAccountId": {
+        "description": "Exact canonical domainless I105 AccountId. Runtime admission verifies the complete I105 alphabet, checksum, controller encoding, and byte-for-byte canonical re-rendering.",
+        "minLength": 1,
+        "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+        "type": "string"
+      },
+      "CanonicalAliasSegment": {
+        "description": "Canonical lowercase single-label UTS-46 alias segment. Runtime admission also verifies the exact normalization profile.",
+        "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+        "type": "string"
+      },
+      "CanonicalSignature": {
+        "description": "Canonical Norito JSON signature payload as nonempty uppercase byte-aligned hexadecimal. Verification enforces the signer algorithm's exact length and rejects all-zero payloads.",
+        "minLength": 2,
+        "not": {
+          "pattern": "^0+$"
+        },
+        "pattern": "^(?:[0-9A-F]{2})+$",
+        "type": "string"
+      },
+      "ResolvedAccountAliasV1": {
+        "additionalProperties": false,
+        "description": "Canonical account-alias text components pinned to the numeric dataspace identifier consensus must revalidate.",
+        "properties": {
+          "canonical_name": {
+            "$ref": "#/components/schemas/AccountAliasName"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "canonical_name",
+          "dataspace_id"
+        ],
+        "type": "object"
+      },
+      "AliasFramedInstructionV1": {
+        "additionalProperties": false,
+        "description": "One exact framed Norito instruction returned by the onboarding planner.",
+        "properties": {
+          "framed_payload": {
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "wire_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "framed_payload"
+        ],
+        "type": "object"
+      },
+      "AliasLeaseAcquisitionV1": {
+        "additionalProperties": false,
+        "description": "Lease terms used only when the planned account-alias resource remains absent.",
+        "properties": {
+          "pricing_class_hint": {
+            "oneOf": [
+              {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "term_years": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "term_years",
+          "pricing_class_hint"
+        ],
+        "type": "object"
+      },
+      "AliasLeaseQuoteV1": {
+        "additionalProperties": false,
+        "description": "Exact lease quote attached to an account-alias create plan.",
+        "properties": {
+          "exact_amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "expires_at_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "grace_expires_at_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "guard": {
+            "$ref": "#/components/schemas/AliasQuoteGuardV1"
+          },
+          "pricing_class": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "redemption_expires_at_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AccountOnboardingAliasTargetV1"
+          }
+        },
+        "required": [
+          "target",
+          "pricing_class",
+          "exact_amount",
+          "guard",
+          "expires_at_ms",
+          "grace_expires_at_ms",
+          "redemption_expires_at_ms"
+        ],
+        "type": "object"
+      },
+      "AliasPlanAnchorV1": {
+        "additionalProperties": false,
+        "description": "Committed world-state anchor used to classify the onboarding alias plan.",
+        "properties": {
+          "block_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "block_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "block_height",
+          "block_hash"
+        ],
+        "type": "object"
+      },
+      "AliasPlanDispositionV1": {
+        "additionalProperties": false,
+        "description": "Canonical externally tagged Norito JSON planner disposition.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "no_op",
+              "repair",
+              "create",
+              "conflict"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AliasPlanResourceV1": {
+        "additionalProperties": false,
+        "description": "Exact account-alias resource, disposition, optional quote, and optional instruction index committed by the onboarding receipt.",
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/AliasPlanDispositionV1"
+          },
+          "instruction_index": {
+            "oneOf": [
+              {
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "intent": {
+            "$ref": "#/components/schemas/AccountOnboardingAliasIntentV1"
+          },
+          "quote": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AliasLeaseQuoteV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "intent",
+          "disposition",
+          "quote",
+          "instruction_index"
+        ],
+        "type": "object"
+      },
+      "AliasQuoteGuardV1": {
+        "additionalProperties": false,
+        "description": "Policy, asset, amount, and expiry guard revalidated before onboarding submission.",
+        "properties": {
+          "expected_payment_asset": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected_policy_version": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "valid_until_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_policy_version",
+          "expected_payment_asset",
+          "max_amount",
+          "valid_until_ms"
         ],
         "type": "object"
       },
@@ -8541,7 +9007,8 @@
             "additionalProperties": false,
             "properties": {
               "payer": {
-                "const": "authority"
+                "const": "authority",
+                "type": "string"
               },
               "value": {
                 "additionalProperties": false,
@@ -8578,7 +9045,8 @@
             "additionalProperties": false,
             "properties": {
               "payer": {
-                "const": "sponsor"
+                "const": "sponsor",
+                "type": "string"
               },
               "value": {
                 "additionalProperties": false,
@@ -8709,36 +9177,70 @@
                 "const": "accepted"
               },
               "value": {
-                "additionalProperties": false,
-                "properties": {
-                  "debit_source": {
+                "oneOf": [
+                  {
                     "additionalProperties": false,
                     "properties": {
-                      "kind": {
-                        "enum": [
-                          "account",
-                          "sponsor_program"
+                      "debit_source": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "account",
+                            "type": "string"
+                          },
+                          "value": {
+                            "$ref": "#/components/schemas/CanonicalAccountId"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
                         ],
-                        "type": "string"
+                        "type": "object"
                       },
-                      "value": {}
+                      "program_revision": {
+                        "type": "null"
+                      }
                     },
                     "required": [
-                      "kind",
-                      "value"
+                      "debit_source",
+                      "program_revision"
                     ],
                     "type": "object"
                   },
-                  "program_revision": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "debit_source": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "sponsor_program",
+                            "type": "string"
+                          },
+                          "value": {
+                            "$ref": "#/components/schemas/FeeSponsorProgramId"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      "program_revision": {
+                        "format": "uint64",
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "debit_source",
+                      "program_revision"
+                    ],
+                    "type": "object"
                   }
-                },
-                "required": [
-                  "debit_source"
-                ],
-                "type": "object"
+                ]
               }
             },
             "required": [
@@ -16929,6 +17431,41 @@
                 "type": "string"
               },
               "signer_account_id": {
+                "type": "string"
+              },
+              "validation_fee_hijiri_fee_quote_hash": {
+                "description": "Optional lowercase 32-byte composite Hijiri fee-quote hash. It is accepted only with the validation-fee policy version/hash pair and binds the global policy plus the execution account's risk-record presence and value.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "validation_fee_instruction_index": {
+                "description": "Optional unsigned 64-bit instruction index encoded as a canonical decimal string. It is accepted only with the validation-fee policy version/hash pair.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(?:0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "validation_fee_policy_hash": {
+                "description": "Optional lowercase 32-byte validation-fee policy hash. It must be provided together with validation_fee_policy_version.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "validation_fee_policy_version": {
+                "description": "Optional unsigned 64-bit validation-fee policy version encoded as a canonical decimal string. It must be provided together with validation_fee_policy_hash.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(?:0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "validation_fee_transfer_entry_index": {
+                "description": "Optional unsigned 64-bit transfer-entry index encoded as a canonical decimal string. It requires validation_fee_instruction_index and the validation-fee policy version/hash pair.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(?:0|[1-9][0-9]*)$",
                 "type": "string"
               }
             },
@@ -44645,12 +45182,45 @@
         ],
         "type": "object"
       },
+      "TairaPublicResetFaucetMutationBinding": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "faucet",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Canonical public-reset mutation binding specialized to the faucet operation."
+      },
+      "TairaPublicResetOnboardingMutationBinding": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "onboarding",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Canonical public-reset mutation binding specialized to the onboarding operation."
+      },
       "TairaPublicResetMutationBinding": {
         "additionalProperties": false,
         "properties": {
           "authorization_nonce": {
             "maxLength": 32,
             "minLength": 32,
+            "pattern": "^[a-z0-9_-]{32}$",
             "type": "string"
           },
           "authorization_sha256": {
@@ -44658,6 +45228,7 @@
             "type": "string"
           },
           "execution_expires_at_unix_ms": {
+            "format": "uint64",
             "minimum": 1,
             "type": "integer"
           },
@@ -44675,6 +45246,7 @@
           "phase": {
             "maxLength": 128,
             "minLength": 1,
+            "pattern": "^[a-z0-9_-]+$",
             "type": "string"
           },
           "schema": {
@@ -45618,6 +46190,235 @@
         ],
         "type": "object",
         "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.current_policy_proof.response"
+      },
+      "ValidationFeeDecimalU64StringV1": {
+        "description": "Canonical unsigned 64-bit integer rendered as base-10 ASCII without a sign or leading zeroes (except the value zero).",
+        "maxLength": 20,
+        "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+        "type": "string"
+      },
+      "ValidationFeeHijiriQuoteRequestV1": {
+        "additionalProperties": false,
+        "description": "Canonical native-Norito request for one same-snapshot Hijiri validation-fee quote.",
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Canonical universal account whose effective Hijiri risk is priced. It must exactly equal the authenticated canonical-account principal."
+          },
+          "qualifyingTransferCount": {
+            "description": "Nonzero number of qualifying validation-fee transfers to aggregate before applying one ceiling operation.",
+            "format": "uint32",
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "accountId",
+          "qualifyingTransferCount"
+        ],
+        "type": "object",
+        "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.request"
+      },
+      "ValidationFeeHijiriQuoteResponseV1": {
+        "additionalProperties": false,
+        "description": "Evaluated-only Hijiri validation-fee quote derived from one committed-state snapshot. This response is not independently witness-verified.",
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Echoed canonical universal account."
+          },
+          "accountRiskDigest": {
+            "description": "Lowercase digest of the explicit account-risk record, or null when the global default was used. Present if and only if accountRiskRevision is present.",
+            "oneOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "accountRiskRevision": {
+            "description": "Positive revision of the explicit account-risk record, or null when the global default was used. Present if and only if accountRiskDigest is present.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activePolicyHash": {
+            "description": "Canonical lowercase hash of the validation-fee policy active at quotedExecutionHeight.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "activePolicyVersion": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Positive version of the validation-fee policy active at quotedExecutionHeight."
+          },
+          "adjustedPerTransferFeeMinorUnits": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Informational one-transfer fee after one ceiling operation. Do not multiply this rounded value to derive an aggregate fee."
+          },
+          "aggregateAdjustedFeeMinorUnits": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Exact aggregate fee after applying feeMultiplierQ16 and rounding upward once."
+          },
+          "aggregateBaseFeeMinorUnits": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Exact checked product of basePerTransferFeeMinorUnits and qualifyingTransferCount."
+          },
+          "assurance": {
+            "const": "EVALUATED_PROJECTION_NOT_INDEPENDENTLY_WITNESS_VERIFIED",
+            "description": "Honest assurance label for a live evaluation without an independent witness over both policy inputs.",
+            "type": "string"
+          },
+          "basePerTransferFeeMinorUnits": {
+            "const": "10",
+            "description": "Protected V1 base fee for one qualifying transfer, in fee-asset minor units.",
+            "type": "string"
+          },
+          "defaultAccountRiskQ16": {
+            "description": "Global default account risk as an exact raw Q16.16 integer in the inclusive range zero through one.",
+            "format": "uint32",
+            "maximum": 65536,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "effectiveAccountRiskQ16": {
+            "description": "Effective account risk as an exact raw Q16.16 integer in the inclusive range zero through one.",
+            "format": "uint32",
+            "maximum": 65536,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "evaluatedStateHeight": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Committed ledger tip read for every input in this same-snapshot evaluation."
+          },
+          "feeAssetDefinitionId": {
+            "description": "Canonical asset definition charged by the active validation-fee policy.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "feeMultiplierQ16": {
+            "description": "Applied multiplier as an exact raw Q16.16 integer. Hijiri V1 never discounts the base fee.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 65536,
+            "type": "integer"
+          },
+          "feeScale": {
+            "const": 2,
+            "description": "Protected V1 fee-asset decimal scale.",
+            "format": "uint8",
+            "type": "integer"
+          },
+          "hijiriFeeQuoteHash": {
+            "description": "Lowercase composite hash binding the global Hijiri policy, account identity, and explicit account-risk presence or value.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "hijiriParametersDigest": {
+            "description": "Domain-separated lowercase digest of the complete global Hijiri parameter.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "hijiriParametersRevision": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Positive revision of the active global Hijiri parameter."
+          },
+          "hijiriParametersVersion": {
+            "const": 1,
+            "description": "Active global Hijiri parameter schema version.",
+            "format": "uint16",
+            "type": "integer"
+          },
+          "qualifyingTransferCount": {
+            "description": "Echoed number of qualifying transfers priced as one aggregate.",
+            "format": "uint32",
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "quotedExecutionHeight": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1",
+            "description": "Checked successor of evaluatedStateHeight (committed tip + 1), used to select the policy scheduled for execution."
+          },
+          "schema": {
+            "const": "iroha.torii.v1.validation_fee.hijiri_quote.response",
+            "type": "string"
+          },
+          "treasuryAccountId": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Canonical treasury account that must receive the validation fee."
+          },
+          "version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema",
+          "version",
+          "assurance",
+          "evaluatedStateHeight",
+          "quotedExecutionHeight",
+          "accountId",
+          "activePolicyVersion",
+          "activePolicyHash",
+          "feeAssetDefinitionId",
+          "treasuryAccountId",
+          "feeScale",
+          "hijiriParametersVersion",
+          "hijiriParametersRevision",
+          "hijiriParametersDigest",
+          "defaultAccountRiskQ16",
+          "effectiveAccountRiskQ16",
+          "accountRiskRevision",
+          "accountRiskDigest",
+          "feeMultiplierQ16",
+          "hijiriFeeQuoteHash",
+          "basePerTransferFeeMinorUnits",
+          "adjustedPerTransferFeeMinorUnits",
+          "qualifyingTransferCount",
+          "aggregateBaseFeeMinorUnits",
+          "aggregateAdjustedFeeMinorUnits"
+        ],
+        "type": "object",
+        "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.response"
+      },
+      "ValidationFeePositiveDecimalU64StringV1": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ValidationFeeDecimalU64StringV1"
+          },
+          {
+            "not": {
+              "const": "0"
+            }
+          }
+        ],
+        "description": "Canonical positive unsigned 64-bit integer rendered as base-10 ASCII."
       },
       "ValidationFeeProposalDetailV1": {
         "additionalProperties": false,
@@ -92350,6 +93151,466 @@
         "tags": [
           "Transactions"
         ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/validation-fee/hijiri/quote": {
+      "post": {
+        "description": "Evaluate the validation-fee base policy and Hijiri global/account-risk inputs from one committed-state snapshot for the checked successor execution height. The requested account must exactly equal the authenticated canonical-account principal. The response echoes that account and the bounded transfer count, exposes the exact aggregate base and once-rounded adjusted fee, and carries the composite hash required by signed admission. This is an evaluated projection, not an independently witness-verified proof; later state changes can make it stale and admission will reject a mismatched binding.",
+        "operationId": "validationFeeHijiriQuote",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "description": "Canonical Norito encoding of `ValidationFeeHijiriQuoteRequestV1`.",
+                "format": "binary",
+                "type": "string",
+                "x-iroha-max-bytes": 4096,
+                "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ValidationFeeHijiriQuoteResponseV1`.",
+                  "format": "binary",
+                  "type": "string",
+                  "x-iroha-max-bytes": 65536,
+                  "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.hijiri_quote.response"
+                }
+              }
+            },
+            "description": "One same-snapshot, evaluated-only quote for committed tip + 1.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The Content-Type framing, native Norito body, request version, or qualifying transfer count is invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable request rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "request_content_type_invalid",
+                    "request_norito_invalid",
+                    "validation_fee_request_invalid"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical account authentication is missing.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable canonical-authentication rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "canonical_authentication_required"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The requested account does not exactly equal the authenticated canonical-account principal.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable authenticated-principal mismatch code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "validation_fee_hijiri_quote_account_mismatch"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "A validation-fee policy is unavailable or disabled at the quoted height, or global Hijiri parameters are absent.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable quote-availability rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "validation_fee_hijiri_quote_unavailable"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The native Norito body exceeds the configured body or decode-resource limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable request-size rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "request_payload_too_large"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Content-Type is missing or is not one parameter-free application/x-norito value.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable native-Norito media rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "request_content_type_missing",
+                    "request_content_type_unsupported"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `ErrorEnvelope`.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The retained validation-fee or Hijiri state is malformed or inconsistent, or checked quote arithmetic cannot complete.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable state-consistency rejection code.",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "validation_fee_state_inconsistent"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Evaluate a Hijiri validation-fee quote.",
+        "tags": [
+          "Validation fee"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-operation": "validation_fee.hijiri.quote",
         "x-iroha-tool-effect": "read"
       }
     },

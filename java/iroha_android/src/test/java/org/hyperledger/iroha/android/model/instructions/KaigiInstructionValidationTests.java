@@ -1,7 +1,12 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public final class KaigiInstructionValidationTests {
@@ -13,6 +18,8 @@ public final class KaigiInstructionValidationTests {
     fullWidthUnsignedFieldsRoundTripThroughSignedJvmCarriers();
     rejectsOversizedAndSparseRelayManifestHopIndices();
     typedParsersRequireExactActionDiscriminator();
+    parsersRejectUnknownFieldsAndRebuildImmutableCanonicalMaps();
+    relayHealthReportsValidateStatusNotesAndCanonicalMaps();
     unitEnumPayloadsAndCallIdentifiersRejectMalformedState();
     rejectsInvalidRelayHpkeKey();
     rejectsInvalidRelayManifestHpkeKey();
@@ -23,6 +30,8 @@ public final class KaigiInstructionValidationTests {
     rejectsInvalidUsageProofBase64();
     rejectsZeroAndMissingBandwidthClass();
     rejectsStructurallyInvalidRelayManifests();
+    relayManifestsAcceptEightHopsAndRejectNineInBuildersAndParsers();
+    relayHpkeKeysAccept4096DecodedBytesAndReject4097();
     preservesLedgerSafePrivacyFields();
     rejectsClearPrivacyIdentityHints();
     System.out.println("[IrohaAndroid] KaigiInstructionValidationTests passed.");
@@ -79,6 +88,17 @@ public final class KaigiInstructionValidationTests {
     assertEquals(u64MaxText, usage.toArguments().get("duration_ms"));
     assertEquals(u64MaxText, usage.toArguments().get("billed_gas"));
     assertEquals(usage, RecordKaigiUsageInstruction.fromArguments(usage.toArguments()));
+
+    final ReportKaigiRelayHealthInstruction health =
+        ReportKaigiRelayHealthInstruction.builder()
+            .setCallId("wonderland", "unsigned-boundary")
+            .setRelayId("relay")
+            .setStatus(ReportKaigiRelayHealthInstruction.Status.HEALTHY)
+            .setReportedAtMs(u64Max)
+            .build();
+    assertEquals(u64MaxText, health.toArguments().get("reported_at_ms"));
+    assertEquals(
+        health, ReportKaigiRelayHealthInstruction.fromArguments(health.toArguments()));
 
     final SetKaigiRelayManifestInstruction manifest =
         SetKaigiRelayManifestInstruction.builder()
@@ -167,6 +187,230 @@ public final class KaigiInstructionValidationTests {
     assertThrows(
         () -> RecordKaigiUsageInstruction.fromArguments(missingAction),
         "expected missing action to throw");
+  }
+
+  private static void parsersRejectUnknownFieldsAndRebuildImmutableCanonicalMaps() {
+    final String rawHash = hash(1);
+    final Map<String, String> shuffled = new LinkedHashMap<>();
+    shuffled.put("metadata.z", "last");
+    shuffled.put("commitment.commitment", rawHash);
+    shuffled.put("host", "host");
+    shuffled.put("call.call_name", "weekly-sync");
+    shuffled.put("call.domain_id", "wonderland");
+    shuffled.put("action", "CreateKaigi");
+    shuffled.put("metadata.a", "first");
+
+    final CreateKaigiInstruction parsedCreate =
+        CreateKaigiInstruction.fromArguments(shuffled);
+    assertEquals(
+        Arrays.asList(
+            "action",
+            "call.domain_id",
+            "call.call_name",
+            "host",
+            "gas_rate_per_minute",
+            "metadata.a",
+            "metadata.z",
+            "privacy.mode",
+            "room_policy.policy",
+            "commitment.commitment"),
+        new ArrayList<>(parsedCreate.toArguments().keySet()));
+    assertEquals(
+        KaigiInstructionUtils.canonicalizeHash(rawHash),
+        parsedCreate.toArguments().get("commitment.commitment"));
+    final String lowercaseLiteral =
+        KaigiInstructionUtils.canonicalizeHash(hash(0xAB)).toLowerCase(Locale.ROOT);
+    final CreateKaigiInstruction parsedLowercaseLiteral =
+        CreateKaigiInstruction.fromArguments(
+            withArgument(shuffled, "commitment.commitment", lowercaseLiteral));
+    assertEquals(
+        KaigiInstructionUtils.canonicalizeHash(hash(0xAB)),
+        parsedLowercaseLiteral.toArguments().get("commitment.commitment"));
+    assertUnsupportedThrows(
+        () -> parsedCreate.toArguments().put("host", "changed"),
+        "expected canonical argument map to be immutable");
+    assertUnsupportedThrows(
+        () -> parsedCreate.metadata().put("new", "value"),
+        "expected metadata map to be immutable");
+
+    final List<KaigiInstructionUtils.RelayManifestHop> mutableHops = new ArrayList<>();
+    mutableHops.add(new KaigiInstructionUtils.RelayManifestHop("relay-a", key(1), 1));
+    mutableHops.add(new KaigiInstructionUtils.RelayManifestHop("relay-b", key(2), 1));
+    mutableHops.add(new KaigiInstructionUtils.RelayManifestHop("relay-c", key(3), 1));
+    final KaigiInstructionUtils.RelayManifest snapshot =
+        new KaigiInstructionUtils.RelayManifest(100L, mutableHops);
+    mutableHops.clear();
+    assertEquals(3, snapshot.hops().size());
+    assertUnsupportedThrows(
+        () -> snapshot.hops().clear(),
+        "expected relay manifest hops to be immutable");
+
+    final List<Map<String, String>> arguments =
+        Arrays.asList(
+            parsedCreate.toArguments(),
+            JoinKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setParticipant("participant")
+                .build()
+                .toArguments(),
+            LeaveKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setParticipant("participant")
+                .build()
+                .toArguments(),
+            EndKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .build()
+                .toArguments(),
+            RecordKaigiUsageInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setDurationMs(1)
+                .build()
+                .toArguments(),
+            RegisterKaigiRelayInstruction.builder()
+                .setRelayId("relay")
+                .setHpkePublicKeyBase64(key(1))
+                .setBandwidthClass(1)
+                .build()
+                .toArguments(),
+            UnregisterKaigiRelayInstruction.builder()
+                .setRelayId("relay")
+                .build()
+                .toArguments(),
+            SetKaigiRelayManifestInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .build()
+                .toArguments(),
+            ReportKaigiRelayHealthInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setRelayId("relay")
+                .setStatus(ReportKaigiRelayHealthInstruction.Status.HEALTHY)
+                .setReportedAtMs(1)
+                .build()
+                .toArguments());
+    final List<java.util.function.Consumer<Map<String, String>>> parsers =
+        Arrays.asList(
+            value -> CreateKaigiInstruction.fromArguments(value),
+            value -> JoinKaigiInstruction.fromArguments(value),
+            value -> LeaveKaigiInstruction.fromArguments(value),
+            value -> EndKaigiInstruction.fromArguments(value),
+            value -> RecordKaigiUsageInstruction.fromArguments(value),
+            value -> RegisterKaigiRelayInstruction.fromArguments(value),
+            value -> UnregisterKaigiRelayInstruction.fromArguments(value),
+            value -> SetKaigiRelayManifestInstruction.fromArguments(value),
+            value -> ReportKaigiRelayHealthInstruction.fromArguments(value));
+    for (int index = 0; index < arguments.size(); index++) {
+      final Map<String, String> unknown =
+          withArgument(arguments.get(index), "unknown", "value");
+      final java.util.function.Consumer<Map<String, String>> parser = parsers.get(index);
+      assertThrows(
+          () -> parser.accept(unknown),
+          "expected parser to reject an unknown instruction argument");
+    }
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.fromArguments(
+                withArgument(shuffled, "metadata.", "malformed")),
+        "expected malformed metadata key to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.fromArguments(
+                withArgument(shuffled, "commitment.commitment", "")),
+        "expected blank hash field to throw");
+    assertThrows(
+        () ->
+            RegisterKaigiRelayInstruction.builder()
+                .setRelayId("relay")
+                .setHpkePublicKeyBase64("AQ")
+                .setBandwidthClass(1),
+        "expected non-canonical base64 to throw");
+    final UnregisterKaigiRelayInstruction unregistration =
+        UnregisterKaigiRelayInstruction.builder().setRelayId("relay").build();
+    assertEquals(
+        unregistration,
+        UnregisterKaigiRelayInstruction.fromArguments(unregistration.toArguments()));
+    assertThrows(
+        () -> UnregisterKaigiRelayInstruction.builder().setRelayId(" "),
+        "expected blank relay id to throw");
+  }
+
+  private static void relayHealthReportsValidateStatusNotesAndCanonicalMaps() {
+    final String maxNotes = repeat("\uD83D\uDE00", 512);
+    final ReportKaigiRelayHealthInstruction report =
+        ReportKaigiRelayHealthInstruction.builder()
+            .setCallId("wonderland", "weekly-sync")
+            .setRelayId("relay")
+            .setStatus(ReportKaigiRelayHealthInstruction.Status.DEGRADED)
+            .setReportedAtMs(-1L)
+            .setNotes(maxNotes)
+            .build();
+
+    assertEquals(
+        Arrays.asList(
+            "action",
+            "call.domain_id",
+            "call.call_name",
+            "relay_id",
+            "status",
+            "reported_at_ms",
+            "notes"),
+        new ArrayList<>(report.toArguments().keySet()));
+    assertEquals("Degraded", report.toArguments().get("status"));
+    assertEquals("18446744073709551615", report.toArguments().get("reported_at_ms"));
+    assertEquals(
+        report, ReportKaigiRelayHealthInstruction.fromArguments(report.toArguments()));
+    assertUnsupportedThrows(
+        () -> report.toArguments().put("status", "Healthy"),
+        "expected relay health arguments to be immutable");
+
+    final ReportKaigiRelayHealthInstruction zeroTimestamp =
+        ReportKaigiRelayHealthInstruction.builder()
+            .setCallId("wonderland", "weekly-sync")
+            .setRelayId("relay")
+            .setStatus(ReportKaigiRelayHealthInstruction.Status.HEALTHY)
+            .setReportedAtMs(0)
+            .build();
+    assertEquals("0", zeroTimestamp.toArguments().get("reported_at_ms"));
+
+    final ReportKaigiRelayHealthInstruction emptyNotes =
+        ReportKaigiRelayHealthInstruction.fromArguments(
+            withArgument(report.toArguments(), "notes", ""));
+    assertEquals("", emptyNotes.notes());
+    assertEquals(true, emptyNotes.toArguments().containsKey("notes"));
+
+    assertThrows(
+        () ->
+            ReportKaigiRelayHealthInstruction.fromArguments(
+                withArgument(report.toArguments(), "status", "degraded")),
+        "expected non-canonical relay health status to throw");
+    assertThrows(
+        () ->
+            ReportKaigiRelayHealthInstruction.fromArguments(
+                withArgument(report.toArguments(), "reported_at_ms", "01")),
+        "expected non-canonical relay health timestamp to throw");
+    final Map<String, String> missingRelay = new HashMap<>(report.toArguments());
+    missingRelay.remove("relay_id");
+    assertThrows(
+        () -> ReportKaigiRelayHealthInstruction.fromArguments(missingRelay),
+        "expected missing relay ID to throw");
+    assertThrows(
+        () ->
+            ReportKaigiRelayHealthInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setRelayId("relay")
+                .setStatus(ReportKaigiRelayHealthInstruction.Status.UNAVAILABLE)
+                .setReportedAtMs(1)
+                .setNotes(repeat("x", 513)),
+        "expected oversized relay health notes to throw");
+    assertThrows(
+        () ->
+            ReportKaigiRelayHealthInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setRelayId("relay")
+                .setStatus(ReportKaigiRelayHealthInstruction.Status.UNAVAILABLE)
+                .setReportedAtMs(1)
+                .setNotes("\uD800"),
+        "expected unpaired UTF-16 surrogate in relay health notes to throw");
   }
 
   private static void unitEnumPayloadsAndCallIdentifiersRejectMalformedState() {
@@ -343,6 +587,156 @@ public final class KaigiInstructionValidationTests {
                 .addRelayManifestHop("relay-alpha", key(1), 1)
                 .addRelayManifestHop("relay-beta", "", 1),
         "expected empty manifest key to throw");
+  }
+
+  private static void relayManifestsAcceptEightHopsAndRejectNineInBuildersAndParsers() {
+    final SetKaigiRelayManifestInstruction.Builder setBuilder =
+        SetKaigiRelayManifestInstruction.builder()
+            .setCallId("wonderland", "eight-hop-limit")
+            .setRelayManifestExpiryMs(100L);
+    for (int index = 0;
+        index < KaigiInstructionUtils.KAIGI_RELAY_MANIFEST_MAX_HOPS_V1;
+        index++) {
+      setBuilder.addRelayManifestHop("relay-" + index, key(index + 1), 1);
+    }
+    final SetKaigiRelayManifestInstruction setAtLimit = setBuilder.build();
+    assertEquals(
+        setAtLimit,
+        SetKaigiRelayManifestInstruction.fromArguments(setAtLimit.toArguments()));
+    assertThrows(
+        () -> setBuilder.addRelayManifestHop("relay-8", key(9), 1),
+        "expected a ninth SetKaigiRelayManifest builder hop to throw");
+
+    final Map<String, String> setWithNineArguments =
+        new LinkedHashMap<>(setAtLimit.toArguments());
+    setWithNineArguments.put("relay_manifest.hop.8.relay_id", "relay-8");
+    setWithNineArguments.put("relay_manifest.hop.8.hpke_public_key", key(9));
+    setWithNineArguments.put("relay_manifest.hop.8.weight", "1");
+    assertThrows(
+        () -> SetKaigiRelayManifestInstruction.fromArguments(setWithNineArguments),
+        "expected a ninth parsed SetKaigiRelayManifest hop to throw");
+
+    final CreateKaigiInstruction.Builder createBuilder =
+        CreateKaigiInstruction.builder()
+            .setCallId("wonderland", "eight-hop-limit")
+            .setHost("host")
+            .setRelayManifestExpiryMs(100L);
+    for (int index = 0;
+        index < KaigiInstructionUtils.KAIGI_RELAY_MANIFEST_MAX_HOPS_V1;
+        index++) {
+      createBuilder.addRelayManifestHop("relay-" + index, key(index + 1), 1);
+    }
+    final CreateKaigiInstruction createAtLimit = createBuilder.build();
+    assertEquals(
+        createAtLimit, CreateKaigiInstruction.fromArguments(createAtLimit.toArguments()));
+    assertThrows(
+        () -> createBuilder.addRelayManifestHop("relay-8", key(9), 1),
+        "expected a ninth CreateKaigi builder hop to throw");
+
+    final Map<String, String> createWithNineArguments =
+        new LinkedHashMap<>(createAtLimit.toArguments());
+    createWithNineArguments.put("relay_manifest.hop.8.relay_id", "relay-8");
+    createWithNineArguments.put("relay_manifest.hop.8.hpke_public_key", key(9));
+    createWithNineArguments.put("relay_manifest.hop.8.weight", "1");
+    assertThrows(
+        () -> CreateKaigiInstruction.fromArguments(createWithNineArguments),
+        "expected a ninth parsed CreateKaigi hop to throw");
+  }
+
+  private static void relayHpkeKeysAccept4096DecodedBytesAndReject4097() {
+    final String maxKey =
+        keyWithSize(KaigiInstructionUtils.KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1);
+    final String oversizedKey =
+        keyWithSize(KaigiInstructionUtils.KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1);
+
+    final RegisterKaigiRelayInstruction registration =
+        RegisterKaigiRelayInstruction.builder()
+            .setRelayId("relay-alpha")
+            .setHpkePublicKeyBase64(maxKey)
+            .setBandwidthClass(1)
+            .build();
+    assertEquals(
+        registration,
+        RegisterKaigiRelayInstruction.fromArguments(registration.toArguments()));
+    RegisterKaigiRelayInstruction.builder()
+        .setRelayId("relay-alpha-bytes")
+        .setHpkePublicKey(
+            new byte[KaigiInstructionUtils.KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1])
+        .setBandwidthClass(1)
+        .build();
+    assertThrows(
+        () ->
+            RegisterKaigiRelayInstruction.builder()
+                .setRelayId("relay-alpha")
+                .setHpkePublicKeyBase64(oversizedKey),
+        "expected a 4097-byte registered relay HPKE key to throw");
+    assertThrows(
+        () ->
+            RegisterKaigiRelayInstruction.builder()
+                .setRelayId("relay-alpha")
+                .setHpkePublicKey(
+                    new byte[
+                        KaigiInstructionUtils.KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1]),
+        "expected the byte-array registered relay HPKE builder to enforce the limit");
+    assertThrows(
+        () ->
+            RegisterKaigiRelayInstruction.fromArguments(
+                withArgument(
+                    registration.toArguments(), "relay.hpke_public_key", oversizedKey)),
+        "expected a parsed 4097-byte registered relay HPKE key to throw");
+
+    final SetKaigiRelayManifestInstruction manifest =
+        SetKaigiRelayManifestInstruction.builder()
+            .setCallId("wonderland", "hpke-key-limit")
+            .setRelayManifestExpiryMs(100L)
+            .addRelayManifestHop("relay-alpha", maxKey, 1)
+            .addRelayManifestHop("relay-beta", key(2), 1)
+            .addRelayManifestHop("relay-gamma", key(3), 1)
+            .build();
+    assertEquals(
+        manifest, SetKaigiRelayManifestInstruction.fromArguments(manifest.toArguments()));
+    assertThrows(
+        () ->
+            SetKaigiRelayManifestInstruction.builder()
+                .setCallId("wonderland", "hpke-key-limit")
+                .setRelayManifestExpiryMs(100L)
+                .addRelayManifestHop("relay-alpha", oversizedKey, 1),
+        "expected a 4097-byte SetKaigiRelayManifest builder key to throw");
+    assertThrows(
+        () ->
+            SetKaigiRelayManifestInstruction.fromArguments(
+                withArgument(
+                    manifest.toArguments(),
+                    "relay_manifest.hop.0.hpke_public_key",
+                    oversizedKey)),
+        "expected a parsed 4097-byte SetKaigiRelayManifest key to throw");
+
+    final CreateKaigiInstruction create =
+        CreateKaigiInstruction.builder()
+            .setCallId("wonderland", "hpke-key-limit")
+            .setHost("host")
+            .setRelayManifestExpiryMs(100L)
+            .addRelayManifestHop("relay-alpha", maxKey, 1)
+            .addRelayManifestHop("relay-beta", key(2), 1)
+            .addRelayManifestHop("relay-gamma", key(3), 1)
+            .build();
+    assertEquals(create, CreateKaigiInstruction.fromArguments(create.toArguments()));
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.builder()
+                .setCallId("wonderland", "hpke-key-limit")
+                .setHost("host")
+                .setRelayManifestExpiryMs(100L)
+                .addRelayManifestHop("relay-alpha", oversizedKey, 1),
+        "expected a 4097-byte CreateKaigi builder key to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.fromArguments(
+                withArgument(
+                    create.toArguments(),
+                    "relay_manifest.hop.0.hpke_public_key",
+                    oversizedKey)),
+        "expected a parsed 4097-byte CreateKaigi key to throw");
   }
 
   private static void preservesLedgerSafePrivacyFields() {
@@ -684,11 +1078,25 @@ public final class KaigiInstructionValidationTests {
     return Base64.getEncoder().encodeToString(new byte[] {(byte) value});
   }
 
+  private static String keyWithSize(final int size) {
+    final byte[] key = new byte[size];
+    Arrays.fill(key, (byte) 0xA5);
+    return Base64.getEncoder().encodeToString(key);
+  }
+
   private static String hash(final int value) {
     final StringBuilder result = new StringBuilder(64);
     final String octet = String.format("%02x", value & 0xFF);
     for (int index = 0; index < 32; index++) {
       result.append(octet);
+    }
+    return result.toString();
+  }
+
+  private static String repeat(final String value, final int count) {
+    final StringBuilder result = new StringBuilder(value.length() * count);
+    for (int index = 0; index < count; index++) {
+      result.append(value);
     }
     return result.toString();
   }
@@ -712,6 +1120,15 @@ public final class KaigiInstructionValidationTests {
     try {
       runnable.run();
     } catch (final IllegalStateException expected) {
+      return;
+    }
+    throw new AssertionError(message);
+  }
+
+  private static void assertUnsupportedThrows(final Runnable runnable, final String message) {
+    try {
+      runnable.run();
+    } catch (final UnsupportedOperationException expected) {
       return;
     }
     throw new AssertionError(message);

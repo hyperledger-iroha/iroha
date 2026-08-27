@@ -118,6 +118,19 @@ isi! {
     }
 }
 isi! {
+    /// Remove a Kaigi relay descriptor and its retained health feedback.
+    ///
+    /// Native execution requires authorization by the relay account (or its
+    /// active canonical account-id rekey successor). Removal prevents future
+    /// manifest admission; existing manifests remain self-contained and retain
+    /// their pinned descriptor until the host refreshes or ends the call, or
+    /// until the manifest expires.
+    pub struct UnregisterKaigiRelay {
+        /// Relay account whose descriptor should be removed.
+        pub relay_id: AccountId,
+    }
+}
+isi! {
     /// Report the observed health for a relay participating in a Kaigi session.
     pub struct ReportKaigiRelayHealth {
         /// Identifier of the call where the relay was observed.
@@ -142,6 +155,7 @@ impl crate::seal::Instruction for EndKaigi {}
 impl crate::seal::Instruction for RecordKaigiUsage {}
 impl crate::seal::Instruction for SetKaigiRelayManifest {}
 impl crate::seal::Instruction for RegisterKaigiRelay {}
+impl crate::seal::Instruction for UnregisterKaigiRelay {}
 impl crate::seal::Instruction for ReportKaigiRelayHealth {}
 fn kaigi_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
@@ -214,6 +228,9 @@ impl_kaigi_decode_from_slice!(SetKaigiRelayManifest {
 });
 impl_kaigi_decode_from_slice!(RegisterKaigiRelay {
     relay: KaigiRelayRegistration,
+});
+impl_kaigi_decode_from_slice!(UnregisterKaigiRelay {
+    relay_id: AccountId,
 });
 impl_kaigi_decode_from_slice!(ReportKaigiRelayHealth {
     call_id: KaigiId,
@@ -288,6 +305,47 @@ mod tests {
         call.relay_manifest = Some(relay_manifest());
         call
     }
+
+    fn assert_canonical_wire_envelope<T>(
+        registry: &crate::isi::InstructionRegistry,
+        expected_wire_id: &'static str,
+        value: T,
+    ) where
+        T: crate::isi::Instruction + Into<crate::isi::InstructionBox>,
+    {
+        let type_name = std::any::type_name::<T>();
+        assert_eq!(registry.wire_id(type_name), Some(expected_wire_id));
+        assert!(registry.contains(expected_wire_id));
+        assert!(!registry.contains(type_name));
+
+        let boxed: crate::isi::InstructionBox = value.into();
+        assert_eq!(
+            crate::isi::instruction_wire_id(&boxed),
+            Some(expected_wire_id)
+        );
+
+        let (wire_id, framed) = crate::isi::framed_instruction_payload(&boxed)
+            .expect("registered Kaigi instruction frame");
+        assert_eq!(wire_id, expected_wire_id);
+        let decoded = crate::isi::decode_instruction_from_pair(wire_id, &framed)
+            .expect("decode canonical Kaigi instruction pair");
+        assert_eq!(crate::isi::Instruction::id(&*decoded), type_name);
+        assert_eq!(
+            crate::isi::Instruction::dyn_encode(&*decoded),
+            crate::isi::Instruction::dyn_encode(&*boxed)
+        );
+        assert!(crate::isi::decode_instruction_from_pair(type_name, &framed).is_err());
+
+        let encoded = norito::to_bytes(&boxed).expect("encode Kaigi InstructionBox");
+        let decoded: crate::isi::InstructionBox =
+            norito::decode_from_bytes(&encoded).expect("decode Kaigi InstructionBox");
+        assert_eq!(crate::isi::Instruction::id(&*decoded), type_name);
+        assert_eq!(
+            crate::isi::Instruction::dyn_encode(&*decoded),
+            crate::isi::Instruction::dyn_encode(&*boxed)
+        );
+    }
+
     #[test]
     fn kaigi_decode_from_slice_roundtrips() {
         let call_id = call_id();
@@ -339,6 +397,9 @@ mod tests {
         assert_slice_roundtrip(RegisterKaigiRelay {
             relay: relay_registration(),
         });
+        assert_slice_roundtrip(UnregisterKaigiRelay {
+            relay_id: account(4),
+        });
         assert_slice_roundtrip(ReportKaigiRelayHealth {
             call_id,
             relay_id: account(4),
@@ -351,81 +412,110 @@ mod tests {
     fn kaigi_default_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::registry::default();
         let call_id = call_id();
-        assert_registry_decodes(
+        let value = CreateKaigi {
+            call: new_kaigi(),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        };
+        assert_registry_decodes(&registry, value.clone());
+        assert_canonical_wire_envelope(
             &registry,
-            CreateKaigi {
-                call: new_kaigi(),
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
-            },
+            "iroha.instruction.v1::kaigi::CreateKaigi",
+            value,
         );
-        assert_registry_decodes(
+
+        let value = JoinKaigi {
+            call_id: call_id.clone(),
+            participant: account(5),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        };
+        assert_registry_decodes(&registry, value.clone());
+        assert_canonical_wire_envelope(&registry, "iroha.instruction.v1::kaigi::JoinKaigi", value);
+
+        let value = LeaveKaigi {
+            call_id: call_id.clone(),
+            participant: account(5),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        };
+        assert_registry_decodes(&registry, value.clone());
+        assert_canonical_wire_envelope(&registry, "iroha.instruction.v1::kaigi::LeaveKaigi", value);
+
+        let value = EndKaigi {
+            call_id: call_id.clone(),
+            ended_at_ms: None,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        };
+        assert_registry_decodes(&registry, value.clone());
+        assert_canonical_wire_envelope(&registry, "iroha.instruction.v1::kaigi::EndKaigi", value);
+
+        let value = RecordKaigiUsage {
+            call_id: call_id.clone(),
+            duration_ms: 60_000,
+            billed_gas: 15,
+            usage_commitment: None,
+            proof: None,
+        };
+        assert_registry_decodes(&registry, value.clone());
+        assert_canonical_wire_envelope(
             &registry,
-            JoinKaigi {
-                call_id: call_id.clone(),
-                participant: account(5),
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
-            },
+            "iroha.instruction.v1::kaigi::RecordKaigiUsage",
+            value,
         );
-        assert_registry_decodes(
+
+        let value = SetKaigiRelayManifest {
+            call_id: call_id.clone(),
+            relay_manifest: Some(relay_manifest()),
+        };
+        assert_registry_decodes(&registry, value.clone());
+        assert_canonical_wire_envelope(
             &registry,
-            LeaveKaigi {
-                call_id: call_id.clone(),
-                participant: account(5),
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
-            },
+            "iroha.instruction.v1::kaigi::SetKaigiRelayManifest",
+            value,
         );
-        assert_registry_decodes(
+
+        let value = RegisterKaigiRelay {
+            relay: relay_registration(),
+        };
+        assert_registry_decodes(&registry, value.clone());
+        assert_canonical_wire_envelope(
             &registry,
-            EndKaigi {
-                call_id: call_id.clone(),
-                ended_at_ms: None,
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
-            },
+            "iroha.instruction.v1::kaigi::RegisterKaigiRelay",
+            value,
         );
-        assert_registry_decodes(
+
+        let value = UnregisterKaigiRelay {
+            relay_id: account(4),
+        };
+        assert_registry_decodes(&registry, value.clone());
+        assert_canonical_wire_envelope(
             &registry,
-            RecordKaigiUsage {
-                call_id: call_id.clone(),
-                duration_ms: 60_000,
-                billed_gas: 15,
-                usage_commitment: None,
-                proof: None,
-            },
+            "iroha.instruction.v1::kaigi::UnregisterKaigiRelay",
+            value,
         );
-        assert_registry_decodes(
+
+        let value = ReportKaigiRelayHealth {
+            call_id,
+            relay_id: account(4),
+            status: KaigiRelayHealthStatus::Healthy,
+            reported_at_ms: 1_700_030_000,
+            notes: None,
+        };
+        assert_registry_decodes(&registry, value.clone());
+        assert_canonical_wire_envelope(
             &registry,
-            SetKaigiRelayManifest {
-                call_id: call_id.clone(),
-                relay_manifest: Some(relay_manifest()),
-            },
-        );
-        assert_registry_decodes(
-            &registry,
-            RegisterKaigiRelay {
-                relay: relay_registration(),
-            },
-        );
-        assert_registry_decodes(
-            &registry,
-            ReportKaigiRelayHealth {
-                call_id,
-                relay_id: account(4),
-                status: KaigiRelayHealthStatus::Healthy,
-                reported_at_ms: 1_700_030_000,
-                notes: None,
-            },
+            "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth",
+            value,
         );
     }
 }

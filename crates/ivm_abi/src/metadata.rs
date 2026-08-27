@@ -14,8 +14,8 @@ use iroha_data_model::smart_contract::manifest::{
 use norito::{
     Decode, Encode,
     core::{
-        Archived, DecodeFromSlice, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
-        serialize_to_buffer,
+        Archived, DecodeFromSlice, DecodeLimits, Error as NoritoError, NoritoDeserialize,
+        NoritoSerialize, serialize_to_buffer,
     },
 };
 use std::io::Write;
@@ -40,6 +40,26 @@ pub const MAGIC: &[u8; 4] = b"IVM\0";
 /// Fixed IVM V1 header size: 17 bytes of execution metadata followed by the
 /// authenticated 32-byte ABI descriptor hash.
 pub const HEADER_SIZE: usize = 49;
+/// Maximum bytes after the fixed header in one first-release IVM image.
+pub const MAX_PROGRAM_IMAGE_BYTES_V1: usize = 0x0010_0000;
+/// Maximum cumulative native allocation while decoding a `CNTR` section.
+pub const CONTRACT_INTERFACE_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 32 * 1024 * 1024;
+/// Maximum cumulative native allocation while decoding a `DBG1` section.
+pub const CONTRACT_DEBUG_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 16 * 1024 * 1024;
+const CONTRACT_INTERFACE_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    MAX_PROGRAM_IMAGE_BYTES_V1,
+    MAX_PROGRAM_IMAGE_BYTES_V1,
+    MAX_PROGRAM_IMAGE_BYTES_V1 * 8,
+    CONTRACT_INTERFACE_MAX_DECODE_ALLOCATION_BYTES_V1,
+    MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
+);
+const CONTRACT_DEBUG_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    MAX_PROGRAM_IMAGE_BYTES_V1,
+    MAX_PROGRAM_IMAGE_BYTES_V1,
+    MAX_PROGRAM_IMAGE_BYTES_V1 * 8,
+    CONTRACT_DEBUG_MAX_DECODE_ALLOCATION_BYTES_V1,
+    32,
+);
 /// Literal table section marker placed immediately after the metadata header
 /// when compiled bytecode includes literal fixups.
 pub const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
@@ -1414,6 +1434,13 @@ impl ProgramMetadata {
                 actual: abi_hash,
             });
         }
+        let image_len = bytes
+            .len()
+            .checked_sub(HEADER_SIZE)
+            .ok_or(VMError::InvalidMetadata)?;
+        if image_len > MAX_PROGRAM_IMAGE_BYTES_V1 {
+            return Err(VMError::InvalidMetadata);
+        }
         // Note: vector_length may be non-zero even if VECTOR flag is off; the
         // host/runtime may ignore it depending on policy.
         let mut code_offset = header_len;
@@ -1541,9 +1568,11 @@ fn parse_contract_interface_section(
     if payload_end > bytes.len() {
         return Err(VMError::InvalidMetadata);
     }
-    let decoded =
-        norito::decode_canonical::<EmbeddedContractInterfaceV1>(&bytes[payload_start..payload_end])
-            .map_err(|_| VMError::InvalidMetadata)?;
+    let decoded = norito::decode_canonical_with_limits::<EmbeddedContractInterfaceV1>(
+        &bytes[payload_start..payload_end],
+        CONTRACT_INTERFACE_DECODE_LIMITS_V1,
+    )
+    .map_err(|_| VMError::InvalidMetadata)?;
     Ok((decoded, payload_end))
 }
 fn parse_contract_debug_section(
@@ -1567,9 +1596,11 @@ fn parse_contract_debug_section(
     if payload_end > bytes.len() {
         return Err(VMError::InvalidMetadata);
     }
-    let decoded =
-        norito::decode_canonical::<EmbeddedContractDebugInfoV1>(&bytes[payload_start..payload_end])
-            .map_err(|_| VMError::InvalidMetadata)?;
+    let decoded = norito::decode_canonical_with_limits::<EmbeddedContractDebugInfoV1>(
+        &bytes[payload_start..payload_end],
+        CONTRACT_DEBUG_DECODE_LIMITS_V1,
+    )
+    .map_err(|_| VMError::InvalidMetadata)?;
     Ok((decoded, payload_end))
 }
 fn parse_literal_section(
@@ -1687,6 +1718,26 @@ mod tests {
         bytes[0] ^= 0xff;
         assert_eq!(
             ProgramMetadata::parse(&bytes).expect_err("bad magic is structural corruption"),
+            VMError::InvalidMetadata
+        );
+    }
+    #[test]
+    fn program_image_limit_is_enforced_before_section_decoding() {
+        let mut exact = ProgramMetadata::default().encode();
+        exact.resize(HEADER_SIZE + MAX_PROGRAM_IMAGE_BYTES_V1, 0);
+        ProgramMetadata::parse(&exact).expect("the exact V1 image budget must remain valid");
+
+        exact.push(0);
+        assert_eq!(
+            ProgramMetadata::parse(&exact)
+                .expect_err("an image above the V1 budget must fail before decoding sections"),
+            VMError::InvalidMetadata
+        );
+
+        exact[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&CONTRACT_INTERFACE_SECTION_MAGIC);
+        assert_eq!(
+            ProgramMetadata::parse(&exact)
+                .expect_err("an oversized CNTR-shaped image must not reach Norito decoding"),
             VMError::InvalidMetadata
         );
     }

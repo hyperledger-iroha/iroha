@@ -134,18 +134,18 @@ use iroha_data_model::{
         SoraAgentRuntimeStatusV1, SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1,
         SoraAppInfraActionV1, SoraAppInfraAuditEventV1,
         SoraAppInfraExactCurrentRevisionPreconditionV1, SoraAppInfraManifestV1,
-        SoraAppInfraMutationPreconditionV1, SoraAppInfraStateV1, SoraDecryptionRequestRecordV1,
-        SoraDeploymentBundleV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
-        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
-        SoraHfSharedLeaseQueuedWindowV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
-        SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1, SoraInrouReplicaHostAvailabilityV1,
-        SoraInrouReplicaPlacementV1, SoraInrouReplicaRuntimeStateV1,
-        SoraInrouServicePlacementRecordV1, SoraModelArtifactActionV1,
-        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelProvenanceKindV1,
-        SoraModelProvenanceRefV1, SoraModelRegistryV1, SoraModelWeightActionV1,
-        SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1, SoraRolloutStageV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
-        SoraServiceConfigMutationV1, SoraServiceDeploymentStateV1,
+        SoraAppInfraMutationPreconditionV1, SoraAppInfraStateV1, SoraContainerRuntimeV1,
+        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfSharedLeaseActionV1,
+        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
+        SoraHfSharedLeasePoolV1, SoraHfSharedLeaseQueuedWindowV1, SoraHfSharedLeaseStatusV1,
+        SoraHfSourceRecordV1, SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1,
+        SoraInrouReplicaHostAvailabilityV1, SoraInrouReplicaPlacementV1,
+        SoraInrouReplicaRuntimeStateV1, SoraInrouServicePlacementRecordV1,
+        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
+        SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraRolloutStageV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
+        SoraServiceConfigEntryV1, SoraServiceConfigMutationV1, SoraServiceDeploymentStateV1,
         SoraServiceExactCurrentRevisionPreconditionV1, SoraServiceExecutionPlaneV1,
         SoraServiceHandlerClassV1, SoraServiceHealthStatusV1, SoraServiceLeaseClockV1,
         SoraServiceLeaseEgressCheckpointV1, SoraServiceLeaseReporterAssignmentV1,
@@ -15294,6 +15294,20 @@ impl Execute for isi::AdvanceSoracloudRollout {
                 format!("service `{}` is not deployed", self.service_name).into(),
             ));
         };
+        let current_bundle = load_admitted_bundle(
+            state_transaction,
+            &self.service_name,
+            &deployment.current_service_version,
+        )?;
+        if current_bundle.container.runtime == SoraContainerRuntimeV1::Inrou {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "first-release Inrou service `{}` uses atomic exact-revision upgrades and does not support staged rollout transitions",
+                    self.service_name
+                )
+                .into(),
+            ));
+        }
         let Some(mut rollout) = deployment.active_rollout.clone() else {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("service `{}` has no active rollout", self.service_name).into(),
@@ -15608,44 +15622,28 @@ impl Execute for isi::ClearSoracloudInrouReplicaRuntimeState {
         if self.replica_slot == 0 {
             return Err(invalid_parameter("replica_slot must be greater than zero"));
         }
-        let Some(assignment) = resolve_active_inrou_replica_assignment(
-            state_transaction,
-            &self.service_name,
-            &self.service_version,
-            self.replica_slot,
-            state_transaction.block_unix_timestamp_ms().max(1),
-        )?
+        let key =
+            inrou_replica_runtime_key(&self.service_name, &self.service_version, self.replica_slot);
+        let Some(state) = state_transaction
+            .world
+            .soracloud_inrou_replica_runtime
+            .get(&key)
         else {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "service `{}` revision `{}` replica {} has no authoritative Inrou placement",
-                    self.service_name, self.service_version, self.replica_slot
-                )
-                .into(),
-            ));
+            return Ok(());
         };
-        if assignment.validator_account_id != *authority {
+        if state.validator_account_id != *authority {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "account `{authority}` is not assigned to service `{}` revision `{}` replica {}",
-                    self.service_name, self.service_version, self.replica_slot
+                    "Inrou runtime state for service `{}` revision `{}` replica {} belongs to account `{}`, not `{authority}`",
+                    self.service_name,
+                    self.service_version,
+                    self.replica_slot,
+                    state.validator_account_id
                 )
                 .into(),
             ));
         }
-        require_active_public_lane_validator(authority, state_transaction)?;
-        require_inrou_host_peer_binding(authority, &assignment.peer_id, state_transaction)?;
-        if let Some(state) =
-            state_transaction
-                .world
-                .soracloud_inrou_replica_runtime
-                .get(&inrou_replica_runtime_key(
-                    &self.service_name,
-                    &self.service_version,
-                    self.replica_slot,
-                ))
-            && state.placement_incarnation != self.expected_placement_incarnation
-        {
+        if state.placement_incarnation != self.expected_placement_incarnation {
             return Err(invalid_parameter(
                 "Inrou replica runtime clear compare-and-swap incarnation is stale",
             ));

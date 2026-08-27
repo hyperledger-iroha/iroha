@@ -489,7 +489,7 @@ public final class CanonicalRequestSigner {
   }
 
   // This is wire-safe structural admission only. Torii owns UTS-46 and alias resolution.
-  private static boolean isCanonicalAsciiAccountAlias(final String value) {
+  static boolean isCanonicalAsciiAccountAlias(final String value) {
     if (value.startsWith("0x")) {
       return false;
     }
