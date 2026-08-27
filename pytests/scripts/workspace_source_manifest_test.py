@@ -211,15 +211,16 @@ def test_manifest_tracks_executable_mode(tmp_path: Path) -> None:
     assert os.access(script, os.X_OK)
 
 
-def test_windows_reader_ignores_only_cross_api_ctime(
+def test_windows_reader_normalizes_only_cross_api_ctime_and_execute_bits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Windows pathname/fd ctime differences do not mask fd mutations."""
+    """Windows pathname/fd ctime and execute-bit gaps do not mask mutations."""
 
     module = load_module()
     payload = b"stable source bytes\n"
-    source = tmp_path / "source.bin"
+    source = tmp_path / "source.bat"
     source.write_bytes(payload)
+    source.chmod(0o755)
     real_fstat = module.os.fstat
 
     class ReportedStat:
@@ -228,9 +229,14 @@ def test_windows_reader_ignores_only_cross_api_ctime(
             metadata: os.stat_result,
             *,
             ctime_delta: int = 1,
+            execute_bits: int = 0,
+            other_mode_delta: int = 0,
         ) -> None:
             self._metadata = metadata
             self.st_ctime_ns = metadata.st_ctime_ns + ctime_delta
+            self.st_mode = (
+                ((metadata.st_mode & ~0o111) | execute_bits) ^ other_mode_delta
+            )
 
         def __getattr__(self, name: str):
             return getattr(self._metadata, name)
@@ -247,6 +253,20 @@ def test_windows_reader_ignores_only_cross_api_ctime(
         label="workspace source",
     ) == hashlib.sha256(payload).hexdigest()
 
+    monkeypatch.setattr(
+        module.os,
+        "fstat",
+        lambda descriptor: ReportedStat(
+            real_fstat(descriptor), other_mode_delta=stat.S_IWGRP
+        ),
+    )
+    with pytest.raises(module.SourceSealError, match="changed before it was opened"):
+        module._stable_file_sha256(
+            source,
+            maximum_size=len(payload),
+            label="workspace source",
+        )
+
     observations = 0
 
     def changed_fstat(descriptor: int) -> ReportedStat:
@@ -258,6 +278,24 @@ def test_windows_reader_ignores_only_cross_api_ctime(
         )
 
     monkeypatch.setattr(module.os, "fstat", changed_fstat)
+    with pytest.raises(module.SourceSealError, match="changed while it was read"):
+        module._stable_file_sha256(
+            source,
+            maximum_size=len(payload),
+            label="workspace source",
+        )
+
+    observations = 0
+
+    def permission_changed_fstat(descriptor: int) -> ReportedStat:
+        nonlocal observations
+        observations += 1
+        return ReportedStat(
+            real_fstat(descriptor),
+            execute_bits=stat.S_IXGRP if observations == 2 else 0,
+        )
+
+    monkeypatch.setattr(module.os, "fstat", permission_changed_fstat)
     with pytest.raises(module.SourceSealError, match="changed while it was read"):
         module._stable_file_sha256(
             source,

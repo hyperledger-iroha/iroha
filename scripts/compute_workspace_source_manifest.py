@@ -49,6 +49,7 @@ _STABLE_FILE_FIELDS = (
     "st_mtime_ns",
     "st_ctime_ns",
 )
+_EXECUTE_PERMISSION_BITS = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
 _ACTIVE_GIT_OPERATION_PATHS = (
     ("merge", "MERGE_HEAD"),
     ("cherry-pick", "CHERRY_PICK_HEAD"),
@@ -428,12 +429,20 @@ def _stable_metadata_changed(
     after: os.stat_result,
     *,
     compare_ctime: bool = True,
+    compare_execute_bits: bool = True,
 ) -> bool:
-    return any(
-        getattr(before, field) != getattr(after, field)
-        for field in _STABLE_FILE_FIELDS
-        if compare_ctime or field != "st_ctime_ns"
-    )
+    for field in _STABLE_FILE_FIELDS:
+        if not compare_ctime and field == "st_ctime_ns":
+            continue
+        if not compare_execute_bits and field == "st_mode":
+            if (before.st_mode & ~_EXECUTE_PERMISSION_BITS) != (
+                after.st_mode & ~_EXECUTE_PERMISSION_BITS
+            ):
+                return True
+            continue
+        if getattr(before, field) != getattr(after, field):
+            return True
+    return False
 
 
 @contextmanager
@@ -476,6 +485,11 @@ def _stable_regular_reader(
                 before,
                 opened,
                 compare_ctime=not _windows_host_semantics(),
+                # Windows pathname stat synthesizes execute bits for known
+                # executable suffixes, while descriptor stat cannot see the
+                # suffix.  Normalize only that triad; the same-API checks
+                # below remain strict during the read.
+                compare_execute_bits=not _windows_host_semantics(),
             )
         ):
             raise SourceSealError(f"{label} changed before it was opened")
@@ -825,6 +839,7 @@ def _stable_regular_reader_at(
             expected,
             opened,
             compare_ctime=not _windows_host_semantics(),
+            compare_execute_bits=not _windows_host_semantics(),
         ):
             raise SourceSealError(f"{label} changed before it was opened")
         yield stream, expected
