@@ -24,10 +24,11 @@ It builds the current `kagami`, `iroha3d_taira`, `iroha`, and `sorafs-node`
 binaries, replaces
 the previous script-owned bundle under `/var/lib/iroha-taira-devnet/` by
 default, generates exactly four fresh-key NPoS validators for the canonical
-Taira chain, validates every
-peer configuration, and overlays each peer with the sole first-release Inrou
-backend: one PortableVM with exact CPU, memory, writable-storage, and egress
-budgets plus a separate 10 GiB immutable guest-image materialization bound. It
+Taira chain, with Kagami directly owning the exact storage and closed egress
+profile. It validates every base configuration, stages the trusted guest, and
+atomically binds each peer to the complete first-release Inrou backend: one
+PortableVM with exact CPU, memory, writable-storage, and egress budgets plus a
+separate 10 GiB immutable guest-image materialization bound. It
 starts the peers and waits for all four nodes to become ready, which also proves
 that each daemon passed the artifact-free Inrou startup-boundary probe. That
 probe exercises the production machine type and host CPU under KVM, private
@@ -235,15 +236,20 @@ never presents the stored receipt as fresh evidence. It remains read-only: it
 does not repeat KVM qualification, submit a ping, register an artifact, or
 submit a canary deployment.
 
-Stop it while retaining generated configs and logs:
+Stop it and destroy the complete generated network:
 
 ```bash
 python3 scripts/taira_devnet.py down
 ```
 
+Every `up`, `check`, and `down` holds one exclusive lock on the managed marker.
 Teardown returns success only after every managed PID file and matching peer
-process is gone. If that cannot be proved, the bundle is retained for diagnosis
-and the command fails instead of deleting its ownership evidence.
+process is gone and the pinned cleanup-directory identity is unchanged. It
+atomically moves that exact inode to a private cleanup name, proves the identity
+again, then removes configs, logs, state, runtime signers, and onboarding
+material together. If either proof fails, the bundle (or quarantined racing
+replacement) is retained for diagnosis and the command fails instead of
+deleting unproven ownership evidence.
 
 Optionally run the broader read-only public-product route diagnostic after the
 standard signed smoke and four-peer MCP checks:
@@ -270,9 +276,10 @@ exact descriptor and compiled Taira profile.
 
 The output directory is owner-only and contains private keys and runtime
 tokens. Never commit, print, upload, or archive it. On failure the command
-attempts bounded teardown, keeps the bounded peer logs in place, and exits
-non-zero. If peer ownership or termination cannot be proved, it warns and
-retains the bundle for operator diagnosis instead of claiming cleanup.
+prints bounded peer log tails, attempts bounded teardown, and destroys the
+bundle after proving shutdown and directory identity. If either proof fails, it
+warns and retains the complete bundle for operator diagnosis instead of
+claiming cleanup.
 
 ## Public reset
 
@@ -411,6 +418,18 @@ authorization headers in this repository.
   `taira-canary-client.example.toml` describe the live public profile.
 - `validator_roster.example.toml`, the edge renderer, nginx template, and edge
   installer remain the public-ingress configuration surface.
+
+The edge installer validates with the fixed production executable
+`/usr/sbin/nginx`. Dry runs may run unprivileged; installation and reload must
+run as root into a root-owned include directory. Installed configuration is
+published atomically as root-owned mode `0644`. Install and reload runs hold an
+exclusive owner-only `.taira-edge-install.lock` in that directory for the full
+render, validation, publication, reload, and rollback transaction. The installer
+validates a private snapshot, requires the published bytes to match that exact
+fingerprint, and rechecks content and metadata before and after live validation
+and reload. Rollback never overwrites a changed target; it retains the
+owner-only recovery copy for explicit operator handling. Executable overrides
+and Homebrew-specific target discovery are intentionally not supported.
 
 The retired Python reset, release, evidence, host-supervision, and soak
 controllers are intentionally gone. The compiled `iroha taira public-reset`

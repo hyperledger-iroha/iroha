@@ -107,6 +107,18 @@ impl CarVerifier {
         }
         Ok(VerifiedCanonicalCarV1 { parsed, stats })
     }
+
+    /// Verify a canonical single-file CAR using the default SoraFS chunk profile.
+    ///
+    /// The build plan and chunk store are reconstructed directly from borrowed CAR sections, so
+    /// verification does not allocate a second payload-sized buffer.
+    pub fn verify_canonical_single_file_car(
+        car_bytes: &[u8],
+    ) -> Result<CarVerificationReport, CarVerifyError> {
+        let parsed = ParsedCar::parse(car_bytes)?;
+        let plan = plan_from_parsed_payload(&parsed, ChunkProfile::DEFAULT)?;
+        verify_parsed_car_with_plan(parsed, &plan, car_bytes, CarVerifyError::PlanRootMismatch)
+    }
     /// Verifies a canonical single-file `dag-scope=full` CAR response against
     /// the supplied manifest.
     ///
@@ -266,37 +278,47 @@ impl CarVerifier {
                 if plan.chunk_profile != profile {
                     return Err(CarVerifyError::ChunkProfileMismatch);
                 }
-                validate_plan(plan, &parsed)?;
                 Cow::Borrowed(plan)
             }
-            None => {
-                let generated = plan_from_parsed_payload(&parsed, profile)?;
-                validate_plan(&generated, &parsed)?;
-                Cow::Owned(generated)
-            }
+            None => Cow::Owned(plan_from_parsed_payload(&parsed, profile)?),
         };
-        ensure_plan_offsets(plan_for_store.as_ref())?;
-        let mut canonical_car = CanonicalCarComparator::new(car_bytes);
-        let mut canonical_payload = parsed.payload_reader();
-        let canonical_stats = CarStreamingWriter::new(plan_for_store.as_ref())
-            .write_from_reader(&mut canonical_payload, &mut canonical_car)
-            .map_err(CarVerifyError::CanonicalCar)?;
-        if canonical_stats.root_cids != parsed.roots() {
-            return Err(CarVerifyError::ManifestRootMismatch);
-        }
-        if !canonical_car.matches_exactly() {
-            return Err(CarVerifyError::NonCanonicalCar);
-        }
-        let mut chunk_store = ChunkStore::with_profile(plan_for_store.chunk_profile);
-        let mut payload_reader = parsed.payload_reader();
-        chunk_store
-            .ingest_plan_stream(plan_for_store.as_ref(), &mut payload_reader)
-            .map_err(CarVerifyError::ChunkStore)?;
-        Ok(CarVerificationReport {
-            stats: canonical_stats,
-            chunk_store,
-        })
+        verify_parsed_car_with_plan(
+            parsed,
+            plan_for_store.as_ref(),
+            car_bytes,
+            CarVerifyError::ManifestRootMismatch,
+        )
     }
+}
+
+fn verify_parsed_car_with_plan(
+    parsed: ParsedCar<'_>,
+    plan: &CarBuildPlan,
+    car_bytes: &[u8],
+    root_mismatch: CarVerifyError,
+) -> Result<CarVerificationReport, CarVerifyError> {
+    validate_plan(plan, &parsed)?;
+    ensure_plan_offsets(plan)?;
+    let mut canonical_car = CanonicalCarComparator::new(car_bytes);
+    let mut canonical_payload = parsed.payload_reader();
+    let canonical_stats = CarStreamingWriter::new(plan)
+        .write_from_reader(&mut canonical_payload, &mut canonical_car)
+        .map_err(CarVerifyError::CanonicalCar)?;
+    if canonical_stats.root_cids != parsed.roots() {
+        return Err(root_mismatch);
+    }
+    if !canonical_car.matches_exactly() {
+        return Err(CarVerifyError::NonCanonicalCar);
+    }
+    let mut chunk_store = ChunkStore::with_profile(plan.chunk_profile);
+    let mut payload_reader = parsed.payload_reader();
+    chunk_store
+        .ingest_plan_stream(plan, &mut payload_reader)
+        .map_err(CarVerifyError::ChunkStore)?;
+    Ok(CarVerificationReport {
+        stats: canonical_stats,
+        chunk_store,
+    })
 }
 fn match_ordered_chunk_range(
     plan: &CarBuildPlan,
@@ -381,12 +403,6 @@ fn canonical_block_plan(
             offset: relative_offset,
             length: chunk.length,
             digest: chunk.digest,
-            taikai_segment_hint: chunk
-                .taikai_segment_hint
-                .as_ref()
-                .map(crate::try_clone_taikai_hint)
-                .transpose()
-                .map_err(CarVerifyError::Plan)?,
         });
         relative_offset = relative_offset.checked_add(u64::from(chunk.length)).ok_or(
             CarVerifyError::InternalInvariant("canonical block plan length overflowed u64"),
@@ -475,7 +491,6 @@ fn plan_from_parsed_payload(
             offset,
             length,
             digest: parsed_chunk.digest,
-            taikai_segment_hint: None,
         });
     }
     Ok(CarBuildPlan {
@@ -741,11 +756,25 @@ fn try_reserve_verifier<T>(
     context: &'static str,
 ) -> Result<(), CarVerifyError> {
     values
-        .try_reserve_exact(additional)
+        .try_reserve(additional)
         .map_err(|_| CarVerifyError::AllocationFailed {
             context,
             requested: additional,
         })
+}
+fn ensure_next_parsed_chunk_count(current: usize) -> Result<(), CarVerifyError> {
+    let count = current
+        .checked_add(1)
+        .ok_or(CarVerifyError::InternalInvariant(
+            "parsed CAR chunk count overflowed usize",
+        ))?;
+    if count > crate::CAR_PLAN_MAX_CHUNKS {
+        return Err(CarVerifyError::Plan(CarPlanError::TooManyChunks {
+            count,
+            maximum: crate::CAR_PLAN_MAX_CHUNKS,
+        }));
+    }
+    Ok(())
 }
 impl<'a> ParsedCar<'a> {
     pub(crate) fn parse(bytes: &'a [u8]) -> Result<Self, CarVerifyError> {
@@ -880,6 +909,7 @@ impl<'a> ParsedCar<'a> {
                         CarVerifyError::InternalInvariant("parsed payload length overflowed u64"),
                     )?;
                     payload_hasher.update(data_slice);
+                    ensure_next_parsed_chunk_count(chunk_sections.len())?;
                     try_reserve_verifier(&mut chunk_sections, 1, "parsed CAR chunk sections")?;
                     chunk_sections.push(ParsedChunkSection {
                         digest: cid.digest,
@@ -926,27 +956,6 @@ impl<'a> ParsedCar<'a> {
             section_index: 0,
             section_offset: 0,
         }
-    }
-    #[cfg(feature = "cli")]
-    pub(crate) fn payload_bytes(&self) -> Result<Vec<u8>, CarVerifyError> {
-        let capacity = usize::try_from(self.payload_len)
-            .map_err(|_| CarVerifyError::InternalInvariant("payload length exceeds host width"))?;
-        let mut payload = Vec::new();
-        payload
-            .try_reserve_exact(capacity)
-            .map_err(|_| CarVerifyError::AllocationFailed {
-                context: "parsed CAR payload",
-                requested: capacity,
-            })?;
-        for section in &self.chunk_sections {
-            payload.extend_from_slice(self.chunk_payload(section));
-        }
-        if payload.len() != capacity {
-            return Err(CarVerifyError::InternalInvariant(
-                "parsed payload sections do not match payload length",
-            ));
-        }
-        Ok(payload)
     }
     fn chunk_payload(&self, section: &ParsedChunkSection) -> &[u8] {
         &self.bytes[section.data_range.clone()]
@@ -1391,7 +1400,6 @@ mod tests {
                 offset,
                 length: source.length,
                 digest: source.digest,
-                taikai_segment_hint: source.taikai_segment_hint.clone(),
             });
         }
         let block_len = u64::try_from(block_payload.len()).expect("block payload length");
@@ -1669,6 +1677,19 @@ mod tests {
         assert_eq!(parsed.payload_digest(), blake3_hash(&payload));
     }
     #[test]
+    fn parsed_chunk_count_is_bounded_before_reserving() {
+        ensure_next_parsed_chunk_count(crate::CAR_PLAN_MAX_CHUNKS - 1)
+            .expect("last permitted parsed chunk must fit");
+        let err = ensure_next_parsed_chunk_count(crate::CAR_PLAN_MAX_CHUNKS)
+            .expect_err("one chunk beyond the plan ceiling must reject");
+        assert!(matches!(
+            err,
+            CarVerifyError::Plan(CarPlanError::TooManyChunks { count, maximum })
+                if count == crate::CAR_PLAN_MAX_CHUNKS + 1
+                    && maximum == crate::CAR_PLAN_MAX_CHUNKS
+        ));
+    }
+    #[test]
     fn full_car_verification_detects_length_mismatch() {
         let payload = sample_payload();
         let mut plan =
@@ -1712,7 +1733,6 @@ mod tests {
                 offset: 0,
                 length: chunk.length,
                 digest: chunk.digest,
-                taikai_segment_hint: chunk.taikai_segment_hint.clone(),
             }],
             files: vec![FilePlan {
                 path: Vec::new(),
@@ -1816,13 +1836,11 @@ mod tests {
                     offset: 0,
                     length: plan.chunks[0].length,
                     digest: plan.chunks[0].digest,
-                    taikai_segment_hint: plan.chunks[0].taikai_segment_hint.clone(),
                 },
                 CarChunk {
                     offset: plan.chunks[0].length as u64,
                     length: plan.chunks[2].length,
                     digest: plan.chunks[2].digest,
-                    taikai_segment_hint: plan.chunks[2].taikai_segment_hint.clone(),
                 },
             ],
             files: vec![FilePlan {

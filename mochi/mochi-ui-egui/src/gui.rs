@@ -204,9 +204,6 @@ impl CliOverrides {
         if let Some(path) = &self.binaries.kagami {
             builder = builder.kagami_path(path.clone());
         }
-        if let Some(path) = &self.binaries.iroha_cli {
-            builder = builder.iroha_cli_path(path.clone());
-        }
         if let Some(allow) = self.build_binaries {
             builder = builder.auto_build_binaries(allow);
         }
@@ -369,10 +366,6 @@ where
                 let value = next_value(&mut iter, "--kagami")?;
                 overrides.binaries.kagami = Some(PathBuf::from(value));
             }
-            "--iroha-cli" => {
-                let value = next_value(&mut iter, "--iroha-cli")?;
-                overrides.binaries.iroha_cli = Some(PathBuf::from(value));
-            }
             "--build-binaries" => {
                 overrides.build_binaries = Some(true);
             }
@@ -463,7 +456,6 @@ fn merge_overrides(env: CliOverrides, cli: CliOverrides) -> CliOverrides {
         binaries: BinaryOverrides {
             irohad: cli.binaries.irohad.or(env.binaries.irohad),
             kagami: cli.binaries.kagami.or(env.binaries.kagami),
-            iroha_cli: cli.binaries.iroha_cli.or(env.binaries.iroha_cli),
         },
         build_binaries: cli.build_binaries.or(env.build_binaries),
         readiness_smoke: cli.readiness_smoke.or(env.readiness_smoke),
@@ -734,7 +726,7 @@ enum RestartModeFlag {
 fn parse_restart_mode_flag(value: &str) -> Result<RestartModeFlag, CliParseError> {
     match value.to_ascii_lowercase().as_str() {
         "never" => Ok(RestartModeFlag::Never),
-        "on-failure" | "on_failure" | "onfailure" => Ok(RestartModeFlag::OnFailure),
+        "on-failure" => Ok(RestartModeFlag::OnFailure),
         other => Err(CliParseError::new(format!(
             "--restart-mode expects `never` or `on-failure`, got `{other}`"
         ))),
@@ -855,7 +847,6 @@ fn print_cli_usage() {
     println!("  --nexus-lane-count <count>   Override nexus.lane_count in generated configs.");
     println!("  --irohad <path>              Override the iroha3d binary path.");
     println!("  --kagami <path>              Override the kagami binary path.");
-    println!("  --iroha-cli <path>           Override the iroha_cli binary path.");
     println!("  --build-binaries             Auto-build missing binaries via cargo.");
     println!("  --no-build-binaries          Disable auto-build of missing binaries.");
     println!("  --disable-smoke              Disable readiness smoke transactions.");
@@ -5601,21 +5592,12 @@ impl MochiApp {
                 ui.add_space(12.0);
                 self.render_control_bar(ui, supervisor, peer_rows);
                 ui.add_space(8.0);
-                let footer = if let Some(report) = supervisor.compatibility() {
-                    format!(
-                        "{} • {} • Data root {}",
-                        preset,
-                        report.summary_line(),
-                        supervisor.paths().root().display()
-                    )
-                } else {
-                    format!(
-                        "{} • Chain {} • Data root {}",
-                        preset,
-                        supervisor.chain_id(),
-                        supervisor.paths().root().display()
-                    )
-                };
+                let footer = format!(
+                    "{} • Chain {} • Data root {}",
+                    preset,
+                    supervisor.chain_id(),
+                    supervisor.paths().root().display()
+                );
                 ui.label(RichText::new(footer).size(12.0).color(palette.text_muted));
             });
     }
@@ -5928,50 +5910,6 @@ impl MochiApp {
                                     "When enabled, MOCHI submits a signed transaction and waits for it to appear in the block stream before marking a peer ready.",
                                 );
                             });
-                        ui.add_space(8.0);
-                        ui.collapsing("Binary compatibility", |ui| {
-                            let Some(supervisor) = supervisor else {
-                                ui.label("Supervisor not prepared.");
-                                return;
-                            };
-                            let Some(report) = supervisor.compatibility() else {
-                                ui.label("Compatibility report unavailable.");
-                                return;
-                            };
-                            ui.label(report.summary_line());
-                            ui.add_space(6.0);
-                            egui::Grid::new("mochi_binary_compat_grid")
-                                .num_columns(2)
-                                .striped(true)
-                                .show(ui, |ui| {
-                                    for info in &report.versions {
-                                        ui.label(format!("{}:", info.name));
-                                        ui.label(format!(
-                                            "{} ({})",
-                                            info.path.display(),
-                                            info.source_label()
-                                        ));
-                                        ui.end_row();
-                                        if let Some(version) = info.version.as_ref() {
-                                            ui.label("version:");
-                                            ui.label(version);
-                                            ui.end_row();
-                                        }
-                                    }
-                                });
-                            if let Some(verify) = report.verify.as_ref() {
-                                ui.add_space(6.0);
-                                ui.separator();
-                                ui.label("kagami verify:");
-                                ui.label(format!("profile: {}", verify.profile));
-                                if let Some(chain_id) = verify.chain_id.as_ref() {
-                                    ui.label(format!("reported chain: {chain_id}"));
-                                }
-                                if let Some(fingerprint) = verify.fingerprint.as_ref() {
-                                    ui.label(format!("fingerprint: {fingerprint}"));
-                                }
-                            }
-                        });
                         ui.add_space(8.0);
                         egui::CollapsingHeader::new("Logs and exports")
                             .default_open(false)
@@ -8686,7 +8624,7 @@ impl MochiApp {
                 ui.small(format!("Roles: {roles_label}"));
             });
         }
-        let vault_exists = supervisor.signer_vault().exists();
+        let vault_exists = fs::symlink_metadata(supervisor.signer_vault().path()).is_ok();
         ui.horizontal(|ui| {
             if ui.button("Manage signing vault…").clicked() {
                 self.open_signer_vault_dialog(supervisor);

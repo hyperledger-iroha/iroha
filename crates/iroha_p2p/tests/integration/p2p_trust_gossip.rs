@@ -2,7 +2,7 @@
 #![allow(unexpected_cfgs)]
 use super::next_port;
 use iroha_config::parameters::actual::{
-    Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow,
+    Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
 use iroha_config_base::WithOrigin;
@@ -40,13 +40,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TrustTestMessage {
     }
 }
 fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
-    // Admission puzzles are covered by `p2p_puzzle`; keeping them out of this
-    // suite makes trust-gossip timing assertions test only gossip behavior.
-    let pow = SoranetPow {
-        required: false,
-        puzzle: None,
-        ..SoranetPow::default()
-    };
+    // Admission puzzles are covered by `p2p_puzzle`; the minimum valid puzzle
+    // keeps this suite focused on trust-gossip timing.
     let soranet_handshake = ActualSoranetHandshake {
         descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
         client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
@@ -55,7 +50,7 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         kem_id: 1,
         sig_id: 1,
         resume_hash: None,
-        pow,
+        pow: super::test_soranet_pow(),
     };
     Config {
         happy_eyeballs_stagger: Duration::from_millis(50),

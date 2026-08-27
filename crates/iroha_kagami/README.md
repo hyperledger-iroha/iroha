@@ -14,16 +14,16 @@ cargo build --bin kagami
 
 This places `kagami` in `target/debug/` from the repository root.
 
+Kagami always includes the BLS validator tooling required by Sumeragi v2.
 Optional crypto features come from `iroha_crypto`:
 
 - `--features gost` enables the TC26 GOST R 34.10-2012 parameter sets
-- `--features ml-dsa` enables ML-DSA helpers
-- `--features bls` enables BLS validator tooling
+- `--features sm` enables SM2 tooling
 
 Example:
 
 ```bash
-cargo build --bin kagami --features "bls,gost"
+cargo build --bin kagami --features "gost,sm"
 ```
 
 ## Help
@@ -61,7 +61,6 @@ Docker Compose from one authoritative prepared bundle:
 
 ```bash
 kagami localnet \
-  --fresh-random-keys \
   --peers 4 \
   --out-dir ./localnet
 kagami docker \
@@ -72,15 +71,17 @@ kagami docker \
 docker compose -f docker-compose.yml up
 ```
 
+`localnet` uses operating-system-random keys by default and refuses a non-empty
+output directory. Pass `--seed` only for reproducible development fixtures.
+
 Ed25519 or BLS keys:
 
 ```bash
-kagami keys --algorithm ed25519
-kagami keys --out-dir ./key-custody
-kagami keys --algorithm bls_normal --pop --json
+kagami keys --algorithm ed25519 --out-dir ./key-custody
+kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
 ```
 
-`--out-dir` is the production-oriented form: it creates a mode-`0700`
+`--out-dir` is required: it creates a mode-`0700`
 directory containing newline-terminated `public.key` and owner-only
 `private.key` files, refuses to reuse a non-empty directory, and never prints
 the private key.
@@ -191,13 +192,14 @@ the profile-specific defaults.
 Generate BLS validator keys and PoPs:
 
 ```bash
-target/debug/kagami genesis pop --algorithm bls_normal \
-  --seed-hex 5151515151515151515151515151515151515151515151515151515151515151 \
-  --json > popA.json
-target/debug/kagami genesis pop --algorithm bls_normal \
-  --seed-hex 5252525252525252525252525252525252525252525252525252525252525252 \
-  --json > popB.json
+target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-a \
+  --seed-hex 5151515151515151515151515151515151515151515151515151515151515151
+target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-b \
+  --seed-hex 5252525252525252525252525252525252525252525252525252525252525252
 ```
+
+Each directory contains `public.key`, `private.key`, and `pop.hex`; the private
+key is owner-only and is never printed to the terminal.
 
 Generate a genesis JSON:
 
@@ -248,7 +250,7 @@ identity_public_key  = "ed0120..."
 identity_private_key = "802620..."
 ```
 
-Use `kagami keys --algorithm ed25519` to generate that pair.
+Use `kagami keys --algorithm ed25519 --out-dir ./client-custody` to generate that pair.
 
 ## Advanced Examples
 

@@ -7,18 +7,10 @@ license = "Apache-2.0"
 publish = false
 description = "Core supervisor library for the MOCHI local Iroha network GUI."
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(feature, values("schema-structural"))',
-] }
-
 [lib]
 path = "src/lib.rs"
 
 [features]
-default = ["governance", "bridge"]
-governance = []
-bridge = []
 test = []
 
 [dependencies]
@@ -58,3 +50,7 @@ iroha_core = { workspace = true, default-features = false }
 [[test]]
 name = "composer_drafts"
 path = "tests/composer_drafts.rs"
+
+[[test]]
+name = "torii_streams"
+path = "tests/torii_streams.rs"

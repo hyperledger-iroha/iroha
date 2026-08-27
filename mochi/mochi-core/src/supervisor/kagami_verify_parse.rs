@@ -1,6 +1,6 @@
 //! Parsers for the concise report emitted by `kagami verify`.
 
-use super::{GenesisProfile, KagamiVerifyReport};
+use super::KagamiVerifyReport;
 
 pub(super) fn parse_keyed_value(line: &str, keys: &[&str]) -> Option<String> {
     let lower = line.to_ascii_lowercase();
@@ -33,24 +33,15 @@ pub(super) fn parse_keyed_value(line: &str, keys: &[&str]) -> Option<String> {
     None
 }
 pub(super) fn parse_kagami_verify_output(
-    profile: GenesisProfile,
     vrf_seed_hex: Option<&str>,
     output: &str,
 ) -> KagamiVerifyReport {
     let mut chain_id = None;
-    let mut peers_with_pop = None;
     let mut fingerprint = None;
     let mut vrf_seed = vrf_seed_hex.map(|value| value.to_owned());
     for line in output.lines() {
         if chain_id.is_none() {
             chain_id = parse_keyed_value(line, &["chain_id", "chain id", "chain"]);
-        }
-        if peers_with_pop.is_none() {
-            peers_with_pop = parse_keyed_value(
-                line,
-                &["peers_with_pop", "peers-with-pop", "pop_peers", "pop"],
-            )
-            .and_then(|value| value.parse().ok());
         }
         if fingerprint.is_none() {
             fingerprint = parse_keyed_value(line, &["fingerprint", "hash", "fingerprint_hex"]);
@@ -60,11 +51,8 @@ pub(super) fn parse_kagami_verify_output(
         }
     }
     KagamiVerifyReport {
-        profile,
         chain_id,
         vrf_seed_hex: vrf_seed,
-        peers_with_pop,
         fingerprint,
-        raw_output: output.to_owned(),
     }
 }

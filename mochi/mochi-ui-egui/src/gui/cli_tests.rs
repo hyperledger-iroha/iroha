@@ -234,6 +234,15 @@ fn parse_cli_restart_mode_never_sets_policy() {
     ));
 }
 #[test]
+fn parse_cli_restart_mode_rejects_noncanonical_alias() {
+    let args = vec![
+        OsString::from("--restart-mode"),
+        OsString::from("on_failure"),
+    ];
+    let error = parse_cli_overrides_from(args).expect_err("restart alias must be rejected");
+    assert!(error.to_string().contains("expects `never` or `on-failure`"));
+}
+#[test]
 fn parse_cli_restart_on_failure_overrides_attempts() {
     let args = vec![
         OsString::from("--restart-max"),

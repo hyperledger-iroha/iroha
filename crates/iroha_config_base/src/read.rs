@@ -1,24 +1,23 @@
 //! Configuration reader API.
 use drop_bomb::DropBomb;
 use error_stack::{Report, ResultExt};
-use norito::json::{self, JsonDeserializeOwned};
+use norito::json::JsonDeserializeOwned;
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::identity,
     error::Error as StdError,
-    fmt::{Debug, Write as _},
+    fmt::Debug,
     path::{Path, PathBuf},
 };
 use thiserror::Error;
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 use crate::{
     ParameterId, ParameterOrigin, WithOrigin, attach,
-    attach::{EnvValue, MissingParameter, UnknownParameter},
+    attach::{MissingParameter, UnknownParameter},
     env::{FromEnvStr, ReadEnv},
     toml::{self, TomlSource},
-    util::{Emitter, ExtendsPaths},
+    util::Emitter,
 };
-const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
 /// Maximum number of `extends` edges plus the root source in one traversal.
 ///
 /// Repeated diamond edges count toward this ceiling even though their already
@@ -28,87 +27,6 @@ pub const MAX_TOML_EXTENDS_SOURCES: usize = 64;
 pub const MAX_TOML_EXTENDS_DEPTH: u8 = 32;
 /// Maximum aggregate encoded bytes across unique TOML sources in one traversal.
 pub const MAX_TOML_EXTENDS_TOTAL_BYTES: u64 = 8 * toml::MAX_TOML_SOURCE_BYTES;
-fn escape_json_string_plain(s: &str, out: &mut String) {
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                out.push_str("\\u00");
-                out.push(HEX_DIGITS[((c as u32 >> 4) & 0xF) as usize] as char);
-                out.push(HEX_DIGITS[(c as u32 & 0xF) as usize] as char);
-            }
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-}
-fn serialize_json_value_plain(value: &json::Value, out: &mut String) {
-    use norito::json::native::Number;
-    match value {
-        json::Value::Null => out.push_str("null"),
-        json::Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        json::Value::Number(n) => match n {
-            Number::I64(i) => out.push_str(&i.to_string()),
-            Number::U64(u) => out.push_str(&u.to_string()),
-            Number::F64(f) => {
-                const F64_SAFE_INT: f64 = 9_007_199_254_740_992.0; // 2^53
-                if f.is_finite() && f.fract() == 0.0 && f.abs() <= F64_SAFE_INT {
-                    let _ = write!(out, "{f:.1}");
-                } else {
-                    let _ = write!(out, "{f:?}");
-                }
-            }
-        },
-        json::Value::String(s) => escape_json_string_plain(s, out),
-        json::Value::Array(items) => {
-            out.push('[');
-            let mut iter = items.iter().peekable();
-            while let Some(item) = iter.next() {
-                serialize_json_value_plain(item, out);
-                if iter.peek().is_some() {
-                    out.push(',');
-                }
-            }
-            out.push(']');
-        }
-        json::Value::Object(map) => {
-            out.push('{');
-            let mut iter = map.iter().peekable();
-            while let Some((k, v)) = iter.next() {
-                escape_json_string_plain(k, out);
-                out.push(':');
-                serialize_json_value_plain(v, out);
-                if iter.peek().is_some() {
-                    out.push(',');
-                }
-            }
-            out.push('}');
-        }
-    }
-}
-fn deserialize_json_value_plain<T: json::JsonDeserialize>(
-    value: &json::Value,
-) -> std::result::Result<T, json::Error> {
-    // Prefer the `Value`-aware path (avoids a string round-trip for many types).
-    match json::from_value(value.clone()) {
-        Ok(v) => Ok(v),
-        Err(first_err) => {
-            // Fallback to a minimal textual serialization to dodge any platform-specific
-            // quirks in the fast `from_value` implementation.
-            let mut buf = String::new();
-            serialize_json_value_plain(value, &mut buf);
-            match json::from_json(&buf) {
-                Ok(v) => Ok(v),
-                Err(_fallback_err) => Err(first_err),
-            }
-        }
-    }
-}
 /// A type that implements reading from [`ConfigReader`]
 pub trait ReadConfig: Sized {
     /// Returns the [`FinalWrap`] with self and the reader itself, transformed
@@ -145,12 +63,13 @@ pub enum Error {
     /// Found unrecognised parameters that are not part of the schema.
     #[error("Found unrecognised parameters")]
     UnknownParameters,
-    /// Other error with a descriptive message.
-    #[error("{msg}")]
-    Other {
-        /// Explanatory message for the error variant.
-        msg: String,
-    },
+}
+#[derive(Debug, Error, Copy, Clone, Eq, PartialEq)]
+enum ExtendsPathsError {
+    #[error("expected a string or an array of strings")]
+    InvalidType,
+    #[error("array element at index {index} must be a string")]
+    InvalidArrayElement { index: usize },
 }
 #[derive(Debug, Error, Eq, PartialEq)]
 enum ExtendsTraversalError {
@@ -276,7 +195,7 @@ fn take_extends_paths(source: &mut TomlSource) -> Result<Vec<PathBuf>, Error> {
     let Some(extends) = source.table_mut().remove("extends") else {
         return Ok(Vec::new());
     };
-    let parsed = ExtendsPaths::try_from(extends.clone())
+    let parsed = parse_extends_paths(&extends)
         .map_err(Report::new)
         .attach_with(|| {
             attach::Expected::new(
@@ -286,10 +205,23 @@ fn take_extends_paths(source: &mut TomlSource) -> Result<Vec<PathBuf>, Error> {
         .attach_with(|| attach::ActualValue::new(extends))
         .change_context(Error::InvalidExtends)?;
     log::trace!("found `extends`: {parsed:?}");
-    Ok(match parsed {
-        ExtendsPaths::Single(path) => vec![path],
-        ExtendsPaths::Chain(paths) => paths,
-    })
+    Ok(parsed)
+}
+fn parse_extends_paths(
+    value: &::toml::Value,
+) -> core::result::Result<Vec<PathBuf>, ExtendsPathsError> {
+    match value {
+        ::toml::Value::String(path) => Ok(vec![PathBuf::from(path)]),
+        ::toml::Value::Array(values) => values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| match value {
+                ::toml::Value::String(path) => Ok(PathBuf::from(path)),
+                _ => Err(ExtendsPathsError::InvalidArrayElement { index }),
+            })
+            .collect(),
+        _ => Err(ExtendsPathsError::InvalidType),
+    }
 }
 #[derive(Error, Debug)]
 #[error("{0}")]
@@ -318,17 +250,10 @@ impl From<Report<norito::json::Error>> for JsonValueError {
         }
     }
 }
-impl Error {
-    /// Some other error message
-    pub fn other(message: impl AsRef<str>) -> Self {
-        Self::Other {
-            msg: message.as_ref().to_string(),
-        }
-    }
-}
 #[expect(clippy::too_long_first_doc_paragraph)]
 /// The reader, which provides an API to accumulate config sources, read parameters from them,
-/// override with environment variables, fallback to default values, and finally, construct an
+/// optionally override with an explicitly supplied environment reader, fall back to default values,
+/// and finally construct an
 /// exhaustive error report with as many errors, accumulated along the way, as possible.
 pub struct ConfigReader {
     /// The namespace this [`ConfigReader`] is handling. All the `ParameterId` handled will be prefixed with it.
@@ -368,14 +293,23 @@ impl ConfigReader {
             errors_in_env: <_>::default(),
             existing_parameters: <_>::default(),
             missing_parameters: <_>::default(),
-            bomb: DropBomb::new("forgot to call `ConfigReader::finish()`, didn't you?"),
+            bomb: DropBomb::new("forgot to call `ConfigReader::into_result()`, didn't you?"),
             env: Box::new(crate::env::std_env),
         }
     }
-    /// Replace default environment reader ([`std::env::var`]) with a custom one
+    /// Install an explicit environment reader.
     #[must_use]
     pub fn with_env(mut self, env: impl ReadEnv + 'static) -> Self {
         self.env = Box::new(env);
+        self
+    }
+    /// Disable environment-variable overlays.
+    ///
+    /// Artifact-backed production readers should use this so the ambient launcher environment
+    /// cannot rewrite the supplied configuration.
+    #[must_use]
+    pub fn without_env(mut self) -> Self {
+        self.env = Box::new(crate::env::empty_env);
         self
     }
     /// Add a data source to read parameters from.
@@ -491,16 +425,11 @@ impl ConfigReader {
             }
             Ok(())
         })();
-        match result {
-            Ok(()) => {
-                self.bomb.defuse();
-                Ok(self)
-            }
-            Err(e) => {
-                self.bomb.defuse();
-                Err(e)
-            }
+        if let Err(error) = result {
+            self.bomb.defuse();
+            return Err(error);
         }
+        Ok(self)
     }
     /// Instantiate a parameter reading pipeline.
     #[must_use]
@@ -612,14 +541,12 @@ impl ConfigReader {
     where
         T: JsonDeserializeOwned,
     {
-        self.collect_parameter(id);
         let mut errored = false;
         let mut value = None;
         let mut errors: Vec<(PathBuf, Report<JsonValueError>)> = Vec::new();
         for source in &self.sources {
             if let Some(toml_value) = source.fetch(id) {
                 let source_path = source.path().clone();
-                let printable = toml_value.to_string();
                 let json_value = match toml::value_to_json(toml_value) {
                     Ok(value) => value,
                     Err(error) => {
@@ -627,13 +554,12 @@ impl ConfigReader {
                         value = None;
                         errors.push((
                             source_path.clone(),
-                            Report::new(JsonValueError::from(error))
-                                .attach(attach::ConfigValue::new(printable.clone())),
+                            Report::new(JsonValueError::from(error)),
                         ));
                         continue;
                     }
                 };
-                let result: std::result::Result<T, _> = deserialize_json_value_plain(&json_value);
+                let result: std::result::Result<T, _> = T::json_from_value(&json_value);
                 match (result, errored) {
                     (Ok(v), false) => {
                         if value.is_none() {
@@ -656,8 +582,7 @@ impl ConfigReader {
                         value = None;
                         errors.push((
                             source_path.clone(),
-                            Report::new(JsonValueError::from(error))
-                                .attach(attach::ConfigValue::new(printable.clone())),
+                            Report::new(JsonValueError::from(error)),
                         ));
                     }
                 }
@@ -717,17 +642,14 @@ where
     pub fn env(mut self, var: impl AsRef<str>) -> Self {
         let var = var.as_ref();
         if let Some(raw_str) = self.reader.env.read_env(var) {
-            match (T::from_env_str(raw_str.clone()), self.errored) {
+            match (T::from_env_str(raw_str), self.errored) {
                 (Err(error), _) => {
                     self.errored = true;
-                    self.reader.collect_env_error(
-                        Report::new(error)
-                            .attach(EnvValue::new(var.to_string(), raw_str.into_owned()))
-                            .change_context(EnvError(format!(
-                                "Failed to parse parameter `{}` from `{var}`",
-                                self.id,
-                            ))),
-                    );
+                    self.reader
+                        .collect_env_error(Report::new(error).change_context(EnvError(format!(
+                            "Failed to parse parameter `{}` from `{var}`",
+                            self.id,
+                        ))));
                 }
                 (Ok(value), false) => {
                     if self.value.is_none() {
@@ -909,6 +831,109 @@ mod tests {
     fn report_debug(report: &Report<[Error]>) -> String {
         format!("{report:#?}")
     }
+    #[derive(Debug)]
+    struct RejectValueFastPath;
+    impl norito::json::JsonDeserialize for RejectValueFastPath {
+        fn json_deserialize(
+            parser: &mut norito::json::Parser<'_>,
+        ) -> std::result::Result<Self, norito::json::Error> {
+            <bool as norito::json::JsonDeserialize>::json_deserialize(parser).map(|_| Self)
+        }
+        fn json_from_value(
+            _value: &norito::json::Value,
+        ) -> std::result::Result<Self, norito::json::Error> {
+            Err(norito::json::Error::Message(
+                "value conversion rejected".to_owned(),
+            ))
+        }
+    }
+    #[test]
+    fn environment_overlays_can_be_disabled() {
+        let reader = ConfigReader::new().without_env();
+        assert!(reader.env.read_env("PATH").is_none());
+        reader.into_result().expect("unused reader is valid");
+    }
+    #[test]
+    fn parse_diagnostics_do_not_echo_raw_values() {
+        const TOML_SENTINEL: &str = "toml-secret-sentinel";
+        const ENV_SENTINEL: &str = "env-secret-sentinel";
+        let mut reader = ConfigReader::new()
+            .with_env(crate::env::MockEnv::from([("SECRET_ENV", ENV_SENTINEL)]))
+            .with_toml_source(TomlSource::inline(::toml::toml! {
+                toml_value = "toml-secret-sentinel"
+            }));
+        let _toml_value = reader
+            .read_parameter::<u64>(["toml_value"])
+            .value_required()
+            .finish();
+        let _env_value = reader
+            .read_parameter::<u64>(["env_value"])
+            .env("SECRET_ENV")
+            .value_required()
+            .finish();
+        let report = reader
+            .into_result()
+            .expect_err("both sentinel values must fail parsing");
+        let rendered = report_debug(&report);
+        assert!(rendered.contains("toml_value"));
+        assert!(rendered.contains("SECRET_ENV"));
+        assert!(!rendered.contains(TOML_SENTINEL));
+        assert!(!rendered.contains(ENV_SENTINEL));
+    }
+    #[test]
+    fn parses_extends_paths_without_a_public_wrapper() {
+        assert_eq!(
+            parse_extends_paths(&::toml::Value::String("base.toml".to_owned())),
+            Ok(vec![PathBuf::from("base.toml")])
+        );
+        assert_eq!(
+            parse_extends_paths(&::toml::Value::Array(vec![
+                ::toml::Value::String("first.toml".to_owned()),
+                ::toml::Value::String("second.toml".to_owned()),
+            ])),
+            Ok(vec![
+                PathBuf::from("first.toml"),
+                PathBuf::from("second.toml")
+            ])
+        );
+        assert_eq!(
+            parse_extends_paths(&::toml::Value::Integer(1)),
+            Err(ExtendsPathsError::InvalidType)
+        );
+        assert_eq!(
+            parse_extends_paths(&::toml::Value::Array(vec![::toml::Value::Boolean(true,)])),
+            Err(ExtendsPathsError::InvalidArrayElement { index: 0 })
+        );
+    }
+    #[test]
+    fn parameter_deserialization_uses_one_authoritative_value_path() {
+        let mut reader = ConfigReader::new().with_toml_source(TomlSource::inline(::toml::toml! {
+            value = true
+        }));
+        let _value = reader
+            .read_parameter::<RejectValueFastPath>(["value"])
+            .value_required()
+            .finish();
+        let report = reader
+            .into_result()
+            .expect_err("a rejected value conversion must not be retried through text");
+        assert!(
+            report_debug(&report).contains("value conversion rejected"),
+            "unexpected report: {report:#?}"
+        );
+    }
+    #[test]
+    fn extends_reader_still_requires_final_validation() {
+        let dir = temp_config_dir("extends_drop_bomb");
+        let config = dir.join("config.toml");
+        fs::write(&config, "value = true\n").expect("write configuration");
+        let reader = ConfigReader::new()
+            .read_toml_with_extends(config)
+            .expect("configuration must load");
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(reader)));
+        assert!(panic.is_err(), "dropping before `into_result` must panic");
+        fs::remove_dir_all(dir).expect("remove temporary configuration directory");
+    }
     #[test]
     fn extends_cycle_is_rejected_before_reloading_active_source() {
         let dir = temp_config_dir("cycle");
@@ -1088,37 +1113,5 @@ mod tests {
             reported.message,
             "trailing characters at byte 1 (line 1, col 2)"
         );
-    }
-    #[test]
-    fn plain_serializer_matches_roundtrip() {
-        use norito::json::{self, Value, native::Number};
-        let values = [
-            Value::String("00000000-0000-0000-0000-000000000000".to_owned()),
-            Value::String("addr:127.0.0.1:33337#D694".to_owned()),
-            Value::String(
-                "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4".to_owned(),
-            ),
-            Value::Array(vec![
-                Value::String("peer@addr:127.0.0.1:1337#FFFF".to_owned()),
-                Value::String("peer2@addr:127.0.0.1:1338#EEEE".to_owned()),
-            ]),
-            Value::Object({
-                let mut m = json::native::Map::new();
-                m.insert("pop_hex".into(), Value::String("deadbeef".into()));
-                m.insert("public_key".into(), Value::String("ea0130".into()));
-                m
-            }),
-            Value::Number(Number::U64(42)),
-        ];
-        for value in values {
-            let mut plain = String::new();
-            serialize_json_value_plain(&value, &mut plain);
-            let parsed = json::parse_value(&plain).expect("plain serialized value parses");
-            assert_eq!(parsed, value, "mismatch for plain serializer");
-            let canonical = json::to_json(&value).expect("canonical to_json");
-            let reparsed =
-                json::parse_value(&canonical).expect("canonical serialized value parses");
-            assert_eq!(reparsed, value, "mismatch for canonical serializer");
-        }
     }
 }

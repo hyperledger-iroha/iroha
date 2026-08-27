@@ -1,7 +1,7 @@
 use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::{
-    eyre::{Result, eyre},
+    eyre::{Result, WrapErr, eyre},
     owo_colors::OwoColorize,
 };
 use iroha_data_model::{account::NewAccount, asset::AssetId, domain::Domain, peer::Peer};
@@ -13,7 +13,7 @@ use norito::{
 use std::{
     collections::BTreeMap,
     fmt::{self, Debug, Write as _},
-    fs::File,
+    fs::{self, File},
     io,
     io::{BufRead, BufReader, BufWriter, Read, Write},
     marker::PhantomData,
@@ -212,29 +212,13 @@ impl<T: Write> RunArgs<T> for Args {
             }
             Command::NoritoToJson(args) => {
                 tui::status("Decoding Norito payload to JSON");
-                let mut file_writer = match args.output.clone() {
-                    None => None,
-                    Some(path) => Some(BufWriter::new(File::create(path)?)),
-                };
-                let writer: &mut dyn Write = file_writer
-                    .as_mut()
-                    .map_or(writer, |file_writer| file_writer);
-                let decoder = NoritoJsonDecoder::new(args, &map, writer)?;
-                decoder.norito_to_json()?;
+                run_json_conversion(args, &map, writer, JsonConversion::NoritoToJson)?;
                 tui::success("Converted to JSON");
                 Ok(())
             }
             Command::JsonToNorito(args) => {
                 tui::status("Encoding JSON payload to Norito");
-                let mut file_writer = match args.output.clone() {
-                    None => None,
-                    Some(path) => Some(BufWriter::new(File::create(path)?)),
-                };
-                let writer: &mut dyn Write = file_writer
-                    .as_mut()
-                    .map_or(writer, |file_writer| file_writer);
-                let decoder = NoritoJsonDecoder::new(args, &map, writer)?;
-                decoder.json_to_norito()?;
+                run_json_conversion(args, &map, writer, JsonConversion::JsonToNorito)?;
                 tui::success("Encoded Norito payload");
                 Ok(())
             }
@@ -247,6 +231,82 @@ impl<T: Write> RunArgs<T> for Args {
         }
     }
 }
+
+enum JsonConversion {
+    NoritoToJson,
+    JsonToNorito,
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(windows)]
+fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+fn reject_codec_input_output_alias(input: Option<&Path>, output: Option<&Path>) -> Result<()> {
+    let (Some(input), Some(output)) = (input, output) else {
+        return Ok(());
+    };
+    let same_path = input == output;
+    let same_canonical_path = match (fs::canonicalize(input), fs::canonicalize(output)) {
+        (Ok(input), Ok(output)) => input == output,
+        _ => false,
+    };
+    let same_identity = match (fs::metadata(input), fs::metadata(output)) {
+        (Ok(input), Ok(output)) => same_file_identity(&input, &output),
+        _ => false,
+    };
+    if same_path || same_canonical_path || same_identity {
+        return Err(eyre!(
+            "codec input and output must refer to different files: {}",
+            input.display()
+        ));
+    }
+    Ok(())
+}
+
+fn run_json_conversion<T: Write>(
+    args: NoritoJsonArgs,
+    map: &ConverterMap,
+    writer: &mut BufWriter<T>,
+    conversion: JsonConversion,
+) -> Result<()> {
+    let NoritoJsonArgs {
+        input,
+        output: output_path,
+        type_name,
+    } = args;
+    reject_codec_input_output_alias(input.as_deref(), output_path.as_deref())?;
+    // Open and validate the input, then complete the conversion before creating a staging file.
+    // A failed conversion therefore leaves any existing output untouched.
+    let decoder = NoritoJsonDecoder::new(input, &type_name, map)?;
+    let rendered = match conversion {
+        JsonConversion::NoritoToJson => decoder.norito_to_json()?,
+        JsonConversion::JsonToNorito => decoder.json_to_norito()?,
+    };
+    if let Some(path) = output_path {
+        crate::atomic_output::write_file(&path, ".kagami-codec-", |writer| {
+            writer.write_all(&rendered).map_err(Into::into)
+        })
+    } else {
+        writer.write_all(&rendered).map_err(Into::into)
+    }
+}
+
 fn read_codec_input_bounded<R: Read + ?Sized>(
     reader: &mut R,
     max_bytes: usize,
@@ -388,18 +448,13 @@ impl<'map> NoritoToRustDecoder<'map> {
         Ok(())
     }
 }
-struct NoritoJsonDecoder<'map, 'w> {
+struct NoritoJsonDecoder<'map> {
     reader: Box<dyn BufRead>,
-    writer: &'w mut dyn Write,
     converter: &'map dyn Converter,
 }
-impl<'map, 'w> NoritoJsonDecoder<'map, 'w> {
-    fn new(
-        args: NoritoJsonArgs,
-        map: &'map ConverterMap,
-        writer: &'w mut dyn Write,
-    ) -> Result<Self> {
-        let reader: Box<dyn BufRead> = match args.input {
+impl<'map> NoritoJsonDecoder<'map> {
+    fn new(input: Option<PathBuf>, type_name: &str, map: &'map ConverterMap) -> Result<Self> {
+        let reader: Box<dyn BufRead> = match input {
             None => Box::new(io::stdin().lock()),
             Some(path) => {
                 let file = File::open(&path)?;
@@ -420,19 +475,17 @@ impl<'map, 'w> NoritoJsonDecoder<'map, 'w> {
                 Box::new(BufReader::new(file))
             }
         };
-        let Some(converter) = map.get(&args.type_name) else {
-            return Err(eyre!("Unknown type: `{}`", args.type_name));
+        let Some(converter) = map.get(type_name) else {
+            return Err(eyre!("Unknown type: `{type_name}`"));
         };
         Ok(Self {
             reader,
-            writer,
             converter: converter.as_ref(),
         })
     }
-    fn norito_to_json(self) -> Result<()> {
+    fn norito_to_json(self) -> Result<Vec<u8>> {
         let Self {
             mut reader,
-            writer,
             converter,
         } = self;
         let input = read_codec_input_bounded(
@@ -440,14 +493,16 @@ impl<'map, 'w> NoritoJsonDecoder<'map, 'w> {
             MAX_CODEC_INPUT_BYTES_V1,
             "Norito codec input",
         )?;
-        let output = converter.norito_to_json(&input)?;
-        writeln!(writer, "{output}")?;
-        Ok(())
+        let mut output = converter.norito_to_json(&input)?.into_bytes();
+        output
+            .try_reserve_exact(1)
+            .map_err(|error| eyre!("failed to reserve JSON codec output terminator: {error}"))?;
+        output.push(b'\n');
+        Ok(output)
     }
-    fn json_to_norito(self) -> Result<()> {
+    fn json_to_norito(self) -> Result<Vec<u8>> {
         let Self {
             mut reader,
-            writer,
             converter,
         } = self;
         let input = read_codec_input_bounded(
@@ -457,9 +512,7 @@ impl<'map, 'w> NoritoJsonDecoder<'map, 'w> {
         )?;
         let input = String::from_utf8(input)
             .map_err(|error| eyre!("JSON codec input is not valid UTF-8: {error}"))?;
-        let output = converter.json_to_norito(&input)?;
-        writer.write_all(&output)?;
-        Ok(())
+        converter.json_to_norito(&input)
     }
 }
 /// Print all supported types from `map` to `writer`
@@ -480,14 +533,15 @@ fn list_types<W: io::Write>(map: &ConverterMap, writer: &mut W) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundedDebugString, Converter, ConverterImpl, ConverterMap, NoritoToRustArgs,
-        NoritoToRustDecoder, charge_guessed_output, generate_map, read_codec_input_bounded,
+        BoundedDebugString, Converter, ConverterImpl, ConverterMap, JsonConversion, NoritoJsonArgs,
+        NoritoToRustArgs, NoritoToRustDecoder, charge_guessed_output, generate_map,
+        read_codec_input_bounded, run_json_conversion,
     };
     use color_eyre::eyre::Result as EyreResult;
     use iroha_data_model::{account::NewAccount, asset::AssetId, peer::Peer};
     use iroha_genesis::RawGenesisTransaction;
     use iroha_schema::{Compact, TypeId};
-    use std::{fmt::Write as _, path::PathBuf, sync::Arc};
+    use std::{fmt::Write as _, fs, io::BufWriter, path::PathBuf, sync::Arc};
     fn normalize_roundtrip_json(value: &mut norito::json::Value) {
         let norito::json::Value::Object(map) = value else {
             return;
@@ -526,6 +580,123 @@ mod tests {
             10
         );
         assert!(charge_guessed_output(4, 2, 2, 10).is_err());
+    }
+    #[test]
+    fn json_conversion_rejects_same_input_and_output_without_modifying_it() {
+        let directory = tempfile::tempdir().expect("create codec test directory");
+        let path = directory.path().join("payload.json");
+        let original: &[u8] = b"input must remain intact";
+        fs::write(&path, original).expect("write codec input");
+        let args = NoritoJsonArgs {
+            input: Some(path.clone()),
+            output: Some(path.clone()),
+            type_name: <NewAccount as TypeId>::id(),
+        };
+        let mut stdout = BufWriter::new(Vec::new());
+        let error = run_json_conversion(
+            args,
+            &generate_map(),
+            &mut stdout,
+            JsonConversion::JsonToNorito,
+        )
+        .expect_err("same input and output must be rejected");
+        assert!(error.to_string().contains("different files"));
+        assert_eq!(fs::read(path).expect("read preserved input"), original);
+    }
+    #[test]
+    fn failed_json_conversion_preserves_existing_output() {
+        let directory = tempfile::tempdir().expect("create codec test directory");
+        let input = directory.path().join("invalid.json");
+        let output = directory.path().join("output.bin");
+        fs::write(&input, b"not valid JSON").expect("write invalid input");
+        let original: &[u8] = b"existing output must remain intact";
+        fs::write(&output, original).expect("write existing output");
+        let args = NoritoJsonArgs {
+            input: Some(input),
+            output: Some(output.clone()),
+            type_name: <NewAccount as TypeId>::id(),
+        };
+        let mut stdout = BufWriter::new(Vec::new());
+        run_json_conversion(
+            args,
+            &generate_map(),
+            &mut stdout,
+            JsonConversion::JsonToNorito,
+        )
+        .expect_err("invalid input must fail conversion");
+        assert_eq!(fs::read(output).expect("read preserved output"), original);
+        assert_eq!(
+            fs::read_dir(directory.path())
+                .expect("list codec test directory")
+                .count(),
+            2,
+            "failed conversion must not leave a staging file"
+        );
+    }
+    #[test]
+    fn failed_norito_conversion_preserves_existing_output() {
+        let directory = tempfile::tempdir().expect("create codec test directory");
+        let input = directory.path().join("invalid.nrt");
+        let output = directory.path().join("output.json");
+        fs::write(&input, b"not valid Norito").expect("write invalid input");
+        let original: &[u8] = b"existing output must remain intact";
+        fs::write(&output, original).expect("write existing output");
+        let args = NoritoJsonArgs {
+            input: Some(input),
+            output: Some(output.clone()),
+            type_name: <NewAccount as TypeId>::id(),
+        };
+        let mut stdout = BufWriter::new(Vec::new());
+        run_json_conversion(
+            args,
+            &generate_map(),
+            &mut stdout,
+            JsonConversion::NoritoToJson,
+        )
+        .expect_err("invalid input must fail conversion");
+        assert_eq!(fs::read(output).expect("read preserved output"), original);
+        assert_eq!(
+            fs::read_dir(directory.path())
+                .expect("list codec test directory")
+                .count(),
+            2,
+            "failed conversion must not leave a staging file"
+        );
+    }
+    #[test]
+    fn successful_json_conversion_replaces_output_after_conversion() {
+        iroha_genesis::init_instruction_registry();
+        let directory = tempfile::tempdir().expect("create codec test directory");
+        let input = directory.path().join("account.json");
+        let output = directory.path().join("account.bin");
+        fs::copy(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/samples/codec/account.json"),
+            &input,
+        )
+        .expect("copy codec input");
+        fs::write(&output, b"old output").expect("write existing output");
+        let args = NoritoJsonArgs {
+            input: Some(input),
+            output: Some(output.clone()),
+            type_name: <NewAccount as TypeId>::id(),
+        };
+        let mut stdout = BufWriter::new(Vec::new());
+        run_json_conversion(
+            args,
+            &generate_map(),
+            &mut stdout,
+            JsonConversion::JsonToNorito,
+        )
+        .expect("convert JSON and publish output");
+        assert_eq!(
+            fs::read(output).expect("read published output"),
+            fs::read(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/samples/codec/account.bin"
+            ))
+            .expect("read expected codec output")
+        );
+        assert!(stdout.get_ref().is_empty());
     }
     #[test]
     fn json_norito_roundtrip() {

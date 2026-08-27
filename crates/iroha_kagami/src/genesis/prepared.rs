@@ -2,7 +2,7 @@
 
 use crate::{Outcome, RunArgs, tui};
 use clap::Parser;
-use color_eyre::eyre::{WrapErr as _, ensure};
+use color_eyre::eyre::{WrapErr as _, ensure, eyre};
 use iroha_config::parameters::actual;
 use iroha_crypto::{Hash, HashOf, PublicKey, sha256};
 use iroha_data_model::{
@@ -16,11 +16,18 @@ use iroha_genesis::{
 };
 use std::{
     collections::BTreeSet,
-    io::{BufWriter, Write},
+    fs::File,
+    io::{BufWriter, Read as _, Write},
     path::{Path, PathBuf},
 };
 
 const TAIRA_VALIDATOR_COUNT: usize = 4;
+// Effective configs contain policy settings and paths, while large runtime artifacts remain
+// external files. Eight MiB leaves ample first-release policy headroom while bounding parser input.
+const MAX_VALIDATOR_CONFIG_BYTES_V1: usize = 8 * 1024 * 1024;
+// The first-release Taira roster is exactly four public identity/PoP rows. This permits 16 KiB per
+// validator while preventing an unauthenticated roster from consuming unbounded memory.
+const MAX_VALIDATOR_ROSTER_BYTES_V1: usize = 64 * 1024;
 
 /// Verify the exact semantic, signer, hash, and canonical-wire binding of a prepared genesis.
 #[derive(Clone, Debug, Parser)]
@@ -82,6 +89,48 @@ struct ValidatorBinding {
 
 type LoadedValidatorConfigs = (Vec<Vec<u8>>, Vec<actual::Root>, Vec<ValidatorBinding>);
 
+fn read_prepared_file_bounded(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+) -> color_eyre::Result<Vec<u8>> {
+    let max_bytes_u64 = u64::try_from(max_bytes)
+        .map_err(|_| eyre!("{label} byte limit is not representable on this platform"))?;
+    let mut file = File::open(path)?;
+    let before = file.metadata()?;
+    ensure!(
+        before.is_file(),
+        "{label} must be a regular file: {}",
+        path.display()
+    );
+    ensure!(
+        before.len() <= max_bytes_u64,
+        "{label} exceeds the first-release {max_bytes}-byte limit: {}",
+        path.display()
+    );
+    let capacity = usize::try_from(before.len())
+        .map_err(|_| eyre!("{label} length cannot be addressed on this platform"))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity.saturating_add(1))
+        .map_err(|error| eyre!("failed to reserve {label} input buffer: {error}"))?;
+    file.by_ref()
+        .take(max_bytes_u64.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= max_bytes,
+        "{label} exceeds the first-release {max_bytes}-byte limit: {}",
+        path.display()
+    );
+    let after = file.metadata()?;
+    ensure!(
+        before.len() == after.len() && u64::try_from(bytes.len()).ok() == Some(before.len()),
+        "{label} changed while it was being read: {}",
+        path.display()
+    );
+    Ok(bytes)
+}
+
 fn config_slug(path: &Path, index: usize) -> color_eyre::Result<String> {
     let slug = path
         .parent()
@@ -113,8 +162,9 @@ fn load_validator_configs(
     let mut local_keys = BTreeSet::new();
     for (index, path) in paths.iter().enumerate() {
         let slug = config_slug(path, index)?;
-        let config_bytes = std::fs::read(path)
-            .wrap_err_with(|| format!("read effective validator config {}", path.display()))?;
+        let config_bytes =
+            read_prepared_file_bounded(path, MAX_VALIDATOR_CONFIG_BYTES_V1, "validator config")
+                .wrap_err_with(|| format!("read effective validator config {}", path.display()))?;
         let config = super::sign::load_peer_config_bytes(path, &config_bytes)?;
         super::sign::ensure_peer_config_matches_manifest(&config, manifest)?;
         ensure!(
@@ -407,8 +457,12 @@ impl<T: Write> RunArgs<T> for Args {
             .wrap_err("read reviewed genesis manifest under fixed resource bounds")?;
         let reviewed = RawGenesisTransaction::from_json_slice(&reviewed_bytes)
             .wrap_err("parse exact reviewed genesis manifest")?;
-        let validator_roster_bytes =
-            std::fs::read(&self.validator_roster).wrap_err("read exact public validator roster")?;
+        let validator_roster_bytes = read_prepared_file_bounded(
+            &self.validator_roster,
+            MAX_VALIDATOR_ROSTER_BYTES_V1,
+            "public validator roster",
+        )
+        .wrap_err("read exact public validator roster")?;
         let manifest_bytes = read_genesis_manifest_bytes(&self.bound_manifest)
             .wrap_err("read bound genesis manifest under fixed resource bounds")?;
         let manifest = RawGenesisTransaction::from_json_slice(&manifest_bytes)
@@ -525,6 +579,26 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_genesis::GenesisBuilder;
+
+    #[test]
+    fn bounded_prepared_reader_accepts_exact_limit() {
+        let file = tempfile::NamedTempFile::new().expect("create exact-limit prepared input");
+        std::fs::write(file.path(), [0xA5; 32]).expect("write exact-limit prepared input");
+        assert_eq!(
+            read_prepared_file_bounded(file.path(), 32, "test prepared input")
+                .expect("accept exact-limit prepared input"),
+            vec![0xA5; 32]
+        );
+    }
+
+    #[test]
+    fn bounded_prepared_reader_rejects_limit_plus_one() {
+        let file = tempfile::NamedTempFile::new().expect("create oversized prepared input");
+        std::fs::write(file.path(), [0xA5; 33]).expect("write oversized prepared input");
+        let error = read_prepared_file_bounded(file.path(), 32, "test prepared input")
+            .expect_err("reject prepared input one byte over the limit");
+        assert!(error.to_string().contains("32-byte limit"));
+    }
 
     struct Fixture {
         _directory: tempfile::TempDir,

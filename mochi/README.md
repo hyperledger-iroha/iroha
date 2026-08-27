@@ -77,8 +77,8 @@ transport (`stage = "ga"`, no mTLS) so the same sandbox works for Codex MCP clie
 smoke tests without extra hand-edited config.
 
 Mochi also provisions signer-backed local account onboarding for the universal dataspace. The
-owner-only signer and token remain under the sandbox `runtime/` directory; `session.json` exposes
-only the `local-dev` credential identifier and the `onboarding_signer_file` and
+owner-only signer and token remain under the sandbox `runtime/` directory; `session.json` omits
+the dev signer private key and exposes only the `local-dev` credential identifier and the `onboarding_signer_file` and
 `onboarding_token_file` paths so local applications can use the bundle without copying its raw
 secrets or digest into generated metadata.
 

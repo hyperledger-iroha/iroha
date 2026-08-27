@@ -793,13 +793,12 @@ active Rust source files under the SoraFS crates, the standard daemon's
 runtime-provider registry and broker, and Torii's SoraFS routes found no
 `todo!`, `unimplemented!`, default `NotImplemented`, or “not implemented”
 production body. The shipped Cargo binary inventory has no stub, mock, or
-placeholder binary name. The audit found one stale active module claim in the
-Taikai cache: its header still described signed cache-admission gossip, bounded
-pull orchestration, exit hedging, and telemetry as follow-up work even though
-the module implements all four. The header now states the implemented scope and
-explicitly limits those transport-local structures to retrieval policy rather
-than ledger or manifest authority. The SF-8a pricing schedule documentation no
-longer calls the canonical V1 policy a draft.
+placeholder binary name. The audit also removed the dormant Taikai cache pilot.
+Taikai V1 retrieval uses the normal bounded multi-provider SoraFS fetch path;
+there is no dedicated Taikai cache, pull queue, cache-admission gossip profile,
+exit-hedging profile, cache configuration, governance bundle, or cache
+telemetry/dashboard. The SF-8a pricing schedule documentation no longer calls
+the canonical V1 policy a draft.
 
 The remaining keyword matches were reviewed rather than silently allowlisted:
 

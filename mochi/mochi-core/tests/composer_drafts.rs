@@ -1,6 +1,4 @@
 //! Fixture-driven tests for Mochi composer draft JSON payloads.
-#[path = "torii_streams.rs"]
-mod torii_streams;
 use mochi_core::{drafts_from_json_str, drafts_to_pretty_json};
 const IMPLICIT_RECEIVE_FIXTURE: &str =
     include_str!("fixtures/composer_drafts/implicit_receive_transfer.json");

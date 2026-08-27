@@ -903,9 +903,6 @@ fn parse_plan_page(
         let chunk = chunk
             .as_object()
             .ok_or_else(|| integrity("MUSUBI_ARCHIVE_PLAN_RESPONSE_INVALID"))?;
-        if chunk.contains_key("taikai_segment_hint") {
-            return Err(integrity("MUSUBI_ARCHIVE_PLAN_RESPONSE_INVALID"));
-        }
         let chunk_index = required_usize(chunk, "chunk_index")?;
         let expected_index = offset
             .checked_add(index)
@@ -930,7 +927,6 @@ fn parse_plan_page(
             offset: chunk_offset,
             length,
             digest,
-            taikai_segment_hint: None,
         });
     }
     let mut files = Vec::new();
@@ -2092,9 +2088,6 @@ fn exact_plan_binding(plan: &CarBuildPlan) -> Result<[u8; 32], MusubiArchiveRunt
     transcript.update(&plan.content_length.to_le_bytes());
     update_plan_usize(&mut transcript, plan.chunks.len())?;
     for chunk in &plan.chunks {
-        if chunk.taikai_segment_hint.is_some() {
-            return Err(integrity("MUSUBI_ARCHIVE_PLAN_BINDING_INVALID"));
-        }
         transcript.update(&chunk.offset.to_le_bytes());
         transcript.update(&chunk.length.to_le_bytes());
         transcript.update(&chunk.digest);
@@ -2732,7 +2725,6 @@ operator_private_key_file = "provider.key"
                 offset: 0,
                 length: payload_u32,
                 digest: *blake3::hash(&payload).as_bytes(),
-                taikai_segment_hint: None,
             }],
             files: vec![FilePlan {
                 path: vec!["Musubi.toml".to_owned()],
@@ -2759,7 +2751,6 @@ operator_private_key_file = "provider.key"
                 offset: 0,
                 length: u32::try_from(payload.len()).expect("fixture payload length fits u32"),
                 digest: *blake3::hash(&payload).as_bytes(),
-                taikai_segment_hint: None,
             }],
             files: vec![FilePlan {
                 path: vec!["source.ko".to_owned()],

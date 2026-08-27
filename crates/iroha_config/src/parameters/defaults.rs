@@ -93,6 +93,39 @@ pub mod common {
         CHAIN_DISCRIMINANT
     }
 }
+/// Canonical first-release Taira deployment policy shared by generators and launchers.
+pub mod taira {
+    /// Denominator used by the Nexus storage weight fields.
+    pub const STORAGE_WEIGHT_BASIS_POINTS: u16 = 10_000;
+    /// Aggregate Nexus disk budget for one validator.
+    pub const NEXUS_STORAGE_BUDGET_BYTES: u64 = 68_719_476_736;
+    /// Kura share of the Nexus disk budget, in basis points.
+    pub const NEXUS_KURA_BLOCKS_BPS: u16 = 5_500;
+    /// WSV snapshot share of the Nexus disk budget, in basis points.
+    pub const NEXUS_WSV_SNAPSHOTS_BPS: u16 = 2_000;
+    /// SoraFS share of the Nexus disk budget, in basis points.
+    pub const NEXUS_SORAFS_BPS: u16 = 2_000;
+    /// SoraNet spool share of the Nexus disk budget, in basis points.
+    pub const NEXUS_SORANET_SPOOL_BPS: u16 = 250;
+    /// SoraVPN spool share of the Nexus disk budget, in basis points.
+    pub const NEXUS_SORAVPN_SPOOL_BPS: u16 = 250;
+    /// Effective SoraFS component cap derived from the aggregate budget.
+    pub const SORAFS_STORAGE_CAP_BYTES: u64 =
+        NEXUS_STORAGE_BUDGET_BYTES * NEXUS_SORAFS_BPS as u64 / STORAGE_WEIGHT_BASIS_POINTS as u64;
+    /// Inrou egress request budget per minute.
+    pub const INROU_EGRESS_RATE_PER_MINUTE: u32 = 600;
+    /// Inrou egress byte budget per minute.
+    pub const INROU_EGRESS_MAX_BYTES_PER_MINUTE: u64 = 100 * 1024 * 1024;
+
+    const _: () = assert!(
+        NEXUS_KURA_BLOCKS_BPS
+            + NEXUS_WSV_SNAPSHOTS_BPS
+            + NEXUS_SORAFS_BPS
+            + NEXUS_SORANET_SPOOL_BPS
+            + NEXUS_SORAVPN_SPOOL_BPS
+            == STORAGE_WEIGHT_BASIS_POINTS
+    );
+}
 /// IVM- and banner-related defaults.
 pub mod ivm {
     /// Startup banner settings.
@@ -279,9 +312,9 @@ pub mod compute {
         nonzero!(512_u64)
     }
     /// Maximum request payload size (bytes).
-    pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes(512 * 1024);
+    pub const MAX_REQUEST_BYTES: Bytes = Bytes(512 * 1024);
     /// Maximum response payload size (bytes).
-    pub const MAX_RESPONSE_BYTES: Bytes<u64> = Bytes(512 * 1024);
+    pub const MAX_RESPONSE_BYTES: Bytes = Bytes(512 * 1024);
     /// Default per-call gas limit.
     pub const fn max_gas_per_call() -> NonZeroU64 {
         nonzero!(5_000_000_u64)
@@ -690,7 +723,7 @@ pub mod kura {
     /// Default batching interval for fsync operations.
     pub const FSYNC_INTERVAL: Duration = Duration::from_millis(50);
     /// Maximum on-disk footprint allowed for Kura (0 = unlimited).
-    pub const MAX_DISK_USAGE_BYTES: Bytes<u64> = Bytes(0);
+    pub const MAX_DISK_USAGE_BYTES: Bytes = Bytes(0);
 }
 /// P2P networking defaults covering gossip, framing, and socket behavior.
 pub mod network {
@@ -989,7 +1022,7 @@ pub mod streaming {
         /// Reserved legacy spool path; V1 never creates or writes it.
         pub const PROVISION_SPOOL_DIR: &str = "./storage/streaming/soranet_routes";
         /// Reserved spool budget; unused while V1 publication is disabled.
-        pub const PROVISION_SPOOL_MAX_BYTES: Bytes<u64> = Bytes(0);
+        pub const PROVISION_SPOOL_MAX_BYTES: Bytes = Bytes(0);
         /// Default segment window (inclusive) used when provisioning privacy routes.
         pub const PROVISION_WINDOW_SEGMENTS: u64 = 4;
         /// Maximum number of queued privacy-route provisioning jobs.
@@ -1007,7 +1040,7 @@ pub mod streaming {
         /// Directory used to spool SoraVPN route updates before VPN nodes ingest them.
         pub const PROVISION_SPOOL_DIR: &str = "./storage/streaming/soravpn_routes";
         /// Maximum on-disk footprint for the SoraVPN provision spool (0 = unlimited).
-        pub const PROVISION_SPOOL_MAX_BYTES: Bytes<u64> = Bytes(0);
+        pub const PROVISION_SPOOL_MAX_BYTES: Bytes = Bytes(0);
     }
     /// Defaults applied to the streaming audio/video sync enforcement gate.
     pub mod sync {
@@ -1073,7 +1106,7 @@ pub mod sorafs {
             PathBuf::from("./storage/sorafs")
         }
         /// Maximum on-disk capacity allocated to SoraFS (bytes).
-        pub const MAX_CAPACITY_BYTES: Bytes<u64> = Bytes(100 * 1024 * 1024 * 1024);
+        pub const MAX_CAPACITY_BYTES: Bytes = Bytes(100 * 1024 * 1024 * 1024);
         /// Maximum concurrent fetch operations served by the gateway.
         pub const MAX_PARALLEL_FETCHES: usize = 32;
         /// Maximum number of manifests pinned before the node applies back-pressure.
@@ -1085,7 +1118,7 @@ pub mod sorafs {
         /// Protocol ceiling for configured PDP segment samples.
         pub const PDP_SAMPLE_WINDOW_MAX: u16 = 500;
         /// Aggregate in-memory budget for canonical PDP tree indexes.
-        pub const PDP_TREE_MEMORY_LIMIT_BYTES: Bytes<u64> = Bytes(512 * 1024 * 1024);
+        pub const PDP_TREE_MEMORY_LIMIT_BYTES: Bytes = Bytes(512 * 1024 * 1024);
         /// Authenticated AI-screening admission is opt-in until a governed
         /// authority bundle and its reviewed digest are configured.
         pub const MODERATION_SCREENING_ENABLED: bool = false;
@@ -1142,9 +1175,9 @@ pub mod sorafs {
             /// Safe attempts under one unchanged operation identity.
             pub const MAX_SUBMIT_ATTEMPTS: u16 = 8;
             /// Maximum canonical checkpoint size.
-            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(32 * 1024 * 1024);
+            pub const CHECKPOINT_MAX_BYTES: Bytes = Bytes(32 * 1024 * 1024);
             /// Maximum checkpoint-plus-minimal-terminal-wrapper archive artifact size.
-            pub const PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES: Bytes<u64> = Bytes(40 * 1024 * 1024);
+            pub const PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES: Bytes = Bytes(40 * 1024 * 1024);
             /// Minimum canonical archive artifact size admitted by V1.
             pub const PANEL_NOTIFICATION_ARCHIVE_MIN_BYTES_V1: u64 = 1024 * 1024;
             /// Hard canonical archive artifact ceiling admitted by V1.
@@ -1206,9 +1239,9 @@ pub mod sorafs {
             /// Maximum external-delivery failure receipts retained.
             pub const MAX_MATERIAL_DELIVERY_FAILURES: u32 = 64;
             /// Maximum canonical projector checkpoint size.
-            pub const INGEST_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+            pub const INGEST_CHECKPOINT_MAX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
             /// Maximum canonical publication checkpoint size.
-            pub const PUBLICATION_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(32 * 1024 * 1024);
+            pub const PUBLICATION_CHECKPOINT_MAX_BYTES: Bytes = Bytes(32 * 1024 * 1024);
             /// Maximum bytes accepted for one canonical finalized archive record.
             pub const FINALIZED_ARCHIVE_MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
             /// Maximum immutable records admitted in each finalized archive namespace.
@@ -1257,7 +1290,7 @@ pub mod sorafs {
             /// Maximum immutable pages consumed by one scanner tick.
             pub const MAX_PAGES_PER_TICK: u32 = 64;
             /// Maximum canonical scanner checkpoint bytes.
-            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024);
+            pub const CHECKPOINT_MAX_BYTES: Bytes = Bytes(64 * 1024);
             /// Default private state root used only while the scanner is disabled.
             pub fn state_dir() -> PathBuf {
                 PathBuf::from("./storage/sorafs/reserve-transparency")
@@ -1370,7 +1403,7 @@ pub mod sorafs {
                 pub const CHECKPOINT_MIN_BYTES: usize = 4
                     * iroha_data_model::musubi::MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1;
                 /// Maximum canonical checkpoint size, independently of the entry cap.
-                pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+                pub const CHECKPOINT_MAX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
                 /// Physical and decoder ceiling for one canonical checkpoint.
                 pub const CHECKPOINT_MAX_BYTES_LIMIT: usize = 128 * 1024 * 1024;
                 /// Maximum CAS conflicts retried by one journal operation.
@@ -1384,11 +1417,11 @@ pub mod sorafs {
                 /// Relative archive namespace below the resolved Kura root.
                 pub const RELATIVE_ROOT: &str = "provider-ingest-finalized-archive-v1";
                 /// Maximum canonical bytes admitted for one immutable anchor record.
-                pub const MAX_RECORD_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024);
+                pub const MAX_RECORD_BYTES: Bytes = Bytes(128 * 1024 * 1024);
                 /// Maximum immutable anchor records admitted by one namespace.
                 pub const MAX_ARCHIVE_ENTRIES: usize = 1_000_000;
                 /// Maximum aggregate canonical bytes admitted by one namespace.
-                pub const MAX_TOTAL_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024 * 1024);
+                pub const MAX_TOTAL_BYTES: Bytes = Bytes(64 * 1024 * 1024 * 1024);
                 /// Maximum provider projections admitted at one anchor.
                 pub const MAX_PROVIDERS_PER_ANCHOR: usize = 1_024;
                 /// Maximum assigned orders admitted for one provider at one anchor.
@@ -1415,7 +1448,7 @@ pub mod sorafs {
                 /// Hard production ceiling for one canonical outbox checkpoint.
                 pub const CHECKPOINT_MAX_BYTES_LIMIT: u64 = 192 * 1024 * 1024;
                 /// Maximum canonical outbox checkpoint size.
-                pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(192 * 1024 * 1024);
+                pub const CHECKPOINT_MAX_BYTES: Bytes = Bytes(192 * 1024 * 1024);
                 /// Deadline for one external sealed-checkpoint operation.
                 pub const CHECKPOINT_OPERATION_TIMEOUT_MS: u64 = 30_000;
                 /// Source-claim lease duration.
@@ -1488,7 +1521,7 @@ pub mod sorafs {
                 /// the 192 MiB checkpoint ceiling at this 64 MiB limit.
                 pub const MAX_SIGNED_TRANSACTION_BYTES_LIMIT: u64 = 64 * 1024 * 1024;
                 /// Maximum canonical signed completion transaction size.
-                pub const MAX_SIGNED_TRANSACTION_BYTES: Bytes<u64> = Bytes(256 * 1024);
+                pub const MAX_SIGNED_TRANSACTION_BYTES: Bytes = Bytes(256 * 1024);
                 /// Maximum payload-free rows returned by one status page.
                 pub const MAX_STATUS_PAGE_SIZE: usize = 256;
                 /// Conservatively bound a full canonical outbox checkpoint.
@@ -1526,11 +1559,11 @@ pub mod sorafs {
             /// Maximum compact terminal replay records retained by one provider runtime.
             pub const MAX_TERMINAL_RECORDS: u32 = 65_536;
             /// Maximum canonical durable checkpoint size.
-            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024);
+            pub const CHECKPOINT_MAX_BYTES: Bytes = Bytes(128 * 1024 * 1024);
             /// Maximum canonical challenge payload size.
-            pub const CHALLENGE_MAX_BYTES: Bytes<u64> = Bytes(512 * 1024);
+            pub const CHALLENGE_MAX_BYTES: Bytes = Bytes(512 * 1024);
             /// Maximum canonical proof payload size.
-            pub const PROOF_MAX_BYTES: Bytes<u64> = Bytes(16 * 1024 * 1024);
+            pub const PROOF_MAX_BYTES: Bytes = Bytes(16 * 1024 * 1024);
             /// Minimum governed response window in seconds.
             pub const MIN_RESPONSE_WINDOW_SECS: u64 = 4 * 60;
             /// Maximum governed response window in seconds.
@@ -1547,7 +1580,7 @@ pub mod sorafs {
         /// First-release hard ceiling shared by node and Torii PoR projections.
         pub const RUNTIME_STATE_ENTRY_LIMIT_MAX: usize = 65_536;
         /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
-        pub const RUNTIME_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+        pub const RUNTIME_CHECKPOINT_MAX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
         /// Finalized reconciliation cadence for durable proof-outcome delivery.
         pub const RUNTIME_PROOF_OUTCOME_FORWARDER_INTERVAL_MS: std::num::NonZeroU64 =
             nonzero_ext::nonzero!(1_000_u64);
@@ -1593,13 +1626,13 @@ pub mod sorafs {
             /// DNS lookup timeout before a client is built with pinned addresses.
             pub const DNS_TIMEOUT_MS: u64 = 2_000;
             /// Maximum accepted remote response body.
-            pub const MAX_RESPONSE_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
+            pub const MAX_RESPONSE_BYTES: Bytes = Bytes(4 * 1024 * 1024);
             /// Maximum local block, head, CAR, or block-prefix archive request.
             ///
             /// Covers the canonical block ceiling (128 MiB plus a 64 KiB
             /// signature allowance), the 1 MiB archive wrapper, and 64 KiB
             /// of deterministic multipart framing.
-            pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes((129 * 1024 * 1024) + (128 * 1024));
+            pub const MAX_REQUEST_BYTES: Bytes = Bytes((129 * 1024 * 1024) + (128 * 1024));
             /// Maximum future clock skew accepted for blocks and heads.
             pub const MAX_FUTURE_SKEW_SECS: u64 = 60;
             /// Maximum lifetime accepted for one signed outbound request envelope.
@@ -1647,7 +1680,7 @@ pub mod sorafs {
             /// Maximum signing/submission attempts for one semantic operation.
             pub const MAX_ATTEMPTS: NonZeroU32 = nonzero!(8_u32);
             /// Maximum canonical durable checkpoint size.
-            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+            pub const CHECKPOINT_MAX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
             /// Minimum supported finalized-state scan cadence.
             pub const SCAN_INTERVAL_MIN_MS: u64 = 100;
             /// Maximum supported finalized-state scan cadence.
@@ -1685,7 +1718,7 @@ pub mod sorafs {
             /// Maximum signing/submission attempts for one semantic operation.
             pub const MAX_ATTEMPTS: NonZeroU32 = nonzero!(8_u32);
             /// Maximum canonical durable checkpoint size.
-            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+            pub const CHECKPOINT_MAX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
             /// Minimum supported finalized-state scan cadence.
             pub const SCAN_INTERVAL_MIN_MS: u64 = 100;
             /// Maximum supported finalized-state scan cadence.
@@ -1774,7 +1807,7 @@ pub mod sorafs {
             /// WebAuthn challenge lifetime in milliseconds.
             pub const CHALLENGE_TTL_MS: u64 = 2 * 60 * 1_000;
             /// Maximum authenticated plaintext bytes per range request.
-            pub const MAX_RANGE_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
+            pub const MAX_RANGE_BYTES: Bytes = Bytes(4 * 1024 * 1024);
             /// Maximum retained single-use challenges.
             pub const MAX_CHALLENGES: u32 = 65_536;
             /// Maximum retained case-bound sessions and hold/erasure records.
@@ -1784,7 +1817,7 @@ pub mod sorafs {
             /// Maximum retained idempotency tombstones.
             pub const MAX_IDEMPOTENCY_RECORDS: u32 = 1_000_000;
             /// Maximum canonical checkpoint size.
-            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+            pub const CHECKPOINT_MAX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
             /// Retention interval after the last session expires.
             pub const RETENTION_AFTER_EXPIRY_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
             /// Cadence for the supervised immutable-archive compaction worker.
@@ -1944,7 +1977,7 @@ pub mod sorafs {
                 None
             }
             /// Maximum encoded binding-document size accepted at startup.
-            pub const MAX_BYTES: Bytes<u64> = Bytes(1024 * 1024);
+            pub const MAX_BYTES: Bytes = Bytes(1024 * 1024);
             /// Maximum number of named host bindings accepted at startup.
             pub const MAX_SITES: NonZeroUsize = nonzero!(1024usize);
         }
@@ -2032,9 +2065,9 @@ pub mod sorafs {
             /// identities, feeds, storage, and a runtime transport are provisioned.
             pub const ENABLED: bool = false;
             /// Maximum encoded feed response.
-            pub const MAX_ENCODED_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
+            pub const MAX_ENCODED_BYTES: Bytes = Bytes(4 * 1024 * 1024);
             /// Maximum normalized/decompressed feed response.
-            pub const MAX_DECODED_BYTES: Bytes<u64> = Bytes(16 * 1024 * 1024);
+            pub const MAX_DECODED_BYTES: Bytes = Bytes(16 * 1024 * 1024);
             /// Maximum admitted redirect count.
             pub const MAX_REDIRECTS: u8 = 3;
             /// Maximum distinct public DNS answers.
@@ -2072,7 +2105,7 @@ pub mod torii {
     /// Maximum inner body carried by the first-release Torii proxy protocol.
     pub const TORII_PROXY_MAX_INNER_BODY_BYTES_V1: u64 = 64_000_000;
     /// Maximum request payload size accepted by Torii (bytes).
-    pub const MAX_CONTENT_LEN: Bytes<u64> = Bytes(TORII_PROXY_MAX_INNER_BODY_BYTES_V1);
+    pub const MAX_CONTENT_LEN: Bytes = Bytes(TORII_PROXY_MAX_INNER_BODY_BYTES_V1);
     /// Maximum concurrent physical transaction-ingress compute jobs.
     pub const TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS: NonZeroUsize = nonzero!(4usize);
     /// Maximum signed transactions accepted by one HTTP batch submission.
@@ -2094,7 +2127,7 @@ pub mod torii {
     /// Maximum concurrent heavy query executions admitted by Torii.
     pub const QUERY_HEAVY_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
     /// Aggregate bytes split between bounded signed-query ingress and fanout working sets.
-    pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes<u64> = Bytes(64_000_000);
+    pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes = Bytes(64_000_000);
     /// Minimum aggregate V1 query-memory pool for four ingress slots plus one fanout.
     pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_000_000;
     /// Source-derived route/catalogue/key/candidate bytes in one V1 fanout.
@@ -2153,7 +2186,7 @@ pub mod torii {
     /// Default maximum number of concurrent public Soracloud local-read executions.
     pub const SORACLOUD_PUBLIC_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
     /// Maximum hosted Soracloud response body buffered for P2P proxy forwarding.
-    pub const SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+    pub const SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES: Bytes = Bytes(64 * 1024 * 1024);
     /// Default signed Soracloud mutation rate per account+origin every second.
     pub const SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC: Option<u32> = Some(8);
     /// Default signed Soracloud mutation burst per account+origin.
@@ -2161,13 +2194,13 @@ pub mod torii {
     /// Default maximum number of concurrent signed Soracloud mutation executions.
     pub const SORACLOUD_MUTATION_MAX_INFLIGHT: NonZeroUsize = nonzero!(64usize);
     /// Maximum body size for signed Soracloud control-plane mutations before signature verification.
-    pub const SORACLOUD_MUTATION_MAX_BODY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024);
+    pub const SORACLOUD_MUTATION_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024);
     /// Steady-state proof endpoint rate (requests per minute). None disables.
     pub const PROOF_RATE_PER_MIN: Option<u32> = Some(120);
     /// Burst tokens for proof endpoints (requests).
     pub const PROOF_BURST: Option<u32> = Some(60);
     /// Maximum proof request payload size (bytes).
-    pub const PROOF_MAX_BODY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024); // 8 MiB
+    pub const PROOF_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024); // 8 MiB
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
     pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
     /// Absolute deadline for reading one admitted proof-bearing request body.
@@ -2180,9 +2213,9 @@ pub mod torii {
     /// and worst-case first-release SCCP JSON expansion of a 16 MiB binary envelope.
     pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(64 * 1024 * 1024); // 64 MiB
     /// Aggregate memory budget for retained `/v1/zk/ivm/prove` job state.
-    pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024); // 128 MiB
+    pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES: Bytes = Bytes(128 * 1024 * 1024); // 128 MiB
     /// Per-account memory budget for retained `/v1/zk/ivm/prove` job state.
-    pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER: Bytes<u64> = Bytes(32 * 1024 * 1024); // 32 MiB
+    pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER: Bytes = Bytes(32 * 1024 * 1024); // 32 MiB
     /// Maximum page size accepted by proof listing endpoints.
     pub const PROOF_MAX_LIST_LIMIT: u32 = 200;
     /// Wall-clock timeout applied to proof list/count handlers (milliseconds).
@@ -2224,7 +2257,7 @@ pub mod torii {
         /// Default maximum retained authorization count.
         pub const MAX_RECORDS: usize = 4_096;
         /// Exact worst-case ILS1 reservation for every default authorization slot.
-        pub const MAX_TOTAL_BYTES: Bytes<u64> = Bytes(3_310 * MAX_RECORDS as u64);
+        pub const MAX_TOTAL_BYTES: Bytes = Bytes(3_310 * MAX_RECORDS as u64);
         /// Default terminal-record retention after its authoritative horizon.
         pub const TERMINAL_RETENTION_BLOCKS: u64 = 4_096;
         /// First-release concurrent native-issuance hard ceiling.
@@ -2733,7 +2766,7 @@ pub mod torii {
             /// Maximum number of HTTP/1 headers accepted in one request.
             pub const MAX_HEADERS: NonZeroUsize = nonzero!(100usize);
             /// Maximum HTTP/1 parser buffer, including the request head.
-            pub const MAX_HEADER_BYTES: Bytes<u64> = Bytes(64 * 1024);
+            pub const MAX_HEADER_BYTES: Bytes = Bytes(64 * 1024);
         }
         /// Norito-RPC transport defaults surfaced via `torii.transport.norito_rpc`.
         pub mod norito_rpc {
@@ -2820,7 +2853,7 @@ pub mod torii {
     /// ISO 20022 bridge disabled by default.
     pub const ISO_BRIDGE_ENABLED: bool = false;
     /// Maximum request body accepted by an ISO 20022 submission endpoint.
-    pub const ISO_BRIDGE_MAX_BODY_BYTES: Bytes<u64> = Bytes(1024 * 1024);
+    pub const ISO_BRIDGE_MAX_BODY_BYTES: Bytes = Bytes(1024 * 1024);
     /// ISO 20022 dedupe TTL (seconds).
     pub const ISO_BRIDGE_DEDUPE_TTL_SECS: u64 = 5 * 60; // 5 minutes
     /// ISO 20022 default rail profile.
@@ -2837,7 +2870,7 @@ pub mod torii {
     pub const ISO_BRIDGE_STORE_MAX_RECORDS_HARD_LIMIT_V1: u64 = 1_024;
     /// Return the default ISO 20022 submission body limit.
     #[must_use]
-    pub const fn iso_bridge_max_body_bytes() -> Bytes<u64> {
+    pub const fn iso_bridge_max_body_bytes() -> Bytes {
         ISO_BRIDGE_MAX_BODY_BYTES
     }
     /// Return the default ISO 20022 durable-store record limit.
@@ -3076,7 +3109,7 @@ pub mod nexus {
         /// Block interval between disk budget enforcement scans (0 = every block).
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
-        pub const MAX_WSV_MEMORY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024 * 1024);
+        pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
         /// Budget share for Kura block storage (basis points).
         pub const KURA_BLOCKS_BPS: u16 = 3_000;
         /// Budget share for tiered-state cold snapshots (basis points).
@@ -3512,11 +3545,11 @@ pub mod tiered_state {
     /// Keep all keys hot unless explicitly configured.
     pub const HOT_RETAINED_KEYS: usize = 0;
     /// Hot-tier budget using canonical encoded-key bytes plus measured value bytes.
-    pub const HOT_RETAINED_BYTES: Bytes<u64> = Bytes(0);
+    pub const HOT_RETAINED_BYTES: Bytes = Bytes(0);
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     pub const HOT_RETAINED_GRACE_SNAPSHOTS: u64 = 1;
     /// Optional cold-tier byte budget across snapshots (0 = unlimited).
-    pub const MAX_COLD_BYTES: Bytes<u64> = Bytes(0);
+    pub const MAX_COLD_BYTES: Bytes = Bytes(0);
     /// Default on-disk root for tiered state snapshots.
     pub const DEFAULT_COLD_STORE_ROOT: &str = "./storage/tiered_state";
     /// Default on-disk root for DA-backed tiered state snapshots.
@@ -3668,7 +3701,7 @@ pub mod zk {
         /// Maximum queued FASTPQ proof sidecar attachments.
         pub const PROOF_SIDECAR_QUEUE_CAP: NonZeroUsize = nonzero!(1024_usize);
         /// Maximum encoded FASTPQ proof snapshot accepted for sidecar persistence.
-        pub const PROOF_SIDECAR_MAX_BYTES: Bytes<u64> = Bytes(1024 * 1024);
+        pub const PROOF_SIDECAR_MAX_BYTES: Bytes = Bytes(1024 * 1024);
         /// Maximum attempts to merge a FASTPQ proof snapshot into a pending pipeline sidecar.
         pub const PROOF_SIDECAR_MAX_RETRIES: NonZeroUsize = nonzero!(16_usize);
         /// Optional override for the Metal command-buffer cap (None = derive automatically).
@@ -3794,7 +3827,7 @@ pub mod sumeragi {
     pub const BODY_STORE_MIN_BYTES_PER_HEIGHT: u64 =
         MAX_EXECUTED_BLOCK_WIRE_BYTES + MAX_DA_ENCODED_PAYLOAD_BYTES + 1024 * 1024;
     /// Aggregate final body-frame bytes retained for one active height.
-    pub const BODY_STORE_MAX_BYTES_PER_HEIGHT: Bytes<u64> = Bytes(1024 * 1024 * 1024);
+    pub const BODY_STORE_MAX_BYTES_PER_HEIGHT: Bytes = Bytes(1024 * 1024 * 1024);
     /// Proposal queue scan budget relative to the transaction limit.
     pub const PROPOSAL_QUEUE_SCAN_MULTIPLIER: NonZeroUsize = nonzero!(4_usize);
     /// Serialized reducer command FIFO capacity.

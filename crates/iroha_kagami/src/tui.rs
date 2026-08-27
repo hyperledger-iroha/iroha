@@ -66,7 +66,6 @@ impl Ui {
                     Colour::Info => prefix.bold().cyan().to_string(),
                     Colour::Success => prefix.bold().green().to_string(),
                     Colour::Warn => prefix.bold().yellow().to_string(),
-                    Colour::Error => prefix.bold().red().to_string(),
                 };
                 writeln!(stderr, "{} {}", styled_prefix, message).ok();
             }
@@ -79,8 +78,6 @@ enum Colour {
     Info,
     Success,
     Warn,
-    #[allow(dead_code)]
-    Error,
 }
 static UI: OnceLock<Ui> = OnceLock::new();
 /// Install the global UI configuration.
@@ -102,11 +99,6 @@ pub fn success(message: impl Display) {
 /// Emit a warning status line.
 pub fn warn(message: impl Display) {
     ui().emit("[!!]", message, Colour::Warn);
-}
-/// Emit an error status line.
-#[allow(dead_code)]
-pub fn error(message: impl Display) {
-    ui().emit("[xx]", message, Colour::Error);
 }
 /// Options shared across the CLI for configuring the UI.
 #[derive(Debug, Clone, clap::Args)]

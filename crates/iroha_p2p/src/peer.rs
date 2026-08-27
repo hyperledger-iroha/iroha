@@ -18,10 +18,7 @@ use iroha_crypto::soranet::{
         build_client_hello, client_handle_relay_hello, parse_capabilities, process_client_hello,
         validate_client_capability_vector, validate_runtime_configuration,
     },
-    pow::{
-        self, ChallengeBinding as PowBinding, Parameters as PowParameters, Ticket as PowTicket,
-        TicketRevocationStore,
-    },
+    pow::{self, Ticket as PowTicket, TicketRevocationInsertStatus, TicketRevocationStore},
     puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
 };
 #[cfg(test)]
@@ -36,7 +33,7 @@ use rand::rand_core::TryCryptoRng;
 use rand::{SeedableRng, rngs::StdRng};
 use soranet_pq::MlKemSuite;
 #[cfg(test)]
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     net::SocketAddr,
@@ -44,7 +41,7 @@ use std::{
         Arc, Mutex, MutexGuard, Weak,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
-    time::SystemTime,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -267,10 +264,8 @@ pub struct SoranetHandshakeConfig {
     kem_id: u8,
     sig_id: u8,
     resume_hash: Option<Arc<Vec<u8>>>,
-    pow_required: bool,
-    pow_params: Arc<PowParameters>,
-    pow_ticket_ttl: Duration,
-    puzzle_params: Option<Arc<PuzzleParameters>>,
+    ticket_ttl: Duration,
+    puzzle_params: Arc<PuzzleParameters>,
     revocation_store: Arc<Mutex<TicketRevocationStore>>,
     pending_ticket_replays: Arc<PendingTicketReplays>,
     puzzle_work_admission: Arc<SoranetPuzzleWorkAdmission>,
@@ -285,10 +280,8 @@ impl SoranetHandshakeConfig {
         kem_id: u8,
         sig_id: u8,
         resume_hash: Option<Vec<u8>>,
-        pow_required: bool,
-        pow_params: PowParameters,
-        puzzle_params: Option<PuzzleParameters>,
-        pow_ticket_ttl: Duration,
+        puzzle_params: PuzzleParameters,
+        ticket_ttl: Duration,
         revocation_store: Arc<Mutex<TicketRevocationStore>>,
     ) -> Result<Self, Error> {
         let shared_state = SoranetHandshakeSharedState::new(
@@ -306,10 +299,8 @@ impl SoranetHandshakeConfig {
             kem_id,
             sig_id,
             resume_hash,
-            pow_required,
-            pow_params,
             puzzle_params,
-            pow_ticket_ttl,
+            ticket_ttl,
             shared_state,
         )
     }
@@ -322,10 +313,8 @@ impl SoranetHandshakeConfig {
         kem_id: u8,
         sig_id: u8,
         resume_hash: Option<Vec<u8>>,
-        pow_required: bool,
-        pow_params: PowParameters,
-        puzzle_params: Option<PuzzleParameters>,
-        pow_ticket_ttl: Duration,
+        puzzle_params: PuzzleParameters,
+        ticket_ttl: Duration,
         shared_state: SoranetHandshakeSharedState,
     ) -> Result<Self, Error> {
         if MlKemSuite::from_kem_id(kem_id).is_none() {
@@ -393,10 +382,8 @@ impl SoranetHandshakeConfig {
             kem_id,
             sig_id,
             resume_hash: resume_hash.map(Arc::new),
-            pow_required,
-            pow_params: Arc::new(pow_params),
-            pow_ticket_ttl,
-            puzzle_params: puzzle_params.map(Arc::new),
+            ticket_ttl,
+            puzzle_params: Arc::new(puzzle_params),
             revocation_store: shared_state.revocation_store,
             pending_ticket_replays: shared_state.pending_ticket_replays,
             puzzle_work_admission: shared_state.puzzle_work_admission,
@@ -413,16 +400,9 @@ impl SoranetHandshakeConfig {
         self.puzzle_work_admission.capacities()
     }
     fn effective_ticket_ttl(&self) -> Duration {
-        self.pow_ticket_ttl
-            .min(self.pow_params.max_future_skew())
-            .max(self.pow_params.min_ticket_ttl())
-    }
-    fn pow_binding<'a>(&'a self, transcript_hash: &'a [u8; 32]) -> PowBinding<'a> {
-        PowBinding::new(
-            self.descriptor_commit.as_slice(),
-            transcript_hash,
-            transcript_hash,
-        )
+        self.ticket_ttl
+            .min(self.puzzle_params.max_future_skew())
+            .max(self.puzzle_params.min_ticket_ttl())
     }
     fn puzzle_binding<'a>(&'a self, transcript_hash: &'a [u8; 32]) -> PuzzleBinding<'a> {
         PuzzleBinding::new(
@@ -507,23 +487,48 @@ impl SoranetHandshakeConfig {
     ) -> Result<(), ChallengeVerifyError> {
         {
             let mut store_guard = self.lock_revocation_store()?;
-            pow::record_revocation(ticket, Some(&mut *store_guard), now)
-                .map_err(Self::map_pow_verification_error)?;
+            let outcome = store_guard
+                .revoke_ticket_payload(ticket, now)
+                .map_err(|error| {
+                    Self::map_pow_verification_error(pow::Error::RevocationStore(error.to_string()))
+                })?;
+            match outcome.status {
+                TicketRevocationInsertStatus::Accepted => {}
+                TicketRevocationInsertStatus::Duplicate => {
+                    return Err(ChallengeVerifyError::Replay);
+                }
+                TicketRevocationInsertStatus::Expired => {
+                    let now_secs = now
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(puzzle::Error::Clock)?
+                        .as_secs();
+                    return Err(ChallengeVerifyError::Puzzle(puzzle::Error::Expired(
+                        ticket.expires_at,
+                        now_secs,
+                    )));
+                }
+                TicketRevocationInsertStatus::TtlExceeded => {
+                    return Err(Self::map_pow_verification_error(
+                        pow::Error::RevocationStore(
+                            "revocation ttl exceeded configured maximum".to_owned(),
+                        ),
+                    ));
+                }
+                TicketRevocationInsertStatus::Capacity => {
+                    return Err(Self::map_pow_verification_error(
+                        pow::Error::RevocationStore("revocation store at capacity".to_owned()),
+                    ));
+                }
+            }
         }
         reservation.release().map_err(|reason| {
             Self::map_pow_verification_error(pow::Error::RevocationStore(reason.to_owned()))
         })
     }
-    fn admission_for_difficulty(&self, difficulty: u8) -> ChallengeAdmission {
-        let pow = self.pow_params.with_difficulty(difficulty);
-        let puzzle = self
-            .puzzle_params
-            .as_ref()
-            .map(|params| params.with_difficulty(difficulty));
+    fn admission(&self) -> ChallengeAdmission {
         ChallengeAdmission {
-            pow,
             ticket_ttl: self.effective_ticket_ttl(),
-            puzzle,
+            puzzle: *self.puzzle_params,
         }
     }
     /// Whether this peer participates in trust gossip exchange.
@@ -540,9 +545,15 @@ impl SoranetHandshakeConfig {
             1,
             1,
             None,
-            false,
-            PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30)),
-            None,
+            PuzzleParameters::try_new(
+                NonZeroU32::new(puzzle::MIN_MEMORY_KIB).unwrap(),
+                NonZeroU32::new(1).unwrap(),
+                NonZeroU32::new(1).unwrap(),
+                1,
+                Duration::from_secs(300),
+                Duration::from_secs(30),
+            )
+            .expect("built-in puzzle parameters must be valid"),
             Duration::from_secs(60),
             test_ticket_revocation_store(),
         )
@@ -563,20 +574,8 @@ impl SoranetHandshakeConfig {
                 .map(|value| value.as_ref().as_slice()),
         }
     }
-    /// Whether an inbound peer must present the configured puzzle credential.
-    ///
-    /// Outbound self-minting policy must never weaken this local listener policy.
-    pub(crate) fn inbound_pow_required(&self) -> bool {
-        self.pow_required && (self.pow_params.difficulty() > 0 || self.puzzle_params.is_some())
-    }
-    fn outbound_pow_required(&self) -> bool {
-        self.inbound_pow_required()
-    }
-    fn requires_blocking_ticket_verification(&self) -> bool {
-        self.inbound_pow_required() && self.puzzle_params.is_some()
-    }
     /// Removes expired revocations from the backing store and returns the number of entries purged.
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn purge_expired_revocations(&self) -> Result<usize, ChallengeVerifyError> {
         let mut guard = self.lock_revocation_store()?;
         guard.purge_expired(SystemTime::now()).map_err(|err| {
@@ -589,7 +588,7 @@ impl SoranetHandshakeConfig {
     }
     /// Returns the number of active revocation fingerprints currently tracked.
     #[must_use]
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn active_revocations(&self) -> Result<usize, ChallengeVerifyError> {
         let mut guard = self.lock_revocation_store()?;
         guard.len(SystemTime::now()).map_err(|error| {
@@ -601,100 +600,58 @@ impl SoranetHandshakeConfig {
         })
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub(crate) fn pow_parameters(&self) -> PowParameters {
-        *self.pow_params
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub(crate) fn pow_ticket_ttl(&self) -> Duration {
+    pub(crate) fn ticket_ttl(&self) -> Duration {
         self.effective_ticket_ttl()
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub(crate) fn puzzle_parameters(&self) -> Option<PuzzleParameters> {
-        self.puzzle_params.as_ref().map(|params| **params)
+    pub(crate) fn puzzle_parameters(&self) -> PuzzleParameters {
+        *self.puzzle_params
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub(crate) fn admission_summary(&self) -> Option<ChallengeAdmission> {
-        if !self.inbound_pow_required() {
-            return None;
-        }
-        Some(self.admission_for_difficulty(self.pow_params.difficulty()))
+    pub(crate) fn admission_summary(&self) -> ChallengeAdmission {
+        self.admission()
     }
     pub(crate) fn mint_challenge_ticket<R: TryCryptoRng>(
         &self,
         transcript_hash: &[u8; 32],
         rng: &mut R,
-    ) -> Result<Option<MintedChallenge>, ChallengeMintError> {
-        if !self.outbound_pow_required() {
-            return Ok(None);
-        }
+    ) -> Result<MintedChallenge, puzzle::MintError> {
         let ttl = self.effective_ticket_ttl();
-        let ticket = if let Some(params) = self.puzzle_params.as_ref() {
-            let binding = self.puzzle_binding(transcript_hash);
-            puzzle::mint_ticket(params.as_ref(), &binding, ttl, rng)
-                .map_err(ChallengeMintError::Puzzle)?
-        } else {
-            let binding = self.pow_binding(transcript_hash);
-            pow::mint_ticket(self.pow_params.as_ref(), &binding, ttl, rng)
-                .map_err(ChallengeMintError::Pow)?
-        };
-        let admission = self.admission_for_difficulty(ticket.difficulty);
-        Ok(Some(MintedChallenge {
-            frames: vec![ticket.to_vec()],
-            admission: Some(admission),
-        }))
+        let binding = self.puzzle_binding(transcript_hash);
+        let ticket = puzzle::mint_ticket(self.puzzle_params.as_ref(), &binding, ttl, rng)?;
+        let admission = self.admission();
+        Ok(MintedChallenge {
+            credential: ticket.to_vec(),
+            admission,
+        })
     }
     pub(crate) fn verify_challenge_ticket(
         &self,
         bytes: &[u8],
         transcript_hash: &[u8; 32],
-    ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
-        if !self.inbound_pow_required() {
-            return Ok(None);
-        }
+    ) -> Result<ChallengeAdmission, ChallengeVerifyError> {
         self.verify_ticket_bytes(bytes, transcript_hash)
     }
     fn verify_ticket_bytes(
         &self,
         bytes: &[u8],
         transcript_hash: &[u8; 32],
-    ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
+    ) -> Result<ChallengeAdmission, ChallengeVerifyError> {
         let ticket = PowTicket::parse(bytes).map_err(ChallengeVerifyError::Pow)?;
         let now = SystemTime::now();
         // Reserve the canonical identity while holding the store only for its
         // durable preflight. The RAII guard excludes concurrent duplicates but
         // leaves distinct ML-DSA/Argon2 work free to run in parallel.
         let reservation = self.reserve_ticket_replay(&ticket, now)?;
-        let admission = self
-            .puzzle_params
-            .as_ref()
-            .map_or_else(
-                || {
-                    let binding = self.pow_binding(transcript_hash);
-                    pow::verify_at(&ticket, &binding, self.pow_params.as_ref(), now)
-                        .map_err(ChallengeVerifyError::Pow)
-                },
-                |params| {
-                    let binding = self.puzzle_binding(transcript_hash);
-                    puzzle::verify_at(&ticket, &binding, params.as_ref(), now)
-                        .map_err(ChallengeVerifyError::Puzzle)
-                },
-            )
-            .map(|()| self.admission_for_difficulty(ticket.difficulty))?;
+        let binding = self.puzzle_binding(transcript_hash);
+        puzzle::verify_at(&ticket, &binding, self.puzzle_params.as_ref(), now)
+            .map_err(ChallengeVerifyError::Puzzle)?;
+        let admission = self.admission();
         // Re-check revocation/expiry at commit time so slow Argon2 work cannot
         // accept a ticket that expired after its initial verification instant.
         self.commit_ticket_replay(&ticket, reservation, SystemTime::now())?;
-        Ok(Some(admission))
+        Ok(admission)
     }
-}
-/// Errors encountered while minting `SoraNet` handshake challenges.
-#[derive(Debug, Error)]
-pub enum ChallengeMintError {
-    /// Underlying `PoW` ticket minting failure.
-    #[error("pow ticket mint failed: {0}")]
-    Pow(#[from] pow::MintError),
-    /// Argon2 puzzle minting failure.
-    #[error("puzzle ticket mint failed: {0}")]
-    Puzzle(#[from] puzzle::MintError),
 }
 /// Errors encountered while verifying `SoraNet` handshake challenges.
 #[derive(Debug, Error)]
@@ -715,19 +672,17 @@ pub enum ChallengeVerifyError {
 /// Admission policy snapshot returned alongside minted or verified tickets.
 #[derive(Debug, Clone, Copy)]
 pub struct ChallengeAdmission {
-    /// Effective static first-release `PoW` parameters.
-    pub pow: PowParameters,
     /// Ticket TTL after applying policy clamps.
     pub ticket_ttl: Duration,
-    /// Optional puzzle parameters when Argon2 gating is enabled.
-    pub puzzle: Option<PuzzleParameters>,
+    /// Effective mandatory Argon2 puzzle parameters.
+    pub puzzle: PuzzleParameters,
 }
 /// Minted ticket bytes alongside the admission policy summary.
 pub struct MintedChallenge {
-    /// Self-minted puzzle ticket frames to send before the client hello.
-    pub frames: Vec<Vec<u8>>,
+    /// Self-minted puzzle ticket to send before the client hello.
+    pub credential: Vec<u8>,
     /// Admission policy applied when minting the ticket.
-    pub admission: Option<ChallengeAdmission>,
+    pub admission: ChallengeAdmission,
 }
 fn clear_sensitive_vec(bytes: &mut Vec<u8>) {
     // Initialize the existing spare allocation before clearing so a caller
@@ -741,18 +696,14 @@ impl std::fmt::Debug for MintedChallenge {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("MintedChallenge")
-            .field("frame_count", &self.frames.len())
-            .field("frames", &"[REDACTED]")
+            .field("credential", &"[REDACTED]")
             .field("admission", &self.admission)
             .finish()
     }
 }
 impl MintedChallenge {
     fn clear_sensitive_bytes(&mut self) {
-        for frame in &mut self.frames {
-            clear_sensitive_vec(frame);
-        }
-        self.frames.clear();
+        clear_sensitive_vec(&mut self.credential);
     }
 }
 impl Drop for MintedChallenge {
@@ -799,16 +750,9 @@ async fn mint_handshake_challenge(
     config: Arc<SoranetHandshakeConfig>,
     transcript_hash: [u8; 32],
     mut rng: StdRng,
-) -> Result<(Option<MintedChallenge>, StdRng), Error> {
-    // The ordinary hashcash loop is cheap and preserves the existing direct
-    // path. Only the configured memory-hard Argon2 puzzle needs blocking-pool
-    // isolation and direction-aware process admission.
-    if !config.outbound_pow_required() || config.puzzle_params.is_none() {
-        let minted = config
-            .mint_challenge_ticket(&transcript_hash, &mut rng)
-            .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
-        return Ok((minted, rng));
-    }
+) -> Result<(MintedChallenge, StdRng), Error> {
+    // Argon2 minting is memory-hard and must stay off peer tasks. The process
+    // gate bounds concurrent memory use independently from connection count.
     run_soranet_admission_work(
         config.puzzle_work_admission.outbound_mint_gate(),
         move || {
@@ -824,7 +768,7 @@ async fn verify_handshake_challenge(
     config: Arc<SoranetHandshakeConfig>,
     ticket: SensitiveHandshakeFrame,
     transcript_hash: [u8; 32],
-) -> Result<Option<ChallengeAdmission>, Error> {
+) -> Result<ChallengeAdmission, Error> {
     verify_handshake_challenge_with_gate(
         Arc::clone(&config),
         ticket,
@@ -838,14 +782,9 @@ async fn verify_handshake_challenge_with_gate(
     ticket: SensitiveHandshakeFrame,
     transcript_hash: [u8; 32],
     gate: Arc<Semaphore>,
-) -> Result<Option<ChallengeAdmission>, Error> {
-    // Ordinary hashcash is cheap. Argon2 and ML-DSA verification must never
-    // run on a peer task, and both share the bounded inbound work gate.
-    if !config.requires_blocking_ticket_verification() {
-        return config
-            .verify_challenge_ticket(&ticket, &transcript_hash)
-            .map_err(|error| Error::HandshakeSoranet(error.to_string()));
-    }
+) -> Result<ChallengeAdmission, Error> {
+    // Argon2 verification must never run on a peer task, and every verifier
+    // shares the bounded inbound work gate.
     run_soranet_admission_work(gate, move || {
         config
             .verify_challenge_ticket(&ticket, &transcript_hash)
@@ -14038,17 +13977,11 @@ mod state {
             let (minted, _resumed_rng) =
                 mint_handshake_challenge(Arc::clone(&soranet_handshake), admission_transcript, rng)
                     .await?;
-            if let Some(mut minted) = minted {
-                let mut send_result = Ok(());
-                for frame in &minted.frames {
-                    if let Err(error) = write_handshake_frame(&mut connection.write, frame).await {
-                        send_result = Err(error);
-                        break;
-                    }
-                }
-                minted.clear_sensitive_bytes();
-                send_result?;
-            }
+            let mut minted = minted;
+            let send_result =
+                write_handshake_frame(&mut connection.write, &minted.credential).await;
+            minted.clear_sensitive_bytes();
+            send_result?;
             write_handshake_frame(&mut connection.write, &client_hello).await?;
             let relay_hello = read_handshake_frame(&mut connection.read).await?;
             let secrets = match client_handle_relay_hello(
@@ -14192,28 +14125,19 @@ mod state {
             .await?;
             let runtime_params = soranet_handshake.runtime_params();
             let mut rng = soranet_handshake_rng()?;
-            let ticket = if soranet_handshake.inbound_pow_required() {
-                Some(SensitiveHandshakeFrame::from(
-                    read_handshake_frame(&mut connection.read).await?,
-                ))
-            } else {
-                None
-            };
+            let ticket =
+                SensitiveHandshakeFrame::from(read_handshake_frame(&mut connection.read).await?);
             // Buffering the bounded hello is cheap. Verify its admission
             // commitment before `process_client_hello` performs ML-KEM work.
             let client_hello = read_handshake_frame(&mut connection.read).await?;
-            if let Some(ticket) = ticket {
-                let admission_transcript = soranet_admission_transcript(
-                    &client_hello,
-                    &local_transport_delegation.binding,
-                );
-                verify_handshake_challenge(
-                    Arc::clone(&soranet_handshake),
-                    ticket,
-                    admission_transcript,
-                )
-                .await?;
-            }
+            let admission_transcript =
+                soranet_admission_transcript(&client_hello, &local_transport_delegation.binding);
+            verify_handshake_challenge(
+                Arc::clone(&soranet_handshake),
+                ticket,
+                admission_transcript,
+            )
+            .await?;
             let (relay_hello, secrets) = match process_client_hello(
                 &client_hello,
                 &runtime_params,

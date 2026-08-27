@@ -42486,8 +42486,6 @@ fn map_block_proof_error(error: BlockProofError) -> Error {
 }
 // -------------- Runtime handlers (removed AppState-based; use closures in router) --------------
 mod da;
-#[cfg(feature = "app_api")]
-pub use self::da::compute_taikai_ingest_tags;
 mod stream;
 #[cfg(feature = "app_api")]
 pub(crate) mod webhook;
@@ -44509,8 +44507,8 @@ pub struct Torii {
     events: EventsSender,
     query_service: LiveQueryStoreHandle,
     kura: Arc<Kura>,
-    transaction_max_content_len: ConfigBytes<u64>,
-    iso_bridge_max_body_bytes: ConfigBytes<u64>,
+    transaction_max_content_len: ConfigBytes,
+    iso_bridge_max_body_bytes: ConfigBytes,
     transaction_ingress_max_concurrent_compute_jobs: usize,
     #[cfg(feature = "app_api")]
     verified_source_max_concurrent_compiles: usize,

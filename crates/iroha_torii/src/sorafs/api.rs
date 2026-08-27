@@ -7771,7 +7771,6 @@ fn retained_governance_car_plan(
             offset: expected_offset,
             length,
             digest,
-            taikai_segment_hint: None,
         });
         expected_offset = expected_offset.checked_add(length_u64).ok_or_else(|| {
             json_error(
@@ -24318,22 +24317,8 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
             Ok(profile) => profile,
             Err(err) => return Err(err.into_response()),
         };
-        let taikai_hint = match sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1) {
-            Ok(hint) => hint,
-            Err(err) => {
-                error!(
-                    ?err,
-                    manifest = manifest_id_hex,
-                    "failed to derive Taikai segment hint from manifest"
-                );
-                return Err(json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to derive Taikai metadata",
-                ));
-            }
-        };
         let plan = stored
-            .try_to_car_plan_with_hint(chunk_profile, taikai_hint.as_ref())
+            .try_to_car_plan(chunk_profile)
             .map_err(storage_backend_error)?;
         let specs = plan.try_chunk_fetch_specs().map_err(|err| {
             error!(
@@ -27641,22 +27626,6 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
                 Ok(profile) => profile,
                 Err(err) => return Err(err.into_response()),
             };
-            let taikai_hint = match sorafs_car::taikai_segment_hint_from_sorafs_manifest(
-                &manifest_payload,
-            ) {
-                Ok(hint) => hint,
-                Err(err) => {
-                    error!(
-                        ?err,
-                        manifest = worker_manifest_hex,
-                        "failed to derive Taikai segment hint from manifest"
-                    );
-                    return Err(json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to derive Taikai metadata",
-                    ));
-                }
-            };
             let chunk_slice = match worker_manifest.chunk_slice(range_start, range_length) {
                 Ok(slice) => slice,
                 Err(StorageBackendError::RangeOutOfBounds { .. }) => {
@@ -27694,7 +27663,6 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
                     offset: relative_offset,
                     length: record.length,
                     digest: record.digest,
-                    taikai_segment_hint: taikai_hint.clone(),
                 });
                 relative_offset = relative_offset
                     .checked_add(u64::from(record.length))
@@ -30432,23 +30400,6 @@ fn chunk_fetch_spec_json(spec: &ChunkFetchSpec) -> Value {
         "digest_blake3".into(),
         Value::from(hex::encode(spec.digest)),
     );
-    if let Some(hint) = &spec.taikai_segment_hint {
-        let mut hint_obj = Map::new();
-        hint_obj.insert("event".into(), Value::from(hint.event.clone()));
-        hint_obj.insert("stream".into(), Value::from(hint.stream.clone()));
-        hint_obj.insert("rendition".into(), Value::from(hint.rendition.clone()));
-        hint_obj.insert("sequence".into(), Value::from(hint.sequence));
-        if let Some(len) = hint.payload_len {
-            hint_obj.insert("payload_len".into(), Value::from(len));
-        }
-        if let Some(digest) = hint.payload_digest {
-            hint_obj.insert(
-                "payload_blake3_hex".into(),
-                Value::from(hex::encode(digest)),
-            );
-        }
-        obj.insert("taikai_segment_hint".into(), Value::Object(hint_obj));
-    }
     Value::Object(obj)
 }
 fn normalize_limit(limit: Option<u32>) -> usize {
@@ -41095,9 +41046,7 @@ mod advert_tests {
         let manifest_v1 = manifest.load_manifest().expect("load manifest");
         let chunk_profile =
             chunk_profile_for_manifest(&manifest_v1).expect("resolve chunk profile");
-        let taikai_hint = sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1)
-            .expect("taikai hint");
-        let full_plan = manifest.to_car_plan_with_hint(chunk_profile, taikai_hint);
+        let full_plan = manifest.to_car_plan(chunk_profile);
         let expected_range = 0..=end;
         let report = CarVerifier::verify_block_car(
             &manifest_v1,
@@ -41177,9 +41126,7 @@ mod advert_tests {
         let manifest_v1 = manifest.load_manifest().expect("load manifest");
         let chunk_profile =
             chunk_profile_for_manifest(&manifest_v1).expect("resolve chunk profile");
-        let taikai_hint = sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1)
-            .expect("taikai hint");
-        let full_plan = manifest.to_car_plan_with_hint(chunk_profile, taikai_hint);
+        let full_plan = manifest.to_car_plan(chunk_profile);
         let report = CarVerifier::verify_block_car(
             &manifest_v1,
             &full_plan,

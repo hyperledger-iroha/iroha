@@ -43226,6 +43226,47 @@ impl BlockStore {
     pub fn read_index_count(&mut self) -> Result<u64> {
         self.read_index_count_from_len()
     }
+    /// Read pipeline recovery metadata for a canonical persisted block.
+    ///
+    /// This read-only tooling path uses Kura's current indexed-sidecar layout and
+    /// returns metadata only when its embedded height and block hash match the
+    /// canonical block journals. Missing, malformed, or stale sidecars return
+    /// `Ok(None)`.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical block journals cannot be read.
+    pub fn read_pipeline_metadata(
+        &mut self,
+        height: u64,
+    ) -> Result<Option<PipelineRecoverySidecar>> {
+        if height == 0 || height > self.read_index_count()? {
+            return Ok(None);
+        }
+        let pipeline_dir = self.path_to_blockchain.join(PIPELINE_DIR_NAME);
+        let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        let entry_byte_limit =
+            u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES).unwrap_or(u64::MAX);
+        let Some(sidecar) = Kura::read_indexed_sidecar_from_paths_with_recovery_and_limit(
+            height,
+            &data_path,
+            &index_path,
+            norito::decode_canonical::<PipelineRecoverySidecar>,
+            "pipeline sidecar",
+            false,
+            entry_byte_limit,
+        ) else {
+            return Ok(None);
+        };
+        if sidecar.height != height {
+            return Ok(None);
+        }
+        let expected_hash = self
+            .read_block_hashes(height.saturating_sub(1), 1)?
+            .into_iter()
+            .next();
+        Ok((expected_hash == Some(sidecar.block_hash)).then_some(sidecar))
+    }
     /// Return the durable index count as recorded by the commit marker.
     ///
     /// # Errors

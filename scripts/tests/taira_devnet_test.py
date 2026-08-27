@@ -674,6 +674,10 @@ class FakeRuntime:
                 executable(target / name, b"#!/usr/bin/env bash\n")
             genesis_hash = "a" * 63 + "b"
             network_id = module.network_id_from_genesis_hash(genesis_hash)
+            storage_weights = "".join(
+                f"{name} = {value}\n"
+                for name, value in module.TAIRA_NEXUS_STORAGE_WEIGHTS
+            )
             for index in range(module.PEER_COUNT):
                 sorafs_dir = target / "state" / f"peer{index}" / "sorafs"
                 runtime_dir = (
@@ -685,10 +689,13 @@ class FakeRuntime:
                     f'[genesis]\nexpected_hash = "{network_id}"\n'
                     f'address = "addr:127.0.0.1:{api_port + index}#ABCD"\n'
                     "[nexus.storage]\n"
-                    f"local_budget_bytes = {module.GENERATED_LOCALNET_NEXUS_STORAGE_BYTES}\n"
-                    "[sorafs.storage]\n"
+                    f"local_budget_bytes = {module.TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES}\n"
+                    "[nexus.storage.disk_budget_weights]\n"
+                    + storage_weights
+                    + "[sorafs.storage]\n"
                     "enabled = false\n"
                     f'data_dir = "{sorafs_dir}"\n'
+                    f"max_capacity_bytes = {module.TAIRA_SORAFS_MAX_CAPACITY_BYTES}\n"
                     "[soracloud_runtime]\n"
                     f'state_dir = "{runtime_dir}"\n'
                     "production_mode = true\n"
@@ -700,8 +707,8 @@ class FakeRuntime:
                     "[soracloud_runtime.egress]\n"
                     "default_allow = false\n"
                     "allowed_hosts = []\n"
-                    f"rate_per_minute = {module.GENERATED_TAIRA_EGRESS_RATE_PER_MINUTE}\n"
-                    f"max_bytes_per_minute = {module.GENERATED_TAIRA_EGRESS_MAX_BYTES_PER_MINUTE}\n",
+                    f"rate_per_minute = {module.TAIRA_INROU_EGRESS_RATE_PER_MINUTE}\n"
+                    f"max_bytes_per_minute = {module.TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE}\n",
                     encoding="utf-8",
                 )
             signer_directory = target / module.RUNTIME_SIGNER_DIRECTORY
@@ -904,7 +911,7 @@ class TairaDevnetTests(unittest.TestCase):
             module,
             "require_safe_cleanup_target",
             side_effect=lambda _root, target: (
-                (target.stat().st_dev, target.stat().st_ino, 0)
+                (target.stat().st_dev, target.stat().st_ino, target.stat().st_uid)
                 if target.exists()
                 else None
             ),
@@ -953,6 +960,18 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "single-link"):
             module.read_stable_bytes(source, limit=5, label="fixture")
 
+    def test_operation_lock_rejects_concurrent_devnet_commands(self) -> None:
+        root = module.managed_root(self.root / "locked-state", create=True)
+        first = module._acquire_operation_lock(root)
+        try:
+            with self.assertRaisesRegex(module.DevnetError, "already active"):
+                module._acquire_operation_lock(root)
+        finally:
+            os.close(first)
+
+        second = module._acquire_operation_lock(root)
+        os.close(second)
+
     def test_destroy_network_rejects_identity_replacement(self) -> None:
         root = module.managed_root(self.root / "destroy-state", create=True)
         target = root / "network"
@@ -969,6 +988,34 @@ class TairaDevnetTests(unittest.TestCase):
             module.destroy_network(root, target, identity)
 
         self.assertEqual(replacement.read_bytes(), b"replacement")
+        self.assertEqual((displaced / "secret").read_bytes(), b"secret")
+
+    def test_destroy_network_quarantines_a_racing_replacement_without_deleting_it(
+        self,
+    ) -> None:
+        root = module.managed_root(self.root / "destroy-race-state", create=True)
+        target = root / "network"
+        target.mkdir(mode=0o700)
+        (target / "secret").write_bytes(b"secret")
+        identity = module.require_safe_cleanup_target(root, target)
+        displaced = root / "displaced-network"
+        real_rename = module.os.rename
+
+        def replace_before_quarantine(source: Path, destination: Path) -> None:
+            real_rename(source, displaced)
+            target.mkdir(mode=0o700)
+            (target / "preserve").write_bytes(b"replacement")
+            real_rename(target, destination)
+
+        with mock.patch.object(module.os, "rename", side_effect=replace_before_quarantine):
+            with self.assertRaisesRegex(
+                module.DevnetError,
+                "changed while it was quarantined",
+            ):
+                module.destroy_network(root, target, identity)
+
+        quarantine = root / module.NETWORK_CLEANUP_QUARANTINE
+        self.assertEqual((quarantine / "preserve").read_bytes(), b"replacement")
         self.assertEqual((displaced / "secret").read_bytes(), b"secret")
 
     def test_first_release_taira_identity_is_exact(self) -> None:
@@ -1673,7 +1720,7 @@ class TairaDevnetTests(unittest.TestCase):
             for command in runtime.commands
             if "localnet" in command and "--out-dir" in command
         )
-        self.assertIn("--fresh-random-keys", kagami)
+        self.assertNotIn("--seed", kagami)
         self.assertEqual(kagami[kagami.index("--peers") + 1], "4")
         self.assertEqual(kagami[kagami.index("--sora-profile") + 1], "nexus")
         self.assertEqual(kagami[kagami.index("--consensus-mode") + 1], "npos")
@@ -1939,6 +1986,42 @@ class TairaDevnetTests(unittest.TestCase):
             1,
         )
         self.assertEqual(report["inrou_canary"]["recovery_outcome"], "Applied")
+
+    def test_ambiguous_recovery_is_backed_off_and_attempt_bounded(self) -> None:
+        runtime = FakeRuntime()
+        runtime.ambiguous_submit_kind = "inrou_guest_pin"
+        runtime.failed_recovery_kind = "inrou_guest_pin"
+
+        with (
+            mock.patch.object(module, "PREPARED_RECOVERY_MAX_ATTEMPTS", 3),
+            mock.patch.object(module.time, "monotonic", return_value=100.0),
+            mock.patch.object(module.time, "sleep", return_value=None) as sleep,
+            self.assertRaisesRegex(
+                module.DevnetError,
+                "3 recovery attempts: simulated recovery transport failure",
+            ),
+        ):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        guest_commands = [
+            command
+            for command in runtime.commands
+            if "inrou-canary" in command
+            and "--help" not in command
+            and command[command.index("--operation") + 1] == "guest-pin"
+        ]
+        self.assertEqual(
+            sum("--submit-prepared-envelope-fd" in command for command in guest_commands),
+            1,
+        )
+        self.assertEqual(
+            sum("--recover-prepared-envelope-fd" in command for command in guest_commands),
+            3,
+        )
+        recovery_sleeps = [call.args[0] for call in sleep.call_args_list if call.args]
+        self.assertIn(module.PREPARED_RECOVERY_INITIAL_BACKOFF_SECONDS, recovery_sleeps)
+        self.assertIn(0.5, recovery_sleeps)
+        self.assertIn(1.0, recovery_sleeps)
 
     def test_check_rejects_a_tampered_retained_prepared_child(self) -> None:
         runtime = FakeRuntime()
@@ -2377,10 +2460,10 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertTrue(any("inrou-stage" in command for command in help_commands))
         self.assertTrue(any("inrou-canary" in command for command in help_commands))
 
-    def test_storage_overlay_fails_closed_before_rewriting_any_peer(self) -> None:
+    def test_generated_profile_validation_fails_closed_before_guest_staging(self) -> None:
         source_nexus = (
             "[nexus.storage]\n"
-            f"local_budget_bytes = {module.GENERATED_LOCALNET_NEXUS_STORAGE_BYTES}\n"
+            f"local_budget_bytes = {module.TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES}\n"
         )
         source_sorafs = "[sorafs.storage]\nenabled = false\n"
         cases = (
@@ -2397,7 +2480,7 @@ class TairaDevnetTests(unittest.TestCase):
             (
                 "unexpected-section",
                 lambda text: text
-                + "\n[nexus.storage.disk_budget_weights]\nkura_blocks_bps = 1\n",
+                + "\n[nexus.storage.retired]\nlegacy_budget_bytes = 1\n",
                 "unexpected storage sections",
             ),
             (
@@ -2413,34 +2496,26 @@ class TairaDevnetTests(unittest.TestCase):
         for name, mutate, error in cases:
             with self.subTest(name=name):
                 _, target = self.generated_network(f"generated-{name}")
-                peer0 = target / "peer0.toml"
                 peer3 = target / "peer3.toml"
-                peer0_before = peer0.read_text(encoding="utf-8")
                 peer3.write_text(
                     mutate(peer3.read_text(encoding="utf-8")),
                     encoding="utf-8",
                 )
 
                 with self.assertRaisesRegex(module.DevnetError, error):
-                    module.apply_canonical_taira_profiles(target)
+                    module.require_generated_taira_profiles(target)
 
-                self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
-
-    def test_profile_overlay_rejects_retained_inrou_table_before_rewriting(self) -> None:
+    def test_generated_profile_rejects_retained_inrou_table(self) -> None:
         _, target = self.generated_network("generated-retained-inrou")
-        peer0 = target / "peer0.toml"
         peer3 = target / "peer3.toml"
-        peer0_before = peer0.read_text(encoding="utf-8")
         peer3.write_text(
             peer3.read_text(encoding="utf-8")
             + "\n[soracloud_runtime.inrou]\nenabled = false\n",
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(module.DevnetError, "retained an Inrou selector"):
-            module.apply_canonical_taira_profiles(target)
-
-        self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
+        with self.assertRaisesRegex(module.DevnetError, "contains Inrou tables"):
+            module.require_generated_taira_profiles(target)
 
     def test_canonical_profile_rejects_identity_and_selector_drift(self) -> None:
         runtime = FakeRuntime()
@@ -2492,7 +2567,6 @@ class TairaDevnetTests(unittest.TestCase):
 
     def test_trusted_guest_injection_prevalidates_all_peers_before_rewriting(self) -> None:
         runtime, target = self.generated_network("generated-trust-prevalidation")
-        module.apply_canonical_taira_profiles(target)
         stage = target / module.INROU_STAGE_DIRECTORY
         runtime.run(["iroha", "taira", "inrou-stage", "--stage-dir", str(stage)])
         peer0 = target / "peer0.toml"
@@ -2500,24 +2574,54 @@ class TairaDevnetTests(unittest.TestCase):
         peer0_before = peer0.read_text(encoding="utf-8")
         peer3.write_text(
             peer3.read_text(encoding="utf-8").replace(
-                "portable_vm_uid = 70003",
-                "portable_vm_uid = 70002",
+                f"rate_per_minute = {module.TAIRA_INROU_EGRESS_RATE_PER_MINUTE}",
+                f"rate_per_minute = {module.TAIRA_INROU_EGRESS_RATE_PER_MINUTE + 1}",
                 1,
             ),
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(module.DevnetError, "wrong PortableVM V1 profile"):
+        with self.assertRaisesRegex(module.DevnetError, "wrong egress budgets"):
             module.inject_trusted_inrou_guest_artifact(target, stage)
 
         self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
         self.assertNotIn("trusted_guest_", peer0_before)
 
+    def test_trusted_guest_injection_reads_each_peer_once_per_validation_phase(self) -> None:
+        runtime, target = self.generated_network("generated-trust-read-count")
+        stage = target / module.INROU_STAGE_DIRECTORY
+        runtime.run(["iroha", "taira", "inrou-stage", "--stage-dir", str(stage)])
+        real_read = module.read_bounded_text
+        reads = {f"peer{index}.toml": 0 for index in range(module.PEER_COUNT)}
+
+        def count_peer_read(path: Path, **kwargs) -> str:
+            if path.name in reads:
+                reads[path.name] += 1
+            return real_read(path, **kwargs)
+
+        with mock.patch.object(module, "read_bounded_text", side_effect=count_peer_read):
+            module.inject_trusted_inrou_guest_artifact(target, stage)
+
+        self.assertEqual(set(reads.values()), {2})
+
+    def test_generated_config_replacement_preserves_mode_and_syncs_directory(self) -> None:
+        _, target = self.generated_network("generated-config-replacement")
+        config = target / "peer0.toml"
+        config.chmod(0o640)
+        replacement = config.read_text(encoding="utf-8") + "\n# replacement\n"
+
+        with mock.patch.object(module.os, "fsync", wraps=os.fsync) as fsync:
+            module._atomic_replace_generated_config(config, replacement)
+
+        self.assertEqual(config.read_text(encoding="utf-8"), replacement)
+        self.assertEqual(module.stat.S_IMODE(config.stat().st_mode), 0o640)
+        self.assertEqual(fsync.call_count, 2)
+        self.assertFalse(any(config.parent.glob(f".{config.name}.config-update-*")))
+
     def test_trusted_guest_injection_rejects_untrusted_stage_receipt_without_rewrite(
         self,
     ) -> None:
         runtime, target = self.generated_network("generated-bad-stage-receipt")
-        module.apply_canonical_taira_profiles(target)
         stage = target / module.INROU_STAGE_DIRECTORY
         runtime.run(["iroha", "taira", "inrou-stage", "--stage-dir", str(stage)])
         receipt = stage / module.INROU_STAGE_RECEIPT_FILE
@@ -2720,10 +2824,6 @@ class TairaDevnetTests(unittest.TestCase):
             ),
             1,
         )
-
-        for path in module.runtime_signer_launch_paths(state / "network"):
-            path.write_bytes(b"")
-            path.chmod(0o600)
 
         down_args = module.parser().parse_args(["--dir", str(state), "down"])
         down_report = module.down(down_args, run=runtime.run)

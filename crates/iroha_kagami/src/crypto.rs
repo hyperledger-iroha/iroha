@@ -1,46 +1,29 @@
 use super::*;
 use crate::tui;
-use clap::{ArgGroup, ValueEnum, builder::PossibleValue};
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
+use clap::{ValueEnum, builder::PossibleValue};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use std::path::PathBuf;
 use zeroize::Zeroizing;
 /// Use `Kagami` to generate cryptographic key-pairs.
 #[derive(ClapArgs, Debug, Clone)]
-#[command(group = ArgGroup::new("generate_from").required(false))]
-#[command(group = ArgGroup::new("format").required(false))]
 pub struct Args {
     /// An algorithm to use for the key-pair generation
     #[clap(default_value_t, long, short)]
     algorithm: AlgorithmArg,
-    /// A private key to generate the key-pair from
-    ///
-    /// `--private-key` specifies the payload of the private key, while `--algorithm`
-    /// specifies its algorithm.
-    #[clap(long, short, group = "generate_from")]
-    private_key: Option<String>,
     /// A 32-byte secret key-generation seed encoded as 64 hexadecimal characters.
     ///
     /// This is for reproducible fixtures. Omit it for OS-random production keys.
-    #[clap(long = "seed-hex", group = "generate_from", value_name = "HEX")]
+    #[clap(long = "seed-hex", value_name = "HEX")]
     seed: Option<String>,
-    /// Output the key-pair in JSON format
-    #[clap(long, short, group = "format")]
-    json: bool,
-    /// Use algorithm-prefixed multihash strings in JSON (e.g., "ml-dsa:...")
-    #[clap(long)]
-    json_mh_prefixed: bool,
-    /// Output the key-pair without additional text
-    #[clap(long, short, group = "format")]
-    compact: bool,
     /// Write the key pair into a new owner-only custody directory.
     ///
     /// The directory must not contain any existing entries. Files are written
     /// as `public.key` and `private.key`; `--pop` also writes `pop.hex`. The
     /// private key never passes through standard output.
-    #[clap(long, value_name = "DIR", group = "format")]
-    out_dir: Option<PathBuf>,
+    #[clap(long, value_name = "DIR")]
+    out_dir: PathBuf,
     /// Also output a BLS Proof-of-Possession (PoP) for this key (BLS-normal only).
-    /// Printed as hex in JSON or plain hex in compact mode.
+    /// Written as `pop.hex` in the custody directory.
     #[clap(long)]
     pop: bool,
 }
@@ -63,9 +46,7 @@ impl ValueEnum for AlgorithmArg {
             AlgorithmArg(Algorithm::Gost3410_2012_512ParamSetA),
             #[cfg(feature = "gost")]
             AlgorithmArg(Algorithm::Gost3410_2012_512ParamSetB),
-            #[cfg(feature = "bls")]
             AlgorithmArg(Algorithm::BlsNormal),
-            #[cfg(feature = "bls")]
             AlgorithmArg(Algorithm::BlsSmall),
         ];
         VARIANTS
@@ -76,15 +57,17 @@ impl ValueEnum for AlgorithmArg {
 }
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        let algorithm_name = self.algorithm.to_string();
+        let Self {
+            algorithm,
+            seed,
+            out_dir,
+            pop,
+        } = self;
+        let algorithm_name = algorithm.to_string();
         tui::status(format!("Generating {algorithm_name} key pair"));
-        let json = self.json;
-        let json_mh_prefixed = self.json_mh_prefixed;
-        let compact = self.compact;
-        let out_dir = self.out_dir.clone();
-        let key_pair = self.clone().key_pair()?;
+        let key_pair = key_pair_from_source(algorithm.0, seed)?;
         let exposed_private_key = ExposedPrivateKey(key_pair.private_key().clone());
-        let pop_hex = if self.pop {
+        let pop_hex = if pop {
             let public_algorithm = key_pair
                 .public_key()
                 .try_algorithm()
@@ -96,80 +79,17 @@ impl<T: Write> RunArgs<T> for Args {
             }
             let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
                 .wrap_err("failed to construct PoP for BLS-normal key")?;
-            Some(encode_hex(&pop))
+            Some(hex::encode(pop))
         } else {
             None
         };
-        if let Some(out_dir) = out_dir {
-            write_key_custody(
-                writer,
-                &out_dir,
-                key_pair.public_key(),
-                &exposed_private_key,
-                pop_hex.as_deref(),
-            )?;
-        } else if json {
-            if json_mh_prefixed {
-                #[derive(crate::json_macros::JsonSerialize)]
-                struct KeyPairStrings {
-                    public_key: String,
-                    private_key: String,
-                    #[norito(skip_serializing_if = "Option::is_none")]
-                    pop_hex: Option<String>,
-                }
-                let pk_str = key_pair
-                    .public_key()
-                    .try_to_prefixed_string()
-                    .wrap_err("generated public key is malformed")?;
-                let sk_str = exposed_private_key
-                    .try_to_prefixed_string()
-                    .wrap_err("generated private key is malformed")?;
-                let payload = KeyPairStrings {
-                    public_key: pk_str,
-                    private_key: sk_str,
-                    pop_hex: pop_hex.clone(),
-                };
-                let output = norito::json::to_json_pretty(&payload)
-                    .wrap_err("Failed to serialise to JSON.")?;
-                writeln!(writer, "{output}")?;
-            } else {
-                #[derive(crate::json_macros::JsonSerialize)]
-                pub struct ExposedKeyPair {
-                    public_key: String,
-                    private_key: ExposedPrivateKey,
-                    #[norito(skip_serializing_if = "Option::is_none")]
-                    pop_hex: Option<String>,
-                }
-                let exposed_key_pair = ExposedKeyPair {
-                    public_key: key_pair.public_key().to_string(),
-                    private_key: exposed_private_key,
-                    pop_hex: pop_hex.clone(),
-                };
-                let output = norito::json::to_json_pretty(&exposed_key_pair)
-                    .wrap_err("Failed to serialise to JSON.")?;
-                writeln!(writer, "{output}")?;
-            }
-        } else if compact {
-            writeln!(writer, "{}", &key_pair.public_key())?;
-            writeln!(writer, "{}", &exposed_private_key)?;
-            if let Some(pop_hex) = pop_hex.as_deref() {
-                writeln!(writer, "{pop_hex}")?;
-            }
-        } else {
-            writeln!(
-                writer,
-                "Public key (multihash): \"{}\"",
-                &key_pair.public_key()
-            )?;
-            writeln!(
-                writer,
-                "Private key (multihash): \"{}\"",
-                &exposed_private_key
-            )?;
-            if let Some(pop_hex) = pop_hex.as_deref() {
-                writeln!(writer, "PoP (hex): \"{}\"", pop_hex)?;
-            }
-        }
+        write_key_custody(
+            writer,
+            &out_dir,
+            key_pair.public_key(),
+            &exposed_private_key,
+            pop_hex.as_deref(),
+        )?;
         tui::success(format!("{algorithm_name} key pair ready"));
         Ok(())
     }
@@ -219,36 +139,18 @@ fn write_key_custody<T: Write>(
     }
     Ok(())
 }
-fn encode_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
-}
-impl Args {
-    fn key_pair(self) -> color_eyre::Result<KeyPair> {
-        let algorithm = self.algorithm.0;
-        let key_pair = match (self.seed, self.private_key) {
-            (None, None) => KeyPair::try_random_with_algorithm(algorithm)
-                .wrap_err("Failed to generate random key pair")?,
-            (None, Some(private_key_hex)) => {
-                let private_key = PrivateKey::from_hex(algorithm, private_key_hex)
-                    .wrap_err("Failed to decode private key")?;
-                KeyPair::from_private_key(private_key)
-                    .wrap_err("Failed to derive key pair from private key")?
-            }
-            (Some(seed), None) => {
-                let seed = parse_keygen_seed_hex(&seed)?;
-                KeyPair::try_from_seed(seed, algorithm)
-                    .wrap_err("Failed to derive seeded key pair")?
-            }
-            _ => unreachable!("Clap group invariant"),
-        };
-        Ok(key_pair)
-    }
+fn key_pair_from_source(algorithm: Algorithm, seed: Option<String>) -> color_eyre::Result<KeyPair> {
+    let seed = seed.map(Zeroizing::new);
+    let key_pair = match seed.as_ref() {
+        None => KeyPair::try_random_with_algorithm(algorithm)
+            .wrap_err("Failed to generate random key pair")?,
+        Some(seed) => {
+            let mut seed = Zeroizing::new(parse_keygen_seed_hex(seed.as_str())?);
+            KeyPair::try_from_seed(std::mem::take(&mut *seed), algorithm)
+                .wrap_err("Failed to derive seeded key pair")?
+        }
+    };
+    Ok(key_pair)
 }
 pub fn parse_keygen_seed_hex(seed: &str) -> color_eyre::Result<Vec<u8>> {
     let seed = seed.strip_prefix("0x").unwrap_or(seed);
@@ -267,7 +169,8 @@ mod tests {
     use std::{collections::BTreeSet, io::BufWriter};
     // Bring `ValueEnum` into scope so `AlgorithmArg::value_variants()` is callable in this module.
     use super::{
-        Algorithm, AlgorithmArg, Args, ExposedPrivateKey, KeyPair, RunArgs, parse_keygen_seed_hex,
+        Algorithm, AlgorithmArg, Args, ExposedPrivateKey, KeyPair, RunArgs, key_pair_from_source,
+        parse_keygen_seed_hex,
     };
     use clap::ValueEnum;
     #[test]
@@ -314,45 +217,6 @@ mod tests {
             "AlgorithmArg::value_variants is out of sync with Algorithm"
         );
     }
-    #[test]
-    fn json_prefixed_output_uses_checked_formatters() {
-        let args = Args {
-            algorithm: AlgorithmArg(Algorithm::Ed25519),
-            private_key: None,
-            seed: Some("11".repeat(32)),
-            json: true,
-            json_mh_prefixed: true,
-            compact: false,
-            out_dir: None,
-            pop: false,
-        };
-        let mut writer = BufWriter::new(Vec::new());
-        args.clone()
-            .run(&mut writer)
-            .expect("generate keypair JSON");
-        let output = String::from_utf8(writer.into_inner().expect("writer flush")).expect("utf8");
-        let value: norito::json::Value = norito::json::from_str(&output).expect("json output");
-        let keypair = args.key_pair().expect("expected keypair");
-        let expected_public = keypair
-            .public_key()
-            .try_to_prefixed_string()
-            .expect("checked public formatter");
-        let expected_private = ExposedPrivateKey(keypair.private_key().clone())
-            .try_to_prefixed_string()
-            .expect("checked private formatter");
-        assert_eq!(
-            value
-                .get("public_key")
-                .and_then(norito::json::Value::as_str),
-            Some(expected_public.as_str())
-        );
-        assert_eq!(
-            value
-                .get("private_key")
-                .and_then(norito::json::Value::as_str),
-            Some(expected_private.as_str())
-        );
-    }
     #[cfg(unix)]
     #[test]
     fn out_dir_writes_consistent_owner_only_custody_and_refuses_reuse() {
@@ -361,12 +225,8 @@ mod tests {
         let out_dir = sandbox.path().join("custody");
         let args = Args {
             algorithm: AlgorithmArg(Algorithm::Ed25519),
-            private_key: None,
             seed: Some("42".repeat(32)),
-            json: false,
-            json_mh_prefixed: false,
-            compact: false,
-            out_dir: Some(out_dir.clone()),
+            out_dir: out_dir.clone(),
             pop: false,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -413,17 +273,8 @@ mod tests {
     }
     #[test]
     fn key_pair_random_path_uses_checked_generation() {
-        let args = Args {
-            algorithm: AlgorithmArg(Algorithm::Ed25519),
-            private_key: None,
-            seed: None,
-            json: false,
-            json_mh_prefixed: false,
-            compact: false,
-            out_dir: None,
-            pop: false,
-        };
-        let key_pair = args.key_pair().expect("checked random keypair");
+        let key_pair =
+            key_pair_from_source(Algorithm::Ed25519, None).expect("checked random keypair");
         assert_eq!(key_pair.algorithm(), Algorithm::Ed25519);
     }
     #[test]

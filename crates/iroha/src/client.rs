@@ -34153,8 +34153,6 @@ mod tests {
             },
             local_proxy_manifest: None,
             car_verification: None,
-            taikai_cache_stats: None,
-            taikai_cache_queue: None,
         }
     }
     #[cfg(test)]

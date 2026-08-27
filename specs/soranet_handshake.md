@@ -162,9 +162,9 @@ normative sequence.
      salt epoch, and retry token. Client caches this for inclusion in
      subsequent middle/exit hops.
 
-When PoW is enabled in the directory consensus, the client prepends a
-`PowTicketV1` frame to the Noise stream before transmitting `ClientHello`. The
-frame layout is identical to the main spec:
+Every first-release client prepends an Argon2-backed `PowTicketV1` credential to
+the Noise stream before transmitting `ClientHello`. Relays verify the credential
+against the configured Argon2 policy before processing the hello:
 
 ```norito
 struct PowTicketV1 {
@@ -194,7 +194,7 @@ have the required number of leading zero bits. Tickets must not be excessively
 far in the future and must remain valid for the configured TTL window; relays
 abort with a downgrade alert if the ticket is missing or invalid.
 
-Relay admission layers bounded defenses on top of the mandatory PoW check:
+Relay admission layers bounded defenses on top of the mandatory puzzle check:
 
 - **Static difficulty.** The issuer and verifier use the same configured
   `pow.difficulty` for the lifetime of the process. The first-release schema has
@@ -437,8 +437,8 @@ external revocation list loaded from disk.
 
 Every token is scoped to a single relay and exact client hello: clients must
 mint a new credential whenever the serialized hello changes. When
-`pow.token.enabled = false` the relay falls back to the
-puzzle gate, preserving the default onboarding flow. Token-authenticated
+`pow.token.enabled = false` the relay uses the mandatory puzzle gate.
+Token-authenticated
 sessions still emit downgrade telemetry and compliance log entries so operations
 retain a full audit trail.
 
@@ -453,9 +453,9 @@ retain a full audit trail.
   `pow.max_future_skew_secs` so every ticket admitted by the verifier can remain
   consumed through its expiry. Each verified PoW or puzzle ticket is inserted
   into the store; replays return `pow::Error::Replay` and the handshake fails.
-- The store is pruned on load and can be purged in-process via the
-  `purge_expired_revocations` helper. Active records are never evicted to make
-  room: exhausted capacity rejects new handshakes until records expire.
+- The store prunes expired entries as part of bounded ledger operations. Active
+  records are never evicted to make room: exhausted capacity rejects new
+  handshakes until records expire.
   Capacity/TTL validation or an unreadable path raises a
   `HandshakeSoranet` error during startup, so operators will see explicit
   failures rather than silently disabling replay protection.

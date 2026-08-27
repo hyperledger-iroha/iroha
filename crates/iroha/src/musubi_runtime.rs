@@ -399,10 +399,6 @@ impl MusubiSeedIngressCarPlanV1 {
             || plan.chunks.len() > usize::try_from(MUSUBI_MAX_CHUNKS_V1).unwrap_or(usize::MAX)
             || plan.files.len() < 4
             || plan.files.len() > maximum_files
-            || plan
-                .chunks
-                .iter()
-                .any(|chunk| chunk.taikai_segment_hint.is_some())
             || plan.chunk_profile != seed_ingress_commitment_profile(commitment)?
         {
             return Err(seed_ingress_plan_invalid());
@@ -461,7 +457,6 @@ impl MusubiSeedIngressCarPlanV1 {
             offset: chunk.offset,
             length: chunk.length,
             digest: chunk.digest,
-            taikai_segment_hint: None,
         }));
         let mut files = Vec::new();
         files
@@ -662,10 +657,6 @@ fn validate_seed_ingress_plan_commitment(
             != usize::try_from(commitment.chunk_count).map_err(|_| seed_ingress_plan_invalid())?
         || plan.files.len() != expected_files
         || compute_chunk_plan_digest_sha3(&plan.chunks) != *commitment.chunk_plan_digest.as_bytes()
-        || plan
-            .chunks
-            .iter()
-            .any(|chunk| chunk.taikai_segment_hint.is_some())
     {
         return Err(seed_ingress_plan_invalid());
     }

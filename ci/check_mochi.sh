@@ -18,6 +18,9 @@ for package in "${packages[@]}"; do
   cargo test -p "${package}"
 done
 
+echo "[mochi] cargo test -p mochi-integration --features dev-tools --test supervisor"
+cargo test -p mochi-integration --features dev-tools --test supervisor
+
 echo "[mochi] cargo check -p mochi-ui --features gui --bin mochi"
 cargo check -p mochi-ui --features gui --bin mochi
 

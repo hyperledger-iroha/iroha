@@ -58,6 +58,13 @@ python3 scripts/taira_devnet.py check
 python3 scripts/taira_devnet.py down
 ```
 
+`up`, `check`, and `down` serialize on the owner-only managed marker. `down` is
+destructive by design: after it proves the exact managed cohort is stopped, it
+atomically quarantines the cleanup directory, proves the same inode again, and
+removes the complete tree, including configs, logs, state, and runtime
+credentials. If either proof fails, it preserves the tree or quarantined racing
+replacement for operator recovery.
+
 `up` builds the current Kagami, daemon, CLI, and SoraFS node and replaces one
 marked owner-only directory under `/var/lib/iroha-taira-devnet/` by default. It
 generates exactly four fresh-key NPoS validators on the canonical Taira chain,
@@ -109,10 +116,10 @@ same-revision `iroha taira doctor` directly against the public ingress under
 test for that purpose.
 
 The generated bundle contains private keys and tokens. Do not print, move,
-archive, or commit it. On failure the command attempts bounded teardown and
-leaves bounded peer logs for diagnosis; if ownership or termination cannot be
-proved, it warns instead of claiming cleanup. `down` retains those logs; the
-next `up` replaces the bundle.
+archive, or commit it. On failure the command prints bounded peer log tails,
+attempts bounded teardown, and destroys the bundle after proving shutdown and
+directory identity. If either proof fails, it warns and retains the complete
+bundle instead of claiming cleanup.
 
 Build the public-reset evidence binary with the release profile, then admit the
 complete runtime input closure locally before authorizing mutation:

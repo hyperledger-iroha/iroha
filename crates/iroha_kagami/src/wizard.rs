@@ -14,13 +14,17 @@ use norito::json::{self, Value as JsonValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
-    io::{BufWriter, Write},
+    fs::File,
+    io::{BufWriter, Read as _, Write},
     net::{Ipv4Addr, Ipv6Addr},
     num::NonZeroUsize,
     path::{Path, PathBuf},
     str::FromStr,
 };
 use toml::{Value as TomlValue, value::Table as TomlTable};
+use zeroize::Zeroizing;
+
+const MAX_WIZARD_CONFIG_TEMPLATE_BYTES: u64 = 1024 * 1024;
 /// Supported network profiles for the wizard.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum Profile {
@@ -152,6 +156,8 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         print_banner();
         let answers = gather_answers(&self)?;
+        crate::secure_fs::prepare_empty_private_directory(&answers.output_dir)
+            .wrap_err("prepare fresh wizard private output directory")?;
         let keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .wrap_err("failed to generate wizard BLS key pair")?;
         let soranet_transport_keypair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
@@ -181,12 +187,12 @@ impl<T: Write> RunArgs<T> for Args {
             &trusted_pops,
         )?;
         let genesis = load_and_patch_genesis(&genesis_template_path, &answers.chain)?;
-        fs::create_dir_all(&answers.output_dir)
-            .wrap_err("failed to create output directory for wizard artefacts")?;
         let config_path = answers.output_dir.join("config.toml");
         let genesis_path = answers.output_dir.join("genesis.json");
-        let mut config_payload = toml::to_string_pretty(&config)
-            .wrap_err("failed to serialise config after wizard updates")?;
+        let mut config_payload = Zeroizing::new(
+            toml::to_string_pretty(&config)
+                .wrap_err("failed to serialise config after wizard updates")?,
+        );
         // Surface optional networking knobs in the generated config without changing defaults.
         config_payload.push_str(
             r#"
@@ -210,13 +216,13 @@ impl<T: Write> RunArgs<T> for Args {
 # - P2P always serves TLS 1.3 on network.address; there is no plaintext listener or fallback.
 "#,
         );
-        fs::write(&config_path, config_payload)
+        crate::secure_fs::write_private_file_atomic(&config_path, config_payload.as_bytes())
             .wrap_err_with(|| format!("failed to write config to {}", config_path.display()))?;
         let genesis_payload = json::to_string_pretty(&genesis)
             .wrap_err("failed to serialise genesis after wizard updates")?;
         validate_genesis_manifest_json(genesis_payload.as_bytes())
             .wrap_err("generated wizard genesis exceeds fixed resource bounds")?;
-        fs::write(&genesis_path, genesis_payload)
+        crate::secure_fs::write_private_file_atomic(&genesis_path, genesis_payload.as_bytes())
             .wrap_err_with(|| format!("failed to write genesis to {}", genesis_path.display()))?;
         let guide_path = answers.output_dir.join("README.md");
         let start_command = format!(
@@ -237,6 +243,8 @@ impl<T: Write> RunArgs<T> for Args {
             &genesis_path,
             &start_command,
         )?;
+        crate::secure_fs::harden_private_tree_with_owner_executables(&answers.output_dir, &[])
+            .wrap_err("harden wizard private artifact tree")?;
         tui::success(format!(
             "Config and reference genesis manifest staged under {}",
             answers.output_dir.display()
@@ -638,7 +646,7 @@ fn write_wizard_readme(
         profile_prerequisites = profile_prerequisites,
         start_command = start_command,
     );
-    fs::write(path, rendered)
+    crate::secure_fs::write_private_file_atomic(path, rendered.as_bytes())
         .wrap_err_with(|| format!("failed to write wizard guide to {}", path.display()))
 }
 fn load_config_template(
@@ -651,13 +659,8 @@ fn load_config_template(
     let defaults = ProfileDefaults::for_profile(answers.profile);
     if let Some(path) = defaults.config_template {
         let config_template_path = resolve_wizard_source_path(path);
-        let raw = fs::read_to_string(&config_template_path).wrap_err_with(|| {
-            format!(
-                "failed to read config template at {}",
-                config_template_path.display()
-            )
-        })?;
-        let mut value: TomlValue = toml::from_str(&raw).wrap_err_with(|| {
+        let raw = read_config_template(&config_template_path)?;
+        let mut value: TomlValue = toml::from_str(raw.as_str()).wrap_err_with(|| {
             format!(
                 "failed to parse config template at {}",
                 config_template_path.display()
@@ -696,6 +699,20 @@ fn load_config_template(
             .to_string_lossy()
             .into_owned(),
     ))
+}
+fn read_config_template(path: &Path) -> Result<Zeroizing<String>> {
+    let file = File::open(path)
+        .wrap_err_with(|| format!("failed to open config template at {}", path.display()))?;
+    let mut raw = Zeroizing::new(String::new());
+    file.take(MAX_WIZARD_CONFIG_TEMPLATE_BYTES + 1)
+        .read_to_string(&mut raw)
+        .wrap_err_with(|| format!("failed to read config template at {}", path.display()))?;
+    if u64::try_from(raw.len()).unwrap_or(u64::MAX) > MAX_WIZARD_CONFIG_TEMPLATE_BYTES {
+        return Err(eyre!(
+            "wizard config template exceeds the {MAX_WIZARD_CONFIG_TEMPLATE_BYTES}-byte limit"
+        ));
+    }
+    Ok(raw)
 }
 fn resolve_wizard_source_path(path: &str) -> PathBuf {
     let direct = PathBuf::from(path);
@@ -1420,6 +1437,55 @@ mod tests {
             resolve_profile(&args).expect("non-interactive profile resolution"),
             Profile::Local
         );
+    }
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn wizard_refuses_to_mix_with_existing_output() {
+        let output = tempfile::tempdir().expect("wizard output");
+        let sentinel = output.path().join("keep.txt");
+        fs::write(&sentinel, b"do not overwrite").expect("write sentinel");
+        let args = Args {
+            profile: Some(Profile::Local),
+            output_dir: output.path().to_owned(),
+            non_interactive: true,
+            chain_id: None,
+            p2p_host: None,
+            p2p_port: None,
+            torii_host: None,
+            torii_port: None,
+            relay_mode: None,
+            relay_hub_addresses: Vec::new(),
+            trusted_peers: None,
+            trusted_peers_pop: None,
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("non-empty output must be rejected before key generation");
+        assert!(error.to_string().contains("must be empty"));
+        assert_eq!(
+            fs::read(sentinel).expect("read sentinel"),
+            b"do not overwrite"
+        );
+    }
+    #[test]
+    fn config_template_reader_enforces_its_byte_limit() {
+        let temp = tempfile::tempdir().expect("template directory");
+        let path = temp.path().join("config.toml");
+        let exact_len =
+            usize::try_from(MAX_WIZARD_CONFIG_TEMPLATE_BYTES).expect("limit fits usize");
+        fs::write(&path, vec![b'x'; exact_len]).expect("write exact-limit template");
+        assert_eq!(
+            read_config_template(&path)
+                .expect("read exact-limit template")
+                .len(),
+            exact_len
+        );
+        fs::write(&path, vec![b'x'; exact_len + 1]).expect("write oversized template");
+        let error = read_config_template(&path).expect_err("oversized template must fail");
+        assert!(error.to_string().contains("byte limit"));
     }
     #[test]
     fn wizard_profiles_exclude_public_taira_onboarding() {

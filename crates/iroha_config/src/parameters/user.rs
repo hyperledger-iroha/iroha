@@ -463,7 +463,7 @@ impl json::JsonDeserialize for RelayMode {
         parser: &mut json::Parser<'_>,
     ) -> ::core::result::Result<Self, json::Error> {
         let text = parser.parse_string()?;
-        match text.to_ascii_lowercase().as_str() {
+        match text.as_str() {
             "disabled" => Ok(Self::Disabled),
             "hub" => Ok(Self::Hub),
             "spoke" => Ok(Self::Spoke),
@@ -560,46 +560,6 @@ impl json::JsonDeserialize for PerProviderSubmittersConfig {
         Ok(Self(inner))
     }
 }
-/// Boolean wrapper that accepts common truthy/falsy strings when parsing from env.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Boolish(pub bool);
-/// Error returned when parsing a boolean-ish environment value fails.
-#[derive(Debug, Error, PartialEq, Eq, Copy, Clone)]
-#[error("provided string was not a recognised boolean (expected true/false/1/0/on/off/yes/no)")]
-pub struct BoolishParseError;
-impl From<bool> for Boolish {
-    fn from(value: bool) -> Self {
-        Self(value)
-    }
-}
-impl From<Boolish> for bool {
-    fn from(value: Boolish) -> Self {
-        value.0
-    }
-}
-impl FromEnvStr for Boolish {
-    type Error = BoolishParseError;
-    fn from_env_str(value: Cow<'_, str>) -> std::result::Result<Self, Self::Error> {
-        let normalized = value.trim().to_ascii_lowercase();
-        match normalized.as_str() {
-            "true" | "1" | "yes" | "on" => Ok(Self(true)),
-            "false" | "0" | "no" | "off" => Ok(Self(false)),
-            _ => Err(BoolishParseError),
-        }
-    }
-}
-impl json::JsonSerialize for Boolish {
-    fn json_serialize(&self, out: &mut String) {
-        json::JsonSerialize::json_serialize(&self.0, out);
-    }
-}
-impl json::JsonDeserialize for Boolish {
-    fn json_deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> ::core::result::Result<Self, json::Error> {
-        bool::json_deserialize(parser).map(Self)
-    }
-}
 /// Wrapper around a list of curve identifiers allowing env parsing.
 #[derive(Debug, Clone, Default)]
 pub struct CurveIdListConfig(pub Vec<u8>);
@@ -627,7 +587,6 @@ pub enum SmIntrinsicsPolicyConfig {
     /// Disable SM intrinsics even when the platform supports them.
     ForceDisable,
 }
-impl SmIntrinsicsPolicyConfig {}
 #[derive(Debug, Error)]
 #[error("invalid SM intrinsics policy `{0}` (expected auto, force-enable, or force-disable)")]
 /// Error returned when an SM intrinsics policy string cannot be parsed.
@@ -635,21 +594,12 @@ pub struct SmIntrinsicsPolicyParseError(String);
 impl FromStr for SmIntrinsicsPolicyConfig {
     type Err = SmIntrinsicsPolicyParseError;
     fn from_str(raw: &str) -> core::result::Result<Self, Self::Err> {
-        match raw.trim().to_ascii_lowercase().as_str() {
+        match raw {
             "auto" => Ok(Self::Auto),
-            "force-enable" | "force_enable" | "enable" | "on" | "true" | "1" => {
-                Ok(Self::ForceEnable)
-            }
-            "force-disable" | "force_disable" | "disable" | "off" | "false" | "0" => {
-                Ok(Self::ForceDisable)
-            }
+            "force-enable" => Ok(Self::ForceEnable),
+            "force-disable" => Ok(Self::ForceDisable),
             other => Err(SmIntrinsicsPolicyParseError(other.to_owned())),
         }
-    }
-}
-impl From<&str> for SmIntrinsicsPolicyConfig {
-    fn from(value: &str) -> Self {
-        value.parse().unwrap_or_default()
     }
 }
 impl json::JsonDeserialize for SmIntrinsicsPolicyConfig {
@@ -689,7 +639,20 @@ mod sm_intrinsics_policy_config_tests {
     }
     #[test]
     fn rejects_unknown_policy() {
-        assert!(SmIntrinsicsPolicyConfig::from_str("neon-only").is_err());
+        for value in [
+            "neon-only",
+            "force_enable",
+            "enable",
+            "true",
+            "1",
+            "AUTO",
+            " auto",
+        ] {
+            assert!(
+                SmIntrinsicsPolicyConfig::from_str(value).is_err(),
+                "noncanonical policy {value:?} must be rejected"
+            );
+        }
     }
 }
 impl From<CurveIdListConfig> for Vec<u8> {
@@ -3208,19 +3171,12 @@ max_corpus_entries = 16
         );
     }
     #[test]
-    fn jdg_signature_schemes_accepts_aliases() {
+    fn jdg_signature_schemes_rejects_aliases() {
         let mut cfg = Governance::default();
         cfg.jdg_signature_schemes = vec!["simple".to_string(), "bls-aggregate".to_string()];
-        let parsed = cfg.parse();
         assert!(
-            parsed
-                .jdg_signature_schemes
-                .contains(&JdgSignatureScheme::SimpleThreshold)
-        );
-        assert!(
-            parsed
-                .jdg_signature_schemes
-                .contains(&JdgSignatureScheme::BlsNormalAggregate)
+            std::panic::catch_unwind(|| cfg.parse()).is_err(),
+            "first-release configuration must reject noncanonical aliases"
         );
     }
 }
@@ -3740,7 +3696,7 @@ pub struct TieredState {
         env = "TIERED_STATE_HOT_RETAINED_BYTES",
         default = "defaults::tiered_state::HOT_RETAINED_BYTES"
     )]
-    pub hot_retained_bytes: Bytes<u64>,
+    pub hot_retained_bytes: Bytes,
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     #[config(
         env = "TIERED_STATE_HOT_RETAINED_GRACE_SNAPSHOTS",
@@ -3764,7 +3720,7 @@ pub struct TieredState {
         env = "TIERED_STATE_MAX_COLD_BYTES",
         default = "defaults::tiered_state::MAX_COLD_BYTES"
     )]
-    pub max_cold_bytes: Bytes<u64>,
+    pub max_cold_bytes: Bytes,
 }
 impl TieredState {
     fn parse(self) -> actual::TieredState {
@@ -3797,10 +3753,10 @@ pub struct Compute {
     pub max_ttl_slots: NonZeroU64,
     /// Maximum request payload size (bytes).
     #[config(default = "defaults::compute::MAX_REQUEST_BYTES")]
-    pub max_request_bytes: Bytes<u64>,
+    pub max_request_bytes: Bytes,
     /// Maximum response payload size (bytes).
     #[config(default = "defaults::compute::MAX_RESPONSE_BYTES")]
-    pub max_response_bytes: Bytes<u64>,
+    pub max_response_bytes: Bytes,
     /// Per-call gas cap applied at admission.
     #[config(default = "defaults::compute::max_gas_per_call()")]
     pub max_gas_per_call: NonZeroU64,
@@ -5119,7 +5075,7 @@ pub struct Fastpq {
     pub proof_sidecar_queue_cap: NonZeroUsize,
     /// Maximum encoded FASTPQ proof snapshot accepted for sidecar persistence.
     #[config(default = "defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES")]
-    pub proof_sidecar_max_bytes: Bytes<u64>,
+    pub proof_sidecar_max_bytes: Bytes,
     /// Maximum merge attempts for a FASTPQ proof snapshot while the pipeline sidecar is pending.
     #[config(default = "defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES")]
     pub proof_sidecar_max_retries: NonZeroUsize,
@@ -5153,15 +5109,15 @@ pub struct Fastpq {
     /// Emit verbose Metal device enumeration logs (developer diagnostic; defaults off).
     #[config(
         env = "FASTPQ_DEBUG_METAL_ENUM",
-        default = "Boolish::from(defaults::zk::fastpq::METAL_DEBUG_ENUM)"
+        default = "defaults::zk::fastpq::METAL_DEBUG_ENUM"
     )]
-    pub metal_debug_enum: Boolish,
+    pub metal_debug_enum: bool,
     /// Emit verbose fused Poseidon failure diagnostics (developer diagnostic; defaults off).
     #[config(
         env = "FASTPQ_DEBUG_FUSED",
-        default = "Boolish::from(defaults::zk::fastpq::METAL_DEBUG_FUSED)"
+        default = "defaults::zk::fastpq::METAL_DEBUG_FUSED"
     )]
-    pub metal_debug_fused: Boolish,
+    pub metal_debug_fused: bool,
 }
 impl Fastpq {
     fn parse(self) -> actual::Fastpq {
@@ -5213,8 +5169,8 @@ impl Fastpq {
                 );
             }),
             metal_trace: self.metal_trace,
-            metal_debug_enum: self.metal_debug_enum.into(),
-            metal_debug_fused: self.metal_debug_fused.into(),
+            metal_debug_enum: self.metal_debug_enum,
+            metal_debug_fused: self.metal_debug_fused,
         }
     }
 }
@@ -5311,7 +5267,7 @@ impl std::fmt::Display for CabacMode {
 impl FromStr for CabacMode {
     type Err = ();
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
+        match s {
             "disabled" => Ok(Self::Disabled),
             "adaptive" => Ok(Self::Adaptive),
             "forced" => Ok(Self::Forced),
@@ -5333,6 +5289,32 @@ impl json::JsonDeserialize for CabacMode {
             field: "streaming.codec.cabac_mode".into(),
             message: format!("invalid CABAC mode `{text}`"),
         })
+    }
+}
+#[cfg(test)]
+mod canonical_network_and_codec_label_tests {
+    use super::{CabacMode, RelayMode};
+    use std::str::FromStr;
+    #[test]
+    fn relay_mode_requires_canonical_lowercase_labels() {
+        let parsed = norito::json::from_str::<RelayMode>(r#""hub""#).expect("canonical relay mode");
+        assert_eq!(parsed, RelayMode::Hub);
+        for value in [r#""HUB""#, r#"" Hub ""#] {
+            assert!(
+                norito::json::from_str::<RelayMode>(value).is_err(),
+                "noncanonical relay mode {value} must be rejected"
+            );
+        }
+    }
+    #[test]
+    fn cabac_mode_requires_canonical_lowercase_labels() {
+        assert_eq!(CabacMode::from_str("adaptive"), Ok(CabacMode::Adaptive));
+        for value in ["Adaptive", " adaptive"] {
+            assert!(
+                CabacMode::from_str(value).is_err(),
+                "noncanonical CABAC mode {value:?} must be rejected"
+            );
+        }
     }
 }
 /// User-facing codec toggles (CABAC/trellis gating, rANS artefact path).
@@ -6132,7 +6114,7 @@ pub struct SumeragiQueues {
 pub struct SumeragiStorage {
     /// Aggregate checksummed body-frame bytes retained for one active height.
     #[config(default = "defaults::sumeragi::BODY_STORE_MAX_BYTES_PER_HEIGHT")]
-    pub body_store_max_bytes_per_height: Bytes<u64>,
+    pub body_store_max_bytes_per_height: Bytes,
 }
 /// User-facing finite runtime bounds for Sumeragi v2 lane, merge, and Native AMX services.
 #[derive(Debug, Clone, Copy, ReadConfig)]
@@ -9376,7 +9358,7 @@ pub struct StreamingSoranet {
     pub provision_spool_dir: WithOrigin<PathBuf>,
     /// Reserved spool budget; unused while V1 publication is disabled.
     #[config(default = "defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES")]
-    pub provision_spool_max_bytes: WithOrigin<Bytes<u64>>,
+    pub provision_spool_max_bytes: WithOrigin<Bytes>,
     /// Segment window (inclusive) used when provisioning privacy routes.
     #[config(default = "defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS")]
     pub provision_window_segments: WithOrigin<u64>,
@@ -9499,7 +9481,7 @@ pub struct StreamingSoravpn {
     pub provision_spool_dir: WithOrigin<PathBuf>,
     /// Maximum on-disk footprint for the SoraVPN provision spool (0 = unlimited).
     #[config(default = "defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES")]
-    pub provision_spool_max_bytes: WithOrigin<Bytes<u64>>,
+    pub provision_spool_max_bytes: WithOrigin<Bytes>,
 }
 impl StreamingSoravpn {
     /// Convert user-supplied overrides into runtime defaults.
@@ -9559,7 +9541,7 @@ pub struct Crypto {
     /// SM intrinsic dispatch policy (`auto`, `force-enable`, `force-disable`).
     #[config(
         env = "CRYPTO_SM_INTRINSICS",
-        default = "SmIntrinsicsPolicyConfig::from(defaults::crypto::SM_INTRINSICS_POLICY)"
+        default = "defaults::crypto::SM_INTRINSICS_POLICY.parse().expect(\"valid SM intrinsics policy default\")"
     )]
     pub sm_intrinsics: SmIntrinsicsPolicyConfig,
     /// Default hash algorithm identifier (e.g., `blake2b-256`, `sm3-256`).
@@ -9836,13 +9818,13 @@ pub struct NexusStorage {
     ///
     /// When omitted, `irohad` derives a filesystem-aware budget at runtime without modifying the
     /// operator configuration.
-    pub local_budget_bytes: Option<Bytes<u64>>,
+    pub local_budget_bytes: Option<Bytes>,
     /// Block interval between disk budget enforcement scans (0 = every block).
     #[config(default = "defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS")]
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     #[config(default = "defaults::nexus::storage::MAX_WSV_MEMORY_BYTES")]
-    pub max_wsv_memory_bytes: Bytes<u64>,
+    pub max_wsv_memory_bytes: Bytes,
     /// Budget weights for dividing the disk cap across subsystems.
     #[config(nested)]
     pub disk_budget_weights: NexusStorageWeights,
@@ -13947,7 +13929,7 @@ pub struct Torii {
     pub address: WithOrigin<SocketAddr>,
     /// Maximum HTTP payload size accepted by the API.
     #[config(default = "defaults::torii::MAX_CONTENT_LEN")]
-    pub max_content_len: Bytes<u64>,
+    pub max_content_len: Bytes,
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).
     #[config(default = "defaults::torii::data_dir()")]
     pub data_dir: PathBuf,
@@ -13974,7 +13956,7 @@ pub struct Torii {
     pub query_heavy_max_inflight: NonZeroUsize,
     /// Aggregate bytes for signed-query ingress and cross-dataspace fanout.
     #[config(default = "defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES")]
-    pub query_fanout_max_retained_bytes: Bytes<u64>,
+    pub query_fanout_max_retained_bytes: Bytes,
     /// Absolute deadline for reading one admitted App API routed-read body.
     #[config(default = "app_routed_read_config::default_body_timeout()")]
     pub app_api_routed_read_body_read_timeout_ms: DurationMs,
@@ -14032,7 +14014,7 @@ pub struct Torii {
     pub soracloud_public_max_inflight: NonZeroUsize,
     /// Maximum hosted Soracloud response body buffered for P2P proxy forwarding.
     #[config(default = "defaults::torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES")]
-    pub soracloud_public_max_response_bytes: Bytes<u64>,
+    pub soracloud_public_max_response_bytes: Bytes,
     /// Signed Soracloud mutation rate per account+origin (tokens/sec). None disables.
     pub soracloud_mutation_rate_per_account_origin_per_sec: Option<u32>,
     /// Signed Soracloud mutation burst per account+origin (tokens). None disables.
@@ -14042,14 +14024,14 @@ pub struct Torii {
     pub soracloud_mutation_max_inflight: NonZeroUsize,
     /// Maximum signed Soracloud mutation body size before signature verification.
     #[config(default = "defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES")]
-    pub soracloud_mutation_max_body_bytes: Bytes<u64>,
+    pub soracloud_mutation_max_body_bytes: Bytes,
     /// Proof endpoint steady-state rate (requests per minute). None disables.
     pub proof_rate_per_minute: Option<u32>,
     /// Proof endpoint burst tokens (requests).
     pub proof_burst: Option<u32>,
     /// Maximum proof request payload size (bytes).
     #[config(default = "defaults::torii::PROOF_MAX_BODY_BYTES")]
-    pub proof_max_body_bytes: Bytes<u64>,
+    pub proof_max_body_bytes: Bytes,
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
     ///
     /// This aggregate gate also covers SCCP bridge proof/message submissions.
@@ -14300,7 +14282,7 @@ pub struct Torii {
         env = "TORII_ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES",
         default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES"
     )]
-    pub zk_ivm_prove_job_max_retained_bytes: Bytes<u64>,
+    pub zk_ivm_prove_job_max_retained_bytes: Bytes,
     /// Maximum number of retained `/v1/zk/ivm/prove` jobs for one authenticated account.
     ///
     /// Set to 0 to disable the per-account count cap (not recommended).
@@ -14316,7 +14298,7 @@ pub struct Torii {
         env = "TORII_ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER",
         default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER"
     )]
-    pub zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes<u64>,
+    pub zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes,
     /// Push notification configuration (feature-gated in runtime).
     #[config(nested)]
     pub push: ToriiPush,
@@ -14389,7 +14371,7 @@ pub struct ToriiBootleLanternIssuer {
     pub max_records: usize,
     /// Maximum reserved canonical authorization-store bytes.
     #[config(default = "defaults::torii::privacy_bootle_lantern_issuer::MAX_TOTAL_BYTES")]
-    pub max_total_bytes: Bytes<u64>,
+    pub max_total_bytes: Bytes,
     /// Terminal records retained after their authoritative horizon.
     #[config(
         default = "defaults::torii::privacy_bootle_lantern_issuer::TERMINAL_RETENTION_BLOCKS"
@@ -15817,7 +15799,7 @@ pub struct ToriiHttpTransport {
     pub max_headers: NonZeroUsize,
     /// Maximum HTTP/1 parser buffer, including the request head.
     #[config(default = "defaults::torii::transport::http::MAX_HEADER_BYTES")]
-    pub max_header_bytes: Bytes<u64>,
+    pub max_header_bytes: Bytes,
 }
 impl Default for ToriiHttpTransport {
     fn default() -> Self {
@@ -17633,7 +17615,7 @@ pub struct IsoBridge {
     #[config(default = "defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES")]
     #[norito(default = "defaults::torii::iso_bridge_max_body_bytes")]
     /// Maximum request body accepted by an ISO 20022 submission endpoint.
-    pub max_body_bytes: Bytes<u64>,
+    pub max_body_bytes: Bytes,
     #[config(
         env = "ISO_BRIDGE_DEDUPE_TTL_SECS",
         default = "defaults::torii::ISO_BRIDGE_DEDUPE_TTL_SECS"
@@ -19982,12 +19964,12 @@ pub struct SorafsModerationOrchestrator {
     pub max_submit_attempts: u16,
     /// Maximum canonical checkpoint size.
     #[config(default = "defaults::sorafs::storage::moderation_orchestrator::CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Maximum canonical panel-notification archive artifact size.
     #[config(
         default = "defaults::sorafs::storage::moderation_orchestrator::PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES"
     )]
-    pub panel_notification_archive_max_bytes: Bytes<u64>,
+    pub panel_notification_archive_max_bytes: Bytes,
     /// Finalized reconciliation and maintenance cadence.
     #[config(default = "defaults::sorafs::storage::moderation_orchestrator::WORKER_INTERVAL_MS")]
     pub worker_interval_ms: u64,
@@ -20617,7 +20599,7 @@ pub struct SorafsEvidenceViewerConfig {
     pub checkpoint_path: PathBuf,
     /// Maximum canonical checkpoint size.
     #[config(default = "defaults::sorafs::storage::evidence_viewer::CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Identity-pinned authoritative checkpoint-store runtime handle.
     pub checkpoint_store_handle: Option<String>,
     /// Exact non-zero checkpoint-store adapter and public-policy revision.
@@ -20635,7 +20617,7 @@ pub struct SorafsEvidenceViewerConfig {
     pub challenge_ttl_ms: u64,
     /// Maximum authenticated plaintext range.
     #[config(default = "defaults::sorafs::storage::evidence_viewer::MAX_RANGE_BYTES")]
-    pub max_range_bytes: Bytes<u64>,
+    pub max_range_bytes: Bytes,
     /// Maximum retained challenges.
     #[config(default = "defaults::sorafs::storage::evidence_viewer::MAX_CHALLENGES")]
     pub max_challenges: u32,
@@ -21243,7 +21225,7 @@ pub struct SorafsProviderIngestOutboxConfig {
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::CHECKPOINT_MAX_BYTES"
     )]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Deadline for one external sealed-checkpoint operation, in milliseconds.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::CHECKPOINT_OPERATION_TIMEOUT_MS"
@@ -21274,7 +21256,7 @@ pub struct SorafsProviderIngestOutboxConfig {
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::MAX_SIGNED_TRANSACTION_BYTES"
     )]
-    pub max_signed_transaction_bytes: Bytes<u64>,
+    pub max_signed_transaction_bytes: Bytes,
     /// Maximum payload-free rows returned by one status page.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::MAX_STATUS_PAGE_SIZE"
@@ -21315,7 +21297,7 @@ pub struct SorafsProviderIngestFinalizedArchiveConfig {
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::finalized_archive::MAX_RECORD_BYTES"
     )]
-    pub max_record_bytes: Bytes<u64>,
+    pub max_record_bytes: Bytes,
     /// Maximum immutable anchor records admitted by one archive namespace.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::finalized_archive::MAX_ARCHIVE_ENTRIES"
@@ -21325,7 +21307,7 @@ pub struct SorafsProviderIngestFinalizedArchiveConfig {
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::finalized_archive::MAX_TOTAL_BYTES"
     )]
-    pub max_total_bytes: Bytes<u64>,
+    pub max_total_bytes: Bytes,
     /// Maximum provider projections admitted at one finalized anchor.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::finalized_archive::MAX_PROVIDERS_PER_ANCHOR"
@@ -21690,7 +21672,7 @@ pub struct SorafsProviderAttestationJournalConfig {
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::CHECKPOINT_MAX_BYTES"
     )]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Maximum CAS conflicts retried by one journal operation.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::MAX_CAS_RETRIES"
@@ -23318,12 +23300,12 @@ pub struct SorafsReputationRuntimeConfig {
     #[config(
         default = "defaults::sorafs::storage::reputation_runtime::INGEST_CHECKPOINT_MAX_BYTES"
     )]
-    pub ingest_checkpoint_max_bytes: Bytes<u64>,
+    pub ingest_checkpoint_max_bytes: Bytes,
     /// Maximum canonical publication checkpoint size.
     #[config(
         default = "defaults::sorafs::storage::reputation_runtime::PUBLICATION_CHECKPOINT_MAX_BYTES"
     )]
-    pub publication_checkpoint_max_bytes: Bytes<u64>,
+    pub publication_checkpoint_max_bytes: Bytes,
     /// Governed PoR-success weight.
     #[config(default = "defaults::sorafs::storage::reputation_runtime::POR_SUCCESS_BPS")]
     pub por_success_bps: u16,
@@ -24028,7 +24010,7 @@ pub struct SorafsReserveTransparencyRuntimeConfig {
     #[config(
         default = "defaults::sorafs::storage::reserve_transparency_runtime::CHECKPOINT_MAX_BYTES"
     )]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
 }
 impl Default for SorafsReserveTransparencyRuntimeConfig {
     fn default() -> Self {
@@ -25099,7 +25081,7 @@ pub struct SorafsStorage {
     pub data_dir: PathBuf,
     /// Maximum on-disk capacity allotted to stored chunks (bytes).
     #[config(default = "defaults::sorafs::storage::MAX_CAPACITY_BYTES")]
-    pub max_capacity_bytes: Bytes<u64>,
+    pub max_capacity_bytes: Bytes,
     /// Maximum number of fetch streams served concurrently.
     #[config(default = "defaults::sorafs::storage::MAX_PARALLEL_FETCHES")]
     pub max_parallel_fetches: usize,
@@ -25114,7 +25096,7 @@ pub struct SorafsStorage {
     pub pdp_sample_window: u16,
     /// Aggregate in-memory budget for canonical PDP tree indexes.
     #[config(default = "defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES")]
-    pub pdp_tree_memory_limit_bytes: Bytes<u64>,
+    pub pdp_tree_memory_limit_bytes: Bytes,
     /// Enables authenticated moderation-screening admission.
     #[config(default = "defaults::sorafs::storage::MODERATION_SCREENING_ENABLED")]
     pub moderation_screening_enabled: bool,
@@ -25831,10 +25813,10 @@ pub struct SorafsGovernanceDagService {
     pub dns_timeout_ms: u64,
     /// Maximum accepted remote response body.
     #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_RESPONSE_BYTES")]
-    pub max_response_bytes: Bytes<u64>,
+    pub max_response_bytes: Bytes,
     /// Maximum local block, head, or CAR request payload.
     #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_REQUEST_BYTES")]
-    pub max_request_bytes: Bytes<u64>,
+    pub max_request_bytes: Bytes,
     /// Maximum accepted future clock skew for blocks and heads.
     #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_FUTURE_SKEW_SECS")]
     pub max_future_skew_secs: u64,
@@ -27066,13 +27048,13 @@ pub struct SorafsPdpProviderPolicy {
     pub max_terminal_records: u32,
     /// Maximum canonical durable checkpoint size.
     #[config(default = "defaults::sorafs::storage::pdp_provider::CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Maximum canonical challenge payload size.
     #[config(default = "defaults::sorafs::storage::pdp_provider::CHALLENGE_MAX_BYTES")]
-    pub challenge_max_bytes: Bytes<u64>,
+    pub challenge_max_bytes: Bytes,
     /// Maximum canonical proof payload size.
     #[config(default = "defaults::sorafs::storage::pdp_provider::PROOF_MAX_BYTES")]
-    pub proof_max_bytes: Bytes<u64>,
+    pub proof_max_bytes: Bytes,
     /// Minimum governed challenge response window in seconds.
     #[config(default = "defaults::sorafs::storage::pdp_provider::MIN_RESPONSE_WINDOW_SECS")]
     pub min_response_window_secs: u64,
@@ -27168,7 +27150,7 @@ pub struct SorafsRuntimeRetentionConfig {
     pub state_entry_limit: usize,
     /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
     #[config(default = "defaults::sorafs::storage::RUNTIME_CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Finalized reconciliation cadence for durable proof-outcome delivery.
     #[config(default = "defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_FORWARDER_INTERVAL_MS")]
     pub proof_outcome_forwarder_interval_ms: NonZeroU64,
@@ -27250,7 +27232,7 @@ pub struct SorafsOrderbookWorkerConfig {
     pub max_attempts: NonZeroU32,
     /// Maximum canonical durable checkpoint size.
     #[config(default = "defaults::sorafs::storage::orderbook_worker::CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
 }
 impl Default for SorafsOrderbookWorkerConfig {
     fn default() -> Self {
@@ -27373,7 +27355,7 @@ pub struct SorafsReserveWorkerConfig {
     pub max_attempts: NonZeroU32,
     /// Maximum canonical durable checkpoint size.
     #[config(default = "defaults::sorafs::storage::reserve_worker::CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
 }
 impl Default for SorafsReserveWorkerConfig {
     fn default() -> Self {
@@ -29751,7 +29733,7 @@ pub struct SorafsGatewaySiteBindings {
     pub path: Option<PathBuf>,
     /// Maximum encoded document size accepted at startup.
     #[config(default = "defaults::sorafs::gateway::site_bindings::MAX_BYTES")]
-    pub max_bytes: Bytes<u64>,
+    pub max_bytes: Bytes,
     /// Maximum number of host entries accepted at startup.
     #[config(default = "defaults::sorafs::gateway::site_bindings::MAX_SITES")]
     pub max_sites: NonZeroUsize,
@@ -30051,10 +30033,10 @@ pub struct SorafsGatewayCompliance {
     pub feeds: Vec<SorafsGatewayComplianceFeed>,
     /// Maximum encoded feed response.
     #[config(default = "defaults::sorafs::gateway::compliance::MAX_ENCODED_BYTES")]
-    pub max_encoded_bytes: Bytes<u64>,
+    pub max_encoded_bytes: Bytes,
     /// Maximum normalized/decompressed feed response.
     #[config(default = "defaults::sorafs::gateway::compliance::MAX_DECODED_BYTES")]
-    pub max_decoded_bytes: Bytes<u64>,
+    pub max_decoded_bytes: Bytes,
     /// Maximum redirect count.
     #[config(default = "defaults::sorafs::gateway::compliance::MAX_REDIRECTS")]
     pub max_redirects: u8,

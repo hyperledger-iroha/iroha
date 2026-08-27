@@ -631,6 +631,3 @@ impl Drop for InflightGuard {
 
 #[path = "multi_peer_fetch.rs"]
 mod multi_peer_fetch;
-
-#[path = "taikai_cache.rs"]
-mod taikai_cache;

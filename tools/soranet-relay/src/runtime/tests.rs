@@ -263,7 +263,7 @@ mod tests {
         }
     }
     #[test]
-    fn route_open_metrics_use_adapter_once() {
+    fn route_open_ingress_metrics_use_adapter_once() {
         let metrics = Arc::new(Metrics::new());
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
         let overlay = VpnOverlay::from_config(Default::default());
@@ -280,20 +280,9 @@ mod tests {
         assert_eq!(1, snapshot.vpn_control_ingress_frames);
         assert_eq!(bytes, snapshot.vpn_control_bytes);
         assert_eq!(bytes, snapshot.vpn_control_ingress_bytes);
-        record_route_open_egress_metrics(Some(&adapter), Some(&handle));
-        let snapshot = metrics.snapshot();
-        assert_eq!(0, snapshot.vpn_frames);
-        assert_eq!(0, snapshot.vpn_egress_frames);
-        assert_eq!(0, snapshot.vpn_egress_bytes);
-        assert_eq!(0, snapshot.vpn_bytes);
-        assert_eq!(2, snapshot.vpn_control_frames);
-        assert_eq!(1, snapshot.vpn_control_ingress_frames);
-        assert_eq!(1, snapshot.vpn_control_egress_frames);
-        assert_eq!(bytes * 2, snapshot.vpn_control_bytes);
-        assert_eq!(bytes, snapshot.vpn_control_egress_bytes);
     }
     #[test]
-    fn route_open_metrics_fallback_to_session() {
+    fn route_open_ingress_metrics_fallback_to_session() {
         let metrics = Arc::new(Metrics::new());
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
         let overlay = VpnOverlay::from_config(Default::default());
@@ -309,16 +298,6 @@ mod tests {
         assert_eq!(1, snapshot.vpn_control_ingress_frames);
         assert_eq!(bytes, snapshot.vpn_control_bytes);
         assert_eq!(bytes, snapshot.vpn_control_ingress_bytes);
-        record_route_open_egress_metrics(None, Some(&handle));
-        let snapshot = metrics.snapshot();
-        assert_eq!(0, snapshot.vpn_frames);
-        assert_eq!(0, snapshot.vpn_egress_frames);
-        assert_eq!(0, snapshot.vpn_bytes);
-        assert_eq!(2, snapshot.vpn_control_frames);
-        assert_eq!(1, snapshot.vpn_control_ingress_frames);
-        assert_eq!(1, snapshot.vpn_control_egress_frames);
-        assert_eq!(bytes * 2, snapshot.vpn_control_bytes);
-        assert_eq!(bytes, snapshot.vpn_control_egress_bytes);
     }
     #[test]
     fn handshake_byte_guard_does_not_touch_vpn_bytes() {
@@ -1749,6 +1728,20 @@ mod tests {
             capacity,
         })
     }
+    fn replay_test_ticket(marker: u8) -> PowTicket {
+        let expires_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock after Unix epoch")
+            .as_secs()
+            .saturating_add(60);
+        PowTicket {
+            version: PowTicket::VERSION,
+            difficulty: 1,
+            expires_at,
+            client_nonce: [marker; 32],
+            solution: [marker ^ 0xFF; 32],
+        }
+    }
     fn current_client_hello_frame(
         suite: HandshakeSuite,
         resume_hash: Option<&[u8]>,
@@ -1922,14 +1915,15 @@ mod tests {
     }
     #[test]
     fn verify_puzzle_ticket_requires_binding_and_consumes_once() {
-        let params = PuzzleParameters::new(
+        let params = PuzzleParameters::try_new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             1,
             Duration::from_secs(180),
             Duration::from_secs(45),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let descriptor = vec![0xD4; 32];
         let relay_id = vec![0xC3; 32];
         let admission_transcript = [0x9Au8; 32];
@@ -1979,14 +1973,15 @@ mod tests {
     }
     #[test]
     fn verify_signed_puzzle_ticket_authenticates_argon2_and_consumes_shared_identity() {
-        let params = PuzzleParameters::new(
+        let params = PuzzleParameters::try_new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             1,
             Duration::from_secs(180),
             Duration::from_secs(45),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let descriptor = [0xB4; 32];
         let relay_id = [0xA3; 32];
         let transcript = [0x8A; 32];
@@ -2033,14 +2028,15 @@ mod tests {
     }
     #[test]
     fn verify_puzzle_ticket_rejects_wrong_relay_binding() {
-        let params = PuzzleParameters::new(
+        let params = PuzzleParameters::try_new(
             NonZeroU32::new(4_096).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             5,
             Duration::from_secs(120),
             Duration::from_secs(30),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let descriptor = vec![0x51; 32];
         let relay_id = vec![0x42; 32];
         let admission_transcript = [0x24u8; 32];
@@ -2069,14 +2065,15 @@ mod tests {
         let dir = secure_test_tempdir();
         let path = dir.path().join("relay-ticket-replays.norito");
         let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
-        let params = PuzzleParameters::new(
+        let params = PuzzleParameters::try_new(
             NonZeroU32::new(4_096).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             1,
             Duration::from_secs(180),
             Duration::from_secs(30),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let descriptor = [0x35; 32];
         let relay_id = [0x46; 32];
         let transcript = [0x57; 32];
@@ -2123,16 +2120,8 @@ mod tests {
     #[test]
     fn full_replay_store_rejects_before_costly_ticket_verification() {
         let replays = in_memory_ticket_replays(1);
-        let params = PowParameters::new(0, Duration::from_secs(180), Duration::from_secs(30));
-        let descriptor = [0x11; 32];
-        let relay_id = [0x22; 32];
-        let transcript = [0x33; 32];
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
-        let mut rng = StdRng::from_seed([0x44; 32]);
-        let first = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
-            .expect("mint first");
-        let second = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
-            .expect("mint second");
+        let first = replay_test_ticket(0x44);
+        let second = replay_test_ticket(0x45);
         verify_and_consume_ticket(&first, &replays, || Ok(())).expect("consume first");
         let costly_verify_ran = std::cell::Cell::new(false);
         let err = verify_and_consume_ticket(&second, &replays, || {
@@ -2149,14 +2138,7 @@ mod tests {
     #[test]
     fn concurrent_duplicate_ticket_is_rejected_while_first_use_is_pending() {
         let replays = Arc::new(in_memory_ticket_replays(2));
-        let params = PowParameters::new(0, Duration::from_secs(180), Duration::from_secs(30));
-        let descriptor = [0x71; 32];
-        let relay_id = [0x72; 32];
-        let transcript = [0x73; 32];
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
-        let mut rng = StdRng::from_seed([0x74; 32]);
-        let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
-            .expect("mint ticket");
+        let ticket = replay_test_ticket(0x74);
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let first_replays = Arc::clone(&replays);
@@ -2204,6 +2186,27 @@ mod tests {
         assert_eq!(
             pow_failure_reason(&overflow),
             SoranetPowFailureReasonV1::ClockError
+        );
+    }
+
+    #[test]
+    fn puzzle_failure_reason_preserves_policy_diagnostics() {
+        assert_eq!(
+            puzzle_failure_reason(&puzzle::Error::DifficultyMismatch {
+                ticket: 4,
+                required: 6,
+            }),
+            SoranetPowFailureReasonV1::DifficultyMismatch
+        );
+        assert_eq!(
+            puzzle_failure_reason(&puzzle::Error::Expired(10, 11)),
+            SoranetPowFailureReasonV1::Expired
+        );
+        assert_eq!(
+            puzzle_failure_reason(&puzzle::Error::ExpiryWindowTooSmall(Duration::from_secs(
+                30
+            ))),
+            SoranetPowFailureReasonV1::TtlTooShort
         );
     }
     #[cfg(any())]
@@ -3392,7 +3395,6 @@ mod tests {
         let config = load_config(&json);
         let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         let context = runtime.circuit_context();
-        assert_eq!(context.dos.current_pow_parameters().difficulty(), 6);
         assert_eq!(context.dos.current_puzzle_parameters().difficulty(), 6);
         let replay_state = context.ticket_replays.lock().expect("ticket replay lock");
         assert_eq!(replay_state.capacity, 8_192);
@@ -3699,7 +3701,10 @@ mod tests {
         let valid = format!(
             "GET /metrics HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
         );
-        assert_eq!(RelayRuntime::admin_bearer_token(&valid), Some(TOKEN));
+        assert_eq!(
+            RelayRuntime::parse_admin_request(&valid).and_then(|request| request.bearer_token),
+            Some(TOKEN)
+        );
         for invalid in [
             format!("GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n folded\r\n\r\n"),
             format!(
@@ -3714,7 +3719,7 @@ mod tests {
             format!("GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nMalformed\r\n\r\n"),
         ] {
             assert!(
-                RelayRuntime::admin_bearer_token(&invalid).is_none(),
+                RelayRuntime::parse_admin_request(&invalid).is_none(),
                 "ambiguous request was accepted: {invalid:?}"
             );
         }
@@ -3723,7 +3728,10 @@ mod tests {
     fn admin_parser_rejects_request_line_and_host_smuggling_forms() {
         const TOKEN: &str = "soranet-test-admin-token-00000001";
         let http_10 = format!("GET /metrics HTTP/1.0\r\nAuthorization: Bearer {TOKEN}\r\n\r\n");
-        assert_eq!(RelayRuntime::admin_bearer_token(&http_10), Some(TOKEN));
+        assert_eq!(
+            RelayRuntime::parse_admin_request(&http_10).and_then(|request| request.bearer_token),
+            Some(TOKEN)
+        );
         for invalid in [
             format!("GET /metrics HTTP/1.1\nHost: localhost\nAuthorization: Bearer {TOKEN}\n\n"),
             format!(

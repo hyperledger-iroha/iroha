@@ -1176,51 +1176,6 @@ state_tiered_hot_entries 10
     assert_eq!(snapshot.state_tiered_hot_entries, Some(10.0));
 }
 #[tokio::test(flavor = "current_thread")]
-async fn fetch_block_parses_payload() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let body = r#"{
-  "hash":"aa00bb11",
-  "height":7,
-  "created_at":"2026-01-01T00:00:00Z",
-  "prev_block_hash":"cc22dd33",
-  "transactions_hash":"ee44ff55",
-  "transactions_rejected":1,
-  "transactions_total":2
-}"#;
-    let mock = server.mock(|when, then| {
-        when.method(GET).path("/v1/blocks/7");
-        then.status(200)
-            .header("content-type", "application/json")
-            .body(body);
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let record = client
-        .fetch_block(7)
-        .await
-        .expect("request")
-        .expect("record");
-    mock.assert();
-    assert_eq!(record.height, 7);
-    assert_eq!(record.prev_block_hash.as_deref(), Some("cc22dd33"));
-    assert_eq!(record.transactions_total, 2);
-}
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_block_returns_none_on_404() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let mock = server.mock(|when, then| {
-        when.method(GET).path("/v1/blocks/99");
-        then.status(404);
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let record = client.fetch_block(99).await.expect("request");
-    mock.assert();
-    assert!(record.is_none());
-}
-#[tokio::test(flavor = "current_thread")]
 async fn fetch_blocks_page_supports_query_params() {
     let Some(server) = try_start_mock_server() else {
         return;
@@ -1236,19 +1191,19 @@ async fn fetch_blocks_page_supports_query_params() {
   "transactions_total":1
 },
 {
-  "block_hash":"cc22dd33",
-  "height":"6",
-  "createdAt":"2026-01-01T01:00:00Z",
-  "transactionsRejected":"1",
-  "transactionsTotal":"3"
+  "hash":"cc22dd33",
+  "height":6,
+  "created_at":"2026-01-01T01:00:00Z",
+  "transactions_rejected":1,
+  "transactions_total":3
 }
   ]
 }"#;
     let mock = server.mock(|when, then| {
         when.method(GET)
-            .path("/v1/blocks")
-            .query_param("offset_height", "5")
-            .query_param("limit", "2");
+            .path("/v1/explorer/blocks")
+            .query_param("page", "1")
+            .query_param("per_page", "2");
         then.status(200)
             .header("content-type", "application/json")
             .body(body);
@@ -1256,8 +1211,8 @@ async fn fetch_blocks_page_supports_query_params() {
     let client = ToriiClient::new(server.url("/")).expect("client");
     let page = client
         .fetch_blocks_page(ExplorerBlocksQuery {
-            offset_height: Some(5),
-            limit: Some(2),
+            page: Some(1),
+            per_page: Some(2),
         })
         .await
         .expect("page");
@@ -1360,306 +1315,6 @@ fn status_state_records_sample_interval_and_block_delta() {
     assert_eq!(second_metrics.blocks_non_empty_delta, 2);
     assert_eq!(second_metrics.sample_interval_ms, 150);
 }
-#[tokio::test(flavor = "current_thread")]
-async fn status_monitor_streams_snapshots() {
-    let counter = Arc::new(AtomicUsize::new(0));
-    let monitor = ToriiStatusMonitor::spawn(Duration::from_millis(5), {
-        let counter = Arc::clone(&counter);
-        move || {
-            let counter = Arc::clone(&counter);
-            async move {
-                let value = counter.fetch_add(1, Ordering::SeqCst) as u64 + 1;
-                let status = TelemetryStatus {
-                    queue_size: value,
-                    ..TelemetryStatus::default()
-                };
-                let metrics = StatusMetrics::from_samples(None, &status);
-                Ok(ToriiStatusSnapshot::new(Instant::now(), status, metrics))
-            }
-        }
-    });
-    let mut receiver = monitor.subscribe();
-    timeout(Duration::from_secs(1), receiver.changed())
-        .await
-        .expect("monitor emitted value")
-        .expect("channel open");
-    let state = receiver.borrow().clone();
-    assert!(state.has_snapshot(), "monitor should publish snapshots");
-    assert!(
-        state.last_success_at.is_some(),
-        "monitor should record last success timestamp"
-    );
-    assert_eq!(
-        state
-            .last_snapshot
-            .as_ref()
-            .expect("snapshot available")
-            .status
-            .queue_size,
-        1
-    );
-    assert!(state.last_error.is_none());
-    monitor.stop();
-}
-#[tokio::test(flavor = "current_thread")]
-async fn status_monitor_records_errors_and_clears_on_success() {
-    let step = Arc::new(AtomicUsize::new(0));
-    let monitor = ToriiStatusMonitor::spawn(Duration::from_millis(5), {
-        let step = Arc::clone(&step);
-        move || {
-            let step = Arc::clone(&step);
-            async move {
-                let attempt = step.fetch_add(1, Ordering::SeqCst);
-                if attempt == 0 {
-                    Err(ToriiError::UnexpectedStatus {
-                        status: StatusCode::SERVICE_UNAVAILABLE,
-                        reject_code: None,
-                        message: None,
-                    })
-                } else {
-                    let status = TelemetryStatus {
-                        queue_size: attempt as u64,
-                        ..TelemetryStatus::default()
-                    };
-                    let metrics = StatusMetrics::from_samples(None, &status);
-                    Ok(ToriiStatusSnapshot::new(Instant::now(), status, metrics))
-                }
-            }
-        }
-    });
-    let mut receiver = monitor.subscribe();
-    timeout(Duration::from_secs(1), receiver.changed())
-        .await
-        .expect("first update")
-        .expect("channel open");
-    let first = receiver.borrow().clone();
-    assert!(first.last_error.is_some());
-    assert!(!first.has_snapshot());
-    timeout(Duration::from_secs(1), receiver.changed())
-        .await
-        .expect("second update")
-        .expect("channel open");
-    let second = receiver.borrow().clone();
-    assert!(second.last_error.is_none());
-    assert_eq!(
-        second
-            .last_snapshot
-            .as_ref()
-            .expect("snapshot available")
-            .status
-            .queue_size,
-        1
-    );
-    monitor.stop();
-}
-#[tokio::test(flavor = "current_thread")]
-async fn status_monitor_tracks_last_success_and_exposes_age() {
-    let step = Arc::new(AtomicUsize::new(0));
-    let monitor = ToriiStatusMonitor::spawn(Duration::from_millis(5), {
-        let step = Arc::clone(&step);
-        move || {
-            let step = Arc::clone(&step);
-            async move {
-                let attempt = step.fetch_add(1, Ordering::SeqCst);
-                if attempt == 0 {
-                    let status = TelemetryStatus {
-                        queue_size: 7,
-                        ..TelemetryStatus::default()
-                    };
-                    let metrics = StatusMetrics::from_samples(None, &status);
-                    Ok(ToriiStatusSnapshot::new(Instant::now(), status, metrics))
-                } else {
-                    Err(ToriiError::UnexpectedStatus {
-                        status: StatusCode::BAD_GATEWAY,
-                        reject_code: None,
-                        message: None,
-                    })
-                }
-            }
-        }
-    });
-    let mut receiver = monitor.subscribe();
-    timeout(Duration::from_secs(1), receiver.changed())
-        .await
-        .expect("first update")
-        .expect("channel open");
-    let first = receiver.borrow().clone();
-    let first_timestamp = first
-        .last_success_at
-        .expect("first poll should record success timestamp");
-    let first_age = first
-        .last_success_age()
-        .expect("first poll should expose success age");
-    assert!(
-        first_age >= Duration::ZERO,
-        "age should be present for successful poll"
-    );
-    assert!(first.last_error.is_none(), "first poll should succeed");
-    timeout(Duration::from_secs(1), receiver.changed())
-        .await
-        .expect("second update")
-        .expect("channel open");
-    let second = receiver.borrow().clone();
-    assert_eq!(
-        second.last_success_at,
-        Some(first_timestamp),
-        "error should not clear last success timestamp"
-    );
-    assert_eq!(
-        second.consecutive_failures, 1,
-        "first error should increment failure counter"
-    );
-    assert!(
-        second.last_success_age().is_some(),
-        "age should remain available after errors"
-    );
-    assert!(second.last_error.is_some(), "second poll should fail");
-    monitor.stop();
-}
-#[tokio::test(flavor = "current_thread")]
-async fn metrics_monitor_streams_snapshots() {
-    let counter = Arc::new(AtomicUsize::new(0));
-    let monitor = ToriiMetricsMonitor::spawn(Duration::from_millis(5), {
-        let counter = Arc::clone(&counter);
-        move || {
-            let counter = Arc::clone(&counter);
-            async move {
-                let value = counter.fetch_add(1, Ordering::SeqCst) as f64 + 1.0;
-                let snapshot = ToriiMetricsSnapshot::from_prometheus(
-                    Instant::now(),
-                    &format!("queue_size {value}\n"),
-                );
-                Ok(snapshot)
-            }
-        }
-    });
-    let mut receiver = monitor.subscribe();
-    timeout(Duration::from_secs(1), receiver.changed())
-        .await
-        .expect("monitor emitted value")
-        .expect("channel open");
-    let state = receiver.borrow().clone();
-    assert!(state.has_snapshot(), "monitor should publish snapshots");
-    assert!(
-        state.last_success_at.is_some(),
-        "monitor should record last success timestamp"
-    );
-    assert!(
-        matches!(
-            state
-                .last_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.queue_size),
-            Some(value) if (value - 1.0).abs() < f64::EPSILON
-        ),
-        "monitor should retain queue gauge"
-    );
-    assert!(state.last_error.is_none());
-    monitor.stop();
-}
-#[tokio::test(flavor = "current_thread")]
-async fn metrics_monitor_records_errors_and_clears_on_success() {
-    let step = Arc::new(AtomicUsize::new(0));
-    let monitor = ToriiMetricsMonitor::spawn(Duration::from_millis(5), {
-        let step = Arc::clone(&step);
-        move || {
-            let step = Arc::clone(&step);
-            async move {
-                let attempt = step.fetch_add(1, Ordering::SeqCst);
-                if attempt == 0 {
-                    Err(ToriiError::UnexpectedStatus {
-                        status: StatusCode::GATEWAY_TIMEOUT,
-                        reject_code: None,
-                        message: None,
-                    })
-                } else {
-                    Ok(ToriiMetricsSnapshot::from_prometheus(
-                        Instant::now(),
-                        "queue_size 4\n",
-                    ))
-                }
-            }
-        }
-    });
-    let mut receiver = monitor.subscribe();
-    timeout(Duration::from_secs(1), receiver.changed())
-        .await
-        .expect("first update")
-        .expect("channel open");
-    let first = receiver.borrow().clone();
-    assert!(first.last_error.is_some());
-    assert!(!first.has_snapshot());
-    timeout(Duration::from_secs(1), receiver.changed())
-        .await
-        .expect("second update")
-        .expect("channel open");
-    let second = receiver.borrow().clone();
-    assert!(second.last_error.is_none());
-    assert!(
-        matches!(
-            second
-                .last_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.queue_size),
-            Some(value) if (value - 4.0).abs() < f64::EPSILON
-        ),
-        "successful poll should publish snapshot"
-    );
-    monitor.stop();
-}
-#[tokio::test(flavor = "current_thread")]
-async fn metrics_monitor_tracks_last_success_and_exposes_age() {
-    let step = Arc::new(AtomicUsize::new(0));
-    let monitor = ToriiMetricsMonitor::spawn(Duration::from_millis(5), {
-        let step = Arc::clone(&step);
-        move || {
-            let step = Arc::clone(&step);
-            async move {
-                let attempt = step.fetch_add(1, Ordering::SeqCst);
-                if attempt == 0 {
-                    Ok(ToriiMetricsSnapshot::from_prometheus(
-                        Instant::now(),
-                        "queue_size 2\n",
-                    ))
-                } else {
-                    Err(ToriiError::UnexpectedStatus {
-                        status: StatusCode::BAD_GATEWAY,
-                        reject_code: None,
-                        message: None,
-                    })
-                }
-            }
-        }
-    });
-    let mut receiver = monitor.subscribe();
-    timeout(Duration::from_secs(1), receiver.changed())
-        .await
-        .expect("first update")
-        .expect("channel open");
-    let first = receiver.borrow().clone();
-    let first_timestamp = first
-        .last_success_at
-        .expect("poll should record success timestamp");
-    assert!(
-        first.last_success_age().is_some(),
-        "successful poll should expose age helper"
-    );
-    assert!(first.last_error.is_none());
-    timeout(Duration::from_secs(1), receiver.changed())
-        .await
-        .expect("second update")
-        .expect("channel open");
-    let second = receiver.borrow().clone();
-    assert!(
-        second.last_success_at == Some(first_timestamp),
-        "failed poll should retain last_success_at"
-    );
-    assert!(
-        second.last_error.is_some(),
-        "failed poll should surface the error"
-    );
-    monitor.stop();
-}
 #[test]
 fn metrics_snapshot_queue_utilization_reports_ratio() {
     let mut snapshot = empty_metrics_snapshot();
@@ -1713,19 +1368,68 @@ fn metrics_snapshot_cold_entry_ratio_handles_missing_totals() {
     );
 }
 #[test]
-fn explorer_block_record_parses_camel_case_fields() {
+fn explorer_block_record_accepts_canonical_fields() {
     let value = norito::json!({
-        "blockHash":"1122aabb",
-        "height":"9",
-        "createdAt":"2026-02-10T00:00:00Z",
-        "transactionsRejected":"0",
-        "transactionsTotal":"3"
+        "hash":"1122aabb",
+        "height":9,
+        "created_at":"2026-02-10T00:00:00Z",
+        "transactions_rejected":0,
+        "transactions_total":3
     });
     let record = ExplorerBlockRecord::from_json(&value).expect("record");
     assert_eq!(record.hash, "1122aabb");
     assert_eq!(record.height, 9);
     assert!(record.prev_block_hash.is_none());
     assert_eq!(record.transactions_total, 3);
+}
+#[test]
+fn explorer_block_record_rejects_aliases_and_string_numerics() {
+    let aliased = norito::json!({
+        "block_hash":"1122aabb",
+        "height":9,
+        "createdAt":"2026-02-10T00:00:00Z",
+        "transactionsRejected":0,
+        "transactionsTotal":3
+    });
+    let error = ExplorerBlockRecord::from_json(&aliased)
+        .expect_err("noncanonical field aliases must be rejected");
+    assert!(error.to_string().contains("canonical snake_case"));
+
+    let string_numeric = norito::json!({
+        "hash":"1122aabb",
+        "height":"9",
+        "created_at":"2026-02-10T00:00:00Z",
+        "transactions_rejected":0,
+        "transactions_total":3
+    });
+    let error = ExplorerBlockRecord::from_json(&string_numeric)
+        .expect_err("string-encoded numbers must be rejected");
+    assert!(error.to_string().contains("unsigned integer"));
+}
+#[test]
+fn explorer_blocks_page_rejects_noncanonical_pagination() {
+    let item = norito::json!({
+        "hash":"1122aabb",
+        "height":9,
+        "created_at":"2026-02-10T00:00:00Z",
+        "transactions_rejected":0,
+        "transactions_total":3
+    });
+    let aliased = norito::json!({
+        "pagination":{"page":1,"perPage":1,"totalPages":1,"totalItems":1},
+        "items":[item.clone()]
+    });
+    let error =
+        ExplorerBlocksPage::from_json(&aliased).expect_err("pagination aliases must be rejected");
+    assert!(error.to_string().contains("must contain exactly"));
+
+    let string_numeric = norito::json!({
+        "pagination":{"page":"1","per_page":1,"total_pages":1,"total_items":1},
+        "items":[item]
+    });
+    let error = ExplorerBlocksPage::from_json(&string_numeric)
+        .expect_err("string-encoded pagination numbers must be rejected");
+    assert!(error.to_string().contains("unsigned integer"));
 }
 #[test]
 fn explorer_blocks_page_errors_when_items_invalid() {
@@ -1735,124 +1439,6 @@ fn explorer_blocks_page_errors_when_items_invalid() {
     });
     let err = ExplorerBlocksPage::from_json(&value).expect_err("expected failure");
     assert!(matches!(err, ToriiError::Decode(_)));
-}
-#[test]
-fn explorer_account_record_decodes_payload() {
-    let value = norito::json!({
-        "id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        "i105_address": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        "network_prefix": 42,
-        "metadata": { "role": "admin" },
-        "owned_domains": 2,
-        "owned_assets": 5,
-        "owned_nfts": 1
-    });
-    let record = ExplorerAccountRecord::from_json(&value).expect("record");
-    assert_eq!(
-        record.id,
-        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-    );
-    assert_eq!(
-        record.i105_address,
-        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-    );
-    assert_eq!(record.network_prefix, 42);
-    assert_eq!(record.metadata, norito::json!({ "role": "admin" }));
-    assert_eq!(record.owned_domains, 2);
-    assert_eq!(record.owned_assets, 5);
-    assert_eq!(record.owned_nfts, 1);
-}
-#[test]
-fn explorer_accounts_page_decodes_entries() {
-    let value = norito::json!({
-        "pagination": {
-            "limit": 10,
-            "next_cursor": null,
-            "has_more": false
-        },
-        "items": [
-            {
-                "id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-                "i105_address": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-                "network_prefix": 1,
-                "metadata": {},
-                "owned_domains": 0,
-                "owned_assets": 0,
-                "owned_nfts": 0
-            }
-        ]
-    });
-    let page = ExplorerAccountsPage::from_json(&value).expect("page");
-    assert_eq!(page.pagination.limit, 10);
-    assert!(!page.pagination.has_more);
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(
-        page.items[0].id,
-        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-    );
-}
-#[test]
-fn explorer_domain_record_decodes_payload() {
-    let value = norito::json!({
-        "id": "sora",
-        "logo": "https://example/logo.svg",
-        "metadata": { "tier": "p0" },
-        "owned_by": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-        "accounts": 5,
-        "assets": 3,
-        "nfts": 1
-    });
-    let record = ExplorerDomainRecord::from_json(&value).expect("record");
-    assert_eq!(record.id, "sora");
-    assert_eq!(record.logo.as_deref(), Some("https://example/logo.svg"));
-    assert_eq!(
-        record.owned_by,
-        "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-    );
-    assert_eq!(record.accounts, 5);
-    assert_eq!(record.assets, 3);
-    assert_eq!(record.nfts, 1);
-}
-#[test]
-fn explorer_domains_page_validates_entries() {
-    let value = norito::json!({
-        "pagination":{"limit":10,"next_cursor":null,"has_more":false},
-        "items":[{ "id":"sora","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","accounts":1,"assets":0,"nfts":0 }]
-    });
-    let page = ExplorerDomainsPage::from_json(&value).expect("page");
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].id, "sora");
-}
-#[test]
-fn explorer_asset_definition_record_decodes_payload() {
-    let value = norito::json!({
-        "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        "mintable": "Infinitely",
-        "logo": null,
-        "metadata": { "decimals": 2 },
-        "owned_by": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-        "assets": 10
-    });
-    let record = ExplorerAssetDefinitionRecord::from_json(&value).expect("record");
-    assert_eq!(record.id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-    assert_eq!(record.mintable, "Infinitely");
-    assert_eq!(record.assets, 10);
-    assert_eq!(
-        record.owned_by,
-        "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-    );
-}
-#[test]
-fn explorer_asset_definition_page_validates_entries() {
-    let value = norito::json!({
-        "pagination":{"limit":5,"next_cursor":null,"has_more":false},
-        "items":[
-            {"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","mintable":"Infinitely","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","assets":2}
-        ]
-    });
-    let page = ExplorerAssetDefinitionsPage::from_json(&value).expect("page");
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
 }
 #[test]
 fn explorer_asset_record_decodes_payload() {
@@ -1881,152 +1467,6 @@ fn explorer_assets_page_validates_entries() {
     let page = ExplorerAssetsPage::from_json(&value).expect("page");
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].definition_id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-}
-#[test]
-fn explorer_nft_record_decodes_payload() {
-    let value = norito::json!({
-        "id": "art#gallery",
-        "owned_by": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-        "metadata": { "uri": "ipfs://cid" }
-    });
-    let record = ExplorerNftRecord::from_json(&value).expect("record");
-    assert_eq!(record.id, "art#gallery");
-    assert_eq!(
-        record.owned_by,
-        "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-    );
-    assert_eq!(record.metadata, norito::json!({ "uri": "ipfs://cid" }));
-}
-#[test]
-fn explorer_nfts_page_validates_entries() {
-    let value = norito::json!({
-        "pagination":{"limit":1,"next_cursor":null,"has_more":false},
-        "items":[{"id":"art#gallery","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","metadata":{}}]
-    });
-    let page = ExplorerNftsPage::from_json(&value).expect("page");
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(
-        page.items[0].owned_by,
-        "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-    );
-}
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_explorer_accounts_page_applies_filters() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let body = norito::json!({
-        "pagination": {
-            "limit": 25,
-            "next_cursor": "Y3Vyc29yLTI",
-            "has_more": true
-        },
-        "items": [
-            {
-                "id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-                "i105_address": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-                "network_prefix": 1,
-                "metadata": { "owned_assets": 4 },
-                "owned_domains": 0,
-                "owned_assets": 4,
-                "owned_nfts": 0
-            }
-        ]
-    });
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/explorer/accounts")
-            .query_param("cursor", "Y3Vyc29yLTE")
-            .query_param("limit", "25")
-            .query_param("domain", "sora")
-            .query_param("with_asset", "usd#sora");
-        then.status(200)
-            .body(norito::json::to_string(&body).expect("serialize mock body"));
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let page = client
-        .fetch_explorer_accounts_page(ExplorerAccountsQuery {
-            cursor: Some("Y3Vyc29yLTE".into()),
-            limit: Some(25),
-            domain: Some("sora".into()),
-            with_asset: Some("usd#sora".into()),
-        })
-        .await
-        .expect("page");
-    mock.assert();
-    assert_eq!(page.pagination.limit, 25);
-    assert_eq!(page.pagination.next_cursor.as_deref(), Some("Y3Vyc29yLTI"));
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].owned_assets, 4);
-}
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_explorer_domains_page_applies_filters() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let body = norito::json!({
-        "pagination":{"limit":10,"next_cursor":null,"has_more":false},
-        "items":[{"id":"sora","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","accounts":1,"assets":0,"nfts":0}]
-    });
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/explorer/domains")
-            .query_param("limit", "10")
-            .query_param(
-                "owned_by",
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            );
-        then.status(200)
-            .body(norito::json::to_string(&body).expect("serialize"));
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let page = client
-        .fetch_explorer_domains_page(ExplorerDomainsQuery {
-            cursor: None,
-            limit: Some(10),
-            owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
-        })
-        .await
-        .expect("page");
-    mock.assert();
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].id, "sora");
-}
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_explorer_asset_definitions_page_applies_filters() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let body = norito::json!({
-        "pagination":{"limit":5,"next_cursor":"Y3Vyc29yLTI","has_more":true},
-        "items":[{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","mintable":"Infinitely","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","assets":7}]
-    });
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/explorer/asset-definitions")
-            .query_param("cursor", "Y3Vyc29yLTE")
-            .query_param("limit", "5")
-            .query_param("domain", "sora")
-            .query_param(
-                "owned_by",
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            );
-        then.status(200)
-            .body(norito::json::to_string(&body).expect("serialize"));
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let page = client
-        .fetch_explorer_asset_definitions_page(ExplorerAssetDefinitionsQuery {
-            cursor: Some("Y3Vyc29yLTE".into()),
-            limit: Some(5),
-            domain: Some("sora".into()),
-            owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
-        })
-        .await
-        .expect("page");
-    mock.assert();
-    assert!(page.pagination.has_more);
-    assert_eq!(page.items[0].id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
 }
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_explorer_assets_page_applies_filters() {
@@ -2066,89 +1506,6 @@ async fn fetch_explorer_assets_page_applies_filters() {
         "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
     );
 }
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_explorer_nfts_page_applies_filters() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let body = norito::json!({
-        "pagination":{"limit":5,"next_cursor":"Y3Vyc29yLTI","has_more":true},
-        "items":[{"id":"art#gallery","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","metadata":{}}]
-    });
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/explorer/nfts")
-            .query_param("cursor", "Y3Vyc29yLTE")
-            .query_param("limit", "5")
-            .query_param(
-                "owned_by",
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            )
-            .query_param("domain", "gallery");
-        then.status(200)
-            .body(norito::json::to_string(&body).expect("serialize"));
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let page = client
-        .fetch_explorer_nfts_page(ExplorerNftsQuery {
-            cursor: Some("Y3Vyc29yLTE".into()),
-            limit: Some(5),
-            owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
-            domain: Some("gallery".into()),
-        })
-        .await
-        .expect("page");
-    mock.assert();
-    assert!(page.pagination.has_more);
-    assert_eq!(page.items[0].id, "art#gallery");
-}
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_explorer_rwas_page_applies_filters() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let body = norito::json!({
-        "pagination":{"limit":5,"next_cursor":null,"has_more":false},
-        "items":[{
-            "id":"warehouse#commodities",
-            "owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            "quantity":"10",
-            "held_quantity":"2",
-            "primary_reference":"vault-cert-1",
-            "status":"active",
-            "is_frozen":false,
-            "metadata":{"origin":"AE"},
-            "parents":[{"rwa":"source#commodities","quantity":"10"}]
-        }]
-    });
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/explorer/rwas")
-            .query_param("cursor", "Y3Vyc29yLTE")
-            .query_param("limit", "5")
-            .query_param(
-                "owned_by",
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            )
-            .query_param("domain", "commodities");
-        then.status(200)
-            .body(norito::json::to_string(&body).expect("serialize"));
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let page = client
-        .fetch_explorer_rwas_page(ExplorerRwasQuery {
-            cursor: Some("Y3Vyc29yLTE".into()),
-            limit: Some(5),
-            owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
-            domain: Some("commodities".into()),
-        })
-        .await
-        .expect("page");
-    mock.assert();
-    assert_eq!(page.items[0].id, "warehouse#commodities");
-    assert_eq!(page.items[0].held_quantity, "2");
-    assert_eq!(page.items[0].parents[0].rwa, "source#commodities");
-}
 #[test]
 fn explorer_cursor_metadata_rejects_inconsistent_continuation() {
     let value = norito::json!({
@@ -2175,35 +1532,17 @@ fn explorer_cursor_rejects_noncanonical_trailing_bits() {
     assert!(error.to_string().contains("canonical base64url"));
 }
 #[test]
-fn explorer_world_pages_reject_unknown_fields_and_oversized_items() {
-    macro_rules! assert_all_world_pages_reject {
-        ($value:expr, $needle:literal) => {{
-            let error = ExplorerAccountsPage::from_json(&$value)
-                .expect_err("accounts page must fail closed");
-            assert!(error.to_string().contains($needle));
-            let error =
-                ExplorerDomainsPage::from_json(&$value).expect_err("domains page must fail closed");
-            assert!(error.to_string().contains($needle));
-            let error = ExplorerAssetDefinitionsPage::from_json(&$value)
-                .expect_err("asset definitions page must fail closed");
-            assert!(error.to_string().contains($needle));
-            let error =
-                ExplorerAssetsPage::from_json(&$value).expect_err("assets page must fail closed");
-            assert!(error.to_string().contains($needle));
-            let error =
-                ExplorerNftsPage::from_json(&$value).expect_err("NFTs page must fail closed");
-            assert!(error.to_string().contains($needle));
-            let error =
-                ExplorerRwasPage::from_json(&$value).expect_err("RWAs page must fail closed");
-            assert!(error.to_string().contains($needle));
-        }};
+fn explorer_assets_page_rejects_unknown_fields_and_oversized_items() {
+    fn assert_rejected(value: &norito::json::Value, needle: &str) {
+        let error = ExplorerAssetsPage::from_json(value).expect_err("assets page must fail closed");
+        assert!(error.to_string().contains(needle));
     }
     let unexpected_page_field = norito::json!({
         "pagination": {"limit": 1, "next_cursor": null, "has_more": false},
         "items": [],
         "page": 1
     });
-    assert_all_world_pages_reject!(unexpected_page_field, "must contain exactly");
+    assert_rejected(&unexpected_page_field, "must contain exactly");
     let unexpected_metadata_field = norito::json!({
         "pagination": {
             "limit": 1,
@@ -2213,39 +1552,42 @@ fn explorer_world_pages_reject_unknown_fields_and_oversized_items() {
         },
         "items": []
     });
-    assert_all_world_pages_reject!(unexpected_metadata_field, "must contain exactly");
+    assert_rejected(&unexpected_metadata_field, "must contain exactly");
     let oversized_items = norito::json!({
         "pagination": {"limit": 1, "next_cursor": null, "has_more": false},
         "items": [{}, {}]
     });
-    assert_all_world_pages_reject!(oversized_items, "must contain at most 1 entries");
+    assert_rejected(&oversized_items, "must contain at most 1 entries");
 }
 #[tokio::test(flavor = "current_thread")]
 async fn explorer_cursor_query_rejects_invalid_bounds_before_http() {
     let client = ToriiClient::new("http://127.0.0.1:9").expect("client");
     let limit_error = client
-        .fetch_explorer_domains_page(ExplorerDomainsQuery {
+        .fetch_explorer_assets_page(ExplorerAssetsQuery {
             cursor: None,
             limit: Some(101),
             owned_by: None,
+            definition: None,
         })
         .await
         .expect_err("oversized limit must fail locally");
     assert!(limit_error.to_string().contains("between 1 and 100"));
     let cursor_error = client
-        .fetch_explorer_domains_page(ExplorerDomainsQuery {
+        .fetch_explorer_assets_page(ExplorerAssetsQuery {
             cursor: Some("padded==".to_owned()),
             limit: Some(25),
             owned_by: None,
+            definition: None,
         })
         .await
         .expect_err("padded cursor must fail locally");
     assert!(cursor_error.to_string().contains("canonical base64url"));
     let trailing_bits_error = client
-        .fetch_explorer_domains_page(ExplorerDomainsQuery {
+        .fetch_explorer_assets_page(ExplorerAssetsQuery {
             cursor: Some("AB".to_owned()),
             limit: Some(25),
             owned_by: None,
+            definition: None,
         })
         .await
         .expect_err("cursor with non-zero unused bits must fail locally");
@@ -2593,134 +1935,6 @@ async fn fetch_smoke_transaction_status_rejects_noncanonical_hash_before_http() 
         .expect_err("short transaction hash must fail locally");
     assert!(error.to_string().contains("64 lowercase hexadecimal"));
     assert_eq!(short_hash.hits(), 0, "invalid hash must not reach Torii");
-}
-#[tokio::test(flavor = "current_thread")]
-async fn list_triggers_parses_results() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let payload = norito::json!({
-        "items": [
-            {
-                "id": "daily-airdrop",
-                "action": { "Mint": { "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", "value": "5" } },
-                "metadata": { "cron": "0 0 * * *" }
-            }
-        ],
-        "total": 7
-    });
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/triggers")
-            .query_param("namespace", "core")
-            .query_param(
-                "authority",
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            )
-            .query_param("limit", "5")
-            .query_param("offset", "10");
-        then.status(200)
-            .body(norito::json::to_string(&payload).expect("serialize payload"));
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let page = client
-        .list_triggers(TriggerListQuery {
-            namespace: Some(" core ".into()),
-            authority: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
-            limit: Some(5),
-            offset: Some(10),
-        })
-        .await
-        .expect("page");
-    mock.assert();
-    assert_eq!(page.total, 7);
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].id, "daily-airdrop");
-    assert_eq!(
-        page.items[0].metadata,
-        norito::json!({ "cron": "0 0 * * *" })
-    );
-}
-#[tokio::test(flavor = "current_thread")]
-async fn get_trigger_supports_missing() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let not_found = server.mock(|when, then| {
-        when.method(GET).path("/v1/triggers/missing");
-        then.status(404);
-    });
-    let body = norito::json!({
-        "id": "mint-hook",
-        "action": { "Register": { "Account": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D" } },
-        "metadata": {}
-    });
-    let found = server.mock(|when, then| {
-        when.method(GET).path("/v1/triggers/mint-hook");
-        then.status(200)
-            .body(norito::json::to_string(&body).expect("serialize body"));
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    assert!(
-        client
-            .get_trigger("missing")
-            .await
-            .expect("request")
-            .is_none()
-    );
-    not_found.assert();
-    let record = client
-        .get_trigger("mint-hook")
-        .await
-        .expect("request")
-        .expect("record");
-    found.assert();
-    assert_eq!(record.id, "mint-hook");
-    assert_eq!(record.action, body.get("action").unwrap().clone());
-}
-#[tokio::test(flavor = "current_thread")]
-async fn register_trigger_posts_json() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let request = norito::json!({
-        "id": "hook",
-        "action": { "Mint": { "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", "value": "42" } },
-        "metadata": { "note": "demo" }
-    });
-    let response = request.clone();
-    let mock = server.mock(|when, then| {
-        when.method(POST)
-            .path("/v1/triggers")
-            .header("content-type", "application/json")
-            .body(norito::json::to_string(&request).expect("serialize request"));
-        then.status(200)
-            .body(norito::json::to_string(&response).expect("serialize payload"));
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let record = client.register_trigger(&request).await.expect("request");
-    mock.assert();
-    assert_eq!(record.id, "hook");
-    assert_eq!(record.action, response.get("action").unwrap().clone());
-}
-#[tokio::test(flavor = "current_thread")]
-async fn delete_trigger_reports_outcome() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let deleted = server.mock(|when, then| {
-        when.method(DELETE).path("/v1/triggers/hook");
-        then.status(204);
-    });
-    let missing = server.mock(|when, then| {
-        when.method(DELETE).path("/v1/triggers/missing");
-        then.status(404);
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    assert!(client.delete_trigger("hook").await.expect("delete"));
-    deleted.assert();
-    assert!(!client.delete_trigger("missing").await.expect("delete"));
-    missing.assert();
 }
 #[test]
 fn account_deleted_summary_mentions_account_id() {

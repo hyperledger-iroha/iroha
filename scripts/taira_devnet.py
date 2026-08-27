@@ -86,6 +86,7 @@ DEFAULT_OPERATION_TIMEOUT_SECONDS = 300
 DEFAULT_BLOCK_CADENCE_MS = 5_000
 MARKER = ".iroha-taira-devnet"
 MARKER_BODY = "managed by scripts/taira_devnet.py\n"
+NETWORK_CLEANUP_QUARANTINE = ".network-cleanup"
 MAX_BUNDLE_TEXT_BYTES = 8 * 1024 * 1024
 MAX_LOG_TAIL_BYTES = 64 * 1024
 MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
@@ -104,7 +105,6 @@ BUILD_ENV_REMOVALS = (
 TAIRA_BUILD_PROFILE = "local-release"
 RUNTIME_SIGNER_DIRECTORY = Path("runtime") / "taira-runtime-signers"
 RUNTIME_SIGNER_FILE_BYTES = 71
-GENERATED_LOCALNET_NEXUS_STORAGE_BYTES = 1_073_741_824
 TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES = 68_719_476_736
 TAIRA_NEXUS_STORAGE_WEIGHTS = (
     ("kura_blocks_bps", 5_500),
@@ -166,8 +166,6 @@ PREPARED_INROU_CHILDREN = (
     ("inrou_guest_pin", "guest-pin", "guest_pin"),
     ("inrou_canary", "service-mutation", "service_mutation"),
 )
-GENERATED_TAIRA_EGRESS_RATE_PER_MINUTE = 60
-GENERATED_TAIRA_EGRESS_MAX_BYTES_PER_MINUTE = 1024 * 1024
 LINUX_KVM_GET_API_VERSION = 0xAE00
 LINUX_KVM_API_VERSION = 12
 INROU_CANARY_SERVICE_VERSION_PREFIX_V1 = "artifact-"
@@ -362,7 +360,6 @@ CLI_SURFACES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("localnet",),
         (
             "--out-dir",
-            "--fresh-random-keys",
             "--sora-profile",
             "--consensus-mode",
             "--peers",
@@ -967,15 +964,6 @@ def runtime_signer_paths(target: Path) -> tuple[Path, ...]:
     )
 
 
-def runtime_signer_launch_paths(target: Path) -> tuple[Path, ...]:
-    """Return the four disposable FD198 launch copies without reading them."""
-
-    return tuple(
-        target / RUNTIME_SIGNER_DIRECTORY / f"peer{index}.fd198"
-        for index in range(PEER_COUNT)
-    )
-
-
 def require_runtime_signer_files(target: Path) -> None:
     """Require four distinct owner-only single-link key files."""
 
@@ -1028,6 +1016,36 @@ def _stable_file_identity(metadata: os.stat_result) -> tuple[int, int, int, int,
         metadata.st_mtime_ns,
         metadata.st_ctime_ns,
     )
+
+
+def _acquire_operation_lock(root: Path) -> int:
+    """Hold the managed marker so concurrent commands cannot race cleanup."""
+
+    marker = root / MARKER
+    try:
+        before = marker.lstat()
+        descriptor = os.open(
+            marker,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as error:
+        fail(f"cannot open the Taira devnet operation lock {marker}: {error}")
+    try:
+        if _stable_file_identity(os.fstat(descriptor)) != _stable_file_identity(before):
+            fail(f"Taira devnet marker changed while opening its operation lock: {marker}")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fail(f"another Taira devnet operation is already active under {root}")
+        after = marker.lstat()
+        if _stable_file_identity(after) != _stable_file_identity(before):
+            fail(f"Taira devnet marker changed while acquiring its operation lock: {marker}")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def read_stable_bytes(
@@ -1406,16 +1424,38 @@ def destroy_network(
     target: Path,
     expected_identity: tuple[int, int, int] | None,
 ) -> bool:
-    """Destroy one previously pinned, stopped disposable network tree."""
+    """Quarantine and destroy one previously pinned, stopped network tree."""
 
+    quarantine = root / NETWORK_CLEANUP_QUARANTINE
+    if quarantine.exists() or quarantine.is_symlink():
+        fail(f"a prior network cleanup quarantine requires recovery: {quarantine}")
     current_identity = require_safe_cleanup_target(root, target)
     if current_identity != expected_identity:
         fail(f"network cleanup target changed before destruction: {target}")
     if current_identity is None:
         return False
-    shutil.rmtree(target)
+    try:
+        os.rename(target, quarantine)
+    except OSError as error:
+        fail(f"cannot quarantine the proven network cleanup target {target}: {error}")
+    fsync_directory(root, label="managed devnet root")
+    quarantined_identity = _direct_root_owned_directory_identity(
+        quarantine,
+        label="network cleanup quarantine",
+        expected_owner=current_identity[2],
+    )
+    if quarantined_identity != current_identity:
+        fail(
+            "network cleanup target changed while it was quarantined; preserved at "
+            f"{quarantine}"
+        )
+    _require_no_cleanup_mount_crossing(quarantine, current_identity[0])
+    shutil.rmtree(quarantine)
+    fsync_directory(root, label="managed devnet root")
+    if quarantine.exists() or quarantine.is_symlink():
+        fail(f"network cleanup quarantine survived destruction: {quarantine}")
     if target.exists() or target.is_symlink():
-        fail(f"network cleanup target survived destruction: {target}")
+        fail(f"a new network cleanup target appeared during destruction: {target}")
     return True
 
 
@@ -1996,7 +2036,6 @@ def generate_network(
             "localnet",
             "--out-dir",
             str(target),
-            "--fresh-random-keys",
             "--sora-profile",
             "nexus",
             "--consensus-mode",
@@ -2812,7 +2851,7 @@ def _require_exact_keys(
 
 
 def _canonical_nonnegative_integer(path: Path, field: str, value: str) -> int:
-    """Decode one canonical decimal integer from the generated overlay."""
+    """Decode one canonical decimal integer from a generated Taira config."""
 
     if re.fullmatch(r"0|[1-9][0-9]*", value) is None:
         fail(f"generated {field} must be one canonical non-negative integer: {path}")
@@ -2827,25 +2866,22 @@ def _expected_peer_sorafs_dir(target: Path, peer_index: int) -> Path:
     )
 
 
-def _storage_sections_for_mode(
+def _taira_storage_sections(
     path: Path,
     text: str,
-    *,
-    canonical: bool,
 ) -> tuple[
     list[str],
-    dict[str, tuple[str, bool, int, int]],
+    list[tuple[str, bool, int, int]],
     dict[str, dict[str, str]],
 ]:
-    """Require only the exact source or overlaid storage table topology."""
+    """Require only the exact canonical Taira storage table topology."""
 
     lines, sections = _generated_config_sections(path, text)
     allowed = {
         _NEXUS_STORAGE_SECTION,
+        _NEXUS_STORAGE_WEIGHTS_SECTION,
         _SORAFS_STORAGE_SECTION,
     }
-    if canonical:
-        allowed.add(_NEXUS_STORAGE_WEIGHTS_SECTION)
     related = [
         section
         for section in sections
@@ -2868,91 +2904,7 @@ def _storage_sections_for_mode(
         name: _storage_section_assignments(path, lines, section)
         for name, section in selected.items()
     }
-    return lines, selected, assignments
-
-
-def _validate_generated_storage_source(
-    config: Path,
-    target: Path,
-    peer_index: int,
-) -> tuple[list[str], dict[str, tuple[str, bool, int, int]]]:
-    """Require the exact current Kagami storage shape before replacing it."""
-
-    text = read_bounded_text(
-        config,
-        limit=MAX_BUNDLE_TEXT_BYTES,
-        label=f"peer{peer_index} config",
-    )
-    lines, sections, assignments = _storage_sections_for_mode(
-        config, text, canonical=False
-    )
-    nexus = assignments[_NEXUS_STORAGE_SECTION]
-    _require_exact_keys(
-        config,
-        _NEXUS_STORAGE_SECTION,
-        nexus,
-        {"local_budget_bytes"},
-    )
-    if (
-        _canonical_nonnegative_integer(
-            config,
-            "nexus.storage.local_budget_bytes",
-            nexus["local_budget_bytes"],
-        )
-        != GENERATED_LOCALNET_NEXUS_STORAGE_BYTES
-    ):
-        fail(f"generated [{_NEXUS_STORAGE_SECTION}] is not the expected localnet shape: {config}")
-
-    sorafs = assignments[_SORAFS_STORAGE_SECTION]
-    _require_exact_keys(
-        config,
-        _SORAFS_STORAGE_SECTION,
-        sorafs,
-        {"data_dir", "enabled"},
-    )
-    expected_dir = _expected_peer_sorafs_dir(target, peer_index)
-    if sorafs["enabled"] != "false" or sorafs["data_dir"] != f'"{expected_dir}"':
-        fail(f"generated [{_SORAFS_STORAGE_SECTION}] is not the expected localnet shape: {config}")
-    return lines, sections
-
-
-def _canonical_storage_text(
-    config: Path,
-    target: Path,
-    peer_index: int,
-) -> str:
-    """Render one fail-closed canonical Taira V1 storage overlay."""
-
-    lines, sections = _validate_generated_storage_source(config, target, peer_index)
-    nexus = sections[_NEXUS_STORAGE_SECTION]
-    sorafs = sections[_SORAFS_STORAGE_SECTION]
-    data_dir = _expected_peer_sorafs_dir(target, peer_index)
-    nexus_text = (
-        f"[{_NEXUS_STORAGE_SECTION}]\n"
-        f"local_budget_bytes = {TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES}\n\n"
-        f"[{_NEXUS_STORAGE_WEIGHTS_SECTION}]\n"
-        + "".join(f"{key} = {value}\n" for key, value in TAIRA_NEXUS_STORAGE_WEIGHTS)
-        + "\n"
-    )
-    sorafs_text = (
-        f"[{_SORAFS_STORAGE_SECTION}]\n"
-        f'data_dir = "{data_dir}"\n'
-        "enabled = false\n"
-        f"max_capacity_bytes = {TAIRA_SORAFS_MAX_CAPACITY_BYTES}\n\n"
-    )
-    replacements = {
-        nexus[2]: (nexus[3], nexus_text),
-        sorafs[2]: (sorafs[3], sorafs_text),
-    }
-    rendered: list[str] = []
-    cursor = 0
-    for start in sorted(replacements):
-        end, replacement = replacements[start]
-        rendered.extend(lines[cursor:start])
-        rendered.append(replacement)
-        cursor = end
-    rendered.extend(lines[cursor:])
-    return "".join(rendered)
+    return lines, sections, assignments
 
 
 def taira_inrou_identity(peer_index: int) -> tuple[str, int, int]:
@@ -2964,60 +2916,23 @@ def taira_inrou_identity(peer_index: int) -> tuple[str, int, int]:
     return f"{TAIRA_INROU_IDENTITY_NAME_PREFIX}{peer_index}", identifier, identifier
 
 
-def _canonical_inrou_text(config: Path, text: str, peer_index: int) -> str:
-    """Render the one-backend, one-VM Taira V1 runtime overlay."""
+def fsync_directory(path: Path, *, label: str) -> None:
+    """Durably publish directory-entry changes or fail closed."""
 
-    lines, sections = _generated_config_sections(config, text)
-    _one_storage_section(config, sections, _SORACLOUD_RUNTIME_SECTION)
-    egress = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_EGRESS_SECTION)
-    retained_inrou = [
-        section[0]
-        for section in sections
-        if section[0] == _SORACLOUD_RUNTIME_INROU_SECTION
-        or section[0].startswith(f"{_SORACLOUD_RUNTIME_INROU_SECTION}.")
-    ]
-    if retained_inrou:
-        fail(
-            "generated config unexpectedly retained an Inrou selector table "
-            f"before the canonical Taira overlay: {config}"
-        )
-    egress_assignments = _storage_section_assignments(config, lines, egress)
-    _require_exact_keys(
-        config,
-        _SORACLOUD_RUNTIME_EGRESS_SECTION,
-        egress_assignments,
-        {"default_allow", "allowed_hosts", "rate_per_minute", "max_bytes_per_minute"},
-    )
-    expected_source = {
-        "default_allow": "false",
-        "allowed_hosts": "[]",
-        "rate_per_minute": str(GENERATED_TAIRA_EGRESS_RATE_PER_MINUTE),
-        "max_bytes_per_minute": str(GENERATED_TAIRA_EGRESS_MAX_BYTES_PER_MINUTE),
-    }
-    if egress_assignments != expected_source:
-        fail(
-            f"generated [{_SORACLOUD_RUNTIME_EGRESS_SECTION}] is not the expected "
-            f"Kagami Taira shape: {config}"
-        )
-    _, uid, gid = taira_inrou_identity(peer_index)
-    replacement = (
-        f"[{_SORACLOUD_RUNTIME_EGRESS_SECTION}]\n"
-        "default_allow = false\n"
-        "allowed_hosts = []\n"
-        f"rate_per_minute = {TAIRA_INROU_EGRESS_RATE_PER_MINUTE}\n"
-        f"max_bytes_per_minute = {TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE}\n\n"
-        f"[{_SORACLOUD_RUNTIME_INROU_SECTION}]\n"
-        "enabled = true\n"
-        f"portable_vm_uid = {uid}\n"
-        f"portable_vm_gid = {gid}\n"
-        f"guest_image_max_bytes = {TAIRA_INROU_GUEST_IMAGE_MAX_BYTES}\n"
-        f"max_cpu_millis = {TAIRA_INROU_MAX_CPU_MILLIS}\n"
-        f"max_memory_bytes = {TAIRA_INROU_MAX_MEMORY_BYTES}\n"
-        f"max_storage_bytes = {TAIRA_INROU_MAX_STORAGE_BYTES}\n"
-        f"start_grace_ms = {TAIRA_INROU_START_GRACE_MS}\n"
-        f"stop_grace_ms = {TAIRA_INROU_STOP_GRACE_MS}\n\n"
-    )
-    return "".join((*lines[: egress[2]], replacement, *lines[egress[3] :]))
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        fail(f"cannot open {label} {path}: {error}")
+    try:
+        os.fsync(descriptor)
+    except OSError as error:
+        fail(f"cannot synchronize {label} {path}: {error}")
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            fail(f"cannot close {label} {path}: {error}")
 
 
 def _atomic_replace_generated_config(path: Path, text: str) -> None:
@@ -3026,7 +2941,7 @@ def _atomic_replace_generated_config(path: Path, text: str) -> None:
     metadata = path.stat()
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
-        prefix=f".{path.name}.storage-overlay-",
+        prefix=f".{path.name}.config-update-",
     )
     temporary = Path(temporary_name)
     try:
@@ -3036,82 +2951,88 @@ def _atomic_replace_generated_config(path: Path, text: str) -> None:
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, path)
+        fsync_directory(path.parent, label="generated config directory")
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def _require_canonical_taira_storage_profiles(target: Path) -> None:
-    """Validate the exact four-peer Taira V1 storage profile and cap math."""
+def _taira_peer_configs(target: Path) -> tuple[Path, ...]:
+    """Return the exact four generated peer config paths."""
 
     expected_files = {f"peer{index}.toml" for index in range(PEER_COUNT)}
     actual_files = {path.name for path in target.glob("peer*.toml")}
     if actual_files != expected_files:
         fail("generated Taira network must contain exactly peer0.toml through peer3.toml")
-    for peer_index in range(PEER_COUNT):
-        config = target / f"peer{peer_index}.toml"
-        text = read_bounded_text(
+    return tuple(target / f"peer{index}.toml" for index in range(PEER_COUNT))
+
+
+def _require_canonical_taira_storage_profile(
+    target: Path,
+    peer_index: int,
+    config: Path,
+    text: str,
+) -> tuple[list[str], list[tuple[str, bool, int, int]]]:
+    """Validate one exact Taira V1 storage profile and its cap math."""
+
+    lines, sections, assignments = _taira_storage_sections(config, text)
+    nexus = assignments[_NEXUS_STORAGE_SECTION]
+    weights = assignments[_NEXUS_STORAGE_WEIGHTS_SECTION]
+    sorafs = assignments[_SORAFS_STORAGE_SECTION]
+    _require_exact_keys(
+        config,
+        _NEXUS_STORAGE_SECTION,
+        nexus,
+        {"local_budget_bytes"},
+    )
+    expected_weight_fields = {key for key, _ in TAIRA_NEXUS_STORAGE_WEIGHTS}
+    _require_exact_keys(
+        config,
+        _NEXUS_STORAGE_WEIGHTS_SECTION,
+        weights,
+        expected_weight_fields,
+    )
+    _require_exact_keys(
+        config,
+        _SORAFS_STORAGE_SECTION,
+        sorafs,
+        {"data_dir", "enabled", "max_capacity_bytes"},
+    )
+    aggregate = _canonical_nonnegative_integer(
+        config,
+        "nexus.storage.local_budget_bytes",
+        nexus["local_budget_bytes"],
+    )
+    parsed_weights = {
+        key: _canonical_nonnegative_integer(
             config,
-            limit=MAX_BUNDLE_TEXT_BYTES,
-            label=f"peer{peer_index} config",
+            f"nexus.storage.disk_budget_weights.{key}",
+            weights[key],
         )
-        _, _, assignments = _storage_sections_for_mode(config, text, canonical=True)
-        nexus = assignments[_NEXUS_STORAGE_SECTION]
-        weights = assignments[_NEXUS_STORAGE_WEIGHTS_SECTION]
-        sorafs = assignments[_SORAFS_STORAGE_SECTION]
-        _require_exact_keys(
-            config,
-            _NEXUS_STORAGE_SECTION,
-            nexus,
-            {"local_budget_bytes"},
-        )
-        expected_weight_fields = {key for key, _ in TAIRA_NEXUS_STORAGE_WEIGHTS}
-        _require_exact_keys(
-            config,
-            _NEXUS_STORAGE_WEIGHTS_SECTION,
-            weights,
-            expected_weight_fields,
-        )
-        _require_exact_keys(
-            config,
-            _SORAFS_STORAGE_SECTION,
-            sorafs,
-            {"data_dir", "enabled", "max_capacity_bytes"},
-        )
-        aggregate = _canonical_nonnegative_integer(
-            config,
-            "nexus.storage.local_budget_bytes",
-            nexus["local_budget_bytes"],
-        )
-        parsed_weights = {
-            key: _canonical_nonnegative_integer(
-                config,
-                f"nexus.storage.disk_budget_weights.{key}",
-                weights[key],
-            )
-            for key in expected_weight_fields
-        }
-        capacity = _canonical_nonnegative_integer(
-            config,
-            "sorafs.storage.max_capacity_bytes",
-            sorafs["max_capacity_bytes"],
-        )
-        expected_dir = _expected_peer_sorafs_dir(target, peer_index)
-        if aggregate != TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES:
-            fail(f"peer{peer_index} has the wrong Taira storage aggregate: {config}")
-        parsed_weight_tuple = tuple(
-            (key, parsed_weights[key]) for key, _ in TAIRA_NEXUS_STORAGE_WEIGHTS
-        )
-        if parsed_weight_tuple != TAIRA_NEXUS_STORAGE_WEIGHTS:
-            fail(f"peer{peer_index} has the wrong Taira storage weights: {config}")
-        if sum(parsed_weights.values()) != STORAGE_WEIGHT_BASIS_POINTS:
-            fail(f"peer{peer_index} Taira storage weights do not sum to 10000 bps: {config}")
-        computed_capacity = (
-            aggregate * parsed_weights["sorafs_bps"] // STORAGE_WEIGHT_BASIS_POINTS
-        )
-        if computed_capacity != TAIRA_SORAFS_MAX_CAPACITY_BYTES or capacity != computed_capacity:
-            fail(f"peer{peer_index} has the wrong computed SoraFS capacity: {config}")
-        if sorafs["enabled"] != "false" or sorafs["data_dir"] != f'"{expected_dir}"':
-            fail(f"peer{peer_index} does not use its disabled disjoint SoraFS root: {config}")
+        for key in expected_weight_fields
+    }
+    capacity = _canonical_nonnegative_integer(
+        config,
+        "sorafs.storage.max_capacity_bytes",
+        sorafs["max_capacity_bytes"],
+    )
+    expected_dir = _expected_peer_sorafs_dir(target, peer_index)
+    if aggregate != TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES:
+        fail(f"peer{peer_index} has the wrong Taira storage aggregate: {config}")
+    parsed_weight_tuple = tuple(
+        (key, parsed_weights[key]) for key, _ in TAIRA_NEXUS_STORAGE_WEIGHTS
+    )
+    if parsed_weight_tuple != TAIRA_NEXUS_STORAGE_WEIGHTS:
+        fail(f"peer{peer_index} has the wrong Taira storage weights: {config}")
+    if sum(parsed_weights.values()) != STORAGE_WEIGHT_BASIS_POINTS:
+        fail(f"peer{peer_index} Taira storage weights do not sum to 10000 bps: {config}")
+    computed_capacity = (
+        aggregate * parsed_weights["sorafs_bps"] // STORAGE_WEIGHT_BASIS_POINTS
+    )
+    if computed_capacity != TAIRA_SORAFS_MAX_CAPACITY_BYTES or capacity != computed_capacity:
+        fail(f"peer{peer_index} has the wrong computed SoraFS capacity: {config}")
+    if sorafs["enabled"] != "false" or sorafs["data_dir"] != f'"{expected_dir}"':
+        fail(f"peer{peer_index} does not use its disabled disjoint SoraFS root: {config}")
+    return lines, sections
 
 
 def _validated_trusted_inrou_guest_artifact(
@@ -3134,26 +3055,84 @@ def _validated_trusted_inrou_guest_artifact(
     return artifact
 
 
-def _require_canonical_taira_profiles(
-    target: Path,
-    trusted_guest: TrustedInrouGuestArtifact | None,
+def _require_canonical_taira_egress(
+    config: Path,
+    lines: list[str],
+    sections: list[tuple[str, bool, int, int]],
 ) -> None:
-    """Validate all four profiles, optionally before the trusted stage exists."""
+    """Validate the one closed Taira runtime egress policy."""
 
-    _require_canonical_taira_storage_profiles(target)
-    if trusted_guest is not None:
-        trusted_guest = _validated_trusted_inrou_guest_artifact(trusted_guest)
-    identities: set[tuple[int, int]] = set()
-    for peer_index in range(PEER_COUNT):
-        config = target / f"peer{peer_index}.toml"
+    _one_storage_section(config, sections, _SORACLOUD_RUNTIME_SECTION)
+    egress = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_EGRESS_SECTION)
+    assignments = _storage_section_assignments(config, lines, egress)
+    _require_exact_keys(
+        config,
+        _SORACLOUD_RUNTIME_EGRESS_SECTION,
+        assignments,
+        {"default_allow", "allowed_hosts", "rate_per_minute", "max_bytes_per_minute"},
+    )
+    expected = {
+        "default_allow": "false",
+        "allowed_hosts": "[]",
+        "rate_per_minute": str(TAIRA_INROU_EGRESS_RATE_PER_MINUTE),
+        "max_bytes_per_minute": str(TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE),
+    }
+    if assignments != expected:
+        fail(f"generated Taira config has the wrong egress budgets: {config}")
+
+
+def _validated_generated_taira_profiles(target: Path) -> tuple[tuple[Path, str], ...]:
+    """Read and validate Kagami's complete Taira base profiles once."""
+
+    validated: list[tuple[Path, str]] = []
+    for peer_index, config in enumerate(_taira_peer_configs(target)):
         text = read_bounded_text(
             config,
             limit=MAX_BUNDLE_TEXT_BYTES,
             label=f"peer{peer_index} config",
         )
-        lines, sections = _generated_config_sections(config, text)
-        _one_storage_section(config, sections, _SORACLOUD_RUNTIME_SECTION)
-        egress = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_EGRESS_SECTION)
+        lines, sections = _require_canonical_taira_storage_profile(
+            target, peer_index, config, text
+        )
+        _require_canonical_taira_egress(config, lines, sections)
+        retained = [
+            section[0]
+            for section in sections
+            if section[0] == _SORACLOUD_RUNTIME_INROU_SECTION
+            or section[0].startswith(f"{_SORACLOUD_RUNTIME_INROU_SECTION}.")
+        ]
+        if retained:
+            fail(
+                "generated Taira base config unexpectedly contains Inrou tables "
+                f"{', '.join(f'[{name}]' for name in retained)}: {config}"
+            )
+        validated.append((config, text))
+    return tuple(validated)
+
+
+def require_generated_taira_profiles(target: Path) -> None:
+    """Validate Kagami's complete Taira base profile before guest staging."""
+
+    _validated_generated_taira_profiles(target)
+
+
+def require_canonical_taira_profiles(
+    target: Path,
+    trusted_guest: TrustedInrouGuestArtifact,
+) -> None:
+    """Validate exact four-peer profiles bound to one trusted guest artifact."""
+
+    trusted_guest = _validated_trusted_inrou_guest_artifact(trusted_guest)
+    for peer_index, config in enumerate(_taira_peer_configs(target)):
+        text = read_bounded_text(
+            config,
+            limit=MAX_BUNDLE_TEXT_BYTES,
+            label=f"peer{peer_index} config",
+        )
+        lines, sections = _require_canonical_taira_storage_profile(
+            target, peer_index, config, text
+        )
+        _require_canonical_taira_egress(config, lines, sections)
         inrou = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_INROU_SECTION)
         related = [
             section[0]
@@ -3165,26 +3144,13 @@ def _require_canonical_taira_profiles(
                 "generated config contains non-V1 Inrou selector tables "
                 f"{', '.join(f'[{name}]' for name in related)}: {config}"
             )
-        egress_assignments = _storage_section_assignments(config, lines, egress)
-        _require_exact_keys(
-            config,
-            _SORACLOUD_RUNTIME_EGRESS_SECTION,
-            egress_assignments,
-            {"default_allow", "allowed_hosts", "rate_per_minute", "max_bytes_per_minute"},
-        )
-        expected_egress = {
-            "default_allow": "false",
-            "allowed_hosts": "[]",
-            "rate_per_minute": str(TAIRA_INROU_EGRESS_RATE_PER_MINUTE),
-            "max_bytes_per_minute": str(TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE),
-        }
-        if egress_assignments != expected_egress:
-            fail(f"peer{peer_index} has the wrong Taira egress budgets: {config}")
         inrou_assignments = _storage_section_assignments(config, lines, inrou)
         expected_inrou_keys = {
             "enabled",
             "portable_vm_uid",
             "portable_vm_gid",
+            "trusted_guest_manifest_digest_hex",
+            "trusted_guest_content_cid",
             "guest_image_max_bytes",
             "max_cpu_millis",
             "max_memory_bytes",
@@ -3192,13 +3158,6 @@ def _require_canonical_taira_profiles(
             "start_grace_ms",
             "stop_grace_ms",
         }
-        if trusted_guest is not None:
-            expected_inrou_keys.update(
-                {
-                    "trusted_guest_manifest_digest_hex",
-                    "trusted_guest_content_cid",
-                }
-            )
         _require_exact_keys(
             config,
             _SORACLOUD_RUNTIME_INROU_SECTION,
@@ -3210,6 +3169,8 @@ def _require_canonical_taira_profiles(
             "enabled": "true",
             "portable_vm_uid": str(expected_uid),
             "portable_vm_gid": str(expected_gid),
+            "trusted_guest_manifest_digest_hex": f'"{trusted_guest.manifest_digest_hex}"',
+            "trusted_guest_content_cid": f'"{trusted_guest.content_cid}"',
             "guest_image_max_bytes": str(TAIRA_INROU_GUEST_IMAGE_MAX_BYTES),
             "max_cpu_millis": str(TAIRA_INROU_MAX_CPU_MILLIS),
             "max_memory_bytes": str(TAIRA_INROU_MAX_MEMORY_BYTES),
@@ -3217,85 +3178,33 @@ def _require_canonical_taira_profiles(
             "start_grace_ms": str(TAIRA_INROU_START_GRACE_MS),
             "stop_grace_ms": str(TAIRA_INROU_STOP_GRACE_MS),
         }
-        if trusted_guest is not None:
-            expected_inrou.update(
-                {
-                    "trusted_guest_manifest_digest_hex": (
-                        f'"{trusted_guest.manifest_digest_hex}"'
-                    ),
-                    "trusted_guest_content_cid": f'"{trusted_guest.content_cid}"',
-                }
-            )
         if inrou_assignments != expected_inrou:
             fail(f"peer{peer_index} has the wrong PortableVM V1 profile: {config}")
-        identity = (expected_uid, expected_gid)
-        if identity in identities:
-            fail("Taira validators must use distinct PortableVM identities")
-        identities.add(identity)
-    if TAIRA_INROU_VM_CAPACITY != 1:
-        fail("Taira must retain the intrinsic one-VM Inrou V1 profile")
-
-
-def require_canonical_taira_profiles(
-    target: Path,
-    trusted_guest: TrustedInrouGuestArtifact,
-) -> None:
-    """Validate exact four-peer profiles bound to one trusted guest artifact."""
-
-    _require_canonical_taira_profiles(
-        target,
-        _validated_trusted_inrou_guest_artifact(trusted_guest),
-    )
-
-
-def apply_canonical_taira_profiles(target: Path) -> None:
-    """Atomically overlay all four generated configs, then validate the result."""
-
-    expected_files = {f"peer{index}.toml" for index in range(PEER_COUNT)}
-    actual_files = {path.name for path in target.glob("peer*.toml")}
-    if actual_files != expected_files:
-        fail("generated Taira network must contain exactly peer0.toml through peer3.toml")
-    replacements = [
-        (
-            target / f"peer{peer_index}.toml",
-            _canonical_inrou_text(
-                target / f"peer{peer_index}.toml",
-                _canonical_storage_text(
-                    target / f"peer{peer_index}.toml",
-                    target,
-                    peer_index,
-                ),
-                peer_index,
-            ),
-        )
-        for peer_index in range(PEER_COUNT)
-    ]
-    for config, text in replacements:
-        _atomic_replace_generated_config(config, text)
-    _require_canonical_taira_profiles(target, None)
 
 
 def _trusted_inrou_text(
-    config: Path,
     text: str,
+    peer_index: int,
     trusted_guest: TrustedInrouGuestArtifact,
 ) -> str:
-    """Insert one exact staged guest identity into a canonical base profile."""
+    """Append one complete trusted Inrou profile to a canonical base config."""
 
-    trusted_guest = _validated_trusted_inrou_guest_artifact(trusted_guest)
-    lines, sections = _generated_config_sections(config, text)
-    inrou = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_INROU_SECTION)
-    assignments = _storage_section_assignments(config, lines, inrou)
-    if any(key.startswith("trusted_guest_") for key in assignments):
-        fail(f"refusing to replace an existing trusted Inrou guest identity: {config}")
-    insertion = inrou[3]
-    while insertion > inrou[2] + 1 and not lines[insertion - 1].strip():
-        insertion -= 1
-    trusted_text = (
+    _, uid, gid = taira_inrou_identity(peer_index)
+    inrou_text = (
+        f"\n\n[{_SORACLOUD_RUNTIME_INROU_SECTION}]\n"
+        "enabled = true\n"
+        f"portable_vm_uid = {uid}\n"
+        f"portable_vm_gid = {gid}\n"
         f'trusted_guest_manifest_digest_hex = "{trusted_guest.manifest_digest_hex}"\n'
         f'trusted_guest_content_cid = "{trusted_guest.content_cid}"\n'
+        f"guest_image_max_bytes = {TAIRA_INROU_GUEST_IMAGE_MAX_BYTES}\n"
+        f"max_cpu_millis = {TAIRA_INROU_MAX_CPU_MILLIS}\n"
+        f"max_memory_bytes = {TAIRA_INROU_MAX_MEMORY_BYTES}\n"
+        f"max_storage_bytes = {TAIRA_INROU_MAX_STORAGE_BYTES}\n"
+        f"start_grace_ms = {TAIRA_INROU_START_GRACE_MS}\n"
+        f"stop_grace_ms = {TAIRA_INROU_STOP_GRACE_MS}\n"
     )
-    return "".join((*lines[:insertion], trusted_text, *lines[insertion:]))
+    return text.rstrip("\n") + inrou_text
 
 
 def inject_trusted_inrou_guest_artifact(
@@ -3305,46 +3214,17 @@ def inject_trusted_inrou_guest_artifact(
     """Atomically bind every peer config to the exact staged guest artifact."""
 
     trusted_guest = require_inrou_stage_guest_artifact(stage_dir)
-    _require_canonical_taira_profiles(target, None)
     replacements = []
-    for peer_index in range(PEER_COUNT):
-        config = target / f"peer{peer_index}.toml"
-        text = read_bounded_text(
-            config,
-            limit=MAX_BUNDLE_TEXT_BYTES,
-            label=f"peer{peer_index} config",
+    for peer_index, (config, text) in enumerate(
+        _validated_generated_taira_profiles(target)
+    ):
+        replacements.append(
+            (config, _trusted_inrou_text(text, peer_index, trusted_guest))
         )
-        replacements.append((config, _trusted_inrou_text(config, text, trusted_guest)))
     for config, text in replacements:
         _atomic_replace_generated_config(config, text)
     require_canonical_taira_profiles(target, trusted_guest)
     return trusted_guest
-
-
-def peer_sorafs_preseed_dir(
-    target: Path,
-    peer_index: int,
-    trusted_guest: TrustedInrouGuestArtifact,
-) -> Path:
-    """Resolve one validator's exact disabled-provider preseed store."""
-
-    if not 0 <= peer_index < PEER_COUNT:
-        fail(f"Taira SoraFS peer index is outside the four-validator cohort: {peer_index}")
-    require_canonical_taira_profiles(target, trusted_guest)
-    config = target / f"peer{peer_index}.toml"
-    if section_assignment(config, "sorafs.storage", "enabled") != "false":
-        fail(f"peer{peer_index} must keep provider SoraFS disabled for preseed mode")
-    configured = Path(section_assignment(config, "sorafs.storage", "data_dir"))
-    configured = (
-        configured if configured.is_absolute() else target / configured
-    ).resolve(strict=False)
-    expected = _expected_peer_sorafs_dir(target, peer_index)
-    if configured != expected:
-        fail(
-            f"peer{peer_index} SoraFS preseed root is not its disjoint generated root: "
-            f"{configured}"
-        )
-    return configured
 
 
 def _require_exact_directory_entries(
@@ -3717,8 +3597,9 @@ def preseed_inrou_stage(
 
     if require_inrou_stage_guest_artifact(stage_dir) != trusted_guest:
         fail("Taira Inrou stage guest identity changed before SoraFS preseed")
+    require_canonical_taira_profiles(target, trusted_guest)
     data_dirs = [
-        peer_sorafs_preseed_dir(target, index, trusted_guest)
+        _expected_peer_sorafs_dir(target, index)
         for index in range(PEER_COUNT)
     ]
     if len(set(data_dirs)) != PEER_COUNT:
@@ -4222,14 +4103,7 @@ def write_inrou_guest_qualification(
                 os.fsync(output.fileno())
             os.link(temporary, path, follow_symlinks=False)
             temporary.unlink()
-            directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(
-                os, "O_DIRECTORY", 0
-            )
-            directory_descriptor = os.open(target, directory_flags)
-            try:
-                os.fsync(directory_descriptor)
-            finally:
-                os.close(directory_descriptor)
+            fsync_directory(target, label="Inrou guest qualification directory")
         except OSError as error:
             fail(f"cannot publish Inrou guest qualification record: {error}")
     finally:
@@ -5373,16 +5247,10 @@ def _run_prepare_envelope(
         )
         try:
             os.fsync(output_fd)
-            directory_flags = (
-                os.O_RDONLY
-                | getattr(os, "O_CLOEXEC", 0)
-                | getattr(os, "O_DIRECTORY", 0)
+            fsync_directory(
+                envelope_path.parent,
+                label="prepared canary envelope directory",
             )
-            directory_descriptor = os.open(envelope_path.parent, directory_flags)
-            try:
-                os.fsync(directory_descriptor)
-            finally:
-                os.close(directory_descriptor)
         except OSError as error:
             fail(f"cannot durably retain prepared canary envelope: {error}")
     finally:
@@ -6231,7 +6099,7 @@ def up(
             args.block_cadence_ms,
             run,
         )
-        apply_canonical_taira_profiles(target)
+        require_generated_taira_profiles(target)
         require_bundle_identity(target, roots)
         print("Building and pre-seeding the exact Taira Inrou stage...", flush=True)
         inrou_stage = prepare_inrou_stage(
@@ -6629,11 +6497,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the selected disposable devnet operation."""
 
     args = parser().parse_args(argv)
+    lock_descriptor: int | None = None
     try:
+        root = managed_root(args.dir, create=args.command == "up")
+        args.dir = root
+        lock_descriptor = _acquire_operation_lock(root)
         report = args.handler(args)
     except DevnetError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
+    finally:
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 

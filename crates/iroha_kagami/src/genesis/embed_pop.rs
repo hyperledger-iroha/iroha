@@ -80,7 +80,10 @@ impl<T: std::io::Write> RunArgs<T> for Args {
                 used_pops.insert(pk);
                 let mut map = norito::json::native::Map::new();
                 map.insert("peer".into(), peer_value);
-                map.insert("pop_hex".into(), norito::json::Value::from(encode_hex(pop)));
+                map.insert(
+                    "pop_hex".into(),
+                    norito::json::Value::from(hex::encode(pop)),
+                );
                 out_entries.push(norito::json::Value::Object(map));
             }
             tx_obj.insert("topology".into(), norito::json::Value::Array(out_entries));
@@ -151,15 +154,6 @@ fn ensure_consensus_mode(manifest: &norito::json::Value) -> color_eyre::Result<(
     let _: SumeragiConsensusMode =
         norito::json::value::from_value(raw.clone()).wrap_err("decode `consensus_mode`")?;
     Ok(())
-}
-fn encode_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
 }
 #[cfg(test)]
 mod tests {

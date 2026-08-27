@@ -675,10 +675,7 @@ WAVE_THREE_AGGREGATES = (
         package="crates/sorafs_orchestrator",
         target="orchestrator_parity",
         root="orchestrator_parity.rs",
-        modules=(
-            ("multi_peer_fetch", "multi_peer_fetch.rs", None),
-            ("taikai_cache", "taikai_cache.rs", None),
-        ),
+        modules=(("multi_peer_fetch", "multi_peer_fetch.rs", None),),
     ),
 )
 
@@ -696,7 +693,6 @@ WAVE_THREE_TOP_LEVEL_RS = {
         "multi_peer_fetch.rs",
         "orchestrator_parity.rs",
         "sorafs_cli.rs",
-        "taikai_cache.rs",
     ),
 }
 
@@ -719,18 +715,17 @@ WAVE_THREE_SOURCE_SHA256 = {
     "crates/sorafs_chunker/tests/one_gib.rs": "d9457984ecff184b50f38cd4b791a84bb3bf518a8696d34fba2cb68dcf60d547",
     "crates/sorafs_chunker/tests/vectors.rs": "cec047ab1a41958fbc750ef390292a56bda9a9e271685c4525490aadce43c8f6",
     "crates/sorafs_orchestrator/tests/multi_peer_fetch.rs": "4ba24970d87483f3f0c5947080feb6abf14627d5f550a8098e08698adb5a4e30",
-    "crates/sorafs_orchestrator/tests/orchestrator_parity.rs": "1a21ad0365822933346695375b32a860141f3f99e3043c3a726badaa4331c3b8",
-    "crates/sorafs_orchestrator/tests/taikai_cache.rs": "46ec18a662250118359838f52847b071f39fac9189cb756ff5c641912ffa5f5d",
+    "crates/sorafs_orchestrator/tests/orchestrator_parity.rs": "487b914ff97de086633d1652af71ec0d2be2400aaaf8cbfd61eacfa1df8283c4",
 }
 
 WAVE_THREE_TARGET_INVENTORY_SHA256 = (
     "431c72f60cf1d12c89002347d876ddbe72e3fb236f369da7eee9374c5664277d"
 )
 WAVE_THREE_MODULE_INVENTORY_SHA256 = (
-    "d036081bdc704d58b0ac69272555570adb2d86437c3d3185333cd4e3c40c7ae0"
+    "1e977ed36600fa9bcdb34d789b5a391d8f812077478c190df367773bd16963a4"
 )
 WAVE_THREE_TEST_INVENTORY_SHA256 = (
-    "3bd3ea43b20a472f3e5656b3ae6096e8fe7a348136c6559b21549752a34f257e"
+    "3f54d6f255e599928461fe0ababee28e2d5544a6a5f676b1619e9779538635b1"
 )
 WAVE_THREE_DOC_PATH = "specs/sorafs/chunker_profile_authoring.md"
 WAVE_THREE_OLD_DOC_COMMAND = (
@@ -877,7 +872,7 @@ def validate_wave_three(
             )
 
     module_digest = hashlib.sha256("".join(sorted(module_rows)).encode()).hexdigest()
-    if len(module_rows) != 6 or module_digest != WAVE_THREE_MODULE_INVENTORY_SHA256:
+    if len(module_rows) != 5 or module_digest != WAVE_THREE_MODULE_INVENTORY_SHA256:
         raise AssertionError("wave-three module count or identity drifted")
 
     test_rows: list[str] = []
@@ -890,7 +885,7 @@ def validate_wave_three(
         for attributes, name in _wave_three_test_items(source):
             test_rows.append(f"{path}\0{attributes}\0{name}\n")
     test_digest = hashlib.sha256("".join(test_rows).encode()).hexdigest()
-    if len(test_rows) != 36 or test_digest != WAVE_THREE_TEST_INVENTORY_SHA256:
+    if len(test_rows) != 34 or test_digest != WAVE_THREE_TEST_INVENTORY_SHA256:
         raise AssertionError("wave-three test ID, attribute, or order drifted")
 
     docs = sources[WAVE_THREE_DOC_PATH]
@@ -935,12 +930,6 @@ class WaveThreeIntegrationTargetConsolidationTest(unittest.TestCase):
                 "crates/norito_derive/tests/strict_json.rs",
                 '#[cfg(feature = "trybuild-tests")]',
                 '#[cfg(feature = "other")]',
-            ),
-            _replace_once(
-                sources,
-                "crates/sorafs_orchestrator/tests/taikai_cache.rs",
-                "fn cache_admission_envelope_roundtrip_and_verify()",
-                "fn cache_admission_envelope_roundtrip_and_verify_mutated()",
             ),
             _replace_once(
                 sources,

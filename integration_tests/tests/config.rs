@@ -34,7 +34,6 @@ fn config_scenarios() -> eyre::Result<()> {
         .with_config_layer(|c| {
             c.write(["network", "block_gossip_size"], 100)
                 .write(["queue", "capacity"], 100_000)
-                .write(["network", "soranet_handshake", "pow", "required"], true)
                 .write(["network", "soranet_handshake", "pow", "difficulty"], 6_i64)
                 .write(
                     [
@@ -52,10 +51,6 @@ fn config_scenarios() -> eyre::Result<()> {
                 .write(
                     ["network", "soranet_handshake", "pow", "ticket_ttl_secs"],
                     240_i64,
-                )
-                .write(
-                    ["network", "soranet_handshake", "pow", "puzzle", "enabled"],
-                    true,
                 )
                 .write(
                     [
@@ -142,7 +137,6 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
             sig_id: Some(3),
             resume_hash_hex: Some(ResumeHashDirective::Set(resume_hex.clone())),
             pow: Some(SoranetHandshakePowUpdate {
-                required: Some(true),
                 difficulty: Some(5),
                 max_future_skew_secs: Some(900),
                 min_ticket_ttl_secs: Some(120),
@@ -150,7 +144,6 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
                 outbound_mint_capacity: None,
                 inbound_verify_capacity: None,
                 puzzle: Some(SoranetHandshakePuzzleUpdate {
-                    enabled: Some(true),
                     memory_kib: Some(UPDATED_POW_MEMORY_KIB),
                     time_cost: Some(UPDATED_POW_TIME_COST),
                     lanes: Some(UPDATED_POW_LANES),
@@ -164,7 +157,7 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
     let mut config = client.get_config()?;
     for _ in 0..CONFIG_APPLY_RETRY_ATTEMPTS {
         let handshake = &config.network.soranet_handshake;
-        if handshake.pow.required && handshake.pow.difficulty == 5 {
+        if handshake.pow.difficulty == 5 {
             break;
         }
         client.set_config(&handshake_update)?;
@@ -177,9 +170,8 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
         handshake.resume_hash_hex.as_deref(),
         Some(resume_hex.as_str())
     );
-    assert!(handshake.pow.required);
     assert_eq!(handshake.pow.difficulty, 5);
-    let puzzle = handshake.pow.puzzle.expect("puzzle summary present");
+    let puzzle = handshake.pow.puzzle;
     assert_eq!(puzzle.memory_kib, UPDATED_POW_MEMORY_KIB);
     assert_eq!(puzzle.time_cost, UPDATED_POW_TIME_COST);
     assert_eq!(puzzle.lanes, UPDATED_POW_LANES);
@@ -192,12 +184,11 @@ fn soranet_pow_puzzle_config_roundtrips_scenario(
 ) -> eyre::Result<()> {
     let config = client.get_config()?;
     let handshake = &config.network.soranet_handshake;
-    assert!(handshake.pow.required, "puzzle gate must remain enabled");
     assert_eq!(handshake.pow.difficulty, 6);
     assert_eq!(handshake.pow.max_future_skew_secs, 900);
     assert_eq!(handshake.pow.min_ticket_ttl_secs, 120);
     assert_eq!(handshake.pow.ticket_ttl_secs, 240);
-    let puzzle = handshake.pow.puzzle.expect("puzzle summary present");
+    let puzzle = handshake.pow.puzzle;
     assert_eq!(puzzle.memory_kib, INITIAL_POW_MEMORY_KIB);
     assert_eq!(puzzle.time_cost, INITIAL_POW_TIME_COST);
     assert_eq!(puzzle.lanes, INITIAL_POW_LANES);
@@ -221,9 +212,7 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
     let client = peer_to_update.client();
     let baseline = client.get_config()?;
     let baseline_pow = baseline.network.soranet_handshake.pow;
-    let baseline_puzzle = baseline_pow
-        .puzzle
-        .expect("puzzle summary present at baseline");
+    let baseline_puzzle = baseline_pow.puzzle;
     let bump_u8 = |current: u8, desired: u8| {
         if current == desired {
             desired.saturating_add(1)
@@ -254,16 +243,13 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
     let target_puzzle_time = bump_u32(baseline_puzzle.time_cost, TEST_POW_TIME_COST);
     let target_puzzle_lanes = bump_u32(baseline_puzzle.lanes, TEST_POW_LANES).min(16);
     let pow_matches_target = |pow: &SoranetHandshakePowSummary| {
-        pow.required
-            && pow.difficulty == target_difficulty
+        pow.difficulty == target_difficulty
             && pow.max_future_skew_secs == target_max_future_skew
             && pow.min_ticket_ttl_secs == target_min_ttl
             && pow.ticket_ttl_secs == target_ticket_ttl
-            && pow.puzzle.as_ref().is_some_and(|puzzle| {
-                puzzle.memory_kib == target_puzzle_memory
-                    && puzzle.time_cost == target_puzzle_time
-                    && puzzle.lanes == target_puzzle_lanes
-            })
+            && pow.puzzle.memory_kib == target_puzzle_memory
+            && pow.puzzle.time_cost == target_puzzle_time
+            && pow.puzzle.lanes == target_puzzle_lanes
     };
     for peer in other_peers {
         let remote_pow = peer.client().get_config()?.network.soranet_handshake.pow;
@@ -288,7 +274,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
             sig_id: None,
             resume_hash_hex: None,
             pow: Some(SoranetHandshakePowUpdate {
-                required: Some(true),
                 difficulty: Some(target_difficulty),
                 max_future_skew_secs: Some(target_max_future_skew),
                 min_ticket_ttl_secs: Some(target_min_ttl),
@@ -296,7 +281,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
                 outbound_mint_capacity: None,
                 inbound_verify_capacity: None,
                 puzzle: Some(SoranetHandshakePuzzleUpdate {
-                    enabled: Some(true),
                     memory_kib: Some(target_puzzle_memory),
                     time_cost: Some(target_puzzle_time),
                     lanes: Some(target_puzzle_lanes),
@@ -337,27 +321,22 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
     }
     if !propagated {
         println!(
-            "Target PoW: required={target_difficulty}, diff={target_difficulty}, max_skew={target_max_future_skew}, min_ttl={target_min_ttl}, ticket_ttl={target_ticket_ttl}, puzzle={{memory_kib={target_puzzle_memory}, time_cost={target_puzzle_time}, lanes={target_puzzle_lanes}}}"
+            "Target PoW: diff={target_difficulty}, max_skew={target_max_future_skew}, min_ttl={target_min_ttl}, ticket_ttl={target_ticket_ttl}, puzzle={{memory_kib={target_puzzle_memory}, time_cost={target_puzzle_time}, lanes={target_puzzle_lanes}}}"
         );
         for (i, peer) in other_peers.iter().enumerate() {
             match peer.client().get_config() {
                 Ok(config) => {
                     let pow = &config.network.soranet_handshake.pow;
-                    let puzzle = pow.puzzle.as_ref().map(|p| {
-                        format!(
-                            "memory_kib={}, time_cost={}, lanes={}",
-                            p.memory_kib, p.time_cost, p.lanes
-                        )
-                    });
                     println!(
-                        "Peer {i} ({}) pow: required={}, diff={}, max_skew={}, min_ttl={}, ticket_ttl={}, puzzle={:?}",
+                        "Peer {i} ({}) pow: diff={}, max_skew={}, min_ttl={}, ticket_ttl={}, puzzle={{memory_kib={}, time_cost={}, lanes={}}}",
                         peer.id(),
-                        pow.required,
                         pow.difficulty,
                         pow.max_future_skew_secs,
                         pow.min_ticket_ttl_secs,
                         pow.ticket_ttl_secs,
-                        puzzle
+                        pow.puzzle.memory_kib,
+                        pow.puzzle.time_cost,
+                        pow.puzzle.lanes,
                     );
                 }
                 Err(err) => {

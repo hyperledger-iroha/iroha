@@ -10,7 +10,6 @@ use crate::{
 };
 use hex::FromHex;
 use iroha_crypto::KeyPair;
-use std::time::Duration;
 use tempfile::{NamedTempFile, TempDir};
 macro_rules! config_fixture {
     ($name:literal) => {
@@ -1571,26 +1570,26 @@ fn puzzle_config_rejects_invalid_values() {
     }
 }
 #[test]
-fn pow_config_parameters_reject_inverted_ticket_timing_without_panic() {
+fn puzzle_parameters_reject_inverted_ticket_timing_without_panic() {
     let pow = PowConfig {
         max_future_skew_secs: 10,
         min_ticket_ttl_secs: 30,
         ..PowConfig::default()
     };
-    match pow.parameters() {
+    match pow.puzzle_parameters() {
         Err(ConfigError::Puzzle(message)) => assert!(
-            message.contains("invalid pow ticket timing parameters"),
-            "unexpected pow timing error: {message}"
+            message.contains("invalid pow.puzzle timing parameters"),
+            "unexpected puzzle timing error: {message}"
         ),
-        other => panic!("expected pow timing error, got {other:?}"),
+        other => panic!("expected puzzle timing error, got {other:?}"),
     }
     let mut pow = pow;
     match pow.apply_defaults() {
         Err(ConfigError::Puzzle(message)) => assert!(
-            message.contains("invalid pow ticket timing parameters"),
-            "unexpected pow defaults error: {message}"
+            message.contains("invalid pow.puzzle timing parameters"),
+            "unexpected puzzle defaults error: {message}"
         ),
-        other => panic!("expected pow defaults error, got {other:?}"),
+        other => panic!("expected puzzle defaults error, got {other:?}"),
     }
 }
 #[test]
@@ -1607,8 +1606,7 @@ fn puzzle_config_builds_parameters() {
         ..PowConfig::default()
     };
     pow.apply_defaults().expect("defaults");
-    let base = pow::Parameters::new(12, Duration::from_secs(45), Duration::from_secs(15));
-    let params = pow.puzzle_parameters(&base).expect("parameters");
+    let params = pow.puzzle_parameters().expect("parameters");
     assert_eq!(params.memory_kib().get(), 32 * 1024);
     assert_eq!(params.time_cost().get(), 3);
     assert_eq!(params.lanes().get(), 2);

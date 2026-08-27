@@ -7458,7 +7458,6 @@ fn taira_streaming_directory_plan(
                     length: u32::try_from(boundary.length)
                         .map_err(|_| eyre!("Taira guest-image chunk length exceeds u32"))?,
                     digest: blake3::hash(bytes).into(),
-                    taikai_segment_hint: None,
                 });
                 emitted_offset = emitted_offset
                     .checked_add(boundary.length)
@@ -7486,7 +7485,6 @@ fn taira_streaming_directory_plan(
                     length: u32::try_from(boundary.length)
                         .map_err(|_| eyre!("Taira guest-image chunk length exceeds u32"))?,
                     digest: blake3::hash(&pending).into(),
-                    taikai_segment_hint: None,
                 });
                 emitted_offset = emitted_offset
                     .checked_add(boundary.length)

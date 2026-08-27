@@ -17,6 +17,7 @@ use std::{
     io::{BufWriter, Write, stdout},
     process::ExitCode,
 };
+mod atomic_output;
 mod client_configs;
 mod codec;
 mod crypto;
@@ -49,7 +50,7 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami localnet --out-dir ./localnet\n",
     "  kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml\n",
     "  kagami keys --out-dir ./key-custody\n",
-    "  kagami keys --algorithm bls_normal --pop --json\n",
+    "  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody\n",
     "  kagami advanced markdown-help\n",
 );
 /// Error requesting one deliberate non-default CLI exit status.
@@ -478,10 +479,13 @@ mod tests {
         )
     }
     #[test]
-    fn keys_owner_only_output_is_a_distinct_format() {
+    fn keys_requires_owner_only_custody_output() {
         assert!(parse("kagami keys --out-dir ./custody").is_ok());
+        assert!(parse("kagami keys").is_err());
         assert!(parse("kagami keys --out-dir ./custody --compact").is_err());
         assert!(parse("kagami keys --out-dir ./custody --json").is_err());
+        assert!(parse("kagami keys --out-dir ./custody --private-key deadbeef").is_err());
+        assert!(parse("kagami keys --json --json-mh-prefixed").is_err());
     }
     #[test]
     fn advanced_subcommands_parse() {
@@ -515,6 +519,7 @@ mod tests {
         assert!(parse("kagami kura ./store print").is_err());
         assert!(parse("kagami client-configs --base-config ./client.toml --names alice").is_err());
         assert!(parse("kagami markdown-help").is_err());
+        assert!(parse("kagami genesis pop --algorithm bls_normal").is_err());
     }
     #[test]
     fn checked_in_markdown_help_matches_generated_help() {

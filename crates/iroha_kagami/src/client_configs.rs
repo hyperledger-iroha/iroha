@@ -3,17 +3,22 @@ use crate::{Outcome, RunArgs, tui};
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
-use iroha_data_model::NetworkId;
+use iroha_data_model::{
+    NetworkId,
+    domain::DomainId,
+    name::{Name, canonicalize_domain_label},
+};
 use std::{
     collections::BTreeSet,
-    fmt::Write as _,
-    fs,
-    io::{BufWriter, Write},
+    fs::{self, File},
+    io::{BufWriter, Read as _, Write},
     path::{Path, PathBuf},
+    str::FromStr as _,
 };
 use zeroize::Zeroizing;
 const DEFAULT_TTL_MS: u64 = 120_000;
 const DEFAULT_STATUS_TIMEOUT_MS: u64 = 120_000;
+const MAX_BASE_CONFIG_BYTES: u64 = 64 * 1024;
 const CLIENT_CONFIG_DERIVATION_DOMAIN: &[u8] = b"iroha:kagami:client-config:v1";
 #[derive(Debug, Clone)]
 struct BaseConfig {
@@ -25,7 +30,7 @@ struct BaseConfig {
 #[derive(Debug, Clone)]
 struct BasicAuth {
     web_login: String,
-    password: String,
+    password: Zeroizing<String>,
 }
 /// Generate per-client CLI configs from a base client.toml.
 #[derive(ClapArgs, Debug, Clone)]
@@ -75,7 +80,7 @@ impl<T: Write> RunArgs<T> for Args {
                 KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
                     .wrap_err("failed to generate an OS-random client key pair")?
             };
-            let rendered = render_client_config(&base, &self.domain, &key_pair);
+            let rendered = render_client_config(&base, &self.domain, &key_pair)?;
             let path = out_dir.join(format!("{name}.toml"));
             crate::secure_fs::write_private_file_atomic(&path, rendered.as_bytes())
                 .wrap_err_with(|| format!("failed to write {}", path.display()))?;
@@ -105,8 +110,7 @@ fn derive_client_key_pair(master_seed: &[u8], name: &str) -> Result<KeyPair> {
         .wrap_err_with(|| format!("failed to derive key pair for client `{name}`"))
 }
 fn load_base_config(path: &Path) -> Result<BaseConfig> {
-    let raw =
-        fs::read_to_string(path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
+    let raw = read_base_config(path)?;
     let value: toml::Value =
         toml::from_str(&raw).wrap_err_with(|| format!("invalid TOML in {}", path.display()))?;
     let chain = value
@@ -125,8 +129,8 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         .and_then(toml::Value::as_str)
         .ok_or_else(|| eyre!("base config is missing `torii_url`"))?
         .to_owned();
-    let basic_auth = match value.get("basic_auth").and_then(toml::Value::as_table) {
-        Some(table) => {
+    let basic_auth = match value.get("basic_auth") {
+        Some(toml::Value::Table(table)) => {
             let web_login = table
                 .get("web_login")
                 .and_then(toml::Value::as_str)
@@ -139,9 +143,10 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
                 .to_owned();
             Some(BasicAuth {
                 web_login,
-                password,
+                password: Zeroizing::new(password),
             })
         }
+        Some(_) => return Err(eyre!("base config `basic_auth` must be a TOML table")),
         None => None,
     };
     Ok(BaseConfig {
@@ -150,6 +155,19 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         torii_url,
         basic_auth,
     })
+}
+fn read_base_config(path: &Path) -> Result<Zeroizing<String>> {
+    let file = File::open(path).wrap_err_with(|| format!("failed to open {}", path.display()))?;
+    let mut raw = Zeroizing::new(String::new());
+    file.take(MAX_BASE_CONFIG_BYTES + 1)
+        .read_to_string(&mut raw)
+        .wrap_err_with(|| format!("failed to read UTF-8 TOML from {}", path.display()))?;
+    if raw.len() as u64 > MAX_BASE_CONFIG_BYTES {
+        return Err(eyre!(
+            "base config exceeds the {MAX_BASE_CONFIG_BYTES}-byte input limit"
+        ));
+    }
+    Ok(raw)
 }
 fn resolve_out_dir(base_config: &Path, out_dir: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(out_dir) = out_dir {
@@ -174,6 +192,16 @@ fn normalize_names(raw: Vec<String>) -> Result<Vec<String>> {
                 trimmed
             ));
         }
+        Name::from_str(trimmed)
+            .wrap_err_with(|| format!("client name `{trimmed}` is not canonical"))?;
+        if !trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(eyre!(
+                "client name `{trimmed}` must contain only ASCII letters, digits, `-`, or `_`"
+            ));
+        }
         if !seen.insert(trimmed.to_owned()) {
             return Err(eyre!("duplicate client name `{}`", trimmed));
         }
@@ -184,41 +212,94 @@ fn normalize_names(raw: Vec<String>) -> Result<Vec<String>> {
     }
     Ok(names)
 }
-fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> Zeroizing<String> {
-    let public_key = key_pair.public_key().to_string();
-    let private_key = Zeroizing::new(ExposedPrivateKey(key_pair.private_key().clone()).to_string());
-    let network_id = base.network_id.to_string();
-    let mut rendered = Zeroizing::new(format!(
-        concat!(
-            "chain = \"{chain}\"\n",
-            "network_id = \"{network_id}\"\n",
-            "torii_url = \"{torii_url}\"\n",
-            "\n",
-            "[transaction]\n",
-            "time_to_live_ms = {ttl}\n",
-            "status_timeout_ms = {status}\n",
-            "nonce = false\n",
-            "\n",
-            "[account]\n",
-            "domain = \"{domain}\"\n",
-            "private_key = \"{private_key}\"\n",
-            "public_key  = \"{public_key}\"\n",
+fn render_client_config(
+    base: &BaseConfig,
+    account_scope: &str,
+    key_pair: &KeyPair,
+) -> Result<Zeroizing<String>> {
+    validate_account_scope(account_scope)?;
+    let public_key = key_pair
+        .public_key()
+        .try_to_multihash_string()
+        .wrap_err("encode generated public key")?;
+    let private_key = Zeroizing::new(
+        ExposedPrivateKey(key_pair.private_key().clone())
+            .try_to_multihash_string()
+            .wrap_err("encode generated private key")?,
+    );
+    let mut root = toml::Table::new();
+    root.insert("chain".into(), toml::Value::String(base.chain.clone()));
+    root.insert(
+        "network_id".into(),
+        toml::Value::String(base.network_id.to_string()),
+    );
+    root.insert(
+        "torii_url".into(),
+        toml::Value::String(base.torii_url.clone()),
+    );
+
+    let mut transaction = toml::Table::new();
+    transaction.insert(
+        "time_to_live_ms".into(),
+        toml::Value::Integer(
+            i64::try_from(DEFAULT_TTL_MS).wrap_err("default TTL does not fit TOML integer")?,
         ),
-        chain = base.chain,
-        network_id = network_id,
-        torii_url = base.torii_url,
-        ttl = DEFAULT_TTL_MS,
-        status = DEFAULT_STATUS_TIMEOUT_MS,
-        domain = domain,
-        private_key = private_key.as_str(),
-        public_key = public_key,
-    ));
+    );
+    transaction.insert(
+        "status_timeout_ms".into(),
+        toml::Value::Integer(
+            i64::try_from(DEFAULT_STATUS_TIMEOUT_MS)
+                .wrap_err("default status timeout does not fit TOML integer")?,
+        ),
+    );
+    transaction.insert("nonce".into(), toml::Value::Boolean(false));
+    root.insert("transaction".into(), toml::Value::Table(transaction));
+
+    let mut account = toml::Table::new();
+    account.insert(
+        "domain".into(),
+        toml::Value::String(account_scope.to_owned()),
+    );
+    account.insert(
+        "private_key".into(),
+        toml::Value::String(private_key.as_str().to_owned()),
+    );
+    account.insert("public_key".into(), toml::Value::String(public_key));
+    root.insert("account".into(), toml::Value::Table(account));
+
     if let Some(auth) = &base.basic_auth {
-        rendered.push_str("\n[basic_auth]\n");
-        let _ = writeln!(&mut *rendered, "password  = \"{}\"", auth.password);
-        let _ = writeln!(&mut *rendered, "web_login = \"{}\"", auth.web_login);
+        let mut basic_auth = toml::Table::new();
+        basic_auth.insert(
+            "password".into(),
+            toml::Value::String(auth.password.as_str().to_owned()),
+        );
+        basic_auth.insert(
+            "web_login".into(),
+            toml::Value::String(auth.web_login.clone()),
+        );
+        root.insert("basic_auth".into(), toml::Value::Table(basic_auth));
     }
-    rendered
+    toml::to_string(&root)
+        .map(Zeroizing::new)
+        .wrap_err("serialize generated client TOML")
+}
+fn validate_account_scope(value: &str) -> Result<()> {
+    if value.trim().is_empty() || value.trim() != value {
+        return Err(eyre!(
+            "account scope must use canonical `dataspace` or `domain.dataspace` form"
+        ));
+    }
+    let valid = if value.contains('.') {
+        DomainId::parse_fully_qualified(value).is_ok_and(|scope| scope.to_string() == value)
+    } else {
+        canonicalize_domain_label(value).is_ok_and(|scope| scope == value)
+    };
+    if !valid {
+        return Err(eyre!(
+            "account scope must use canonical `dataspace` or `domain.dataspace` form"
+        ));
+    }
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -250,7 +331,26 @@ web_login = "demo"
         assert_eq!(base.torii_url, "http://127.0.0.1:8080/");
         let auth = base.basic_auth.expect("basic auth present");
         assert_eq!(auth.web_login, "demo");
-        assert_eq!(auth.password, "secret");
+        assert_eq!(auth.password.as_str(), "secret");
+    }
+    #[test]
+    fn load_base_config_rejects_oversized_inputs_and_malformed_auth() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("client.toml");
+        let oversized_len = usize::try_from(MAX_BASE_CONFIG_BYTES).expect("limit fits usize") + 1;
+        fs::write(&path, vec![b'x'; oversized_len]).expect("write oversized config");
+        let error = load_base_config(&path).expect_err("oversized config must be rejected");
+        assert!(error.to_string().contains("input limit"));
+
+        let malformed = r#"
+chain = "demo-chain"
+network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+torii_url = "http://127.0.0.1:8080/"
+basic_auth = "not a table"
+"#;
+        fs::write(&path, malformed).expect("write malformed config");
+        let error = load_base_config(&path).expect_err("malformed auth must be rejected");
+        assert!(error.to_string().contains("must be a TOML table"));
     }
     #[test]
     fn resolve_out_dir_defaults_to_clients_dir() {
@@ -266,6 +366,20 @@ web_login = "demo"
         let err = normalize_names(vec!["admin1".into(), "admin1".into()])
             .expect_err("duplicate rejected");
         assert!(format!("{err}").contains("duplicate client name"));
+    }
+    #[test]
+    fn normalize_names_rejects_path_components() {
+        for name in [
+            "../escape",
+            "nested/client",
+            r"nested\client",
+            ".",
+            "client.toml",
+        ] {
+            let error = normalize_names(vec![name.to_owned()])
+                .expect_err("client filename stem must not contain path syntax");
+            assert!(error.to_string().contains("client name"));
+        }
     }
     #[test]
     fn deterministic_client_derivation_requires_secret_master_and_separates_names() {
@@ -291,12 +405,13 @@ web_login = "demo"
             torii_url: "http://127.0.0.1:8080/".to_owned(),
             basic_auth: Some(BasicAuth {
                 web_login: "demo".to_owned(),
-                password: "secret".to_owned(),
+                password: Zeroizing::new("secret".to_owned()),
             }),
         };
         let key_pair = KeyPair::try_from_seed(b"demo-admin1".to_vec(), Algorithm::Ed25519)
             .expect("seeded client key should derive");
-        let rendered = render_client_config(&base, "acme.universal", &key_pair);
+        let rendered =
+            render_client_config(&base, "acme.universal", &key_pair).expect("render config");
         let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
         assert_eq!(
             value.get("chain").and_then(toml::Value::as_str),
@@ -377,7 +492,7 @@ web_login = "demo"
         };
         let key_pair = KeyPair::try_from_seed(b"demo-sender".to_vec(), Algorithm::Ed25519)
             .expect("seeded client key should derive");
-        let rendered = render_client_config(&base, "cbuae", &key_pair);
+        let rendered = render_client_config(&base, "cbuae", &key_pair).expect("render config");
         let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
         let account = value
             .get("account")
@@ -387,6 +502,40 @@ web_login = "demo"
             account.get("domain").and_then(toml::Value::as_str),
             Some("cbuae")
         );
+    }
+    #[test]
+    fn render_client_config_escapes_values_and_rejects_noncanonical_scope() {
+        let base = BaseConfig {
+            chain: "demo\"chain\nnext".to_owned(),
+            network_id:
+                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                    .parse()
+                    .expect("network id"),
+            torii_url: "https://example.test/path?value=\"quoted\"".to_owned(),
+            basic_auth: Some(BasicAuth {
+                web_login: "operator\"name".to_owned(),
+                password: Zeroizing::new("line one\nline \"two\"".to_owned()),
+            }),
+        };
+        let key_pair = KeyPair::try_from_seed(b"escaping-client".to_vec(), Algorithm::Ed25519)
+            .expect("seeded client key should derive");
+        let rendered =
+            render_client_config(&base, "acme.universal", &key_pair).expect("render config");
+        let value: toml::Value = toml::from_str(rendered.as_str()).expect("parse rendered config");
+        assert_eq!(
+            value.get("chain").and_then(toml::Value::as_str),
+            Some(base.chain.as_str())
+        );
+        let auth = value
+            .get("basic_auth")
+            .and_then(toml::Value::as_table)
+            .expect("basic auth");
+        assert_eq!(
+            auth.get("password").and_then(toml::Value::as_str),
+            Some(base.basic_auth.as_ref().expect("auth").password.as_str())
+        );
+        assert!(render_client_config(&base, "acme.universal\n[evil]", &key_pair).is_err());
+        assert!(render_client_config(&base, "ACME.universal", &key_pair).is_err());
     }
     #[test]
     fn run_writes_client_configs() {

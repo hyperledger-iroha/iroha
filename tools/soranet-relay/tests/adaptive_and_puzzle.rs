@@ -1,6 +1,5 @@
 use iroha_crypto::soranet::{
     handshake::DEFAULT_DESCRIPTOR_COMMIT,
-    pow::Parameters as PowParameters,
     puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
 };
 use rand::{SeedableRng, rngs::StdRng};
@@ -29,11 +28,6 @@ fn configured_difficulty_remains_static_after_repeated_failures() {
         ..PowConfig::default()
     };
     pow_cfg.apply_defaults().expect("pow defaults");
-    let base = PowParameters::new(
-        pow_cfg.difficulty.min(u8::MAX as u32) as u8,
-        Duration::from_secs(pow_cfg.max_future_skew_secs),
-        Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
-    );
     let controls = DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
         .expect("dos controls");
     let remote: SocketAddr = "192.0.2.10:7447".parse().expect("valid socket");
@@ -43,20 +37,23 @@ fn configured_difficulty_remains_static_after_repeated_failures() {
             .expect("attempt should be accepted");
         controls.record_pow_failure(&attempt, Duration::from_millis(5));
     }
-    let new_params = controls.current_pow_parameters();
-    assert_eq!(new_params.difficulty(), base.difficulty());
+    assert_eq!(
+        controls.current_puzzle_parameters().difficulty(),
+        u8::try_from(pow_cfg.difficulty).expect("test difficulty fits u8")
+    );
 }
 #[test]
 fn puzzle_failures_surface_and_sync_policies() {
     let metrics = Arc::new(Metrics::new());
-    let puzzle_params = PuzzleParameters::new(
+    let puzzle_params = PuzzleParameters::try_new(
         NonZeroU32::new(8_192).expect("non-zero memory"),
         NonZeroU32::new(2).expect("non-zero iterations"),
         NonZeroU32::new(1).expect("non-zero lanes"),
         6,
         Duration::from_secs(120),
         Duration::from_secs(30),
-    );
+    )
+    .expect("test puzzle parameters must be valid");
     let mut pow_cfg = PowConfig {
         difficulty: 6,
         max_future_skew_secs: 120,
@@ -94,17 +91,16 @@ fn puzzle_failures_surface_and_sync_policies() {
         other => panic!("unexpected puzzle error variant: {other:?}"),
     };
     controls.record_pow_failure(&attempt, Duration::from_millis(5));
-    let pow_state = controls.current_pow_parameters();
     let puzzle_state = controls.current_puzzle_parameters();
     assert_eq!(
-        pow_state.difficulty(),
         puzzle_state.difficulty(),
-        "puzzle policy must share the static configured difficulty"
+        6,
+        "puzzle policy must retain the static configured difficulty"
     );
     assert_eq!(
-        pow_state.max_future_skew(),
         puzzle_state.max_future_skew(),
-        "puzzle policy must share timing bounds with pow"
+        Duration::from_secs(120),
+        "puzzle policy must retain its configured timing bound"
     );
 }
 #[test]
@@ -125,9 +121,8 @@ fn static_difficulty_outcome_replay_is_deterministic() {
         remote: SocketAddr,
         descriptor: &[u8],
         events: &[Event],
-    ) -> (Vec<u8>, Vec<u8>) {
-        let mut pow_diffs = Vec::new();
-        let mut puzzle_diffs = Vec::new();
+    ) -> Vec<u8> {
+        let mut difficulties = Vec::new();
         for event in events {
             let now = base + event.offset;
             let attempt = controls
@@ -141,11 +136,9 @@ fn static_difficulty_outcome_replay_is_deterministic() {
                     controls.record_pow_failure_at(&attempt, Duration::from_millis(30), now);
                 }
             }
-            pow_diffs.push(controls.current_pow_parameters().difficulty());
-            let puzzle = controls.current_puzzle_parameters();
-            puzzle_diffs.push(puzzle.difficulty());
+            difficulties.push(controls.current_puzzle_parameters().difficulty());
         }
-        (pow_diffs, puzzle_diffs)
+        difficulties
     }
     let mut pow_cfg = PowConfig {
         difficulty: 5,
@@ -202,7 +195,7 @@ fn static_difficulty_outcome_replay_is_deterministic() {
         },
     ];
     let base_primary = Instant::now();
-    let (pow_primary, puzzle_primary) = run_sequence(
+    let primary = run_sequence(
         &controls_primary,
         base_primary,
         remote,
@@ -210,19 +203,11 @@ fn static_difficulty_outcome_replay_is_deterministic() {
         &events,
     );
     let base_replay = base_primary + Duration::from_secs(30);
-    let (pow_replay, puzzle_replay) =
-        run_sequence(&controls_replay, base_replay, remote, &descriptor, &events);
+    let replay = run_sequence(&controls_replay, base_replay, remote, &descriptor, &events);
     assert_eq!(
-        pow_primary, pow_replay,
-        "pow difficulty sequence should be deterministic"
-    );
-    assert_eq!(
-        puzzle_primary, puzzle_replay,
+        primary, replay,
         "puzzle difficulty sequence should be deterministic"
     );
-    for (pow, puzzle) in pow_primary.iter().zip(puzzle_primary.iter()) {
-        assert_eq!(pow, puzzle, "puzzle difficulty must track pow");
-    }
 }
 #[test]
 fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
@@ -271,7 +256,7 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
     let remote2: SocketAddr = "198.51.100.11:7001".parse().expect("valid socket addr");
     let mut rng = StdRng::from_seed([0x42; 32]);
     let mut now = Instant::now();
-    let baseline_difficulty = controls.current_pow_parameters().difficulty();
+    let baseline_difficulty = controls.current_puzzle_parameters().difficulty();
     let mut observed_difficulties = Vec::new();
     let mut latencies = Vec::new();
     for _ in 0..burst_limit {
@@ -280,11 +265,6 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
             .expect("attempt within burst limit");
         let params = controls.current_puzzle_parameters();
         observed_difficulties.push(params.difficulty());
-        assert_eq!(
-            params.difficulty(),
-            controls.current_pow_parameters().difficulty(),
-            "puzzle difficulty should track pow difficulty"
-        );
         let ticket = puzzle::mint_ticket(
             &params,
             &binding,
@@ -358,8 +338,8 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         );
     }
     assert_eq!(
-        controls.current_pow_parameters().difficulty(),
+        controls.current_puzzle_parameters().difficulty(),
         baseline_difficulty,
-        "pow difficulty must remain at the first-release configured value"
+        "puzzle difficulty must remain at the first-release configured value"
     );
 }

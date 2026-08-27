@@ -2,7 +2,7 @@
 fn post_commit_failure_preserves_reconciliation_and_publication_uncertainty() {
     let failure = combine_post_commit_failures(
         Some(SupervisorError::Config(
-            "compatibility reconciliation failed".to_owned(),
+            "generation reconciliation failed".to_owned(),
         )),
         Some(SupervisorError::PublicationUncertain {
             generation_id: "generation-new".to_owned(),
@@ -2709,6 +2709,7 @@ fn four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe
     let session_debug = format!("{session:?}");
     assert!(!session_debug.contains(&token));
     assert!(!session_debug.contains(&expected_digest));
+    assert!(!session_debug.contains(&admin_private));
     let supervisor_debug = format!("{supervisor:?}");
     assert!(!supervisor_debug.contains(&token));
     assert!(!supervisor_debug.contains(&expected_digest));
@@ -2736,7 +2737,6 @@ fn supervisor_session_info_reports_workspace_and_mcp_urls() {
     assert_eq!(info.torii_url, "http://127.0.0.1:8080");
     assert_eq!(info.mcp_url, "http://127.0.0.1:8080/v1/mcp");
     assert!(info.account_id.is_some());
-    assert!(info.private_key.is_some());
     assert_eq!(
         info.onboarding_token_file,
         info.sandbox_root.join("runtime/onboarding.token")

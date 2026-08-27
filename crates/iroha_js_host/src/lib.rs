@@ -259,10 +259,6 @@ use sorafs_orchestrator::{
         LocalQuicProxyConfig, ProxyCarBridgeConfig, ProxyKaigiBridgeConfig, ProxyMode,
         ProxyNoritoBridgeConfig,
     },
-    taikai_cache::{
-        EvictionStats, QosConfig, QosStats, ReliabilityTuning, TaikaiCacheConfig,
-        TaikaiCacheStatsSnapshot, TaikaiPullQueueStats, TierStats,
-    },
 };
 use tokio::runtime::Runtime;
 const SM2_PRIVATE_KEY_LENGTH: usize = 32;
@@ -3345,142 +3341,6 @@ pub struct JsLocalProxyConfig {
     pub kaigi_bridge: Option<JsProxyKaigiBridgeConfig>,
 }
 #[napi(object)]
-#[derive(Clone, Copy, Debug)]
-/// `QoS` envelope for Taikai cache classes.
-pub struct JsTaikaiQosConfig {
-    /// Priority lane throughput (bytes/sec).
-    pub priority_rate_bps: JsU64,
-    /// Standard lane throughput (bytes/sec).
-    pub standard_rate_bps: JsU64,
-    /// Bulk lane throughput (bytes/sec).
-    pub bulk_rate_bps: JsU64,
-    /// Token burst multiplier.
-    pub burst_multiplier: u32,
-}
-#[napi(object)]
-#[derive(Clone, Copy, Debug)]
-/// Taikai cache tier/retention configuration.
-pub struct JsTaikaiCacheConfig {
-    /// Hot-tier storage capacity in bytes.
-    pub hot_capacity_bytes: JsU64,
-    /// Hot-tier retention window in seconds.
-    pub hot_retention_secs: JsU64,
-    /// Warm-tier storage capacity in bytes.
-    pub warm_capacity_bytes: JsU64,
-    /// Warm-tier retention window in seconds.
-    pub warm_retention_secs: JsU64,
-    /// Cold-tier storage capacity in bytes.
-    pub cold_capacity_bytes: JsU64,
-    /// Cold-tier retention window in seconds.
-    pub cold_retention_secs: JsU64,
-    /// `QoS` token-bucket parameters per class.
-    pub qos: JsTaikaiQosConfig,
-    /// Optional reliability tuning for shard circuit breakers.
-    pub reliability: Option<JsTaikaiReliabilityConfig>,
-}
-#[napi(object)]
-#[derive(Clone, Copy, Debug)]
-/// Reliability configuration for the Taikai pull queue.
-pub struct JsTaikaiReliabilityConfig {
-    /// Consecutive failures required to trip a circuit breaker.
-    pub failures_to_trip: Option<u32>,
-    /// Duration (seconds) a circuit stays open before retry.
-    pub open_secs: Option<JsU64>,
-}
-#[napi(object)]
-#[derive(Clone, Copy, Debug)]
-/// Per-tier hit/insert counters for the Taikai cache.
-pub struct JsTaikaiCacheTierCounts {
-    /// Count recorded for the hot tier.
-    pub hot: JsU64,
-    /// Count recorded for the warm tier.
-    pub warm: JsU64,
-    /// Count recorded for the cold tier.
-    pub cold: JsU64,
-}
-#[napi(object)]
-#[derive(Clone, Copy, Debug)]
-/// Eviction counters partitioned by reason.
-pub struct JsTaikaiCacheEvictionCounts {
-    /// Number of entries evicted due to expiry.
-    pub expired: JsU64,
-    /// Number of entries evicted due to capacity pressure.
-    pub capacity: JsU64,
-}
-#[napi(object)]
-#[derive(Clone, Copy, Debug)]
-/// Eviction counters per tier.
-pub struct JsTaikaiCacheEvictions {
-    /// Evictions from the hot tier.
-    pub hot: JsTaikaiCacheEvictionCounts,
-    /// Evictions from the warm tier.
-    pub warm: JsTaikaiCacheEvictionCounts,
-    /// Evictions from the cold tier.
-    pub cold: JsTaikaiCacheEvictionCounts,
-}
-#[napi(object)]
-#[derive(Clone, Copy, Debug)]
-/// Promotion counters captured by the Taikai cache.
-pub struct JsTaikaiCachePromotions {
-    /// Promotions from warm to hot.
-    pub warm_to_hot: JsU64,
-    /// Promotions from cold to warm.
-    pub cold_to_warm: JsU64,
-    /// Promotions from cold directly to hot.
-    pub cold_to_hot: JsU64,
-}
-#[napi(object)]
-#[derive(Clone, Copy, Debug)]
-/// `QoS` counters for Taikai cache and queue telemetry.
-pub struct JsTaikaiQosCounts {
-    /// Count recorded for the priority class.
-    pub priority: JsU64,
-    /// Count recorded for the standard class.
-    pub standard: JsU64,
-    /// Count recorded for the bulk class.
-    pub bulk: JsU64,
-}
-#[napi(object)]
-#[derive(Clone, Copy, Debug)]
-/// Snapshot of Taikai cache activity recorded after a fetch.
-pub struct JsTaikaiCacheStats {
-    /// Cache hits per tier.
-    pub hits: JsTaikaiCacheTierCounts,
-    /// Total cache misses.
-    pub misses: JsU64,
-    /// Cache inserts per tier.
-    pub inserts: JsTaikaiCacheTierCounts,
-    /// Evictions observed during the fetch.
-    pub evictions: JsTaikaiCacheEvictions,
-    /// Promotions observed during the fetch.
-    pub promotions: JsTaikaiCachePromotions,
-    /// `QoS` denials recorded during the fetch.
-    pub qos_denials: JsTaikaiQosCounts,
-}
-#[napi(object)]
-#[derive(Clone, Copy, Debug)]
-/// Snapshot of the Taikai pull queue state.
-pub struct JsTaikaiQueueStats {
-    /// Queued segment count.
-    pub pending_segments: JsU64,
-    /// Queued bytes across all pending segments.
-    pub pending_bytes: JsU64,
-    /// Pending batches awaiting issuance.
-    pub pending_batches: JsU64,
-    /// Batches currently in flight.
-    pub in_flight_batches: JsU64,
-    /// Number of hedged batches.
-    pub hedged_batches: JsU64,
-    /// `QoS` denials emitted by the shaper.
-    pub shaper_denials: JsTaikaiQosCounts,
-    /// Segments dropped due to backpressure.
-    pub dropped_segments: JsU64,
-    /// Failover events recorded by the queue.
-    pub failovers: JsU64,
-    /// Open circuit count across shards.
-    pub open_circuits: JsU64,
-}
-#[napi(object)]
 #[derive(Default)]
 /// Options controlling `sorafsGatewayFetch`.
 pub struct JsGatewayFetchOptions {
@@ -3508,8 +3368,6 @@ pub struct JsGatewayFetchOptions {
     pub write_mode: Option<String>,
     /// Optional local proxy configuration for browser integrations.
     pub local_proxy: Option<JsLocalProxyConfig>,
-    /// Optional Taikai cache configuration (SNNet-14 pilots).
-    pub taikai_cache: Option<JsTaikaiCacheConfig>,
     /// File path used to persist the computed scoreboard (mirrors `--scoreboard-out`).
     pub scoreboard_out_path: Option<String>,
     /// Override for the Unix timestamp used when evaluating adverts (`--scoreboard-now`).
@@ -3642,10 +3500,6 @@ pub struct JsGatewayFetchResult {
     pub car_verification: Option<JsCarVerification>,
     /// Scoreboard metadata captured during the fetch session.
     pub metadata: JsGatewayMetadata,
-    /// Snapshot of Taikai cache activity captured after the fetch.
-    pub taikai_cache_summary: Option<JsTaikaiCacheStats>,
-    /// Snapshot of the Taikai pull queue captured after the fetch.
-    pub taikai_cache_queue: Option<JsTaikaiQueueStats>,
 }
 #[napi(object)]
 #[allow(clippy::struct_excessive_bools)]
@@ -3697,66 +3551,6 @@ pub struct JsGatewayMetadata {
     pub allow_single_source_fallback: bool,
     /// Whether implicit provider metadata was allowed when scoring adverts.
     pub allow_implicit_metadata: bool,
-}
-impl From<TaikaiCacheStatsSnapshot> for JsTaikaiCacheStats {
-    fn from(stats: TaikaiCacheStatsSnapshot) -> Self {
-        let tier_counts = |counts: TierStats| JsTaikaiCacheTierCounts {
-            hot: JsU64(counts.hot),
-            warm: JsU64(counts.warm),
-            cold: JsU64(counts.cold),
-        };
-        let evictions = |stats: EvictionStats| JsTaikaiCacheEvictions {
-            hot: JsTaikaiCacheEvictionCounts {
-                expired: JsU64(stats.hot.expired),
-                capacity: JsU64(stats.hot.capacity),
-            },
-            warm: JsTaikaiCacheEvictionCounts {
-                expired: JsU64(stats.warm.expired),
-                capacity: JsU64(stats.warm.capacity),
-            },
-            cold: JsTaikaiCacheEvictionCounts {
-                expired: JsU64(stats.cold.expired),
-                capacity: JsU64(stats.cold.capacity),
-            },
-        };
-        let qos = |counts: QosStats| JsTaikaiQosCounts {
-            priority: JsU64(counts.priority),
-            standard: JsU64(counts.standard),
-            bulk: JsU64(counts.bulk),
-        };
-        Self {
-            hits: tier_counts(stats.hits),
-            misses: JsU64(stats.misses),
-            inserts: tier_counts(stats.inserts),
-            evictions: evictions(stats.evictions),
-            promotions: JsTaikaiCachePromotions {
-                warm_to_hot: JsU64(stats.promotions.warm_to_hot),
-                cold_to_warm: JsU64(stats.promotions.cold_to_warm),
-                cold_to_hot: JsU64(stats.promotions.cold_to_hot),
-            },
-            qos_denials: qos(stats.qos_denials),
-        }
-    }
-}
-impl From<TaikaiPullQueueStats> for JsTaikaiQueueStats {
-    fn from(stats: TaikaiPullQueueStats) -> Self {
-        let qos = JsTaikaiQosCounts {
-            priority: JsU64(stats.shaper_denials.priority),
-            standard: JsU64(stats.shaper_denials.standard),
-            bulk: JsU64(stats.shaper_denials.bulk),
-        };
-        Self {
-            pending_segments: JsU64(stats.pending_segments),
-            pending_bytes: JsU64(stats.pending_bytes),
-            pending_batches: JsU64(stats.pending_batches),
-            in_flight_batches: JsU64(stats.in_flight_batches),
-            hedged_batches: JsU64(stats.hedged_batches),
-            shaper_denials: qos,
-            dropped_segments: JsU64(stats.dropped_segments),
-            failovers: JsU64(stats.failovers),
-            open_circuits: JsU64(stats.open_circuits),
-        }
-    }
 }
 fn js_range_capability_to_input(range: JsRangeCapability) -> RangeCapabilityInput {
     RangeCapabilityInput {
@@ -4056,75 +3850,6 @@ fn build_local_proxy_config(cfg: &JsLocalProxyConfig) -> napi::Result<LocalQuicP
     }
     Ok(proxy)
 }
-fn build_taikai_cache_config(cfg: &JsTaikaiCacheConfig) -> napi::Result<TaikaiCacheConfig> {
-    fn ensure_positive(value: u64, label: &str) -> napi::Result<u64> {
-        if value == 0 {
-            Err(invalid_arg(format!("{label} must be greater than zero")))
-        } else {
-            Ok(value)
-        }
-    }
-    fn duration_from_secs(value: u64, label: &str) -> napi::Result<Duration> {
-        ensure_positive(value, label).map(Duration::from_secs)
-    }
-    let qos_cfg = &cfg.qos;
-    if qos_cfg.burst_multiplier == 0 {
-        return Err(invalid_arg(
-            "taikaiCache.qos.burstMultiplier must be greater than zero",
-        ));
-    }
-    let reliability_cfg = cfg.reliability.unwrap_or(JsTaikaiReliabilityConfig {
-        failures_to_trip: None,
-        open_secs: None,
-    });
-    let failures_to_trip = reliability_cfg.failures_to_trip.unwrap_or(3).max(1);
-    let open_secs = reliability_cfg.open_secs.map_or(2, Into::into);
-    Ok(TaikaiCacheConfig {
-        hot_capacity_bytes: ensure_positive(
-            cfg.hot_capacity_bytes.into(),
-            "taikaiCache.hotCapacityBytes",
-        )?,
-        hot_retention: duration_from_secs(
-            cfg.hot_retention_secs.into(),
-            "taikaiCache.hotRetentionSecs",
-        )?,
-        warm_capacity_bytes: ensure_positive(
-            cfg.warm_capacity_bytes.into(),
-            "taikaiCache.warmCapacityBytes",
-        )?,
-        warm_retention: duration_from_secs(
-            cfg.warm_retention_secs.into(),
-            "taikaiCache.warmRetentionSecs",
-        )?,
-        cold_capacity_bytes: ensure_positive(
-            cfg.cold_capacity_bytes.into(),
-            "taikaiCache.coldCapacityBytes",
-        )?,
-        cold_retention: duration_from_secs(
-            cfg.cold_retention_secs.into(),
-            "taikaiCache.coldRetentionSecs",
-        )?,
-        qos: QosConfig {
-            priority_rate_bps: ensure_positive(
-                qos_cfg.priority_rate_bps.into(),
-                "taikaiCache.qos.priorityRateBps",
-            )?,
-            standard_rate_bps: ensure_positive(
-                qos_cfg.standard_rate_bps.into(),
-                "taikaiCache.qos.standardRateBps",
-            )?,
-            bulk_rate_bps: ensure_positive(
-                qos_cfg.bulk_rate_bps.into(),
-                "taikaiCache.qos.bulkRateBps",
-            )?,
-            burst_multiplier: qos_cfg.burst_multiplier,
-        },
-        reliability: ReliabilityTuning {
-            failures_to_trip,
-            open_secs,
-        },
-    })
-}
 fn build_gateway_provider_input(
     spec: &JsGatewayProviderSpec,
 ) -> napi::Result<GatewayProviderInput> {
@@ -4245,7 +3970,6 @@ fn build_gateway_plan(
             offset: spec.offset,
             length: spec.length,
             digest: spec.digest,
-            taikai_segment_hint: spec.taikai_segment_hint.clone(),
         })
         .collect();
     Ok(CarBuildPlan {
@@ -4594,10 +4318,6 @@ fn apply_gateway_options(
         let config_value = build_local_proxy_config(proxy_cfg)?;
         config.local_proxy = Some(config_value);
     }
-    if let Some(cache_cfg) = options.taikai_cache.as_ref() {
-        let cache = build_taikai_cache_config(cache_cfg)?;
-        config.taikai_cache = Some(cache);
-    }
     Ok(max_peers)
 }
 fn usize_to_u32(value: usize, field: &str) -> napi::Result<u32> {
@@ -4702,8 +4422,6 @@ fn convert_fetch_session_to_js(
             },
         }
     });
-    let taikai_cache_summary = session.taikai_cache_stats.map(JsTaikaiCacheStats::from);
-    let taikai_cache_queue = session.taikai_cache_queue.map(JsTaikaiQueueStats::from);
     Ok(JsGatewayFetchResult {
         manifest_id_hex: manifest_id_hex.to_string(),
         chunker_handle: chunker_handle.to_string(),
@@ -4736,8 +4454,6 @@ fn convert_fetch_session_to_js(
         local_proxy_manifest_json,
         car_verification,
         metadata,
-        taikai_cache_summary,
-        taikai_cache_queue,
     })
 }
 #[cfg(test)]
@@ -13006,7 +12722,7 @@ mod tests {
     use sorafs_orchestrator::{
         AnonymityPolicy, GatewayCarVerification, OrchestratorConfig, PolicyOverride, PolicyReport,
         PolicyStatus, RolloutPhase, TransportPolicy, prelude::BrowserExtensionManifest,
-        proxy::ProxyMode, taikai_cache::PromotionStats,
+        proxy::ProxyMode,
     };
     use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
     use tempfile::tempdir;
@@ -14142,36 +13858,6 @@ seiyaku Privacy {
             duplicates: vec!["AC-2025-014".to_owned()],
         }
     }
-    fn sample_taikai_cache_options() -> JsTaikaiCacheConfig {
-        JsTaikaiCacheConfig {
-            hot_capacity_bytes: JsU64(8_388_608),
-            hot_retention_secs: JsU64(45),
-            warm_capacity_bytes: JsU64(33_554_432),
-            warm_retention_secs: JsU64(180),
-            cold_capacity_bytes: JsU64(268_435_456),
-            cold_retention_secs: JsU64(3_600),
-            qos: JsTaikaiQosConfig {
-                priority_rate_bps: JsU64(83_886_080),
-                standard_rate_bps: JsU64(41_943_040),
-                bulk_rate_bps: JsU64(12_582_912),
-                burst_multiplier: 4,
-            },
-            reliability: None,
-        }
-    }
-    #[test]
-    fn gateway_options_apply_taikai_cache_config() {
-        let mut config = OrchestratorConfig::default();
-        let opts = JsGatewayFetchOptions {
-            taikai_cache: Some(sample_taikai_cache_options()),
-            ..Default::default()
-        };
-        apply_gateway_options(&mut config, &opts).expect("taikai cache applies");
-        let cache = config.taikai_cache.expect("cache configured");
-        assert_eq!(cache.hot_capacity_bytes, 8_388_608);
-        assert_eq!(cache.cold_retention.as_secs(), 3_600);
-        assert_eq!(cache.qos.burst_multiplier, 4);
-    }
     #[test]
     fn gateway_policy_block_uses_canonical_compliance_evidence_only() {
         let value = attempt_failure_to_value(AttemptFailure::Provider {
@@ -14217,22 +13903,6 @@ seiyaku Privacy {
                 "removed policy evidence field `{removed}` must stay absent"
             );
         }
-    }
-    #[test]
-    fn taikai_cache_validation_rejects_invalid_values() {
-        let mut config = OrchestratorConfig::default();
-        let mut invalid = sample_taikai_cache_options();
-        invalid.qos.burst_multiplier = 0;
-        let opts = JsGatewayFetchOptions {
-            taikai_cache: Some(invalid),
-            ..Default::default()
-        };
-        let err =
-            apply_gateway_options(&mut config, &opts).expect_err("burst multiplier validation");
-        assert!(
-            err.to_string().contains("burstMultiplier"),
-            "unexpected error: {err}"
-        );
     }
     fn make_stream_token_b64(
         manifest_id_hex: &str,
@@ -14309,7 +13979,6 @@ seiyaku Privacy {
             anonymity_policy: None,
             write_mode: None,
             local_proxy: None,
-            taikai_cache: None,
             scoreboard_out_path: None,
             scoreboard_now_unix_secs: None,
             scoreboard_telemetry_label: None,
@@ -14994,7 +14663,6 @@ seiyaku Privacy {
                 }),
                 kaigi_bridge: None,
             }),
-            taikai_cache: None,
             scoreboard_out_path: Some(scoreboard_path.to_string_lossy().into_owned()),
             scoreboard_now_unix_secs: Some(JsU64(1_700_000_000)),
             scoreboard_telemetry_label: Some("ci-gateway".into()),
@@ -15088,8 +14756,6 @@ seiyaku Privacy {
                 policy_report,
                 local_proxy_manifest: Some(manifest_stub),
                 car_verification: Some(car_verification),
-                taikai_cache_stats: None,
-                taikai_cache_queue: None,
             })
         });
         let result = sorafs_gateway_fetch(
@@ -18318,45 +17984,4 @@ seiyaku Privacy {
         assert!(!summary.proofs.is_empty());
         assert!(summary.proofs.iter().all(|proof| proof.verified));
     }
-    #[test]
-    fn taikai_cache_stats_conversion_populates_js_struct() {
-        let mut evictions = EvictionStats::default();
-        evictions.hot.expired = 1;
-        evictions.hot.capacity = 2;
-        evictions.warm.expired = 3;
-        evictions.warm.capacity = 4;
-        evictions.cold.expired = 5;
-        evictions.cold.capacity = 6;
-        let stats = TaikaiCacheStatsSnapshot {
-            hits: TierStats {
-                hot: 7,
-                warm: 8,
-                cold: 9,
-            },
-            misses: 10,
-            inserts: TierStats {
-                hot: 11,
-                warm: 12,
-                cold: 13,
-            },
-            evictions,
-            promotions: PromotionStats {
-                warm_to_hot: 14,
-                cold_to_warm: 15,
-                cold_to_hot: 16,
-            },
-            qos_denials: QosStats {
-                priority: 17,
-                standard: 18,
-                bulk: 19,
-            },
-        };
-        let js = JsTaikaiCacheStats::from(stats);
-        assert_eq!(js.hits.hot.0, 7);
-        assert_eq!(js.evictions.warm.capacity.0, 4);
-        assert_eq!(js.promotions.cold_to_hot.0, 16);
-        assert_eq!(js.qos_denials.standard.0, 18);
-        assert_eq!(js.misses.0, 10);
-    }
-    include!("taikai_queue_stats_test.rs");
 }

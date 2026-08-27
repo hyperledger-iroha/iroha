@@ -1117,22 +1117,6 @@ impl VpnSessionHandle {
         }
         Ok(())
     }
-    /// Cancel a just-started service window when durable admission fails before forwarding.
-    pub(crate) fn cancel_metered_service_before_forwarding(&self) -> Result<(), VpnBillingError> {
-        self.ensure_forwarding_available()?;
-        if self.metered_usage.ingress_bytes.load(Ordering::Relaxed) != 0
-            || self.metered_usage.egress_bytes.load(Ordering::Relaxed) != 0
-        {
-            return Err(VpnBillingError::settlement(
-                "vpn metered service cannot be cancelled after forwarding",
-            ));
-        }
-        *lock_billing_state(
-            &self.metered_usage.service_window,
-            &self.metered_usage.unavailable,
-        )? = VpnMeteredServiceWindow::default();
-        Ok(())
-    }
     /// End the billable service interval as soon as forwarding stops.
     ///
     /// The wall-clock sample is intentionally ignored for billing duration;
@@ -1686,77 +1670,5 @@ mod tests {
                 .expect("monotonic actual fee")
         );
         assert!(!receipt.earned_fee.is_zero());
-    }
-    #[test]
-    fn cancelled_durable_admission_does_not_charge_unforwarded_service_time() {
-        let tariff = VpnTariffV1 {
-            lease_fee: Quantity::from(10_u64),
-            active_fee_per_minute: Quantity::from(1_u64),
-            ingress_fee_per_mib: Quantity::from(1_u64),
-            egress_fee_per_mib: Quantity::from(1_u64),
-        };
-        let metering_keys =
-            KeyPair::try_from_seed(vec![0x67; 32], Algorithm::Ed25519).expect("metering keypair");
-        let relay_key = Arc::new(
-            KeyPair::try_from_seed(vec![0x68; 32], Algorithm::Ed25519)
-                .expect("relay identity keypair"),
-        );
-        let (_, relay_public_key) = relay_key
-            .public_key()
-            .try_to_bytes()
-            .expect("relay identity public key");
-        let mut relay_id = [0_u8; 32];
-        relay_id.copy_from_slice(relay_public_key);
-        let body = VpnUsageVoucherBodyV1 {
-            session_id: [0x12; 16],
-            quote_id: [0x23; 32],
-            relay_id,
-            sequence: 0,
-            ingress_bytes: 256 * 1_024,
-            egress_bytes: 256 * 1_024,
-            active_ms: 2_000,
-            issued_at_ms: 20_000,
-        };
-        let envelope = VpnUsageVoucherEnvelopeV1 {
-            voucher: VpnUsageVoucherV1::try_sign(body, metering_keys.private_key())
-                .expect("signed voucher"),
-            fee_ceiling: tariff.fee_ceiling(&body).expect("fee ceiling"),
-        };
-        let metrics = Arc::new(Metrics::new());
-        let mut handle = VpnSessionHandle::new(
-            VpnSession::from_parts(metrics),
-            body.session_id,
-            VpnExitClassV1::Standard,
-            vpn_tariff_meter_hash_v1(&tariff),
-        );
-        handle.quote_id = body.quote_id;
-        handle.relay_id = body.relay_id;
-        handle.valid_after_ms = body.issued_at_ms;
-        handle.expires_at_ms = body.issued_at_ms + 30_000;
-        handle.tariff = Some(tariff);
-        handle.relay_identity_key = Some(relay_key);
-        handle
-            .record_usage_voucher(envelope)
-            .expect("voucher state available");
-        handle
-            .begin_metered_service(body.issued_at_ms)
-            .expect("billing state available");
-        std::thread::sleep(Duration::from_millis(2));
-        handle
-            .cancel_metered_service_before_forwarding()
-            .expect("unforwarded service remains cancellable");
-
-        let artifact = handle
-            .settlement_artifact()
-            .expect("relay receipt signing succeeds")
-            .expect("accepted voucher remains settleable");
-        artifact
-            .receipt
-            .verify()
-            .expect("settlement artifact carries a valid relay signature");
-        assert_eq!(artifact.receipt.receipt.started_at_ms, body.issued_at_ms);
-        assert_eq!(artifact.receipt.receipt.ended_at_ms, body.issued_at_ms);
-        assert_eq!(artifact.receipt.receipt.uptime_secs, 0);
-        assert!(artifact.receipt.receipt.earned_fee.is_zero());
     }
 }

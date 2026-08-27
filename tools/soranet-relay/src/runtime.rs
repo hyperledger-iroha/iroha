@@ -1,8 +1,6 @@
 //! Runtime orchestration for the relay daemon.
 #![allow(unexpected_cfgs)]
 use bytes::Bytes;
-#[cfg(test)]
-use iroha_crypto::soranet::pow::Parameters as PowParameters;
 use iroha_crypto::{
     Algorithm, KeyPair, PrivateKey, PublicKey,
     soranet::{
@@ -16,8 +14,8 @@ use iroha_crypto::{
             SessionSecrets, inspect_client_hello, process_client_hello, update_suite_list,
         },
         pow::{
-            self, SignedTicket, Ticket as PowTicket, TicketRevocationStore,
-            TicketRevocationStoreLimits,
+            self, SignedTicket, Ticket as PowTicket, TicketRevocationInsertStatus,
+            TicketRevocationStore, TicketRevocationStoreLimits,
         },
         puzzle::{self, ChallengeBinding as PuzzleBinding},
         record::{RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind},
@@ -2336,17 +2334,6 @@ fn record_route_open_ingress_metrics(
             .record_vpn_control_ingress(bytes);
     }
 }
-fn record_route_open_egress_metrics(
-    vpn_adapter: Option<&VpnAdapter>,
-    vpn_session: Option<&VpnSessionHandle>,
-) {
-    let bytes = RouteOpenFrame::length() as u64;
-    if let Some(adapter) = vpn_adapter {
-        adapter.session().metrics().record_vpn_control_egress(bytes);
-    } else if let Some(session) = vpn_session {
-        session.session().metrics().record_vpn_control_egress(bytes);
-    }
-}
 /// Fully configured relay runtime ready to serve traffic.
 pub struct RelayRuntime {
     config: RelayConfig,
@@ -2683,10 +2670,29 @@ fn verify_and_consume_ticket(
     let mut state = replay_state
         .lock()
         .map_err(|_| HandshakeError::ReplayStore("ticket replay lock poisoned".to_owned()))?;
-    let consumed = pow::record_revocation(ticket, Some(&mut state.persisted), SystemTime::now())
-        .map_err(|error| match error {
-            pow::Error::RevocationStore(message) => HandshakeError::ReplayStore(message),
-            other => HandshakeError::Pow(other),
+    let now = SystemTime::now();
+    let consumed = state
+        .persisted
+        .revoke_ticket_payload(ticket, now)
+        .map_err(|error| HandshakeError::ReplayStore(error.to_string()))
+        .and_then(|outcome| match outcome.status {
+            TicketRevocationInsertStatus::Accepted => Ok(()),
+            TicketRevocationInsertStatus::Duplicate => Err(HandshakeError::Pow(pow::Error::Replay)),
+            TicketRevocationInsertStatus::Expired => {
+                let now_secs = now
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|error| HandshakeError::Puzzle(puzzle::Error::Clock(error)))?;
+                Err(HandshakeError::Puzzle(puzzle::Error::Expired(
+                    ticket.expires_at,
+                    now_secs.as_secs(),
+                )))
+            }
+            TicketRevocationInsertStatus::TtlExceeded => Err(HandshakeError::ReplayStore(
+                "revocation ttl exceeded configured maximum".to_owned(),
+            )),
+            TicketRevocationInsertStatus::Capacity => Err(HandshakeError::ReplayStore(
+                "ticket replay store at capacity".to_owned(),
+            )),
         });
     state.pending.remove(&fingerprint);
     consumed
@@ -4267,7 +4273,9 @@ impl RelayRuntime {
                 let millis = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
                 let pow_detail = match &error {
                     HandshakeError::Pow(pow_error) => Some(pow_failure_reason(pow_error)),
-                    HandshakeError::Puzzle(_) => Some(SoranetPowFailureReasonV1::InvalidSolution),
+                    HandshakeError::Puzzle(puzzle_error) => {
+                        Some(puzzle_failure_reason(puzzle_error))
+                    }
                     _ => None,
                 };
                 let reason = match &error {
@@ -6377,9 +6385,6 @@ impl RelayRuntime {
             path,
             bearer_token: token,
         })
-    }
-    fn admin_bearer_token(request: &str) -> Option<&str> {
-        Self::parse_admin_request(request)?.bearer_token
     }
     async fn render_admin_request(
         request: &str,

@@ -10,12 +10,15 @@ use crate::{
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 use iroha_data_model::{account::AccountId, role::RoleId};
 use norito::json::{self, Map, Value};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::{
     collections::BTreeSet,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
+    sync::atomic::{AtomicU64, Ordering},
 };
 /// Canonical filename storing signer metadata beneath a network root.
 pub const SIGNERS_FILE_NAME: &str = "signers.json";
@@ -53,9 +56,21 @@ pub struct SignerVault {
     path: PathBuf,
 }
 fn read_vault_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    let named_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if named_metadata.file_type().is_symlink() || !named_metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "signer vault must be a regular file, not a symlink",
+        ));
+    }
+    #[cfg(unix)]
+    validate_vault_metadata(path, &named_metadata)?;
     let mut file = match File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
     let metadata = file.metadata()?;
@@ -64,6 +79,16 @@ fn read_vault_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
             io::ErrorKind::InvalidData,
             "signer vault must be a regular file",
         ));
+    }
+    #[cfg(unix)]
+    {
+        validate_vault_metadata(path, &metadata)?;
+        if named_metadata.dev() != metadata.dev() || named_metadata.ino() != metadata.ino() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "signer vault changed while it was being opened",
+            ));
+        }
     }
     if metadata.len() > u64::try_from(SIGNER_VAULT_MAX_BYTES_V1).unwrap_or(u64::MAX) {
         return Err(io::Error::new(
@@ -97,6 +122,55 @@ fn read_vault_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
         ));
     }
     Ok(Some(bytes))
+}
+#[cfg(unix)]
+fn validate_vault_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.nlink() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "signer vault must have exactly one filesystem link",
+        ));
+    }
+    let mode = metadata.mode() & 0o777;
+    if mode & 0o077 != 0 || mode & 0o400 == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "signer vault `{}` must be owner-readable and inaccessible to group/other users",
+                path.display()
+            ),
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        let parent_metadata = fs::metadata(parent)?;
+        if metadata.uid() != parent_metadata.uid() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "signer vault owner must match its parent directory owner",
+            ));
+        }
+    }
+    Ok(())
+}
+fn create_vault_temp(path: &Path) -> io::Result<(PathBuf, File)> {
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    for _ in 0..32 {
+        let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = path.with_extension(format!("json.tmp.{}.{id}", std::process::id()));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        match options.open(&tmp_path) {
+            Ok(file) => return Ok((tmp_path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique signer-vault temporary file",
+    ))
 }
 fn signer_vault_limit(message: impl Into<String>) -> SignerVaultError {
     SignerVaultError::InvalidEntry(message.into())
@@ -142,11 +216,6 @@ impl SignerVault {
     pub fn path(&self) -> &Path {
         &self.path
     }
-    /// Whether the vault file exists on disk.
-    #[must_use]
-    pub fn exists(&self) -> bool {
-        self.path.exists()
-    }
     /// Load signing authorities from disk without applying fallbacks.
     ///
     /// Returns an empty list when the vault file is absent.
@@ -190,23 +259,31 @@ impl SignerVault {
         }
         Ok(signers)
     }
-    /// Load signing authorities, falling back to development fixtures when unavailable.
-    #[must_use]
-    pub fn load_with_fallback(&self) -> Vec<SigningAuthority> {
-        match self.load() {
-            Ok(signers) if !signers.is_empty() => signers,
-            Ok(_) => development_signing_authorities().to_vec(),
-            Err(err) => {
-                eprintln!(
-                    "MOCHI: failed to load signing vault {}: {err}",
-                    self.path.display()
-                );
-                development_signing_authorities().to_vec()
+    /// Load persisted signing authorities, using development fixtures only when no vault exists.
+    pub fn load_or_development(&self) -> Result<Vec<SigningAuthority>, SignerVaultError> {
+        match fs::symlink_metadata(&self.path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Ok(development_signing_authorities().to_vec())
+            }
+            Err(error) => Err(error.into()),
+            Ok(_) => {
+                let signers = self.load()?;
+                if signers.is_empty() {
+                    return Err(SignerVaultError::InvalidEntry(
+                        "persisted signer vault must contain at least one signer".to_owned(),
+                    ));
+                }
+                Ok(signers)
             }
         }
     }
     /// Persist the provided signing authorities to disk, replacing the existing vault.
     pub fn save(&self, signers: &[SigningAuthority]) -> Result<(), SignerVaultError> {
+        if signers.is_empty() {
+            return Err(signer_vault_limit(
+                "cannot persist an empty signer vault; remove the file to use development signers",
+            ));
+        }
         if signers.len() > SIGNER_VAULT_MAX_SIGNERS_V1 {
             return Err(signer_vault_limit(format!(
                 "cannot persist {} signers (maximum {SIGNER_VAULT_MAX_SIGNERS_V1})",
@@ -237,18 +314,22 @@ impl SignerVault {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let tmp_path = self.path.with_extension("json.tmp");
-        if tmp_path.exists() {
-            fs::remove_file(&tmp_path)?;
-        }
-        {
-            let mut file = File::create(&tmp_path)?;
+        let (tmp_path, mut file) = create_vault_temp(&self.path)?;
+        let write_result = (|| -> io::Result<()> {
             file.write_all(text.as_bytes())?;
-            file.sync_all()?;
+            file.sync_all()
+        })();
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(error.into());
         }
         if let Err(err) = fs::rename(&tmp_path, &self.path) {
             let _ = fs::remove_file(&tmp_path);
             return Err(err.into());
+        }
+        #[cfg(unix)]
+        if let Some(parent) = self.path.parent() {
+            File::open(parent)?.sync_all()?;
         }
         Ok(())
     }
@@ -335,8 +416,6 @@ fn parse_entry(entry: &Value) -> Result<SigningAuthority, SignerVaultError> {
     })?;
     let key_field = object
         .get("private_key")
-        .or_else(|| object.get("privateKey"))
-        .or_else(|| object.get("private_key_hex"))
         .ok_or_else(|| SignerVaultError::InvalidEntry("missing `private_key` field".to_owned()))?;
     let key_str = key_field.as_str().ok_or_else(|| {
         SignerVaultError::InvalidEntry("`private_key` must be a string".to_owned())
@@ -363,9 +442,9 @@ fn parse_entry(entry: &Value) -> Result<SigningAuthority, SignerVaultError> {
     ))
 }
 fn parse_permissions(object: &Map) -> Result<BTreeSet<InstructionPermission>, SignerVaultError> {
-    let Some(raw) = object.get("permissions") else {
-        return Ok(InstructionPermission::all().into_iter().collect());
-    };
+    let raw = object.get("permissions").ok_or_else(|| {
+        SignerVaultError::InvalidEntry("missing `permissions` field".to_owned())
+    })?;
     let array = raw.as_array().ok_or_else(|| {
         SignerVaultError::InvalidEntry("`permissions` must be an array".to_owned())
     })?;
@@ -472,6 +551,18 @@ mod tests {
             &NetworkProfile::from_preset(ProfilePreset::FourPeerBft),
         )
     }
+    fn create_private_test_file(path: &Path) -> File {
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        options.open(path).expect("create private test vault")
+    }
+    fn write_private_test_file(path: &Path, bytes: impl AsRef<[u8]>) {
+        let mut file = create_private_test_file(path);
+        file.write_all(bytes.as_ref())
+            .expect("write private test vault");
+    }
     #[test]
     fn vault_roundtrip_preserves_signers() {
         let dir = tempdir().expect("temp dir");
@@ -522,6 +613,28 @@ mod tests {
         );
     }
     #[test]
+    fn parser_requires_canonical_private_key_and_explicit_permissions() {
+        let signer = &development_signing_authorities()[0];
+        let Value::Object(mut object) = encode_entry(signer).expect("encode development signer")
+        else {
+            panic!("encoded signer must be an object");
+        };
+        let private_key = object
+            .remove("private_key")
+            .expect("canonical private-key field");
+        object.insert("privateKey".to_owned(), private_key.clone());
+        let error = parse_entry(&Value::Object(object.clone()))
+            .expect_err("legacy private-key aliases must be rejected");
+        assert!(error.to_string().contains("missing `private_key`"));
+
+        object.remove("privateKey");
+        object.insert("private_key".to_owned(), private_key);
+        object.remove("permissions");
+        let error = parse_entry(&Value::Object(object))
+            .expect_err("permissions must be explicit");
+        assert!(error.to_string().contains("missing `permissions`"));
+    }
+    #[test]
     fn load_missing_vault_produces_empty_list() {
         let dir = tempdir().expect("temp dir");
         let paths = dummy_paths(dir.path());
@@ -529,13 +642,19 @@ mod tests {
         let vault = SignerVault::new(&paths);
         let loaded = vault.load().expect("load missing vault returns Ok");
         assert!(loaded.is_empty(), "missing vault should return empty set");
+        assert_eq!(
+            vault
+                .load_or_development()
+                .expect("missing vault uses development signers")
+                .len(),
+            development_signing_authorities().len()
+        );
     }
     #[test]
     fn bounded_vault_reader_accepts_exact_limit_and_rejects_first_overflow() {
         let dir = tempdir().expect("temp dir");
         let path = dir.path().join(SIGNERS_FILE_NAME);
-        File::create(&path)
-            .expect("create sparse exact-limit vault")
+        create_private_test_file(&path)
             .set_len(SIGNER_VAULT_MAX_BYTES_V1 as u64)
             .expect("size sparse exact-limit vault");
         assert_eq!(
@@ -545,8 +664,7 @@ mod tests {
                 .len(),
             SIGNER_VAULT_MAX_BYTES_V1
         );
-        File::create(&path)
-            .expect("replace sparse vault")
+        create_private_test_file(&path)
             .set_len((SIGNER_VAULT_MAX_BYTES_V1 + 1) as u64)
             .expect("size sparse overflow vault");
         let error = read_vault_file(&path).expect_err("first overflow byte must fail");
@@ -562,7 +680,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(",")
         );
-        fs::write(&path, payload).expect("write over-count vault");
+        write_private_test_file(&path, payload);
         let error = SignerVault::from_path(path)
             .load()
             .expect_err("first signer beyond the V1 count must fail");
@@ -620,10 +738,60 @@ mod tests {
             vec![InstructionPermission::TransferAsset],
             "updated permissions should persist"
         );
-        let tmp_path = vault.path().with_extension("json.tmp");
+        let file_name = vault
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("UTF-8 vault filename");
         assert!(
-            !tmp_path.exists(),
+            fs::read_dir(vault.path().parent().expect("vault parent"))
+                .expect("list vault parent")
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with(&format!(
+                    "{file_name}.tmp."
+                ))),
             "temporary vault file should be removed after rename"
         );
+    }
+    #[test]
+    fn existing_empty_vault_does_not_fall_back_to_development_keys() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join(SIGNERS_FILE_NAME);
+        write_private_test_file(&path, b"[]");
+        let error = SignerVault::from_path(path)
+            .load_or_development()
+            .expect_err("an existing empty vault must fail closed");
+        assert!(error.to_string().contains("at least one signer"));
+    }
+    #[test]
+    fn save_rejects_empty_vault() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join(SIGNERS_FILE_NAME);
+        let error = SignerVault::from_path(&path)
+            .save(&[])
+            .expect_err("empty signer vault must be rejected");
+        assert!(error.to_string().contains("empty signer vault"));
+        assert!(!path.exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn vault_is_owner_only_and_symlinks_are_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join(SIGNERS_FILE_NAME);
+        let vault = SignerVault::from_path(&path);
+        vault
+            .save(development_signing_authorities())
+            .expect("save private vault");
+        let mode = fs::metadata(&path).expect("vault metadata").mode() & 0o777;
+        assert_eq!(mode & 0o077, 0, "group and other bits must be clear");
+
+        let link_path = dir.path().join("linked-signers.json");
+        symlink(&path, &link_path).expect("create vault symlink");
+        let error = SignerVault::from_path(link_path)
+            .load()
+            .expect_err("vault symlinks must be rejected");
+        assert!(error.to_string().contains("not a symlink"));
     }
 }

@@ -2,8 +2,7 @@
 
 These commands help you decode **Iroha 3** data types from binaries using the Norito codec.
 
-> **Note:** The codec subcommands are gated behind the optional `codec` feature.
-> Run them via `cargo run -p iroha_kagami --features codec -- advanced codec <SUBCOMMAND>` or build the binary with that feature enabled.
+> Run them via `cargo run -p iroha_kagami -- advanced codec <SUBCOMMAND>` or use a built `kagami` binary directly.
 
 ### Subcommands
 
@@ -47,6 +46,9 @@ Algorithm
 
 Both commands by default read data from `stdin` and print result to `stdout`.
 There are flags `--input` and `--output` which can be used to read/write from files instead.
+Input and output must refer to different files. File output is rendered and
+validated first, then published atomically, so a failed conversion leaves an
+existing destination unchanged.
 
 Codec input and rendered output are limited to 64 MiB, matching the
 first-release signed-genesis artifact corridor (the largest registered codec

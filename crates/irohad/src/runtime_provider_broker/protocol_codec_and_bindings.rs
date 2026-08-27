@@ -321,8 +321,7 @@ struct ProviderIngestSourceFetchRequestWireV1 {
 }
 define_broker_wire_struct!(owned ProviderIngestCarPlanWireV1 { chunk_profile: ProviderIngestChunkProfileWireV1, payload_digest: [u8; 32], content_length: u64, chunks: Vec<ProviderIngestCarChunkWireV1>, files: Vec<ProviderIngestFilePlanWireV1>, });
 define_broker_wire_struct!(copy ProviderIngestChunkProfileWireV1 { min_size: u64, target_size: u64, max_size: u64, break_mask: u64, });
-define_broker_wire_struct!(owned ProviderIngestCarChunkWireV1 { offset: u64, length: u32, digest: [u8; 32], taikai_segment_hint: Option<ProviderIngestTaikaiSegmentHintWireV1>, });
-define_broker_wire_struct!(owned ProviderIngestTaikaiSegmentHintWireV1 { event: String, stream: String, rendition: String, sequence: u64, payload_len: Option<u64>, payload_digest: Option<[u8; 32]>, });
+define_broker_wire_struct!(copy ProviderIngestCarChunkWireV1 { offset: u64, length: u32, digest: [u8; 32], });
 define_broker_wire_struct!(owned ProviderIngestFilePlanWireV1 { path: Vec<String>, first_chunk: u64, chunk_count: u64, size: u64, });
 define_broker_wire_struct!(owned ProviderIngestSourceHeaderWireV1 { manifest: Vec<u8>, plan: Vec<u8>, content_length: u64, frame_count: u64, });
 define_broker_wire_struct!(owned ProviderIngestSourceChunkWireV1 { sequence: u64, offset: u64, bytes: Vec<u8>, });
@@ -693,16 +692,6 @@ fn source_plan_to_wire(
             offset: chunk.offset,
             length: chunk.length,
             digest: chunk.digest,
-            taikai_segment_hint: chunk.taikai_segment_hint.as_ref().map(|hint| {
-                ProviderIngestTaikaiSegmentHintWireV1 {
-                    event: hint.event.clone(),
-                    stream: hint.stream.clone(),
-                    rendition: hint.rendition.clone(),
-                    sequence: hint.sequence,
-                    payload_len: hint.payload_len,
-                    payload_digest: hint.payload_digest,
-                }
-            }),
         })
         .collect();
     let files = plan
@@ -756,16 +745,6 @@ fn source_plan_from_wire(
                 offset: chunk.offset,
                 length: chunk.length,
                 digest: chunk.digest,
-                taikai_segment_hint: chunk.taikai_segment_hint.map(|hint| {
-                    sorafs_car::TaikaiSegmentHint {
-                        event: hint.event,
-                        stream: hint.stream,
-                        rendition: hint.rendition,
-                        sequence: hint.sequence,
-                        payload_len: hint.payload_len,
-                        payload_digest: hint.payload_digest,
-                    }
-                }),
             })
             .collect(),
         files: wire

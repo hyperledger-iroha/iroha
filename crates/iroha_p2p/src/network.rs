@@ -60,7 +60,21 @@ fn test_network_id(seed: &str) -> NetworkId {
 #[cfg(test)]
 fn test_soranet_handshake_runtime() -> Arc<SoranetHandshakeRuntime> {
     let mut handshake = ActualSoranetHandshake::default();
-    handshake.pow.required = false;
+    handshake.pow.difficulty = 1;
+    handshake.pow.puzzle.memory_kib =
+        std::num::NonZeroU32::new(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB).unwrap();
+    handshake.pow.puzzle.time_cost = std::num::NonZeroU32::new(1).unwrap();
+    handshake.pow.puzzle.lanes = std::num::NonZeroU32::new(1).unwrap();
+    static TEST_REPLAY_DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    static NEXT_REPLAY_STORE: AtomicU64 = AtomicU64::new(0);
+    let replay_dir = TEST_REPLAY_DIR.get_or_init(|| tempfile::tempdir().expect("test replay dir"));
+    let store_id = NEXT_REPLAY_STORE.fetch_add(1, Ordering::Relaxed);
+    handshake.pow.revocation_store_path = replay_dir
+        .path()
+        .join(format!("revocations-{store_id}.norito"))
+        .to_string_lossy()
+        .into_owned()
+        .into();
     runtime_from_handshake(handshake).expect("test SoraNet handshake runtime")
 }
 #[cfg(feature = "quic")]
@@ -18060,7 +18074,12 @@ mod tests {
         let initial_capacity = initial.puzzle_work_capacities().0;
         let changed_capacity = if initial_capacity.get() == 1 { 2 } else { 1 };
         let mut rejected = ActualSoranetHandshake::default();
-        rejected.pow.required = false;
+        rejected.pow.revocation_store_path = network
+            .soranet_handshake
+            .replay_state_path()
+            .to_string_lossy()
+            .into_owned()
+            .into();
         rejected.pow.outbound_mint_capacity =
             std::num::NonZeroUsize::new(changed_capacity).expect("non-zero capacity");
         let (rejected_response, rejected_result) = oneshot::channel();
@@ -18085,7 +18104,12 @@ mod tests {
         ));
 
         let mut accepted = ActualSoranetHandshake::default();
-        accepted.pow.required = false;
+        accepted.pow.revocation_store_path = network
+            .soranet_handshake
+            .replay_state_path()
+            .to_string_lossy()
+            .into_owned()
+            .into();
         accepted.pow.difficulty = 6;
         let (accepted_response, accepted_result) = oneshot::channel();
         network.handle_soranet_handshake_update(message::UpdateHandshake {
@@ -18100,7 +18124,7 @@ mod tests {
             .soranet_handshake
             .snapshot()
             .expect("policy after acceptance");
-        assert_eq!(active.pow_parameters().difficulty(), 6);
+        assert_eq!(active.puzzle_parameters().difficulty(), 6);
         assert!(!Arc::ptr_eq(&initial, &active));
     }
     fn bare_network_with<T: Pload + message::ClassifyTopic>()

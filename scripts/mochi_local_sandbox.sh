@@ -20,7 +20,7 @@ Commands:
 
 Environment:
   MOCHI_WORKSPACE_ROOT         Workspace root for .env.local and .mochi/generated/* (default: current directory)
-  MOCHI_PROFILE                Preset profile slug (four-peer-bft; legacy single-peer also launches 4)
+  MOCHI_PROFILE                Preset profile slug (four-peer-bft)
   MOCHI_PROFILE_SLUG           Explicit sandbox slug override when MOCHI_PROFILE is custom
   MOCHI_CARGO_TARGET_DIR       Cargo target dir for `cargo run`/auto-builds (default: <workspace>/.mochi/build-target)
   MOCHI_START_TIMEOUT_SECONDS  Seconds to wait for session.json readiness (default: 1200)
@@ -48,11 +48,11 @@ resolve_profile_slug() {
 
   local profile="${MOCHI_PROFILE:-$DEFAULT_PROFILE}"
   case "$profile" in
-    single-peer|four-peer-bft)
+    four-peer-bft)
       printf '%s\n' "$profile"
       ;;
     *)
-      printf 'Unsupported MOCHI_PROFILE `%s`. Use four-peer-bft (or legacy single-peer), or set MOCHI_PROFILE_SLUG explicitly.\n' "$profile" >&2
+      printf 'Unsupported MOCHI_PROFILE `%s`. Use four-peer-bft, or set MOCHI_PROFILE_SLUG explicitly.\n' "$profile" >&2
       return 1
       ;;
   esac
@@ -115,6 +115,41 @@ elif isinstance(value, list):
         print(item)
 else:
     print(value)
+PY
+}
+
+dotenv_field() {
+  local env_file="$1"
+  local field="$2"
+  "$PYTHON_BIN" - "$env_file" "$field" <<'PY'
+import json
+import os
+import stat
+import sys
+
+path, field = sys.argv[1], sys.argv[2]
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+try:
+    descriptor = os.open(path, flags)
+except OSError:
+    raise SystemExit(1)
+with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+    metadata = os.fstat(handle.fileno())
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 64 * 1024:
+        raise SystemExit(1)
+    if metadata.st_mode & 0o077:
+        raise SystemExit(1)
+    if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
+        raise SystemExit(1)
+    for line in handle:
+        name, separator, raw_value = line.rstrip("\n").partition("=")
+        if separator and name == field:
+            value = raw_value.strip()
+            if value.startswith('"'):
+                value = json.loads(value)
+            print(value)
+            raise SystemExit(0)
+raise SystemExit(1)
 PY
 }
 
@@ -365,11 +400,12 @@ require_session() {
 }
 
 cmd_env() {
-  local workspace_root profile_slug sandbox_root session_file account_id private_key
+  local workspace_root profile_slug sandbox_root session_file env_file account_id private_key
   workspace_root="$(resolve_workspace_root)"
   profile_slug="$(resolve_profile_slug)"
   sandbox_root="$(resolve_sandbox_root "$workspace_root" "$profile_slug")"
   session_file="${sandbox_root}/session.json"
+  env_file="${workspace_root}/.env.local"
 
   require_session "$session_file"
 
@@ -382,7 +418,7 @@ cmd_env() {
   if account_id="$(json_field "$session_file" account_id 2>/dev/null)"; then
     printf 'export IROHA_ACCOUNT_ID=%s\n' "$(shell_quote "$account_id")"
   fi
-  if private_key="$(json_field "$session_file" private_key 2>/dev/null)"; then
+  if private_key="$(dotenv_field "$env_file" IROHA_PRIVATE_KEY 2>/dev/null)"; then
     printf 'export IROHA_PRIVATE_KEY=%s\n' "$(shell_quote "$private_key")"
   fi
 }

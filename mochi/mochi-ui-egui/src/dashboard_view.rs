@@ -240,9 +240,6 @@ impl MochiApp {
                         .show(&mut columns[0], |ui| {
                             ui.label(RichText::new(&card.label).strong());
                             ui.small(&card.account_id);
-                            if let Some(address) = &card.i105_address {
-                                ui.small(format!("i105: {address}"));
-                            }
                             if !card.balances.is_empty() {
                                 ui.add_space(6.0);
                                 for balance in card.balances.iter().take(4) {

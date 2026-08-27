@@ -281,9 +281,6 @@ pub enum SupervisorError {
     /// Validation of a Kagami verify report failed.
     #[error("kagami verify rejected: {0}")]
     KagamiVerify(String),
-    /// Failed to probe a binary version string.
-    #[error("failed to probe `{binary}` version: {message}")]
-    VersionProbeFailed { binary: String, message: String },
     /// Attempted to start an already running peer.
     #[error("peer `{alias}` already running")]
     PeerAlreadyRunning { alias: String },
@@ -772,119 +769,33 @@ impl Default for RestartPolicy {
         }
     }
 }
-/// Describes where a binary path originated so UI layers can surface actionable hints.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BinarySource {
-    /// Explicit override supplied via config/CLI/env.
-    Explicit,
-    /// Discovered via a specific environment variable.
-    Env(&'static str),
-    /// Discovered via a Cargo-set binary env var.
-    CargoEnv(&'static str),
-    /// Located next to the currently running executable.
-    CurrentExeNeighbor,
-    /// Located under the workspace target directory (profile captured for context).
-    WorkspaceTarget(String),
-    /// Found on the system PATH.
-    PathSearch,
-    /// Default unresolved placeholder.
-    AutoDefault,
-    /// Produced by an on-demand cargo build.
-    Built,
-}
-impl BinarySource {
-    fn label(&self) -> String {
-        match self {
-            Self::Explicit => "explicit override".to_owned(),
-            Self::Env(var) => format!("{var} environment variable"),
-            Self::CargoEnv(var) => format!("{var} cargo env"),
-            Self::CurrentExeNeighbor => "bundle directory".to_owned(),
-            Self::WorkspaceTarget(profile) => format!("workspace target/{profile}"),
-            Self::PathSearch => "PATH".to_owned(),
-            Self::AutoDefault => "default lookup".to_owned(),
-            Self::Built => "cargo build".to_owned(),
-        }
-    }
-}
-/// Version and build metadata discovered for a binary.
 #[derive(Debug, Clone)]
-pub struct BinaryVersionInfo {
-    /// Logical name used by the supervisor.
-    pub name: &'static str,
-    /// Resolved path to the executable.
-    pub path: PathBuf,
-    /// Parsed version string when available.
-    pub version: Option<String>,
-    /// Raw stdout/stderr captured during probing.
-    pub raw_output: Option<String>,
-    /// Where the executable was discovered.
-    source: BinarySource,
+struct KagamiVerifyReport {
+    chain_id: Option<String>,
+    vrf_seed_hex: Option<String>,
+    fingerprint: Option<String>,
 }
-impl BinaryVersionInfo {
-    /// Human-readable source label for display.
-    pub fn source_label(&self) -> String {
-        self.source.label()
+fn validate_kagami_verify_binding(
+    report: &KagamiVerifyReport,
+    chain_id: &str,
+    vrf_seed_hex: Option<&str>,
+) -> Result<()> {
+    if let Some(observed_chain_id) = &report.chain_id
+        && observed_chain_id != chain_id
+    {
+        return Err(SupervisorError::KagamiVerify(format!(
+            "kagami verify reported chain `{observed_chain_id}` but genesis was built for `{chain_id}`"
+        )));
     }
-}
-/// Structured summary emitted by `kagami verify`.
-#[derive(Debug, Clone)]
-pub struct KagamiVerifyReport {
-    /// Profile the verification targeted.
-    pub profile: GenesisProfile,
-    /// Reported chain identifier (if present).
-    pub chain_id: Option<String>,
-    /// VRF seed (hex) forwarded to Kagami, if any.
-    pub vrf_seed_hex: Option<String>,
-    /// Number of peers with PoP keys, when surfaced by Kagami.
-    pub peers_with_pop: Option<u16>,
-    /// Optional Kagami fingerprint or hash.
-    pub fingerprint: Option<String>,
-    /// Full stdout/stderr output from the verification command.
-    pub raw_output: String,
-}
-impl KagamiVerifyReport {
-    fn summary_fragment(&self) -> String {
-        let mut parts = Vec::new();
-        if let Some(chain_id) = &self.chain_id {
-            parts.push(format!("chain {chain_id}"));
-        }
-        if let Some(fingerprint) = &self.fingerprint {
-            parts.push(format!("fingerprint {fingerprint}"));
-        }
-        parts.join(" • ")
+    if let (Some(expected_seed), Some(observed_seed)) =
+        (vrf_seed_hex, report.vrf_seed_hex.as_deref())
+        && observed_seed != expected_seed
+    {
+        return Err(SupervisorError::KagamiVerify(format!(
+            "kagami verify reported vrf seed `{observed_seed}` but `{expected_seed}` was configured"
+        )));
     }
-}
-/// Compatibility and version summary for a prepared supervisor.
-#[derive(Debug, Clone)]
-pub struct CompatibilityReport {
-    /// Build-line and version data for binaries.
-    pub versions: Vec<BinaryVersionInfo>,
-    /// Optional verification output from `kagami verify`.
-    pub verify: Option<KagamiVerifyReport>,
-    /// Chain identifier bound to the supervisor.
-    pub chain_id: String,
-    /// Genesis profile used to construct the network, if any.
-    pub profile: Option<GenesisProfile>,
-}
-impl CompatibilityReport {
-    /// One-line human readable summary suitable for the UI header.
-    pub fn summary_line(&self) -> String {
-        let mut fragments = Vec::new();
-        if let Some(profile) = self.profile {
-            fragments.push(format!("profile {}", profile.as_kagami_arg()));
-        }
-        if let Some(verify) = &self.verify {
-            let frag = verify.summary_fragment();
-            if !frag.is_empty() {
-                fragments.push(frag);
-            }
-        }
-        if fragments.is_empty() {
-            format!("chain {}", self.chain_id)
-        } else {
-            format!("chain {} • {}", self.chain_id, fragments.join(" • "))
-        }
-    }
+    Ok(())
 }
 /// Connection details for the active Mochi sandbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -909,8 +820,6 @@ pub struct SupervisorSessionInfo {
     pub mcp_url: String,
     /// Preferred local dev signer account identifier.
     pub account_id: Option<String>,
-    /// Preferred local dev signer private key.
-    pub private_key: Option<String>,
     /// Stable identifier for the managed local account-onboarding credential.
     pub onboarding_credential_id: String,
     /// Owner-only file containing the local account-onboarding signer.
@@ -925,24 +834,17 @@ pub struct BinaryPaths {
     irohad_verified: bool,
     irohad_build_attempted: bool,
     irohad_auto: bool,
-    irohad_source: BinarySource,
     kagami: PathBuf,
     kagami_verified: bool,
     kagami_build_attempted: bool,
     kagami_auto: bool,
-    kagami_source: BinarySource,
-    iroha_cli: PathBuf,
-    iroha_cli_verified: bool,
-    iroha_cli_build_attempted: bool,
-    iroha_cli_auto: bool,
-    iroha_cli_source: BinarySource,
     allow_builds: bool,
 }
 fn default_binary_entry(
     env_override: &'static str,
     cargo_env: &'static str,
     binary: &str,
-) -> (PathBuf, bool, BinarySource) {
+) -> (PathBuf, bool) {
     let exe_name = format!("{binary}{}", env::consts::EXE_SUFFIX);
     let env_path = |key: &str| {
         env::var_os(key)
@@ -950,17 +852,17 @@ fn default_binary_entry(
             .map(PathBuf::from)
     };
     if let Some(path) = env_path(env_override) {
-        return (path, false, BinarySource::Env(env_override));
+        return (path, false);
     }
     if let Some(path) = env_path(cargo_env) {
-        return (path, false, BinarySource::CargoEnv(cargo_env));
+        return (path, false);
     }
     if let Ok(current) = env::current_exe()
         && let Some(dir) = current.parent()
     {
         let candidate = dir.join(&exe_name);
         if candidate.exists() {
-            return (candidate, true, BinarySource::CurrentExeNeighbor);
+            return (candidate, true);
         }
     }
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -968,53 +870,17 @@ fn default_binary_entry(
         for profile in ["debug", "release"] {
             let candidate = workspace.join("target").join(profile).join(&exe_name);
             if candidate.exists() {
-                return (
-                    candidate,
-                    true,
-                    BinarySource::WorkspaceTarget(profile.to_owned()),
-                );
+                return (candidate, true);
             }
         }
     }
-    (PathBuf::from(binary), true, BinarySource::AutoDefault)
+    (PathBuf::from(binary), true)
 }
-fn default_irohad_entry() -> (PathBuf, bool, BinarySource) {
+fn default_irohad_entry() -> (PathBuf, bool) {
     default_binary_entry("MOCHI_IROHAD", "CARGO_BIN_EXE_iroha3d", "iroha3d")
 }
-fn default_kagami_entry() -> (PathBuf, bool, BinarySource) {
+fn default_kagami_entry() -> (PathBuf, bool) {
     default_binary_entry("MOCHI_KAGAMI", "CARGO_BIN_EXE_kagami", "kagami")
-}
-fn default_iroha_cli_entry() -> (PathBuf, bool, BinarySource) {
-    default_binary_entry("MOCHI_IROHA_CLI", "CARGO_BIN_EXE_iroha_cli", "iroha_cli")
-}
-fn resolve_iroha_cli_alias() -> Option<(PathBuf, BinarySource)> {
-    for bin in ["iroha3", "iroha"] {
-        let exe_name = format!("{bin}{}", env::consts::EXE_SUFFIX);
-        if let Ok(current) = env::current_exe()
-            && let Some(dir) = current.parent()
-        {
-            let candidate = dir.join(&exe_name);
-            if is_executable_file(&candidate) {
-                return Some((candidate, BinarySource::CurrentExeNeighbor));
-            }
-        }
-        let target_root = env::var_os("CARGO_TARGET_DIR")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| workspace_root().map(|workspace| workspace.join("target")));
-        if let Some(target_root) = target_root {
-            for profile in ["debug", "release"] {
-                let candidate = target_root.join(profile).join(&exe_name);
-                if is_executable_file(&candidate) {
-                    return Some((candidate, BinarySource::WorkspaceTarget(profile.to_owned())));
-                }
-            }
-        }
-        if let Some(resolved) = resolve_name_on_path(OsStr::new(bin)) {
-            return Some((resolved, BinarySource::PathSearch));
-        }
-    }
-    None
 }
 impl BinaryPaths {
     /// Override the path to the `iroha3d` executable.
@@ -1023,7 +889,6 @@ impl BinaryPaths {
         self.irohad_verified = false;
         self.irohad_build_attempted = false;
         self.irohad_auto = false;
-        self.irohad_source = BinarySource::Explicit;
         self
     }
     /// Override the path to the `kagami` executable.
@@ -1032,16 +897,6 @@ impl BinaryPaths {
         self.kagami_verified = false;
         self.kagami_build_attempted = false;
         self.kagami_auto = false;
-        self.kagami_source = BinarySource::Explicit;
-        self
-    }
-    /// Override the path to the `iroha_cli` executable.
-    pub fn iroha_cli(mut self, path: impl Into<PathBuf>) -> Self {
-        self.iroha_cli = path.into();
-        self.iroha_cli_verified = false;
-        self.iroha_cli_build_attempted = false;
-        self.iroha_cli_auto = false;
-        self.iroha_cli_source = BinarySource::Explicit;
         self
     }
     /// Enable or disable automatic cargo builds when binaries are missing.
@@ -1049,64 +904,20 @@ impl BinaryPaths {
         self.allow_builds = allow;
         self
     }
-    fn probe_versions(&mut self) -> Result<Vec<BinaryVersionInfo>> {
-        let irohad = self.ensure_irohad_ready()?.to_path_buf();
-        let irohad_source = self.irohad_source.clone();
-        let kagami = self.ensure_kagami_ready()?.to_path_buf();
-        let kagami_source = self.kagami_source.clone();
-        let iroha_cli = self.ensure_iroha_cli_ready()?.to_path_buf();
-        let iroha_cli_source = self.iroha_cli_source.clone();
-        let entries = [
-            ("iroha3d", irohad, irohad_source),
-            ("kagami", kagami, kagami_source),
-            ("iroha_cli", iroha_cli, iroha_cli_source),
-        ];
-        let mut versions = Vec::with_capacity(entries.len());
-        for (name, path, source) in entries {
-            versions.push(Self::probe_single_version(name, &path, source)?);
-        }
-        Ok(versions)
-    }
-    fn probe_single_version(
-        name: &'static str,
-        path: &Path,
-        source: BinarySource,
-    ) -> Result<BinaryVersionInfo> {
-        let (raw_output, version) = probe_version_output(path, name)?;
-        Ok(BinaryVersionInfo {
-            name,
-            path: path.to_path_buf(),
-            version,
-            raw_output,
-            source,
-        })
-    }
     fn irohad_executable(&self) -> &Path {
         &self.irohad
     }
     fn ensure_irohad_ready(&mut self) -> Result<&Path> {
-        if self.irohad_verified && is_executable_file(&self.irohad) {
-            return Ok(&self.irohad);
-        }
-        if is_explicit_path(&self.irohad) && is_executable_file(&self.irohad) {
+        if is_executable_file(&self.irohad) {
             self.irohad_verified = true;
-            self.irohad_source = BinarySource::Explicit;
             return Ok(&self.irohad);
         }
         if !is_explicit_path(&self.irohad) {
             if let Some(resolved) = resolve_name_on_path(self.irohad.as_os_str()) {
                 self.irohad = resolved;
                 self.irohad_verified = true;
-                self.irohad_source = BinarySource::PathSearch;
                 return Ok(&self.irohad);
             }
-        } else if let Some(name) = self.irohad.file_name()
-            && let Some(resolved) = resolve_name_on_path(name)
-        {
-            self.irohad = resolved;
-            self.irohad_verified = true;
-            self.irohad_source = BinarySource::PathSearch;
-            return Ok(&self.irohad);
         }
         if self.allow_builds && self.irohad_auto && !self.irohad_build_attempted {
             self.irohad_build_attempted = true;
@@ -1115,16 +926,11 @@ impl BinaryPaths {
                     Ok(path) => {
                         self.irohad = path;
                         self.irohad_verified = true;
-                        self.irohad_source = BinarySource::Built;
                         return Ok(&self.irohad);
                     }
                     Err(err) => return Err(err),
                 }
             }
-        }
-        if is_executable_file(&self.irohad) {
-            self.irohad_verified = true;
-            return Ok(&self.irohad);
         }
         let message = if self.irohad_auto {
             format!(
@@ -1145,28 +951,16 @@ impl BinaryPaths {
         })
     }
     fn ensure_kagami_ready(&mut self) -> Result<&Path> {
-        if self.kagami_verified && is_executable_file(&self.kagami) {
-            return Ok(&self.kagami);
-        }
-        if is_explicit_path(&self.kagami) && is_executable_file(&self.kagami) {
+        if is_executable_file(&self.kagami) {
             self.kagami_verified = true;
-            self.kagami_source = BinarySource::Explicit;
             return Ok(&self.kagami);
         }
         if !is_explicit_path(&self.kagami) {
             if let Some(resolved) = resolve_name_on_path(self.kagami.as_os_str()) {
                 self.kagami = resolved;
                 self.kagami_verified = true;
-                self.kagami_source = BinarySource::PathSearch;
                 return Ok(&self.kagami);
             }
-        } else if let Some(name) = self.kagami.file_name()
-            && let Some(resolved) = resolve_name_on_path(name)
-        {
-            self.kagami = resolved;
-            self.kagami_verified = true;
-            self.kagami_source = BinarySource::PathSearch;
-            return Ok(&self.kagami);
         }
         if self.allow_builds && self.kagami_auto && !self.kagami_build_attempted {
             self.kagami_build_attempted = true;
@@ -1175,16 +969,11 @@ impl BinaryPaths {
                     Ok(path) => {
                         self.kagami = path;
                         self.kagami_verified = true;
-                        self.kagami_source = BinarySource::Built;
                         return Ok(&self.kagami);
                     }
                     Err(err) => return Err(err),
                 }
             }
-        }
-        if is_executable_file(&self.kagami) {
-            self.kagami_verified = true;
-            return Ok(&self.kagami);
         }
         let message = if self.kagami_auto {
             format!(
@@ -1204,149 +993,40 @@ impl BinaryPaths {
             message,
         })
     }
-    fn iroha_cli_executable(&self) -> &Path {
-        &self.iroha_cli
-    }
-    fn ensure_iroha_cli_ready(&mut self) -> Result<&Path> {
-        if self.iroha_cli_verified && is_executable_file(&self.iroha_cli) {
-            return Ok(&self.iroha_cli);
-        }
-        if is_explicit_path(&self.iroha_cli) && is_executable_file(&self.iroha_cli) {
-            self.iroha_cli_verified = true;
-            self.iroha_cli_source = BinarySource::Explicit;
-            return Ok(&self.iroha_cli);
-        }
-        if !is_explicit_path(&self.iroha_cli) {
-            if let Some(resolved) = resolve_name_on_path(self.iroha_cli.as_os_str()) {
-                self.iroha_cli = resolved;
-                self.iroha_cli_verified = true;
-                self.iroha_cli_source = BinarySource::PathSearch;
-                return Ok(&self.iroha_cli);
-            }
-        } else if let Some(name) = self.iroha_cli.file_name()
-            && let Some(resolved) = resolve_name_on_path(name)
-        {
-            self.iroha_cli = resolved;
-            self.iroha_cli_verified = true;
-            self.iroha_cli_source = BinarySource::PathSearch;
-            return Ok(&self.iroha_cli);
-        }
-        if let Some((resolved, source)) = resolve_iroha_cli_alias() {
-            self.iroha_cli = resolved;
-            self.iroha_cli_verified = true;
-            self.iroha_cli_source = source;
-            return Ok(&self.iroha_cli);
-        }
-        if self.allow_builds && self.iroha_cli_auto && !self.iroha_cli_build_attempted {
-            self.iroha_cli_build_attempted = true;
-            if let Some(workspace) = workspace_root() {
-                match try_build_iroha_cli(&workspace) {
-                    Ok(path) => {
-                        self.iroha_cli = path;
-                        self.iroha_cli_verified = true;
-                        self.iroha_cli_source = BinarySource::Built;
-                        return Ok(&self.iroha_cli);
-                    }
-                    Err(err) => return Err(err),
-                }
-            }
-        }
-        if is_executable_file(&self.iroha_cli) {
-            self.iroha_cli_verified = true;
-            return Ok(&self.iroha_cli);
-        }
-        let message = if self.iroha_cli_auto {
-            format!(
-                "looked for `{}` and searched on PATH; run `cargo build -p iroha_cli` \
-                 or set `MOCHI_IROHA_CLI`/`binaries.iroha_cli` to the executable",
-                self.iroha_cli.display()
-            )
-        } else {
-            format!(
-                "configured path `{}` is not executable; adjust \
-                 `MOCHI_IROHA_CLI`/`binaries.iroha_cli` to point at a valid `iroha_cli` binary",
-                self.iroha_cli.display()
-            )
-        };
-        Err(SupervisorError::BinaryUnavailable {
-            binary: "iroha_cli",
-            message,
-        })
-    }
 }
 impl Default for BinaryPaths {
     fn default() -> Self {
-        let (irohad, irohad_auto, irohad_source) = default_irohad_entry();
-        let (kagami, kagami_auto, kagami_source) = default_kagami_entry();
-        let (iroha_cli, iroha_cli_auto, iroha_cli_source) = default_iroha_cli_entry();
+        let (irohad, irohad_auto) = default_irohad_entry();
+        let (kagami, kagami_auto) = default_kagami_entry();
         Self {
             irohad,
             irohad_verified: false,
             irohad_build_attempted: false,
             irohad_auto,
-            irohad_source,
             kagami,
             kagami_verified: false,
             kagami_build_attempted: false,
             kagami_auto,
-            kagami_source,
-            iroha_cli,
-            iroha_cli_verified: false,
-            iroha_cli_build_attempted: false,
-            iroha_cli_auto,
-            iroha_cli_source,
             allow_builds: false,
         }
     }
-}
-fn probe_version_output(path: &Path, binary: &str) -> Result<(Option<String>, Option<String>)> {
-    let output = Command::new(path)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|err| SupervisorError::VersionProbeFailed {
-            binary: binary.to_owned(),
-            message: err.to_string(),
-        })?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let mut raw_output = None;
-    if !stdout.trim().is_empty() || !stderr.trim().is_empty() {
-        let mut combined = stdout.trim_end().to_owned();
-        let stderr_trimmed = stderr.trim_end();
-        if !stderr_trimmed.is_empty() {
-            if !combined.is_empty() {
-                combined.push('\n');
-            }
-            combined.push_str(stderr_trimmed);
-        }
-        raw_output = Some(combined);
-    }
-    if !output.status.success() {
-        let message = if let Some(raw) = &raw_output {
-            format!("`{binary} --version` exited with {}: {raw}", output.status)
-        } else {
-            format!("`{binary} --version` exited with {}", output.status)
-        };
-        return Err(SupervisorError::VersionProbeFailed {
-            binary: binary.to_owned(),
-            message,
-        });
-    }
-    let version = raw_output
-        .as_deref()
-        .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
-        .map(|line| line.trim().to_owned());
-    Ok((raw_output, version))
 }
 fn is_explicit_path(path: &Path) -> bool {
     path.has_root() || path.components().count() > 1
 }
 fn is_executable_file(path: &Path) -> bool {
     match fs::metadata(path) {
-        Ok(meta) => meta.is_file(),
+        Ok(meta) if meta.is_file() => {
+            #[cfg(unix)]
+            {
+                meta.permissions().mode() & 0o111 != 0
+            }
+            #[cfg(not(unix))]
+            {
+                true
+            }
+        }
+        Ok(_) => false,
         Err(_) => false,
     }
 }
@@ -1482,53 +1162,6 @@ fn try_build_kagami(workspace: &Path) -> Result<PathBuf> {
         binary: "kagami",
         message: format!(
             "built `kagami` but could not find an executable under `{}`",
-            target_root.display()
-        ),
-    })
-}
-fn try_build_iroha_cli(workspace: &Path) -> Result<PathBuf> {
-    let cargo = env::var_os("CARGO")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("cargo"));
-    let mut command = Command::new(&cargo);
-    command
-        .current_dir(workspace)
-        .arg("build")
-        .arg("-p")
-        .arg("iroha_cli")
-        .stdout(Stdio::null());
-    let status = command
-        .status()
-        .map_err(|err| SupervisorError::BinaryUnavailable {
-            binary: "iroha_cli",
-            message: format!("failed to invoke `{}`: {err}", cargo.display()),
-        })?;
-    if !status.success() {
-        return Err(SupervisorError::BinaryUnavailable {
-            binary: "iroha_cli",
-            message: format!("`cargo build -p iroha_cli` exited with status {status}"),
-        });
-    }
-    let target_root = env::var_os("CARGO_TARGET_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.join("target"));
-    for bin in ["iroha3", "iroha"] {
-        let exe_name = format!("{bin}{}", env::consts::EXE_SUFFIX);
-        for candidate in [
-            target_root.join("debug").join(&exe_name),
-            target_root.join("release").join(&exe_name),
-        ] {
-            if is_executable_file(&candidate) {
-                return Ok(candidate);
-            }
-        }
-    }
-    Err(SupervisorError::BinaryUnavailable {
-        binary: "iroha_cli",
-        message: format!(
-            "built `iroha_cli` but could not find an `iroha3`/`iroha` executable under `{}`",
             target_root.display()
         ),
     })
@@ -1681,11 +1314,6 @@ impl SupervisorBuilder {
     /// Override just the `kagami` binary path.
     pub fn kagami_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.binaries = self.binaries.clone().kagami(path);
-        self
-    }
-    /// Override just the `iroha_cli` binary path.
-    pub fn iroha_cli_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.binaries = self.binaries.clone().iroha_cli(path);
         self
     }
     /// Configure the restart policy for managed peers.
@@ -1875,11 +1503,6 @@ impl SupervisorBuilder {
                     .to_owned(),
             ));
         }
-        if self.genesis_profile.is_some() {
-            binaries.ensure_irohad_ready()?;
-            binaries.ensure_kagami_ready()?;
-            binaries.ensure_iroha_cli_ready()?;
-        }
         let mut torii_ports = PortAllocator::new(self.torii_base_port);
         let mut p2p_ports = PortAllocator::new(self.p2p_base_port);
         let mut reserved_ports = HashSet::new();
@@ -1976,8 +1599,8 @@ impl SupervisorBuilder {
                 .map(|spec| PeerHandle::prepared(spec, paths.logs_dir(), self.restart_policy))
                 .collect::<Vec<_>>();
             let vault = SignerVault::new(&paths);
-            let signers = vault.load_with_fallback();
-            let mut supervisor = Supervisor {
+            let signers = vault.load_or_development()?;
+            let supervisor = Supervisor {
                 profile: self.profile,
                 paths,
                 chain_id,
@@ -1987,12 +1610,9 @@ impl SupervisorBuilder {
                 onboarding,
                 binaries,
                 peer_config_overrides: peer_config_overrides.clone(),
-                compatibility: None,
                 irohad_ready: false,
-                iroha_cli_ready: false,
                 _ownership_lock: ownership_lock,
             };
-            supervisor.run_compatibility_checks()?;
             Ok(supervisor)
         })();
         let uncertainty = publication.take_uncertainty();
@@ -2510,9 +2130,7 @@ pub struct Supervisor {
     onboarding: OnboardingRuntimeBundle,
     binaries: BinaryPaths,
     peer_config_overrides: PeerConfigOverrides,
-    compatibility: Option<CompatibilityReport>,
     irohad_ready: bool,
-    iroha_cli_ready: bool,
     _ownership_lock: Arc<SupervisorOwnershipLock>,
 }
 impl Supervisor {
@@ -2539,18 +2157,6 @@ impl Supervisor {
     }
     fn irohad_path(&mut self) -> Result<PathBuf> {
         self.ensure_irohad().map(|path| path.to_path_buf())
-    }
-    fn ensure_iroha_cli(&mut self) -> Result<&Path> {
-        if !self.iroha_cli_ready {
-            let path = self.binaries.ensure_iroha_cli_ready()?;
-            self.iroha_cli_ready = true;
-            return Ok(path);
-        }
-        Ok(self.binaries.iroha_cli_executable())
-    }
-    /// Resolve the path to the configured `iroha_cli` binary, verifying it if necessary.
-    pub fn iroha_cli_path(&mut self) -> Result<PathBuf> {
-        self.ensure_iroha_cli().map(|path| path.to_path_buf())
     }
     fn refresh_peer_states_with(&mut self, irohad: &Path) {
         let ownership_lock = Arc::clone(&self._ownership_lock);
@@ -2683,14 +2289,6 @@ impl Supervisor {
     pub fn genesis_block_file(&self) -> &Path {
         &self.genesis.block_path
     }
-    /// Optional verification report emitted by `kagami verify` when a profile is selected.
-    pub fn genesis_verify_report(&self) -> Option<&KagamiVerifyReport> {
-        self.genesis.verify_report.as_ref()
-    }
-    /// Cached compatibility summary for the configured binaries and genesis.
-    pub fn compatibility(&self) -> Option<&CompatibilityReport> {
-        self.compatibility.as_ref()
-    }
     /// Returns the prepared peers in their current states.
     pub fn peers(&self) -> &[PeerHandle] {
         &self.peers
@@ -2708,16 +2306,11 @@ impl Supervisor {
     pub fn signer_vault(&self) -> SignerVault {
         SignerVault::new(&self.paths)
     }
-    /// Reload signing authorities from disk, applying fallback keys when necessary.
-    pub fn reload_signers(&mut self) {
-        let vault = SignerVault::new(&self.paths);
-        self.signers = vault.load_with_fallback();
-    }
     /// Persist new signing authorities and refresh the in-memory cache.
     pub fn save_signers(&mut self, signers: &[SigningAuthority]) -> Result<()> {
         let vault = SignerVault::new(&self.paths);
         vault.save(signers)?;
-        self.signers = vault.load_with_fallback();
+        self.signers = signers.to_vec();
         Ok(())
     }
     /// Build a readiness smoke plan using the genesis signing authority.
@@ -2799,8 +2392,6 @@ impl Supervisor {
             torii_url,
             mcp_url,
             account_id: signer.map(|entry| entry.account_id().to_string()),
-            private_key: signer
-                .map(|entry| ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string()),
             onboarding_credential_id: LOCAL_ONBOARDING_CREDENTIAL_ID.to_owned(),
             onboarding_signer_file: self.onboarding.private_key_file.clone(),
             onboarding_token_file: self.onboarding.token_file.clone(),
@@ -2855,41 +2446,9 @@ impl Supervisor {
     pub fn binaries(&self) -> &BinaryPaths {
         &self.binaries
     }
-    fn run_compatibility_checks(&mut self) -> Result<()> {
-        let versions = self.binaries.probe_versions()?;
-        if self.genesis.profile.is_some()
-            && let Some(report) = &self.genesis.verify_report
-        {
-            if let Some(chain_id) = &report.chain_id
-                && chain_id != &self.chain_id
-            {
-                return Err(SupervisorError::KagamiVerify(format!(
-                    "kagami verify reported chain `{chain_id}` but supervisor is configured for `{}`",
-                    self.chain_id
-                )));
-            }
-            if let Some(expected_seed) = &self.genesis.vrf_seed_hex
-                && let Some(observed_seed) = &report.vrf_seed_hex
-                && observed_seed != expected_seed
-            {
-                return Err(SupervisorError::KagamiVerify(format!(
-                    "kagami verify reported vrf seed `{observed_seed}` but `{expected}` was configured",
-                    expected = expected_seed
-                )));
-            }
-        }
-        self.compatibility = Some(CompatibilityReport {
-            versions,
-            verify: self.genesis.verify_report.clone(),
-            chain_id: self.chain_id.clone(),
-            profile: self.genesis.profile,
-        });
-        Ok(())
-    }
     /// Start all peers managed by the supervisor.
     pub fn start_all(&mut self) -> Result<()> {
         let (_selected, _selection_lease) = self.selected_generation_with_lease()?;
-        self.run_compatibility_checks()?;
         let irohad_path = self.irohad_path()?;
         self.refresh_peer_states_with(&irohad_path);
         let mut started = Vec::new();
@@ -2931,7 +2490,6 @@ impl Supervisor {
     /// Start a single peer by alias.
     pub fn start_peer(&mut self, alias: &str) -> Result<()> {
         let (_selected, _selection_lease) = self.selected_generation_with_lease()?;
-        self.run_compatibility_checks()?;
         let index = self
             .peers
             .iter()
@@ -4701,6 +4259,9 @@ impl GenesisMaterial {
         } else {
             None
         };
+        if let Some(report) = &verify_report {
+            validate_kagami_verify_binding(report, chain_id, vrf_seed_hex)?;
+        }
         let consensus_fingerprint = verify_report
             .as_ref()
             .and_then(|report| report.fingerprint.clone())
@@ -5149,7 +4710,7 @@ impl GenesisMaterial {
             }
             combined.push_str(stderr_trimmed);
         }
-        Ok(parse_kagami_verify_output(profile, vrf_seed_hex, &combined))
+        Ok(parse_kagami_verify_output(vrf_seed_hex, &combined))
     }
     fn public_key(&self) -> &PublicKey {
         self.key_pair.public_key()

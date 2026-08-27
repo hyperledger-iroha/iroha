@@ -324,11 +324,6 @@ static DEVELOPMENT_AUTHORITIES: LazyLock<Vec<SigningAuthority>> = LazyLock::new(
         ),
     ]
 });
-fn default_authority() -> &'static SigningAuthority {
-    DEVELOPMENT_AUTHORITIES
-        .first()
-        .expect("development authorities must not be empty")
-}
 /// Access the bundled development signing authorities.
 #[must_use]
 pub fn development_signing_authorities() -> &'static [SigningAuthority] {
@@ -482,55 +477,6 @@ impl TransactionPreview {
             authority,
         }
     }
-}
-/// Compose an asset quantity mint transaction assigned to the default MOCHI signer.
-///
-/// The helper signs the transaction with the sample Alice key pair so local
-/// deployments have a predictable authority without requiring user input. The
-/// caller supplies the exact genesis-derived network identity.
-///
-/// # Errors
-///
-/// Returns [`ComposeError::InvalidAssetId`] when the supplied identifier cannot
-/// be parsed according to Iroha's asset id rules.
-pub fn mint_quantity_preview(
-    network_id: NetworkId,
-    asset_id: &str,
-    quantity: impl Into<Quantity>,
-) -> Result<TransactionPreview, ComposeError> {
-    let draft = InstructionDraft::MintAsset {
-        asset: parse_asset_id(asset_id)?,
-        quantity: quantity.into(),
-    };
-    compose_preview_with_authority(network_id, &[draft], default_authority())
-}
-/// Compose a transaction preview for an exact network from a list of [`InstructionDraft`] entries.
-///
-/// # Errors
-///
-/// Returns [`ComposeError::EmptyInstructions`] when the provided slice is empty.
-pub fn compose_preview(
-    network_id: NetworkId,
-    drafts: &[InstructionDraft],
-) -> Result<TransactionPreview, ComposeError> {
-    compose_preview_with_authority(network_id, drafts, default_authority())
-}
-/// Compose a transaction preview for an exact network signed by the provided authority.
-///
-/// # Errors
-///
-/// Returns [`ComposeError::EmptyInstructions`] when the provided slice is empty.
-pub fn compose_preview_with_authority(
-    network_id: NetworkId,
-    drafts: &[InstructionDraft],
-    authority: &SigningAuthority,
-) -> Result<TransactionPreview, ComposeError> {
-    compose_preview_with_options(
-        network_id,
-        drafts,
-        authority,
-        &TransactionComposeOptions::default(),
-    )
 }
 /// Compose an exact-network preview while applying the supplied [`TransactionComposeOptions`].
 ///
@@ -1394,7 +1340,7 @@ fn apply_mintable(builder: NewAssetDefinition, mintable: Mintable) -> NewAssetDe
 }
 /// Serialize a list of drafts to a JSON array representation.
 #[must_use]
-pub fn drafts_to_json_value(drafts: &[InstructionDraft]) -> Value {
+fn drafts_to_json_value(drafts: &[InstructionDraft]) -> Value {
     Value::Array(drafts.iter().map(|draft| draft.to_json_value()).collect())
 }
 /// Serialize a list of drafts into a formatted JSON string.
@@ -1414,7 +1360,7 @@ pub fn drafts_to_pretty_json(drafts: &[InstructionDraft]) -> Result<String, Comp
 /// # Errors
 ///
 /// Returns [`ComposeError::InvalidRawDraft`] when the payload is malformed.
-pub fn drafts_from_json_value(value: &Value) -> Result<Vec<InstructionDraft>, ComposeError> {
+fn drafts_from_json_value(value: &Value) -> Result<Vec<InstructionDraft>, ComposeError> {
     match value {
         Value::Array(items) => items
             .iter()
@@ -1478,6 +1424,27 @@ mod tests {
         let value: Value = json::from_str(fixture).expect("fixture json");
         InstructionDraft::from_json_value(&value).expect("fixture draft")
     }
+    fn compose_for_test(
+        drafts: &[InstructionDraft],
+        authority: &SigningAuthority,
+    ) -> Result<TransactionPreview, ComposeError> {
+        compose_preview_with_options(
+            test_network_id(),
+            drafts,
+            authority,
+            &TransactionComposeOptions::default(),
+        )
+    }
+    fn compose_with_development_signer_for_test(
+        drafts: &[InstructionDraft],
+    ) -> Result<TransactionPreview, ComposeError> {
+        compose_for_test(
+            drafts,
+            development_signing_authorities()
+                .first()
+                .expect("development signer"),
+        )
+    }
     #[test]
     fn mint_preview_produces_summary() {
         let account = account_literal(&ALICE_ID);
@@ -1486,7 +1453,8 @@ mod tests {
             .expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
         let network_id = test_network_id();
-        let preview = mint_quantity_preview(network_id, &asset_id, 5_u32).expect("preview");
+        let draft = InstructionDraft::mint_from_input(&asset_id, "5").expect("mint draft");
+        let preview = compose_with_development_signer_for_test(&[draft]).expect("preview");
         assert_eq!(preview.authority(), account);
         assert!(
             !preview.instructions().is_empty(),
@@ -1516,7 +1484,7 @@ mod tests {
     }
     #[test]
     fn invalid_asset_id_reports_error() {
-        let err = mint_quantity_preview(test_network_id(), "invalid-format", 1_u32)
+        let err = InstructionDraft::mint_from_input("invalid-format", "1")
             .expect_err("invalid identifiers should produce compose error");
         matches!(err, ComposeError::InvalidAssetId { .. });
     }
@@ -1564,8 +1532,8 @@ mod tests {
     }
     #[test]
     fn compose_preview_requires_instructions() {
-        let err =
-            compose_preview(test_network_id(), &[]).expect_err("empty instructions should fail");
+        let err = compose_with_development_signer_for_test(&[])
+            .expect_err("empty instructions should fail");
         matches!(err, ComposeError::EmptyInstructions);
     }
     #[test]
@@ -1583,7 +1551,7 @@ mod tests {
             quantity: Quantity::from(3_u32),
             destination: BOB_ID.clone(),
         };
-        let preview = compose_preview(test_network_id(), &[mint, transfer])
+        let preview = compose_with_development_signer_for_test(&[mint, transfer])
             .expect("compose multi instruction");
         assert_eq!(
             preview.instructions().len(),
@@ -1958,7 +1926,7 @@ mod tests {
             .expect("Bob signer present");
         let draft = InstructionDraft::register_account_from_input(&account_literal(&ALICE_ID))
             .expect("account draft");
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to register accounts");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
@@ -1987,7 +1955,7 @@ mod tests {
             None,
         )
         .expect("multisig draft");
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to propose multisig transactions");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
@@ -2004,7 +1972,7 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
         let draft = draft_from_fixture(FIXTURE_SPACE_MANIFEST_TOUCH);
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to publish space directory manifests");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
@@ -2021,7 +1989,7 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
         let draft = draft_from_fixture(FIXTURE_PIN_MANIFEST);
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to register pin manifests");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
@@ -2048,7 +2016,7 @@ mod tests {
 }"#;
         let draft = InstructionDraft::publish_space_directory_manifest_from_json(manifest_json)
             .expect("space directory draft");
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to publish space directory manifests");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
@@ -2072,7 +2040,7 @@ mod tests {
 }"#;
         let draft = InstructionDraft::register_pin_manifest_from_json(pin_manifest_json)
             .expect("pin manifest draft");
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to register pin manifests");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {

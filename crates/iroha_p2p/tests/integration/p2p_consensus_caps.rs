@@ -5,7 +5,7 @@
     clippy::too_many_lines
 )]
 use iroha_config::parameters::actual::{
-    Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow,
+    Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
 use iroha_data_model::{block::consensus_v2::ConsensusMode, prelude::PeerId};
@@ -50,14 +50,10 @@ fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
     assert_eq!(decoded.ivm_gas_schedule_hash, [0xE7; 32]);
 }
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
-    // Consensus-capability tests must not spend their handshake budget on the
-    // independent SoraNet admission puzzle; dedicated puzzle tests cover it.
+    // Consensus-capability tests use the minimum valid admission puzzle;
+    // dedicated puzzle tests cover resource-policy behavior.
     let soranet_handshake = ActualSoranetHandshake {
-        pow: SoranetPow {
-            required: false,
-            puzzle: None,
-            ..SoranetPow::default()
-        },
+        pow: super::test_soranet_pow(),
         ..ActualSoranetHandshake::default()
     };
     Config {

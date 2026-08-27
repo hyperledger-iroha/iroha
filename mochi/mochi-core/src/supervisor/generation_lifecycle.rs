@@ -328,6 +328,5 @@ impl Supervisor {
             peer.replace_spec(spec);
         }
         self.genesis = genesis;
-        self.compatibility = None;
     }
 }

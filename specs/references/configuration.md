@@ -330,4 +330,4 @@ Operators upgrading from an earlier preview must stop the producer and relay and
 
 Notes
 - Acceleration is automatic by default. Backends run golden self-tests on first use and disable themselves at runtime if a mismatch is detected; the VM falls back to scalar/SIMD and remains bit-identical across hardware.
-- Prefer editing `peer.template.toml`-style files and extending them in deployment. Runtime behavior is configured via `iroha_config`; environment variable overrides exist for developer tooling but should not be relied on for operator workflows.
+- Prefer editing `peer.template.toml`-style files and extending them in deployment. Runtime behavior is configured via `iroha_config`; node startup with `--config` ignores ambient environment-variable aliases so a checked or integrity-bound TOML artifact cannot be rewritten by the launcher environment. The no-config deterministic-development path and tests may still exercise explicit environment inputs.

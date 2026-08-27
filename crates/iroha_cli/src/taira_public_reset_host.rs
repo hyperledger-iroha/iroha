@@ -13,10 +13,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, eyre};
 use iroha::{
     client::{
-        AccountFaucetPolicyV1, AccountFaucetPreparedTransactionV1,
-        AccountOnboardingPlanReceiptV1, AccountOnboardingPreparedTransactionV1,
-        AccountOnboardingProofRequiredPrepareResponseV1, TairaPublicResetMutationBindingV1,
-        verify_account_faucet_prepared_transaction_v1,
+        AccountFaucetPolicyV1, AccountFaucetPreparedTransactionV1, AccountOnboardingPlanReceiptV1,
+        AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
+        TairaPublicResetMutationBindingV1, verify_account_faucet_prepared_transaction_v1,
         verify_account_onboarding_prepared_transaction_v1,
         verify_account_onboarding_proof_required_result_v1,
     },
@@ -1636,7 +1635,9 @@ fn validate_prepared_mutation_envelope(
                 eyre!("prepared transaction fee quote is semantically invalid: {error}")
             })?;
         if json::to_value(&fee_quote)? != norito::json::Value::Object(fee_quote_value.clone()) {
-            return Err(eyre!("prepared transaction fee quote is not canonical V1 JSON"));
+            return Err(eyre!(
+                "prepared transaction fee quote is not canonical V1 JSON"
+            ));
         }
     }
     if is_inrou {
@@ -1780,10 +1781,9 @@ fn inventory_fee_payment_intent(inventory: &InventoryV1) -> Result<FeePaymentInt
 fn inventory_faucet_policy(inventory: &InventoryV1) -> Result<AccountFaucetPolicyV1> {
     let authority = AccountId::parse_encoded(&inventory.faucet_policy.authority)
         .wrap_err("signed inventory faucet authority is invalid")?;
-    let asset_definition_id = AssetDefinitionId::from_str(
-        &inventory.faucet_policy.asset_definition_id,
-    )
-    .wrap_err("signed inventory faucet asset definition is invalid")?;
+    let asset_definition_id =
+        AssetDefinitionId::from_str(&inventory.faucet_policy.asset_definition_id)
+            .wrap_err("signed inventory faucet asset definition is invalid")?;
     AccountFaucetPolicyV1::try_new(
         authority,
         asset_definition_id,
@@ -2901,18 +2901,21 @@ fn admit_host_request(
                 .ok_or_else(|| eyre!("host action deadline elapsed during admission"))?,
         ))
         .ok_or_else(|| eyre!("host monotonic action deadline overflow"))?;
-    Ok((HostAdmission {
-        request,
-        request_sha256,
-        inventory,
-        inventory_sha256,
-        authorization,
-        authorization_sha256,
-        target,
-        guard,
-        action_deadline,
-        execution_expired,
-    }, chain_guard))
+    Ok((
+        HostAdmission {
+            request,
+            request_sha256,
+            inventory,
+            inventory_sha256,
+            authorization,
+            authorization_sha256,
+            target,
+            guard,
+            action_deadline,
+            execution_expired,
+        },
+        chain_guard,
+    ))
 }
 
 fn upload_parent(service_root: &str) -> String {
@@ -10264,13 +10267,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 OsString::from("--faucet-authority"),
                 OsString::from(&self.admitted.inventory.faucet_policy.authority),
                 OsString::from("--faucet-asset-id"),
-                OsString::from(
-                    &self
-                        .admitted
-                        .inventory
-                        .faucet_policy
-                        .asset_definition_id,
-                ),
+                OsString::from(&self.admitted.inventory.faucet_policy.asset_definition_id),
                 OsString::from("--faucet-amount"),
                 OsString::from(self.admitted.inventory.faucet_policy.amount.to_string()),
             ]);
@@ -12419,11 +12416,6 @@ const DOCTOR_EXPECTED_CHECKS: &[(&str, u64, Option<&str>)] = &[
         400,
         Some("mounted route is expected to return HTTP 400 for this preflight shape"),
     ),
-    (
-        "retired_transaction_status_alias",
-        404,
-        Some("mounted route is expected to return HTTP 404 for this preflight shape"),
-    ),
     ("sccp_capabilities", 200, None),
     ("zk_proofs_count", 200, None),
     ("public_lane_validators", 200, None),
@@ -12490,7 +12482,10 @@ fn validate_doctor_report(value: &norito::json::Value, public_root: &str) -> Res
         .and_then(norito::json::Value::as_array)
         .ok_or_else(|| eyre!("Taira doctor checks must be an array"))?;
     if checks.len() != DOCTOR_EXPECTED_CHECKS.len() {
-        return Err(eyre!("Taira doctor report must contain exactly 15 checks"));
+        return Err(eyre!(
+            "Taira doctor report must contain exactly {} checks",
+            DOCTOR_EXPECTED_CHECKS.len()
+        ));
     }
     for (check, &(name, http_status, detail)) in checks.iter().zip(DOCTOR_EXPECTED_CHECKS) {
         let check = check
@@ -13279,12 +13274,10 @@ mod tests {
         assert_eq!(authority.gas_limit(), None);
         assert!(authority.charge_limits().is_empty());
 
-        let _chain_guard =
-            ChainDiscriminantGuard::enter(inventory.chain_discriminant);
-        let sponsor_owner = AccountId::parse_encoded(
-            &inventory.canary_onboarding_request.account_id,
-        )
-        .expect("canonical inventory canary account");
+        let _chain_guard = ChainDiscriminantGuard::enter(inventory.chain_discriminant);
+        let sponsor_owner =
+            AccountId::parse_encoded(&inventory.canary_onboarding_request.account_id)
+                .expect("canonical inventory canary account");
         let sponsor = FeeSponsorProgramId::new(
             sponsor_owner,
             Name::from_str("public_reset").expect("program name"),
@@ -13292,8 +13285,7 @@ mod tests {
         inventory.fee_intent.payer = "sponsor".to_owned();
         inventory.fee_intent.sponsor_program = Some(sponsor.to_string());
         inventory.fee_intent.sponsor_program_revision = Some(7);
-        let selected =
-            inventory_fee_payment_intent(&inventory).expect("sponsor fee intent");
+        let selected = inventory_fee_payment_intent(&inventory).expect("sponsor fee intent");
         assert_eq!(selected.sponsor_program(), Some((&sponsor, 7)));
         assert_eq!(selected.gas_limit(), None);
         assert!(selected.charge_limits().is_empty());

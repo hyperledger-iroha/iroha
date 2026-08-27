@@ -25,8 +25,6 @@ pub struct BinaryOverrides {
     pub irohad: Option<PathBuf>,
     /// Optional override for the `kagami` executable.
     pub kagami: Option<PathBuf>,
-    /// Optional override for the `iroha_cli` executable (reserved for future use).
-    pub iroha_cli: Option<PathBuf>,
 }
 /// Parsed configuration extracted from `config/local.toml`.
 #[derive(Debug, Default, Clone)]
@@ -103,9 +101,6 @@ impl BundleConfig {
         }
         if let Some(path) = self.binaries.kagami.as_ref() {
             builder = builder.kagami_path(path.clone());
-        }
-        if let Some(path) = self.binaries.iroha_cli.as_ref() {
-            builder = builder.iroha_cli_path(path.clone());
         }
         if let Some(allow) = self.build_binaries {
             builder = builder.auto_build_binaries(allow);
@@ -319,17 +314,6 @@ impl BundleConfig {
             }
             None => {
                 binaries.remove("kagami");
-            }
-        }
-        match self.binaries.iroha_cli.as_ref() {
-            Some(path) => {
-                binaries.insert(
-                    "iroha_cli".into(),
-                    Value::String(path.display().to_string()),
-                );
-            }
-            None => {
-                binaries.remove("iroha_cli");
             }
         }
         if binaries.is_empty() {
@@ -576,12 +560,16 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
         }
     }
     if let Some(binaries) = table.get("binaries").and_then(Value::as_table) {
+        if binaries.contains_key("iroha_cli") {
+            return Err(ConfigError::new(format!(
+                "config {} contains retired `binaries.iroha_cli`; Mochi does not invoke the external CLI",
+                path.display()
+            )));
+        }
         config.binaries.irohad =
             parse_path_override(base, path, "binaries.irohad", binaries.get("irohad"))?;
         config.binaries.kagami =
             parse_path_override(base, path, "binaries.kagami", binaries.get("kagami"))?;
-        config.binaries.iroha_cli =
-            parse_path_override(base, path, "binaries.iroha_cli", binaries.get("iroha_cli"))?;
     }
     if let Some(nexus_value) = table.get("nexus") {
         let Some(nexus) = nexus_value.as_table() else {
@@ -830,7 +818,7 @@ fn parse_restart_policy(
             }
             Ok(RestartPolicy::Never)
         }
-        "on-failure" | "on_failure" | "onfailure" => {
+        "on-failure" => {
             let max = table
                 .get("max_restarts")
                 .map(|value| parse_restart_count(path, value))
@@ -944,7 +932,7 @@ genesis_profile = "iroha3-dev"
 vrf_seed_hex = "abcd"
 
 [supervisor.restart]
-mode = "on_failure"
+mode = "on-failure"
 max_restarts = 5
 backoff_ms = 2500
 
@@ -955,7 +943,6 @@ p2p_start = 13000
 [binaries]
 irohad = "./bin/iroha3d"
 kagami = "/opt/iroha/bin/kagami"
-iroha_cli = "./tools/iroha_cli"
 "#,
         );
         let config =
@@ -982,10 +969,6 @@ iroha_cli = "./tools/iroha_cli"
         assert_eq!(
             config.binaries.kagami.as_deref(),
             Some(Path::new("/opt/iroha/bin/kagami"))
-        );
-        assert_eq!(
-            config.binaries.iroha_cli.as_deref(),
-            Some(dir.path().join("tools/iroha_cli").as_path())
         );
         match config.restart_policy.expect("restart policy") {
             RestartPolicy::OnFailure {
@@ -1194,6 +1177,18 @@ da_enabled = "nope"
         );
     }
     #[test]
+    fn parse_bundle_config_rejects_retired_iroha_cli_binary() {
+        let (_dir, path) = temp_file(
+            r#"
+[binaries]
+iroha_cli = "/tmp/iroha"
+"#,
+        );
+        let error = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
+            .expect_err("retired CLI binary setting must fail");
+        assert!(error.to_string().contains("binaries.iroha_cli"));
+    }
+    #[test]
     fn parse_bundle_config_rejects_invalid_torii_da_ingest() {
         let (_dir, path) = temp_file(
             r#"
@@ -1278,7 +1273,6 @@ data_root = "./env-data"
         config.set_p2p_start(Some(13000));
         config.binaries.irohad = Some(temp.path().join("bin/iroha3d"));
         config.binaries.kagami = Some(temp.path().join("bin/kagami"));
-        config.binaries.iroha_cli = Some(temp.path().join("bin/iroha_cli"));
         let mut nexus = Map::new();
         nexus.insert("lane_count".into(), Value::Integer(2));
         let mut lane = Map::new();
@@ -1325,7 +1319,6 @@ data_root = "./env-data"
         assert_eq!(parsed.p2p_start, config.p2p_start);
         assert_eq!(parsed.binaries.irohad, config.binaries.irohad);
         assert_eq!(parsed.binaries.kagami, config.binaries.kagami);
-        assert_eq!(parsed.binaries.iroha_cli, config.binaries.iroha_cli);
         assert_eq!(parsed.nexus, config.nexus);
         assert_eq!(parsed.sumeragi, config.sumeragi);
         assert_eq!(parsed.torii, config.torii);
@@ -1403,6 +1396,18 @@ max_restarts = 0
             RestartPolicy::Never => panic!("expected on-failure policy"),
         }
         drop(dir);
+    }
+    #[test]
+    fn parse_restart_policy_rejects_noncanonical_mode_aliases() {
+        let (_dir, path) = temp_file(
+            r#"
+[supervisor.restart]
+mode = "on_failure"
+"#,
+        );
+        let error = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
+            .expect_err("restart mode aliases must be rejected");
+        assert!(error.to_string().contains("invalid `supervisor.restart.mode`"));
     }
     #[test]
     fn parse_restart_policy_never_rejects_extra_fields() {

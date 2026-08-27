@@ -8,7 +8,6 @@ mod embed_pop;
 mod generate;
 mod normalize;
 mod npos;
-mod pop;
 mod prepared;
 pub mod profile;
 mod sign;
@@ -50,8 +49,6 @@ pub enum Args {
     Validate(validate::Args),
     /// Verify one exact bound-manifest/signed-genesis/signer/hash bundle
     ValidatePrepared(prepared::Args),
-    /// Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
-    Pop(pop::Args),
     /// Embed one or more PoPs into a genesis JSON manifest (inline `topology` entries carrying `pop_hex`)
     EmbedPop(embed_pop::Args),
     /// Expand a genesis manifest and show the final ordered transactions
@@ -64,7 +61,6 @@ impl<T: Write> RunArgs<T> for Args {
             Args::Generate(args) => args.run(writer),
             Args::Validate(args) => args.run(writer),
             Args::ValidatePrepared(args) => args.run(writer),
-            Args::Pop(args) => args.run(writer),
             Args::EmbedPop(args) => args.run(writer),
             Args::Normalize(args) => args.run(writer),
         }

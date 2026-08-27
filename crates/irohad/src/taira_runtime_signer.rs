@@ -15,7 +15,20 @@ use crate::{
 };
 use iroha_config::parameters::{
     actual::{NexusStorageWeights, Root as Config, SoracloudRuntime},
-    defaults::soracloud_runtime as soracloud_runtime_defaults,
+    defaults::{
+        soracloud_runtime as soracloud_runtime_defaults,
+        taira::{
+            INROU_EGRESS_MAX_BYTES_PER_MINUTE as TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1,
+            INROU_EGRESS_RATE_PER_MINUTE as TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1,
+            NEXUS_KURA_BLOCKS_BPS as TAIRA_NEXUS_KURA_BLOCKS_BPS_V1,
+            NEXUS_SORAFS_BPS as TAIRA_NEXUS_SORAFS_BPS_V1,
+            NEXUS_SORANET_SPOOL_BPS as TAIRA_NEXUS_SORANET_SPOOL_BPS_V1,
+            NEXUS_SORAVPN_SPOOL_BPS as TAIRA_NEXUS_SORAVPN_SPOOL_BPS_V1,
+            NEXUS_STORAGE_BUDGET_BYTES as TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1,
+            NEXUS_WSV_SNAPSHOTS_BPS as TAIRA_NEXUS_WSV_SNAPSHOTS_BPS_V1,
+            SORAFS_STORAGE_CAP_BYTES as TAIRA_SORAFS_STORAGE_CAP_BYTES_V1,
+        },
+    },
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
@@ -58,20 +71,6 @@ pub const TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 pub const TAIRA_CHAIN_DISCRIMINANT_V1: u16 = 369;
 /// Exact first-release Taira validator count.
 pub const TAIRA_VALIDATOR_COUNT_V1: usize = 4;
-/// Exact aggregate Nexus disk budget for one first-release Taira validator.
-pub const TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1: u64 = 68_719_476_736;
-/// Exact Kura share of the first-release Taira Nexus disk budget.
-pub const TAIRA_NEXUS_KURA_BLOCKS_BPS_V1: u16 = 5_500;
-/// Exact WSV snapshot share of the first-release Taira Nexus disk budget.
-pub const TAIRA_NEXUS_WSV_SNAPSHOTS_BPS_V1: u16 = 2_000;
-/// Exact `SoraFS` share of the first-release Taira Nexus disk budget.
-pub const TAIRA_NEXUS_SORAFS_BPS_V1: u16 = 2_000;
-/// Exact `SoraNet` spool share of the first-release Taira Nexus disk budget.
-pub const TAIRA_NEXUS_SORANET_SPOOL_BPS_V1: u16 = 250;
-/// Exact `SoraVPN` spool share of the first-release Taira Nexus disk budget.
-pub const TAIRA_NEXUS_SORAVPN_SPOOL_BPS_V1: u16 = 250;
-/// Exact effective `SoraFS` component cap derived for first-release Taira.
-pub const TAIRA_SORAFS_STORAGE_CAP_BYTES_V1: u64 = 13_743_895_347;
 /// Exact aggregate Inrou CPU ceiling for one first-release Taira validator.
 pub const TAIRA_INROU_MAX_CPU_MILLIS_V1: u32 = 8_000;
 /// Exact aggregate Inrou memory ceiling for one first-release Taira validator.
@@ -84,10 +83,6 @@ pub const TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
 pub const TAIRA_INROU_START_GRACE_MS_V1: u64 = 30_000;
 /// Exact Inrou shutdown grace for one first-release Taira validator.
 pub const TAIRA_INROU_STOP_GRACE_MS_V1: u64 = 10_000;
-/// Exact Inrou egress request budget for one first-release Taira validator.
-pub const TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1: u32 = 600;
-/// Exact Inrou egress byte budget for one first-release Taira validator.
-pub const TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1: u64 = 100 * 1024 * 1024;
 
 const TAIRA_RUNTIME_SIGNER_HANDLE_PREFIX_V1: &str = "software://taira/inrou/";
 const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN_V1: &[u8] =

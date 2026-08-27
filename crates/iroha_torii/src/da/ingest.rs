@@ -80,6 +80,7 @@ use zstd::stream::read::Decoder as ZstdDecoder;
 const HEADER_SORA_PDP_COMMITMENT: &str = "sora-pdp-commitment";
 const META_DA_REGISTRY_ALIAS: &str = "da.registry.alias";
 const META_DA_REGISTRY_OWNER: &str = "da.registry.owner";
+const RETIRED_TAIKAI_CACHE_HINT_KEY: &str = "taikai.cache_hint";
 const BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
 const SECS_PER_MONTH: u64 = 30 * 24 * 60 * 60;
 struct FreshReplayReservation {
@@ -393,6 +394,17 @@ fn compute_da_manifest_artifacts(
     let canonical = normalize_payload(request)?;
     validate_request(request, canonical.as_slice())
         .map_err(|(status, message)| (status, message.to_owned()))?;
+    if request
+        .metadata
+        .items
+        .iter()
+        .any(|entry| entry.key == RETIRED_TAIKAI_CACHE_HINT_KEY)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "retired Taikai metadata field `taikai.cache_hint` is not accepted in V1".to_owned(),
+        ));
+    }
     let mut metadata = encrypt_governance_metadata(
         &request.metadata,
         governance_metadata_key,
@@ -422,14 +434,12 @@ fn compute_da_manifest_artifacts(
     );
     let enforced_retention = expected_retention.clone();
     if matches!(request.blob_class, BlobClass::TaikaiSegment) {
-        let payload_digest = BlobDigest::from_hash(blake3_hash(canonical.as_slice()));
         taikai::apply_taikai_ingest_tags(
             &mut metadata,
             taikai_availability,
             &enforced_retention,
-            payload_digest,
             request.total_size,
-        )?;
+        );
     }
     // TODO: Persist a durable partial-retry journal for this server-owned queue time.
     let queued_at_secs = SystemTime::now()
@@ -648,7 +658,6 @@ pub async fn handler_post_da_ingest(
                         record_da_chunking_metrics(&compute_telemetry, elapsed);
                     };
                     match taikai_ingest::build_envelope(
-                        &request,
                         &manifest,
                         &chunk_store,
                         canonical.as_slice(),
@@ -2816,7 +2825,6 @@ fn verify_manifest_against_request(
         ));
     }
     if manifest.blob_class == BlobClass::TaikaiSegment {
-        taikai::validate_taikai_cache_hint(expected_metadata, &blob_hash, manifest.total_size)?;
         taikai::validate_da_proof_tier(expected_metadata, manifest.retention_policy.storage_class)?;
     }
     for (expected, actual) in computed_chunks.iter().zip(manifest.chunks.iter()) {

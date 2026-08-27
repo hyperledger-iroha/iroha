@@ -35,11 +35,24 @@ test("soranet puzzle client rejects fractional timeout", () => {
   );
 });
 
+test("soranet puzzle client rejects the retired fetch option alias", () => {
+  assert.throws(
+    () =>
+      new SoranetPuzzleClient(BASE_URL, {
+        fetch: async () => jsonResponse(200, {}),
+      }),
+    /options\.fetch.*first-release API/,
+  );
+});
+
 test("getPuzzleConfig normalises fields", async () => {
+  let captured;
   const queue = [
     {
+      capture(url, init) {
+        captured = { url, init };
+      },
       response: jsonResponse(200, {
-        required: true,
         difficulty: 8,
         max_future_skew_secs: 900,
         min_ticket_ttl_secs: 60,
@@ -63,9 +76,69 @@ test("getPuzzleConfig normalises fields", async () => {
     fetchImpl: createFetch(queue),
   });
   const snapshot = await client.getPuzzleConfig();
-  assert.equal(snapshot.required, true);
-  assert.equal(snapshot.puzzle?.memoryKib, 4096);
+  assert.equal(snapshot.puzzle.memoryKib, 4096);
   assert.equal(snapshot.token.revocationIdsHex.length, 1);
+  assert.equal(captured.url, `${BASE_URL}/v1/puzzle/config`);
+  assert.equal(captured.init.body, undefined);
+  assert.equal(captured.init.headers["Content-Type"], undefined);
+});
+
+test("getPuzzleConfig rejects a missing mandatory puzzle", async () => {
+  const queue = [
+    {
+      response: jsonResponse(200, {
+        difficulty: 8,
+        max_future_skew_secs: 900,
+        min_ticket_ttl_secs: 60,
+        ticket_ttl_secs: 120,
+        token: { enabled: false, revocation_ids_hex: [] },
+      }),
+    },
+  ];
+  const client = new SoranetPuzzleClient(BASE_URL, {
+    fetchImpl: createFetch(queue),
+  });
+  await assert.rejects(() => client.getPuzzleConfig(), /puzzle.*must be an object/);
+});
+
+test("getPuzzleConfig rejects zero-work puzzle policy", async () => {
+  const client = new SoranetPuzzleClient(BASE_URL, {
+    fetchImpl: async () =>
+      jsonResponse(200, {
+        difficulty: 0,
+        max_future_skew_secs: 900,
+        min_ticket_ttl_secs: 60,
+        ticket_ttl_secs: 120,
+        puzzle: { memory_kib: 4096, time_cost: 3, lanes: 4 },
+        token: { enabled: false, revocation_ids_hex: [] },
+      }),
+  });
+  await assert.rejects(() => client.getPuzzleConfig(), /difficulty.*greater than zero/);
+});
+
+test("getPuzzleConfig rejects retired admission toggles", async () => {
+  for (const retiredField of ["required", "signed_ticket_signing_enabled"]) {
+    const queue = [
+      {
+        response: jsonResponse(200, {
+          [retiredField]: true,
+          difficulty: 8,
+          max_future_skew_secs: 900,
+          min_ticket_ttl_secs: 60,
+          ticket_ttl_secs: 120,
+          puzzle: { memory_kib: 4096, time_cost: 3, lanes: 4 },
+          token: { enabled: false, revocation_ids_hex: [] },
+        }),
+      },
+    ];
+    const client = new SoranetPuzzleClient(BASE_URL, {
+      fetchImpl: createFetch(queue),
+    });
+    await assert.rejects(
+      () => client.getPuzzleConfig(),
+      new RegExp(`${retiredField}.*first-release API`),
+    );
+  }
 });
 
 test("mintPuzzleTicket passes overrides", async () => {
@@ -76,7 +149,8 @@ test("mintPuzzleTicket passes overrides", async () => {
         captured = { url, init };
       },
       response: jsonResponse(200, {
-        ticket_b64: "Zm9v",
+        credential_kind: "raw",
+        credential_b64: "Zm9v",
         difficulty: 5,
         ttl_secs: 120,
         expires_at: 1_700_000_000,
@@ -87,8 +161,8 @@ test("mintPuzzleTicket passes overrides", async () => {
     fetchImpl: createFetch(queue),
   });
   const result = await client.mintPuzzleTicket("99".repeat(32), { ttlSecs: 90 });
-  assert.equal(result.ticketB64, "Zm9v");
-  assert.equal(result.signedTicketB64, null);
+  assert.equal(result.credentialKind, "raw");
+  assert.equal(result.credentialB64, "Zm9v");
   assert.equal(result.signedTicketFingerprintHex, null);
   assert.equal(captured.url, `${BASE_URL}/v1/puzzle/mint`);
   const body = JSON.parse(captured.init.body);
@@ -96,7 +170,7 @@ test("mintPuzzleTicket passes overrides", async () => {
   assert.equal(body.transcript_hash_hex, "99".repeat(32));
 });
 
-test("mintPuzzleTicket requests signed tickets with transcript binding", async () => {
+test("mintPuzzleTicket accepts a server-selected signed credential", async () => {
   let captured;
   const queue = [
     {
@@ -104,7 +178,8 @@ test("mintPuzzleTicket requests signed tickets with transcript binding", async (
         captured = { url, init };
       },
       response: jsonResponse(200, {
-        signed_ticket_b64: "YmFy",
+        credential_kind: "signed",
+        credential_b64: "YmFy",
         signed_ticket_fingerprint_hex: "11".repeat(32),
         difficulty: 5,
         ttl_secs: 120,
@@ -115,19 +190,28 @@ test("mintPuzzleTicket requests signed tickets with transcript binding", async (
   const client = new SoranetPuzzleClient(BASE_URL, {
     fetchImpl: createFetch(queue),
   });
-  const result = await client.mintPuzzleTicket("aa".repeat(32), {
-    ttlSecs: 90,
-    signed: true,
-  });
+  const result = await client.mintPuzzleTicket("aa".repeat(32), { ttlSecs: 90 });
   const body = JSON.parse(captured.init.body);
-  assert.equal(result.ticketB64, null);
-  assert.equal(result.signedTicketB64, "YmFy");
-  assert.equal(body.signed, true);
+  assert.equal(result.credentialKind, "signed");
+  assert.equal(result.credentialB64, "YmFy");
+  assert.equal(Object.hasOwn(body, "signed"), false);
   assert.equal(body.transcript_hash_hex, "aa".repeat(32));
   assert.equal(result.signedTicketFingerprintHex, "11".repeat(32));
 });
 
-test("mintPuzzleTicket rejects ambiguous credential responses", async () => {
+test("mintPuzzleTicket rejects the retired signed request option", async () => {
+  const client = new SoranetPuzzleClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("request must not be sent");
+    },
+  });
+  await assert.rejects(
+    () => client.mintPuzzleTicket("aa".repeat(32), { signed: true }),
+    /signed.*first-release API/,
+  );
+});
+
+test("mintPuzzleTicket rejects retired dual-field credential responses", async () => {
   const queue = [
     {
       response: jsonResponse(200, {
@@ -143,8 +227,51 @@ test("mintPuzzleTicket rejects ambiguous credential responses", async () => {
     fetchImpl: createFetch(queue),
   });
   await assert.rejects(
-    () => client.mintPuzzleTicket("ab".repeat(32), { signed: true }),
-    /exactly one/,
+    () => client.mintPuzzleTicket("ab".repeat(32)),
+    /ticket_b64.*first-release API/,
+  );
+});
+
+test("mintPuzzleTicket rejects a signed-ticket fingerprint for raw credentials", async () => {
+  const queue = [
+    {
+      response: jsonResponse(200, {
+        credential_kind: "raw",
+        credential_b64: "Zm9v",
+        signed_ticket_fingerprint_hex: "11".repeat(32),
+        difficulty: 5,
+        ttl_secs: 120,
+        expires_at: 1_700_000_000,
+      }),
+    },
+  ];
+  const client = new SoranetPuzzleClient(BASE_URL, {
+    fetchImpl: createFetch(queue),
+  });
+  await assert.rejects(
+    () => client.mintPuzzleTicket("ab".repeat(32)),
+    /only valid for signed credentials/,
+  );
+});
+
+test("mintPuzzleTicket requires a fingerprint for signed credentials", async () => {
+  const queue = [
+    {
+      response: jsonResponse(200, {
+        credential_kind: "signed",
+        credential_b64: "YmFy",
+        difficulty: 5,
+        ttl_secs: 120,
+        expires_at: 1_700_000_000,
+      }),
+    },
+  ];
+  const client = new SoranetPuzzleClient(BASE_URL, {
+    fetchImpl: createFetch(queue),
+  });
+  await assert.rejects(
+    () => client.mintPuzzleTicket("ab".repeat(32)),
+    /required for signed credentials/,
   );
 });
 
@@ -161,7 +288,7 @@ test("mintPuzzleTicket rejects missing or zero transcript binding", async () => 
   );
 });
 
-test("mintAdmissionToken validates hex + propagates TTL + flags", async () => {
+test("mintAdmissionToken validates hex and propagates TTL", async () => {
   let captured;
   const queue = [
     {
@@ -174,7 +301,6 @@ test("mintAdmissionToken validates hex + propagates TTL + flags", async () => {
         issued_at: 10,
         expires_at: 20,
         ttl_secs: 10,
-        flags: 1,
         issuer_fingerprint_hex: "22".repeat(32),
         relay_id_hex: "33".repeat(32),
       }),
@@ -183,16 +309,48 @@ test("mintAdmissionToken validates hex + propagates TTL + flags", async () => {
   const client = new SoranetPuzzleClient(BASE_URL, {
     fetchImpl: createFetch(queue),
   });
-  const token = await client.mintAdmissionToken("44".repeat(32), {
-    ttlSecs: 30,
-    flags: 2,
-  });
+  const token = await client.mintAdmissionToken("44".repeat(32), { ttlSecs: 30 });
   assert.equal(token.tokenB64, "YmFy");
   assert.deepEqual(JSON.parse(captured.init.body), {
     transcript_hash_hex: "44".repeat(32),
     ttl_secs: 30,
-    flags: 2,
   });
+});
+
+test("mintAdmissionToken rejects the retired flags option", async () => {
+  const client = new SoranetPuzzleClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("request must not be sent");
+    },
+  });
+  await assert.rejects(
+    () => client.mintAdmissionToken("44".repeat(32), { flags: 1 }),
+    /flags.*first-release API/,
+  );
+});
+
+test("mintAdmissionToken rejects a retired flags response field", async () => {
+  const queue = [
+    {
+      response: jsonResponse(200, {
+        token_b64: "YmFy",
+        token_id_hex: "11".repeat(32),
+        issued_at: 10,
+        expires_at: 20,
+        ttl_secs: 10,
+        flags: 0,
+        issuer_fingerprint_hex: "22".repeat(32),
+        relay_id_hex: "33".repeat(32),
+      }),
+    },
+  ];
+  const client = new SoranetPuzzleClient(BASE_URL, {
+    fetchImpl: createFetch(queue),
+  });
+  await assert.rejects(
+    () => client.mintAdmissionToken("44".repeat(32)),
+    /flags.*first-release API/,
+  );
 });
 
 test("request throws SoranetPuzzleError on failure", async () => {
@@ -213,4 +371,36 @@ test("request throws SoranetPuzzleError on failure", async () => {
     () => client.getPuzzleConfig(),
     (error) => error instanceof SoranetPuzzleError && error.body === "boom",
   );
+});
+
+test("timed requests remove external abort listeners after completion", async () => {
+  let added = 0;
+  let removed = 0;
+  const externalSignal = {
+    aborted: false,
+    addEventListener(type) {
+      assert.equal(type, "abort");
+      added += 1;
+    },
+    removeEventListener(type) {
+      assert.equal(type, "abort");
+      removed += 1;
+    },
+  };
+  const client = new SoranetPuzzleClient(BASE_URL, {
+    timeoutMs: 1_000,
+    fetchImpl: async () =>
+      jsonResponse(200, {
+        difficulty: 1,
+        max_future_skew_secs: 900,
+        min_ticket_ttl_secs: 60,
+        ticket_ttl_secs: 120,
+        puzzle: { memory_kib: 4096, time_cost: 1, lanes: 1 },
+        token: { enabled: false, revocation_ids_hex: [] },
+      }),
+  });
+
+  await client.getPuzzleConfig({ signal: externalSignal });
+  assert.equal(added, 1);
+  assert.equal(removed, 1);
 });

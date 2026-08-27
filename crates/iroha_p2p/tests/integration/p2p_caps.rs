@@ -1,6 +1,6 @@
 //! Topic cap enforcement tests. Skips gracefully if sockets are unavailable.
 use iroha_config::parameters::actual::{
-    Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow,
+    Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
 use iroha_config_base::WithOrigin;
@@ -84,13 +84,8 @@ async fn wait_for_consensus_cap_increase(start_cap: u64, timeout: Duration) -> O
     .ok()
 }
 fn default_soranet_handshake() -> ActualSoranetHandshake {
-    // Frame-cap tests do not exercise admission puzzles; avoid coupling their
-    // deadlines to Argon2 cost or host load.
-    let pow = SoranetPow {
-        required: false,
-        puzzle: None,
-        ..SoranetPow::default()
-    };
+    // Frame-cap tests use the minimum valid puzzle so admission remains
+    // mandatory without coupling their deadlines to production Argon2 cost.
     ActualSoranetHandshake {
         descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
         client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
@@ -99,7 +94,7 @@ fn default_soranet_handshake() -> ActualSoranetHandshake {
         kem_id: 1,
         sig_id: 1,
         resume_hash: None,
-        pow,
+        pow: super::test_soranet_pow(),
     }
 }
 fn make_config(

@@ -26,7 +26,6 @@
       "sig_id": 1,
       "resume_hash_hex": null,
       "pow": {
-        "required": true,
         "difficulty": 6,
         "max_future_skew_secs": 300,
         "min_ticket_ttl_secs": 30,
@@ -104,7 +103,7 @@
     },
     "streaming": {
       "soranet": {
-        "enabled": true,
+        "enabled": false,
         "stream_tag": "norito-stream",
         "exit_multiaddr": "/dns/torii/udp/9443/quic",
         "padding_budget_ms": 25,

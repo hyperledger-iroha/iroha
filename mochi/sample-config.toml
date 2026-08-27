@@ -34,7 +34,7 @@ readiness_smoke = true
 [supervisor.restart]
 # Configure how many times MOCHI restarts a crashed peer before surfacing the
 # failure. Use `mode = "never"` to disable automatic restarts entirely.
-mode = "on_failure"
+mode = "on-failure"
 # Maximum restart attempts (1-based). `0` means “do not retry”.
 max_restarts = 3
 # Base backoff in milliseconds before the first retry. Backoff doubles until
@@ -54,7 +54,6 @@ p2p_start = 1337
 # `./bin/mochi --kagami /path/to/kagami`—to override these values without editing
 # this file.
 irohad = ""
-iroha_cli = ""
 kagami = ""
 
 [nexus]

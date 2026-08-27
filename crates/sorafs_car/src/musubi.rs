@@ -325,10 +325,6 @@ fn validate_plan_commitment(
         || plan.chunks.len() > usize::try_from(MUSUBI_MAX_CHUNKS_V1).unwrap_or(usize::MAX)
         || plan.files.len() < BUNDLE_METADATA_FILE_COUNT + 1
         || plan.files.len() > maximum_files
-        || plan
-            .chunks
-            .iter()
-            .any(|chunk| chunk.taikai_segment_hint.is_some())
     {
         return Err(archive_error());
     }

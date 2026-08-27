@@ -2240,9 +2240,9 @@ async fn core_info_handlers_ok() {
             .is_empty(),
         "handshake descriptor should be present in config payload"
     );
-    assert!(
-        config.network.soranet_handshake.pow.puzzle.is_some(),
-        "puzzle gate should be advertised in configuration payload"
+    assert_ne!(
+        config.network.soranet_handshake.pow.puzzle.memory_kib, 0,
+        "mandatory puzzle parameters should be advertised in configuration payload"
     );
     // peers
     let mut peer_headers = headers.clone();

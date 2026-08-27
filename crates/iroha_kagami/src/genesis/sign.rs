@@ -1103,9 +1103,6 @@ impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Signing genesis manifest");
-        if let Some(path) = self.out_file.as_deref() {
-            reject_legacy_scale_out_file(path)?;
-        }
         if let (Some(signed), Some(bound)) =
             (self.out_file.as_deref(), self.bound_manifest_out.as_deref())
             && signed == bound
@@ -1326,18 +1323,6 @@ impl<T: Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-fn reject_legacy_scale_out_file(path: &Path) -> Result<(), color_eyre::eyre::Error> {
-    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
-        return Ok(());
-    };
-    if !ext.eq_ignore_ascii_case("scale") {
-        return Ok(());
-    }
-    Err(eyre!(
-        "refusing to write `{}`: `.scale` is a legacy extension; kagami writes Norito wire format, use `.nrt` (e.g. genesis.signed.nrt)",
-        path.display()
-    ))
-}
 fn load_genesis_key(
     private_key_hex: Option<&str>,
     private_key_file: Option<&Path>,
@@ -1357,7 +1342,9 @@ fn load_genesis_key(
         (None, None, None) => Err(eyre!(
             "genesis signing requires a private key; pass --private-key-file, --private-key, or --seed-hex"
         )),
-        _ => unreachable!("clap enforces key-source conflicts"),
+        _ => Err(eyre!(
+            "genesis signing key sources are mutually exclusive; select exactly one"
+        )),
     }
 }
 fn ensure_expected_public_key(
@@ -1486,26 +1473,7 @@ fn resolve_confidential_policy_hash(config: Option<&actual::Root>) -> [u8; 32] {
     )
 }
 fn decode_hex(s: &str) -> Result<Vec<u8>, color_eyre::eyre::Error> {
-    let s = s.trim_start_matches("0x");
-    if !s.len().is_multiple_of(2) {
-        return Err(color_eyre::eyre::eyre!("odd hex length"));
-    }
-    let mut out = Vec::with_capacity(s.len() / 2);
-    let b = s.as_bytes();
-    for i in (0..b.len()).step_by(2) {
-        let h = from_hex_nibble(b[i]).ok_or_else(|| color_eyre::eyre::eyre!("bad hex"))?;
-        let l = from_hex_nibble(b[i + 1]).ok_or_else(|| color_eyre::eyre::eyre!("bad hex"))?;
-        out.push((h << 4) | l);
-    }
-    Ok(out)
-}
-fn from_hex_nibble(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
-    }
+    hex::decode(s.strip_prefix("0x").unwrap_or(s)).wrap_err("decode PoP hex")
 }
 #[cfg(test)]
 mod tests {
@@ -2376,35 +2344,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         }
     }
     #[test]
-    fn out_file_scale_extension_is_rejected() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("genesis.scale");
-        let args = Args {
-            genesis_file: npos_genesis_file(),
-            out_file: Some(path),
-            bound_manifest_out: None,
-            expected_hash_out: None,
-            topology: None,
-            peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
-            expected_public_key: None,
-            seed: None,
-            creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
-            config: None,
-            consensus_mode: None,
-        };
-        let mut sink = BufWriter::new(Vec::new());
-        let err = args
-            .run(&mut sink)
-            .expect_err("writing a .scale out_file should be rejected");
-        assert!(
-            err.to_string().contains("legacy extension"),
-            "unexpected error: {err}"
-        );
-    }
-    #[test]
     #[expect(
         clippy::too_many_lines,
         reason = "the regression test audits the complete bound-manifest write/sign contract as one transaction"
@@ -2767,6 +2706,21 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .expect("fixture public key must be valid"),
             Algorithm::Secp256k1
         );
+    }
+    #[test]
+    fn pop_hex_decoder_accepts_one_optional_prefix_and_rejects_malformed_input() {
+        assert_eq!(decode_hex("a50f").expect("bare hex"), [0xA5, 0x0F]);
+        assert_eq!(decode_hex("0xa50f").expect("prefixed hex"), [0xA5, 0x0F]);
+        assert!(decode_hex("0x0xa50f").is_err());
+        assert!(decode_hex("abc").is_err());
+    }
+    #[test]
+    fn load_genesis_key_rejects_programmatic_source_conflicts() {
+        let private_key = test_private_key_hex();
+        let seed = "42".repeat(32);
+        let error = load_genesis_key(Some(&private_key), None, Some(&seed), Algorithm::Ed25519)
+            .expect_err("conflicting sources must not rely on Clap validation");
+        assert!(error.to_string().contains("mutually exclusive"));
     }
     #[test]
     fn expected_public_key_must_match_selected_private_key() {

@@ -9,7 +9,10 @@ use crate::{
 };
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
-use iroha_config::{base::toml::TomlSource, parameters::actual};
+use iroha_config::{
+    base::toml::TomlSource,
+    parameters::{actual, defaults::taira as taira_defaults},
+};
 use iroha_core::zk::confidential_v2;
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
 #[cfg(test)]
@@ -278,9 +281,7 @@ impl LocalnetPerfProfile {
 }
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SoraProfileArg {
-    #[value(alias = "dataspaces")]
     Dataspace,
-    #[value(alias = "public", alias = "sora-nexus", alias = "nexus-public")]
     Nexus,
 }
 /// Canonical restricted-dataspace presets supported by the localnet generator.
@@ -319,9 +320,9 @@ fn resolve_sora_profile(
 }
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalnetPerfProfileArg {
-    #[value(name = "10k-permissioned", alias = "throughput-10k-permissioned")]
+    #[value(name = "10k-permissioned")]
     Throughput10kPermissioned,
-    #[value(name = "10k-npos", alias = "throughput-10k-npos")]
+    #[value(name = "10k-npos")]
     Throughput10kNpos,
 }
 impl From<LocalnetPerfProfileArg> for LocalnetPerfProfile {
@@ -603,6 +604,14 @@ const LOCALNET_KURA_FSYNC_MODE: &str = "batched";
 /// localnet owns short-lived storage under its output directory, so an explicit small cap avoids
 /// applying that host-wide production policy to a throwaway network.
 const LOCALNET_NEXUS_STORAGE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+/// Exact first-release Taira Nexus storage weights, in basis points.
+const TAIRA_NEXUS_STORAGE_WEIGHTS: [(&str, u16); 5] = [
+    ("kura_blocks_bps", taira_defaults::NEXUS_KURA_BLOCKS_BPS),
+    ("wsv_snapshots_bps", taira_defaults::NEXUS_WSV_SNAPSHOTS_BPS),
+    ("sorafs_bps", taira_defaults::NEXUS_SORAFS_BPS),
+    ("soranet_spool_bps", taira_defaults::NEXUS_SORANET_SPOOL_BPS),
+    ("soravpn_spool_bps", taira_defaults::NEXUS_SORAVPN_SPOOL_BPS),
+];
 /// Ed25519 signature batch size for perf-profile localnets (0 disables batching).
 const LOCALNET_SIGNATURE_BATCH_MAX_ED25519: usize = 64;
 /// Logger filter for perf-profile localnets to avoid per-transaction log floods.
@@ -891,16 +900,11 @@ pub struct Args {
     /// Number of peers to generate (minimum four).
     #[arg(long, short, value_name = "COUNT", default_value_t = NonZeroU16::new(4).unwrap())]
     peers: NonZeroU16,
-    /// Optional UTF-8 seed for deterministic keys.
+    /// Optional UTF-8 seed for deterministic development keys.
+    ///
+    /// Omit this option to generate independent keys from operating-system entropy.
     #[arg(long, short)]
     seed: Option<String>,
-    /// Generate every private key from a fresh OS-random, process-local seed.
-    ///
-    /// The seed is never accepted through argv, written to the generated
-    /// bundle, or printed. This mode is intended for real first-release
-    /// custody; use `--seed` only for reproducible development fixtures.
-    #[arg(long, conflicts_with = "seed")]
-    fresh_random_keys: bool,
     /// Canonical chain identifier written into genesis, peer configs, and the client config.
     #[arg(long, value_name = "CHAIN_ID", default_value = DEFAULT_CHAIN_ID)]
     chain_id: String,
@@ -952,15 +956,6 @@ pub struct Args {
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
 }
-fn fresh_localnet_seed() -> Result<String> {
-    let mut raw = [0_u8; 32];
-    OsRng
-        .try_fill_bytes(&mut raw)
-        .wrap_err("failed to obtain OS entropy for fresh localnet custody")?;
-    let encoded = hex::encode(raw);
-    raw.zeroize();
-    Ok(encoded)
-}
 fn resolve_requested_consensus_mode(
     explicit_mode: Option<ConsensusModeArg>,
     perf_profile: Option<LocalnetPerfProfile>,
@@ -994,18 +989,12 @@ impl<T: Write> RunArgs<T> for Args {
         for asset_definition_id in self.asset_definition_id {
             assets.push(requested_localnet_asset_spec(&asset_definition_id)?);
         }
-        let fresh_random_keys = self.fresh_random_keys;
         let chain_id = self.chain_id;
-        let seed = if fresh_random_keys {
-            Some(fresh_localnet_seed()?)
-        } else {
-            self.seed
-        };
-        let mut opts = LocalnetOptions {
+        let opts = LocalnetOptions {
             sora_profile,
             perf_profile,
             peers: self.peers,
-            seed,
+            seed: self.seed,
             bind_host: self.bind_host,
             public_host: self.public_host,
             base_api_port: self.base_api_port,
@@ -1016,11 +1005,7 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             block_cadence_ms: self.block_cadence_ms,
         };
-        let outcome = generate_localnet_inner(&opts, writer, fresh_random_keys, Some(&chain_id));
-        if fresh_random_keys && let Some(seed) = opts.seed.as_mut() {
-            seed.zeroize();
-        }
-        outcome
+        generate_localnet_inner(&opts, writer, Some(&chain_id))
     }
 }
 struct Peer {
@@ -1102,7 +1087,7 @@ struct BlsEntry {
 /// # Errors
 /// Returns an error if port ranges are invalid or if config, genesis, or script files cannot be written.
 pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWriter<T>) -> Outcome {
-    generate_localnet_inner(opts, writer, false, None)
+    generate_localnet_inner(opts, writer, None)
 }
 #[allow(clippy::too_many_lines)]
 fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
@@ -1202,19 +1187,13 @@ fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
 fn generate_localnet_inner<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
-    redact_seed_metadata: bool,
     chain_id: Option<&str>,
 ) -> Outcome {
     init_instruction_registry();
     let hosts = validate_localnet_options(opts)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
-    if redact_seed_metadata {
-        crate::secure_fs::prepare_empty_private_directory(&opts.out_dir)
-            .wrap_err("prepare fresh localnet private output directory")?;
-    } else {
-        fs::create_dir_all(&opts.out_dir)
-            .wrap_err("failed to create output directory for localnet")?;
-    }
+    crate::secure_fs::prepare_empty_private_directory(&opts.out_dir)
+        .wrap_err("prepare fresh localnet private output directory")?;
     let out_dir = fs::canonicalize(&opts.out_dir).wrap_err_with(|| {
         format!(
             "failed to canonicalize output directory for localnet: {}",
@@ -1449,7 +1428,6 @@ fn generate_localnet_inner<T: Write>(
         &genesis_private_key_path,
         &genesis_public_key,
         &genesis_private,
-        redact_seed_metadata,
     )?;
     let genesis_expected_hash = write_genesis(GenesisWriteContext {
         manifest: &genesis,
@@ -1568,12 +1546,7 @@ fn generate_localnet_inner<T: Write>(
     write_localnet_readme(
         &out_dir,
         &chain_id,
-        if redact_seed_metadata {
-            None
-        } else {
-            opts.seed.as_deref()
-        },
-        redact_seed_metadata,
+        opts.seed.as_deref(),
         opts.consensus_mode,
         opts.peers.get(),
         &primary_torii_url,
@@ -1590,13 +1563,11 @@ fn generate_localnet_inner<T: Write>(
         &runtime_bundle,
         &alias_setup_intent_path,
     )?;
-    if redact_seed_metadata {
-        crate::secure_fs::harden_private_tree_with_owner_executables(
-            &out_dir,
-            &[&start_path, &stop_path],
-        )
-        .wrap_err("harden fresh localnet private artifact tree")?;
-    }
+    crate::secure_fs::harden_private_tree_with_owner_executables(
+        &out_dir,
+        &[&start_path, &stop_path],
+    )
+    .wrap_err("harden fresh localnet private artifact tree")?;
     tui::success("Localnet ready");
     writeln!(writer, "out_dir: {}", out_dir.display())?;
     writeln!(writer, "chain_id: {}", chain_id)?;
@@ -1652,14 +1623,14 @@ fn generate_localnet_inner<T: Write>(
         writer,
         "next_start: cd {} && {}",
         out_dir.display(),
-        localnet_script_command(redact_seed_metadata, "start.sh")
+        localnet_script_command("start.sh")
     )?;
     writeln!(writer, "next_health: curl -sf {}health", primary_torii_url)?;
     writeln!(
         writer,
         "next_stop: cd {} && {}",
         out_dir.display(),
-        localnet_script_command(redact_seed_metadata, "stop.sh")
+        localnet_script_command("stop.sh")
     )?;
     Ok(())
 }
@@ -2360,8 +2331,17 @@ fn render_peer_config(
         let mut egress = Table::new();
         egress.insert("default_allow".into(), Value::Boolean(false));
         egress.insert("allowed_hosts".into(), Value::Array(Vec::new()));
-        egress.insert("rate_per_minute".into(), Value::Integer(60));
-        egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
+        egress.insert(
+            "rate_per_minute".into(),
+            Value::Integer(i64::from(taira_defaults::INROU_EGRESS_RATE_PER_MINUTE)),
+        );
+        egress.insert(
+            "max_bytes_per_minute".into(),
+            Value::Integer(
+                i64::try_from(taira_defaults::INROU_EGRESS_MAX_BYTES_PER_MINUTE)
+                    .expect("Taira Inrou egress byte budget fits i64"),
+            ),
+        );
         soracloud_runtime.insert("egress".into(), Value::Table(egress));
     }
     root.insert("soracloud_runtime".into(), Value::Table(soracloud_runtime));
@@ -2444,13 +2424,24 @@ fn render_peer_config(
     let mut nexus = Table::new();
     if npos_bootstrap {
         let mut storage = Table::new();
+        let storage_budget = if taira {
+            taira_defaults::NEXUS_STORAGE_BUDGET_BYTES
+        } else {
+            LOCALNET_NEXUS_STORAGE_BUDGET_BYTES
+        };
         storage.insert(
             "local_budget_bytes".into(),
             Value::Integer(
-                i64::try_from(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES)
-                    .expect("localnet Nexus storage budget fits i64"),
+                i64::try_from(storage_budget).expect("localnet Nexus storage budget fits i64"),
             ),
         );
+        if taira {
+            let weights = TAIRA_NEXUS_STORAGE_WEIGHTS
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), Value::Integer(i64::from(value))))
+                .collect();
+            storage.insert("disk_budget_weights".into(), Value::Table(weights));
+        }
         nexus.insert("storage".into(), Value::Table(storage));
     }
     let mut fusion = Table::new();
@@ -2771,6 +2762,15 @@ fn render_peer_config(
         "data_dir".into(),
         Value::String(storage_paths.sorafs.to_string_lossy().into_owned()),
     );
+    if taira {
+        sorafs_storage.insert(
+            "max_capacity_bytes".into(),
+            Value::Integer(
+                i64::try_from(taira_defaults::SORAFS_STORAGE_CAP_BYTES)
+                    .expect("Taira SoraFS storage cap fits i64"),
+            ),
+        );
+    }
     let mut sorafs = Table::new();
     sorafs.insert("storage".into(), Value::Table(sorafs_storage));
     let mut sorafs_por = Table::new();
@@ -4372,7 +4372,6 @@ fn write_genesis_key_files(
     private_path: &Path,
     public_key: &iroha_crypto::PublicKey,
     private_key: &ExposedPrivateKey,
-    private_tree: bool,
 ) -> Result<()> {
     let canonical = Zeroizing::new(
         private_key
@@ -4382,13 +4381,8 @@ fn write_genesis_key_files(
     let mut raw = Zeroizing::new(Vec::with_capacity(canonical.len() + 1));
     raw.extend_from_slice(canonical.as_bytes());
     raw.push(b'\n');
-    if private_tree {
-        crate::secure_fs::write_private_file_atomic(private_path, raw.as_slice())
-            .wrap_err("write genesis private key")?;
-    } else {
-        write_owner_only_localnet_file(private_path, raw.as_slice())
-            .wrap_err("write genesis private key")?;
-    }
+    crate::secure_fs::write_private_file_atomic(private_path, raw.as_slice())
+        .wrap_err("write genesis private key")?;
     let mut public = public_key.to_string();
     public.push('\n');
     let mut options = fs::OpenOptions::new();
@@ -4544,6 +4538,18 @@ fn default_irohad_bin_paths(taira: bool) -> (PathBuf, PathBuf) {
         target_dir.join("release").join(binary),
     )
 }
+fn shell_single_quote(value: &str) -> Result<String> {
+    if value.contains(['\0', '\n', '\r']) {
+        return Err(eyre!("shell assignment value contains a control character"));
+    }
+    Ok(format!("'{}'", value.replace('\'', "'\"'\"'")))
+}
+fn shell_quote_path(path: &Path) -> Result<String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| eyre!("shell script path is not valid UTF-8: {}", path.display()))?;
+    shell_single_quote(value)
+}
 fn write_scripts(
     out_dir: &Path,
     peers: u16,
@@ -4585,6 +4591,12 @@ fn write_start_script(
     let (default_irohad_debug, default_irohad_release) = default_irohad_bin_paths(taira);
     let default_iroha_debug = default_irohad_debug.with_file_name("iroha");
     let default_iroha_release = default_irohad_release.with_file_name("iroha");
+    let default_irohad_debug = shell_quote_path(&default_irohad_debug)?;
+    let default_irohad_release = shell_quote_path(&default_irohad_release)?;
+    let default_iroha_debug = shell_quote_path(&default_iroha_debug)?;
+    let default_iroha_release = shell_quote_path(&default_iroha_release)?;
+    let client_account_literal = shell_single_quote(client_account_literal)?;
+    let fee_asset_definition_id = shell_single_quote(fee_asset_definition_id)?;
     let mut start_file = BufWriter::new(File::create(start)?);
     let sora_flag = if sora_profile_enabled { "--sora " } else { "" };
     let sora_mode_env = if sora_profile_enabled { "1" } else { "0" };
@@ -4605,23 +4617,16 @@ fn write_start_script(
     writeln!(start_file, "}}")?;
     writeln!(
         start_file,
-        "DEFAULT_IROHAD_BIN_DEBUG=\"{}\"",
-        default_irohad_debug.display()
+        "DEFAULT_IROHAD_BIN_DEBUG={default_irohad_debug}"
     )?;
     writeln!(
         start_file,
-        "DEFAULT_IROHAD_BIN_RELEASE=\"{}\"",
-        default_irohad_release.display()
+        "DEFAULT_IROHAD_BIN_RELEASE={default_irohad_release}"
     )?;
+    writeln!(start_file, "DEFAULT_IROHA_CLI_DEBUG={default_iroha_debug}")?;
     writeln!(
         start_file,
-        "DEFAULT_IROHA_CLI_DEBUG=\"{}\"",
-        default_iroha_debug.display()
-    )?;
-    writeln!(
-        start_file,
-        "DEFAULT_IROHA_CLI_RELEASE=\"{}\"",
-        default_iroha_release.display()
+        "DEFAULT_IROHA_CLI_RELEASE={default_iroha_release}"
     )?;
     writeln!(start_file, "if [ -z \"${{IROHAD_BIN:-}}\" ]; then")?;
     writeln!(
@@ -4669,11 +4674,10 @@ fn write_start_script(
     )?;
     writeln!(start_file, "  exit 1")?;
     writeln!(start_file, "fi")?;
-    writeln!(start_file, "FAUCET_ACCOUNT=\"{}\"", client_account_literal)?;
+    writeln!(start_file, "FAUCET_ACCOUNT={client_account_literal}")?;
     writeln!(
         start_file,
-        "FAUCET_ASSET_DEFINITION_ID=\"{}\"",
-        fee_asset_definition_id
+        "FAUCET_ASSET_DEFINITION_ID={fee_asset_definition_id}"
     )?;
     writeln!(
         start_file,
@@ -5247,7 +5251,6 @@ fn write_localnet_readme(
     out_dir: &Path,
     chain_id: &str,
     seed: Option<&str>,
-    private_custody: bool,
     consensus_mode: SumeragiConsensusMode,
     peers: u16,
     torii_url: &str,
@@ -5265,8 +5268,8 @@ fn write_localnet_readme(
     alias_setup_intent_path: &Path,
 ) -> Result<()> {
     let readme_path = out_dir.join("README.md");
-    let start_command = localnet_script_command(private_custody, "start.sh");
-    let stop_command = localnet_script_command(private_custody, "stop.sh");
+    let start_command = localnet_script_command("start.sh");
+    let stop_command = localnet_script_command("stop.sh");
     let seed_line = seed
         .map(|seed| {
             format!(
@@ -5349,12 +5352,8 @@ fn write_localnet_readme(
         )
     })
 }
-fn localnet_script_command(private_custody: bool, script_name: &str) -> String {
-    if private_custody {
-        format!("bash ./{script_name}")
-    } else {
-        format!("./{script_name}")
-    }
+fn localnet_script_command(script_name: &str) -> String {
+    format!("bash ./{script_name}")
 }
 #[cfg(test)]
 mod tests {
@@ -5403,7 +5402,7 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let mut output = BufWriter::new(Vec::new());
-        generate_localnet_inner(&opts, &mut output, false, Some(TAIRA_TESTNET_CHAIN_ID))
+        generate_localnet_inner(&opts, &mut output, Some(TAIRA_TESTNET_CHAIN_ID))
             .expect("generate canonical Taira localnet");
         let peers = build_peers(
             TAIRA_TESTNET_PEERS,
@@ -5528,6 +5527,75 @@ mod tests {
                 .expect("read rendered Taira config");
             assert!(!config.contains(key_record.trim_end()));
             assert!(!start_script.contains(key_record.trim_end()));
+            let config: toml::Value = toml::from_str(&config).expect("parse rendered Taira config");
+            let storage = config
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .expect("canonical Taira Nexus storage profile");
+            assert_eq!(
+                storage
+                    .get("local_budget_bytes")
+                    .and_then(toml::Value::as_integer),
+                Some(
+                    i64::try_from(taira_defaults::NEXUS_STORAGE_BUDGET_BYTES)
+                        .expect("Taira Nexus storage budget fits i64")
+                )
+            );
+            let weights = storage
+                .get("disk_budget_weights")
+                .and_then(toml::Value::as_table)
+                .expect("canonical Taira Nexus storage weights");
+            for (name, expected) in TAIRA_NEXUS_STORAGE_WEIGHTS {
+                assert_eq!(
+                    weights.get(name).and_then(toml::Value::as_integer),
+                    Some(i64::from(expected))
+                );
+            }
+            let sorafs_storage = config
+                .get("sorafs")
+                .and_then(toml::Value::as_table)
+                .and_then(|sorafs| sorafs.get("storage"))
+                .and_then(toml::Value::as_table)
+                .expect("canonical Taira SoraFS storage profile");
+            assert_eq!(
+                sorafs_storage
+                    .get("max_capacity_bytes")
+                    .and_then(toml::Value::as_integer),
+                Some(
+                    i64::try_from(taira_defaults::SORAFS_STORAGE_CAP_BYTES)
+                        .expect("Taira SoraFS storage cap fits i64")
+                )
+            );
+            let egress = config
+                .get("soracloud_runtime")
+                .and_then(toml::Value::as_table)
+                .and_then(|runtime| runtime.get("egress"))
+                .and_then(toml::Value::as_table)
+                .expect("canonical Taira runtime egress profile");
+            assert_eq!(
+                egress
+                    .get("rate_per_minute")
+                    .and_then(toml::Value::as_integer),
+                Some(i64::from(taira_defaults::INROU_EGRESS_RATE_PER_MINUTE))
+            );
+            assert_eq!(
+                egress
+                    .get("max_bytes_per_minute")
+                    .and_then(toml::Value::as_integer),
+                Some(
+                    i64::try_from(taira_defaults::INROU_EGRESS_MAX_BYTES_PER_MINUTE)
+                        .expect("Taira Inrou egress byte budget fits i64")
+                )
+            );
+            assert!(
+                config
+                    .get("soracloud_runtime")
+                    .and_then(toml::Value::as_table)
+                    .is_none_or(|runtime| !runtime.contains_key("inrou")),
+                "Kagami must leave Inrou disabled until the trusted guest identity is staged"
+            );
         }
         assert_eq!(authorities.len(), usize::from(TAIRA_TESTNET_PEERS));
     }
@@ -6071,7 +6139,7 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let mut command_output = BufWriter::new(Vec::new());
-        generate_localnet_inner(&opts, &mut command_output, true, None)
+        generate_localnet_inner(&opts, &mut command_output, None)
             .expect("generate fresh-custody localnet files");
         let command_output = String::from_utf8(
             command_output
@@ -7664,6 +7732,32 @@ mod tests {
             .is_err(),
             "private dataspace selection must reject the public Nexus profile"
         );
+        for retired in ["dataspaces", "public", "sora-nexus", "nexus-public"] {
+            assert!(
+                TestArgs::try_parse_from([
+                    "kagami-localnet-test",
+                    "--out-dir",
+                    "/tmp/kagami-localnet-test",
+                    "--sora-profile",
+                    retired,
+                ])
+                .is_err(),
+                "first-release CLI must reject retired profile alias {retired}"
+            );
+        }
+        for retired in ["throughput-10k-permissioned", "throughput-10k-npos"] {
+            assert!(
+                TestArgs::try_parse_from([
+                    "kagami-localnet-test",
+                    "--out-dir",
+                    "/tmp/kagami-localnet-test",
+                    "--perf-profile",
+                    retired,
+                ])
+                .is_err(),
+                "first-release CLI must reject retired performance alias {retired}"
+            );
+        }
     }
     #[test]
     fn localnet_cli_accepts_an_explicit_canonical_chain_id() {
@@ -8879,7 +8973,6 @@ mod tests {
             tmp.path(),
             DEFAULT_CHAIN_ID,
             Some("Iroha"),
-            false,
             SumeragiConsensusMode::Npos,
             4,
             "http://127.0.0.1:29080/",
@@ -8930,7 +9023,6 @@ mod tests {
             tmp.path(),
             DEFAULT_CHAIN_ID,
             None,
-            true,
             SumeragiConsensusMode::Npos,
             4,
             "http://127.0.0.1:29080/",
@@ -8957,23 +9049,47 @@ mod tests {
         assert!(!contents.lines().any(|line| line == "./stop.sh"));
     }
     #[test]
-    fn fresh_localnet_seed_uses_independent_256_bit_os_entropy() {
-        let first = fresh_localnet_seed().expect("first OS-random seed");
-        let second = fresh_localnet_seed().expect("second OS-random seed");
-        assert_eq!(first.len(), 64);
-        assert_eq!(second.len(), 64);
-        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        assert!(second.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        assert_ne!(first, second);
+    fn omitted_seed_uses_independent_os_random_keys() {
         let peer_index = 0_u16.to_be_bytes();
-        let (first_public, first_private) =
-            generate_streaming_identity_key_pair(Some(first.as_bytes()), &peer_index)
-                .expect("derive first fresh streaming identity");
+        let (first_public, first_private) = generate_streaming_identity_key_pair(None, &peer_index)
+            .expect("generate first streaming identity");
         let (second_public, second_private) =
-            generate_streaming_identity_key_pair(Some(second.as_bytes()), &peer_index)
-                .expect("derive second fresh streaming identity");
+            generate_streaming_identity_key_pair(None, &peer_index)
+                .expect("generate second streaming identity");
         assert_ne!(first_public, second_public);
         assert_ne!(first_private.to_string(), second_private.to_string());
+    }
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn localnet_refuses_to_mix_with_existing_output() {
+        let output = tempfile::tempdir().expect("localnet output");
+        let sentinel = output.path().join("keep.txt");
+        fs::write(&sentinel, b"do not overwrite").expect("write sentinel");
+        let opts = LocalnetOptions {
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("nonzero peers"),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29_080,
+            base_p2p_port: 33_337,
+            out_dir: output.path().to_owned(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_cadence_ms: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+        };
+        let error = generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+            .expect_err("non-empty output must be rejected");
+        assert!(error.to_string().contains("must be empty"));
+        assert_eq!(
+            fs::read(sentinel).expect("read sentinel"),
+            b"do not overwrite"
+        );
     }
     #[test]
     fn onboarding_tokens_remain_random_with_reproducible_identity_keys() {

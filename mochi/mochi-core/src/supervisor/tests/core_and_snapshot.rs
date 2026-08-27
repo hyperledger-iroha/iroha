@@ -206,9 +206,6 @@ case "$*" in
   *"-p iroha_kagami"*)
     BIN="$TARGET/debug/kagami"
     ;;
-  *"-p iroha_cli"*)
-    BIN="$TARGET/debug/iroha3"
-    ;;
   *)
     BIN="$TARGET/debug/unknown"
     ;;
@@ -290,64 +287,39 @@ fn copy_dir_recursive_handles_missing_sources() {
     assert!(iter.next().is_none(), "destination should remain empty");
 }
 #[test]
-fn probe_version_output_parses_first_nonempty_line() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let script_path = temp.path().join("custom-bin.sh");
-    let script = r#"#!/bin/sh
-echo "custom-bin 3.2.1"
-exit 0
-"#;
-    fs::write(&script_path, script).expect("write version script");
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(&script_path)
-            .expect("version script metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&script_path, perms).expect("set version script perms");
-    }
-    let (raw, version) =
-        probe_version_output(&script_path, "custom-bin").expect("version probe succeeds");
-    assert_eq!(version.as_deref(), Some("custom-bin 3.2.1"));
-    assert!(
-        raw.as_deref()
-            .is_some_and(|raw| raw.contains("custom-bin 3.2.1"))
-    );
+fn kagami_verify_binding_accepts_the_requested_chain_and_seed() {
+    let report = KagamiVerifyReport {
+        chain_id: Some("test-chain".to_owned()),
+        vrf_seed_hex: Some("aabb".to_owned()),
+        fingerprint: Some("fp123".to_owned()),
+    };
+    validate_kagami_verify_binding(&report, "test-chain", Some("aabb"))
+        .expect("matching Kagami binding must pass");
 }
 #[test]
-fn compatibility_summary_includes_profile_and_fingerprint() {
-    let report = CompatibilityReport {
-        versions: Vec::new(),
-        verify: Some(KagamiVerifyReport {
-            profile: GenesisProfile::Iroha3Dev,
-            chain_id: Some("test-chain".to_owned()),
-            vrf_seed_hex: None,
-            peers_with_pop: None,
-            fingerprint: Some("fp123".to_owned()),
-            raw_output: "fingerprint fp123".to_owned(),
-        }),
-        chain_id: "test-chain".to_owned(),
-        profile: Some(GenesisProfile::Iroha3Dev),
+fn kagami_verify_binding_rejects_chain_or_seed_mismatch() {
+    let report = KagamiVerifyReport {
+        chain_id: Some("other-chain".to_owned()),
+        vrf_seed_hex: Some("ccdd".to_owned()),
+        fingerprint: None,
     };
-    let summary = report.summary_line();
-    assert!(
-        summary.contains("chain test-chain"),
-        "summary should include chain id: {summary}"
-    );
-    assert!(
-        summary.contains("profile iroha3-dev"),
-        "summary should include profile slug: {summary}"
-    );
-    assert!(
-        summary.contains("fingerprint fp123"),
-        "summary should include verify fingerprint: {summary}"
-    );
+    assert!(matches!(
+        validate_kagami_verify_binding(&report, "test-chain", Some("ccdd")),
+        Err(SupervisorError::KagamiVerify(_))
+    ));
+    let report = KagamiVerifyReport {
+        chain_id: Some("test-chain".to_owned()),
+        ..report
+    };
+    assert!(matches!(
+        validate_kagami_verify_binding(&report, "test-chain", Some("aabb")),
+        Err(SupervisorError::KagamiVerify(_))
+    ));
 }
 struct KagamiStub {
     _path_guard: EnvVarGuard,
     _log_guard: EnvVarGuard,
     _irohad_guard: EnvVarGuard,
-    _iroha_cli_guard: EnvVarGuard,
     _signature_guard: EnvVarGuard,
     log_path: PathBuf,
 }
@@ -452,7 +424,6 @@ esac
         let path_guard = EnvVarGuard::set("MOCHI_KAGAMI", script_path.as_os_str());
         let log_guard = EnvVarGuard::set("MOCHI_KAGAMI_LOG", log_path.as_os_str());
         let irohad_guard = EnvVarGuard::set("MOCHI_IROHAD", iroha_stub.as_os_str());
-        let iroha_cli_guard = EnvVarGuard::set("MOCHI_IROHA_CLI", iroha_stub.as_os_str());
         let signature_guard = EnvVarGuard::set(
             TEST_FINALIZE_KAGAMI_STUB_SIGNATURE,
             std::ffi::OsStr::new("1"),
@@ -462,7 +433,6 @@ esac
             _path_guard: path_guard,
             _log_guard: log_guard,
             _irohad_guard: irohad_guard,
-            _iroha_cli_guard: iroha_cli_guard,
             _signature_guard: signature_guard,
             log_path,
         }
@@ -475,7 +445,6 @@ struct StandaloneKagamiStub {
     script_path: PathBuf,
     log_path: PathBuf,
     _irohad_guard: EnvVarGuard,
-    _iroha_cli_guard: EnvVarGuard,
 }
 impl StandaloneKagamiStub {
     fn create(root: &Path) -> Self {
@@ -567,12 +536,10 @@ esac
         }
         let iroha_stub = write_version_stub(root, "kagami-override-iroha", "3.0.0");
         let irohad_guard = EnvVarGuard::set("MOCHI_IROHAD", iroha_stub.as_os_str());
-        let iroha_cli_guard = EnvVarGuard::set("MOCHI_IROHA_CLI", iroha_stub.as_os_str());
         Self {
             script_path,
             log_path,
             _irohad_guard: irohad_guard,
-            _iroha_cli_guard: iroha_cli_guard,
         }
     }
     fn script_path(&self) -> &Path {
@@ -663,13 +630,39 @@ fn binary_paths_default_respects_env_override() {
     let binaries = BinaryPaths::default();
     assert_eq!(binaries.irohad_executable(), override_path.as_path());
 }
+#[cfg(unix)]
 #[test]
-fn binary_paths_default_respects_cli_env_override() {
-    let temp = tempfile::NamedTempFile::new().expect("temp file");
-    let override_path = temp.path().to_path_buf();
-    let _guard = EnvVarGuard::set("MOCHI_IROHA_CLI", override_path.as_os_str());
-    let binaries = BinaryPaths::default();
-    assert_eq!(binaries.iroha_cli_executable(), override_path.as_path());
+fn binary_paths_do_not_replace_missing_explicit_paths_from_path() {
+    let _env = env_lock().lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path_dir = temp.path().join("path");
+    fs::create_dir(&path_dir).expect("create PATH directory");
+    for name in ["iroha3d", "kagami"] {
+        let executable = path_dir.join(name);
+        fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("write PATH executable");
+        let mut permissions = fs::metadata(&executable)
+            .expect("PATH executable metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).expect("set PATH executable permissions");
+    }
+    let _path_guard = RestoringEnvVarGuard::set("PATH", path_dir.as_os_str());
+    let missing_dir = temp.path().join("missing");
+    let missing_irohad = missing_dir.join("iroha3d");
+    let missing_kagami = missing_dir.join("kagami");
+    let mut binaries = BinaryPaths::default()
+        .allow_auto_builds(false)
+        .irohad(&missing_irohad)
+        .kagami(&missing_kagami);
+
+    let irohad_error = binaries
+        .ensure_irohad_ready()
+        .expect_err("an explicit iroha3d path must fail closed");
+    assert!(irohad_error.to_string().contains(&missing_irohad.display().to_string()));
+    let kagami_error = binaries
+        .ensure_kagami_ready()
+        .expect_err("an explicit kagami path must fail closed");
+    assert!(kagami_error.to_string().contains(&missing_kagami.display().to_string()));
 }
 #[cfg(unix)]
 #[test]
@@ -690,21 +683,16 @@ fn binary_paths_auto_builds_when_enabled() {
     binaries.irohad_verified = false;
     binaries.irohad_build_attempted = false;
     binaries.irohad_auto = true;
-    binaries.irohad_source = BinarySource::AutoDefault;
     binaries.kagami = PathBuf::from("kagami");
     binaries.kagami_verified = false;
     binaries.kagami_build_attempted = false;
     binaries.kagami_auto = true;
-    binaries.kagami_source = BinarySource::AutoDefault;
-    binaries.iroha_cli = PathBuf::from("iroha_cli");
-    binaries.iroha_cli_verified = false;
-    binaries.iroha_cli_build_attempted = false;
-    binaries.iroha_cli_auto = true;
-    binaries.iroha_cli_source = BinarySource::AutoDefault;
-    let versions = binaries
-        .probe_versions()
-        .expect("probe versions should succeed");
-    assert_eq!(versions.len(), 3);
+    binaries
+        .ensure_irohad_ready()
+        .expect("iroha3d auto-build should succeed");
+    binaries
+        .ensure_kagami_ready()
+        .expect("Kagami auto-build should succeed");
     let log = fs::read_to_string(&cargo_log).expect("read cargo log");
     assert!(
         log.lines()
@@ -713,16 +701,19 @@ fn binary_paths_auto_builds_when_enabled() {
     );
     assert_eq!(
         log.lines().count(),
-        3,
+        2,
         "expected one cargo invocation per binary build"
     );
-    let _ = binaries
-        .probe_versions()
-        .expect("second probe should succeed");
+    binaries
+        .ensure_irohad_ready()
+        .expect("resolved iroha3d should remain ready");
+    binaries
+        .ensure_kagami_ready()
+        .expect("resolved Kagami should remain ready");
     let log = fs::read_to_string(&cargo_log).expect("read cargo log");
     assert_eq!(
         log.lines().count(),
-        3,
+        2,
         "second probe should not trigger additional cargo builds"
     );
 }
@@ -744,7 +735,6 @@ fn binary_paths_auto_build_failure_surfaces_error() {
     binaries.irohad_verified = false;
     binaries.irohad_build_attempted = false;
     binaries.irohad_auto = true;
-    binaries.irohad_source = BinarySource::AutoDefault;
     let err = binaries
         .ensure_irohad_ready()
         .expect_err("auto-build should surface failure");
@@ -758,51 +748,6 @@ fn binary_paths_auto_build_failure_surfaces_error() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
-}
-#[cfg(unix)]
-#[test]
-fn binary_paths_resolve_iroha_cli_alias_without_building() {
-    let _env = env_lock().lock().expect("env lock");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let empty_target_dir = temp.path().join("target");
-    fs::create_dir_all(&empty_target_dir).expect("create target dir");
-    let path_dir = temp.path().join("bin");
-    fs::create_dir_all(&path_dir).expect("create bin dir");
-    let iroha_stub_script = write_version_stub(&path_dir, "iroha", "3.0.0");
-    let iroha_stub = path_dir.join(format!("iroha{}", env::consts::EXE_SUFFIX));
-    fs::copy(&iroha_stub_script, &iroha_stub).expect("copy iroha alias stub");
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(&iroha_stub)
-            .expect("iroha alias metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&iroha_stub, perms).expect("set iroha alias permissions");
-    }
-    let cargo_stub = write_cargo_failure_stub(temp.path());
-    let _cargo_guard = RestoringEnvVarGuard::set("CARGO", cargo_stub.as_os_str());
-    let _target_guard = RestoringEnvVarGuard::set("CARGO_TARGET_DIR", empty_target_dir.as_os_str());
-    let _path_guard = RestoringEnvVarGuard::set("PATH", path_dir.as_os_str());
-    let mut binaries = BinaryPaths::default().allow_auto_builds(true);
-    binaries.iroha_cli = PathBuf::from("iroha_cli");
-    binaries.iroha_cli_verified = false;
-    binaries.iroha_cli_build_attempted = false;
-    binaries.iroha_cli_auto = true;
-    binaries.iroha_cli_source = BinarySource::AutoDefault;
-    assert_eq!(
-        resolve_name_on_path(OsStr::new("iroha")).as_deref(),
-        Some(iroha_stub.as_path())
-    );
-    let (alias_path, alias_source) =
-        resolve_iroha_cli_alias().expect("iroha alias should be discoverable");
-    assert_eq!(alias_path, iroha_stub);
-    assert_eq!(alias_source, BinarySource::PathSearch);
-    let resolved = binaries
-        .ensure_iroha_cli_ready()
-        .expect("iroha alias should resolve without cargo build");
-    assert_eq!(resolved, iroha_stub.as_path());
-    assert_eq!(binaries.iroha_cli_source, BinarySource::PathSearch);
-    assert!(!binaries.iroha_cli_build_attempted);
 }
 #[test]
 fn builder_creates_peer_configs() {

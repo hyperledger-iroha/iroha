@@ -393,7 +393,8 @@ Implemented foundations include:
   Private coordinator, drand, and provider-VRF state is derived under the
   single `sorafs.por.state_dir`; PoR has no governance-output directory
   or local unsigned publisher.
-- Taikai cache governance bundle generation via `cargo xtask sorafs-taikai-cache-bundle`.
+- Taikai V1 retrieval uses normal bounded multi-provider SoraFS fetch and
+  produces no dedicated cache governance bundle.
 - Local operator commands:
   - `sorafs_cli governance dag list --root <dir>` inventories local `.to`
     artifacts, reports BLAKE3 sidecar state, identifies
@@ -927,7 +928,6 @@ The rollout evidence scripts have focused Python coverage in:
   `--route-body-blake3-hex` digest for dashboard canaries, validates the
   generated artifact through the SF-12 checker, and writes atomically without
   following output symlinks.
-- Keep `configs/taikai_cache/` and `cargo xtask sorafs-taikai-cache-bundle` documented as Taikai cache governance bundle tooling, not as the full DAG publisher.
 - Package the shipped live-head, public checkpoint recovery, and dashboard
   runbooks with the supervised deployment.
 
@@ -1040,7 +1040,7 @@ rollout gate. This evidence must be collected from the shipped always-on
 publisher rather than synthesized from the pre-publication filesystem hooks.
 
 ## Rollout Status
-- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with one typed atomic publication authority containing one-to-one publish-index and CAR-queue sections, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, deterministic CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, path-free typed NodeHandle snapshots for Torii publish-index, CAR queue, runtime signed-DAG, and supervised mirror query APIs with checkpoint-bound ETags and `limit`-bounded top-level/lookup arrays, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, a rollout evidence checker/planner framework, payload-free canary builder, operator argfile templates, and focused source tests.
+- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with one typed atomic publication authority containing one-to-one publish-index and CAR-queue sections, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, deterministic CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, path-free typed NodeHandle snapshots for Torii publish-index, CAR queue, runtime signed-DAG, and supervised mirror query APIs with checkpoint-bound ETags and `limit`-bounded top-level/lookup arrays, PoR report/challenge filesystem publication, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, a rollout evidence checker/planner framework, payload-free canary builder, operator argfile templates, and focused source tests.
 - Done addendum: valid SF-12 operator-recovery evidence now surfaces
   `valid_checkpoint_digests`, and aggregate readiness validates those checkpoint
   digests as payload-free metadata tied to recognized artifact fingerprints.

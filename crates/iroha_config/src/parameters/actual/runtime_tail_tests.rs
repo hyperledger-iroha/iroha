@@ -32,13 +32,11 @@ fn soranet_pow_defaults_are_const_initializable() {
     const CONST_POW: SoranetPow = SoranetPow::default_const();
     const CONST_PUZZLE: SoranetPuzzle = SoranetPuzzle::default_const();
     let runtime = SoranetPow::default();
-    assert!(runtime.required, "first-release PoW must be mandatory");
     assert_eq!(
         runtime.difficulty,
         iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY
     );
     assert_ne!(runtime.difficulty, 0);
-    assert_eq!(CONST_POW.required, runtime.required);
     assert_eq!(CONST_POW.difficulty, runtime.difficulty);
     assert_eq!(CONST_POW.max_future_skew, runtime.max_future_skew);
     assert_eq!(CONST_POW.min_ticket_ttl, runtime.min_ticket_ttl);
@@ -52,11 +50,9 @@ fn soranet_pow_defaults_are_const_initializable() {
         CONST_POW.revocation_store_path,
         runtime.revocation_store_path
     );
-    assert_eq!(CONST_POW.puzzle.is_some(), runtime.puzzle.is_some());
-    let runtime_puzzle = runtime.puzzle.expect("puzzle present by default");
-    assert_eq!(CONST_PUZZLE.memory_kib, runtime_puzzle.memory_kib);
-    assert_eq!(CONST_PUZZLE.time_cost, runtime_puzzle.time_cost);
-    assert_eq!(CONST_PUZZLE.lanes, runtime_puzzle.lanes);
+    assert_eq!(CONST_PUZZLE.memory_kib, runtime.puzzle.memory_kib);
+    assert_eq!(CONST_PUZZLE.time_cost, runtime.puzzle.time_cost);
+    assert_eq!(CONST_PUZZLE.lanes, runtime.puzzle.lanes);
 }
 #[test]
 fn no_trusted_peers() {

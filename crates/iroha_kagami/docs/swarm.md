@@ -85,7 +85,7 @@ instead of Kagami's ambient working directory. The generator cannot silently
 produce a roster different from the one signed into genesis:
 
 ```bash
-kagami localnet --fresh-random-keys --peers 4 --out-dir ./localnet
+kagami localnet --peers 4 --out-dir ./localnet
 kagami docker \
     --peers 4 \
     --config-dir ./localnet \
@@ -132,9 +132,11 @@ custody path.
 
 - `    --no-cache`: Always pull or rebuild the image even if it is cached locally.
 
-- `-o, --out-file <FILE>`: Sets the path to the target Compose configuration file. 
-  - If the file exists, the app will prompt its overwriting. 
-  - If the TTY is not interactive, the app will stop execution with a non-zero exit code. 
+- `-o, --out-file <FILE>`: Sets the path to the target Compose configuration file.
+  - The output must be outside `--config-dir`, is rendered beside its destination,
+    and is published atomically only after serialization succeeds.
+  - If the file exists, the app will prompt its overwriting.
+  - If the TTY is not interactive, the app will stop execution with a non-zero exit code.
   - To overwrite the file anyway, pass the `--force` flag.
 
 - `-P, --print`: Print the generated configuration to stdout instead of writing it to the target file.
@@ -181,7 +183,6 @@ kagami docker \
 
    ```bash
    kagami localnet \
-       --fresh-random-keys \
        --peers 4 \
        --consensus-mode npos \
        --out-dir ./cfg

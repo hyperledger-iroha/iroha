@@ -287,8 +287,14 @@
             "generated startup must keep logs, pidfiles, and runtime directories owner-only",
         );
         let (debug_path, release_path) = default_irohad_bin_paths(false);
-        let expected_debug = format!("DEFAULT_IROHAD_BIN_DEBUG=\"{}\"", debug_path.display());
-        let expected_release = format!("DEFAULT_IROHAD_BIN_RELEASE=\"{}\"", release_path.display());
+        let expected_debug = format!(
+            "DEFAULT_IROHAD_BIN_DEBUG={}",
+            shell_quote_path(&debug_path).expect("quote debug path")
+        );
+        let expected_release = format!(
+            "DEFAULT_IROHAD_BIN_RELEASE={}",
+            shell_quote_path(&release_path).expect("quote release path")
+        );
         assert!(
             start_contents.lines().any(|line| line == expected_debug),
             "start script should set debug default"
@@ -407,6 +413,22 @@
             stop_contents.contains("rm -f \"$pidfile\""),
             "stop script should clean pidfiles after shutdown"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_assignment_quoting_preserves_metacharacters_as_data() {
+        let input = "target dir/it's-$(printf injected)-`printf other`";
+        let quoted = shell_single_quote(input).expect("quote shell value");
+        let command = format!("value={quoted}; printf '%s' \"$value\"");
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(command)
+            .output()
+            .expect("run generated assignment");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, input.as_bytes());
+        assert!(shell_single_quote("line one\nline two").is_err());
     }
 
     #[cfg(unix)]

@@ -52,8 +52,9 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    rejected before publication.
 3. Start the supervisor via `./bin/mochi`. The egui application will create the
    per-profile data tree on demand and generate a Kagami-aligned genesis block.
-   The dashboard shows a compatibility summary (binary versions and
-   `kagami verify` output for genesis profiles) before peers are launched.
+   For a selected genesis profile, Mochi requires `kagami verify` to confirm
+   the requested chain and VRF seed before publishing the generation. Runtime
+   binaries are resolved only when the operation that needs them starts.
    Readiness is gated on a small smoke transaction by default; disable it with
    `--disable-smoke`, `MOCHI_READINESS_SMOKE=false`, or
    `supervisor.readiness_smoke = false`.

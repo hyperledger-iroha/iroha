@@ -11185,7 +11185,11 @@ fn read_config_and_genesis_with_kagemusha_sources(
     ConfigError,
 > {
     let mut flattened_toml_config_source = None;
-    let mut config = ConfigReader::new();
+    let mut config = if args.config.is_some() {
+        ConfigReader::new().without_env()
+    } else {
+        ConfigReader::new()
+    };
     if let Some(path) = &args.config {
         config = if let Some(expected) = args.startup.config_blake3.as_deref() {
             if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -13417,7 +13421,7 @@ fn run_main_with_config_guard(
             .change_context(MainError::Config)
             .attach_with(|| {
             args.config.as_ref().map_or_else(
-                || "`--config` arg was not set, therefore configuration relies fully on environment variables".to_owned(),
+                || "`--config` arg was not set, therefore development environment inputs and built-in defaults are in use".to_owned(),
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;

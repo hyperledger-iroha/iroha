@@ -4334,7 +4334,6 @@ impl Run for FetchArgs {
                 offset: spec.offset,
                 length: spec.length,
                 digest: spec.digest,
-                taikai_segment_hint: spec.taikai_segment_hint.clone(),
             })
             .collect();
         let plan = CarBuildPlan {
@@ -10346,9 +10345,6 @@ pub struct HandshakeUpdateArgs {
     /// Clear the configured resume hash.
     #[arg(long = "clear-resume-hash", action = clap::ArgAction::SetTrue)]
     clear_resume_hash: bool,
-    /// Require proof-of-work tickets for admission.
-    #[arg(long = "pow-required", action = clap::ArgAction::SetTrue)]
-    pow_required: bool,
     /// Override the proof-of-work difficulty.
     #[arg(long = "pow-difficulty", value_parser = clap::value_parser!(u8))]
     pow_difficulty: Option<u8>,
@@ -10361,9 +10357,6 @@ pub struct HandshakeUpdateArgs {
     /// Override the `PoW` ticket TTL (seconds).
     #[arg(long = "pow-ttl", value_parser = clap::value_parser!(u64))]
     pow_ttl: Option<u64>,
-    /// Enable the Argon2 puzzle gate for handshake admission.
-    #[arg(long = "pow-puzzle-enable", action = clap::ArgAction::SetTrue)]
-    pow_puzzle_enable: bool,
     /// Override the puzzle memory cost (KiB).
     #[arg(long = "pow-puzzle-memory", value_parser = clap::value_parser!(u32))]
     pow_puzzle_memory: Option<u32>,
@@ -10462,9 +10455,6 @@ impl HandshakeUpdateArgs {
             false
         };
         let mut pow_update = SoranetHandshakePowUpdate::default();
-        if self.pow_required {
-            pow_update.required = Some(true);
-        }
         if let Some(value) = self.pow_difficulty {
             pow_update.difficulty = Some(value);
         }
@@ -10477,15 +10467,11 @@ impl HandshakeUpdateArgs {
         if let Some(value) = self.pow_ttl {
             pow_update.ticket_ttl_secs = Some(value);
         }
-        let mut pow_touched = self.pow_required
-            || self.pow_difficulty.is_some()
+        let mut pow_touched = self.pow_difficulty.is_some()
             || self.pow_max_future_skew.is_some()
             || self.pow_min_ttl.is_some()
             || self.pow_ttl.is_some();
         let mut puzzle_update = SoranetHandshakePuzzleUpdate::default();
-        if self.pow_puzzle_enable {
-            puzzle_update.enabled = Some(true);
-        }
         if let Some(value) = self.pow_puzzle_memory {
             puzzle_update.memory_kib = Some(value);
         }
@@ -10495,8 +10481,7 @@ impl HandshakeUpdateArgs {
         if let Some(value) = self.pow_puzzle_lanes {
             puzzle_update.lanes = Some(value);
         }
-        let puzzle_touched = self.pow_puzzle_enable
-            || self.pow_puzzle_memory.is_some()
+        let puzzle_touched = self.pow_puzzle_memory.is_some()
             || self.pow_puzzle_time.is_some()
             || self.pow_puzzle_lanes.is_some();
         if puzzle_touched {
@@ -11618,7 +11603,6 @@ fn render_handshake_summary<C: RunContext>(
             .as_deref()
             .unwrap_or("<not configured>")
     ))?;
-    context.println(format_args!("pow.required: {}", summary.pow.required))?;
     context.println(format_args!("pow.difficulty: {}", summary.pow.difficulty))?;
     context.println(format_args!(
         "pow.max_future_skew_secs: {}",
@@ -11632,14 +11616,10 @@ fn render_handshake_summary<C: RunContext>(
         "pow.ticket_ttl_secs: {}",
         summary.pow.ticket_ttl_secs
     ))?;
-    if let Some(puzzle) = summary.pow.puzzle {
-        context.println(format_args!("pow.puzzle.enabled: true"))?;
-        context.println(format_args!("pow.puzzle.memory_kib: {}", puzzle.memory_kib))?;
-        context.println(format_args!("pow.puzzle.time_cost: {}", puzzle.time_cost))?;
-        context.println(format_args!("pow.puzzle.lanes: {}", puzzle.lanes))?;
-    } else {
-        context.println(format_args!("pow.puzzle.enabled: false"))?;
-    }
+    let puzzle = summary.pow.puzzle;
+    context.println(format_args!("pow.puzzle.memory_kib: {}", puzzle.memory_kib))?;
+    context.println(format_args!("pow.puzzle.time_cost: {}", puzzle.time_cost))?;
+    context.println(format_args!("pow.puzzle.lanes: {}", puzzle.lanes))?;
     Ok(())
 }
 #[derive(clap::Subcommand, Debug)]
@@ -13298,9 +13278,7 @@ impl PinShowArgs {
         let body = response.into_body();
         match status {
             StatusCode::OK => render_json_body(context, &body),
-            StatusCode::NOT_FOUND => {
-                context.println(format_args!("manifest `{digest}` not found"))
-            }
+            StatusCode::NOT_FOUND => context.println(format_args!("manifest `{digest}` not found")),
             status => Err(make_http_error(status, &body)),
         }
     }
@@ -17986,7 +17964,6 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
     fn handshake_update_accepts_pow_overrides() {
         let args = HandshakeUpdateArgs {
             descriptor_commit: Some("aa".into()),
-            pow_required: true,
             pow_difficulty: Some(7),
             pow_max_future_skew: Some(120),
             ..Default::default()
@@ -17994,7 +17971,6 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         let update = args.into_update().expect("update should succeed");
         assert_eq!(update.descriptor_commit_hex.as_deref(), Some("aa"));
         let pow = update.pow.expect("pow overrides present");
-        assert_eq!(pow.required, Some(true));
         assert_eq!(pow.difficulty, Some(7));
         assert_eq!(pow.max_future_skew_secs, Some(120));
         assert!(pow.min_ticket_ttl_secs.is_none());

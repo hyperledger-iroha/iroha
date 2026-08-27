@@ -315,64 +315,6 @@ fn taikai_replication_policy_uses_availability_overrides() {
         assert_eq!(enforced.governance_tag.0, expectation.governance_tag);
     }
 }
-#[test]
-fn taikai_ingest_tags_cover_replication_and_proofs() {
-    let payload = TEST_PAYLOAD;
-    let payload_digest = BlobDigest::from_hash(blake3_hash(payload));
-    let retention = RetentionPolicy {
-        hot_retention_secs: 7_200,
-        cold_retention_secs: 86_400,
-        required_replicas: 5,
-        storage_class: StorageClass::Hot,
-        governance_tag: GovernanceTag::new("da.taikai.ops"),
-    };
-    let metadata = ExtraMetadata {
-        items: base_taikai_metadata(),
-    };
-    let tagged = iroha_torii::compute_taikai_ingest_tags(
-        metadata,
-        Some(TaikaiAvailabilityClass::Warm),
-        &retention,
-        payload_digest,
-        payload.len() as u64,
-    )
-    .expect("tagging succeeds");
-    assert_eq!(value_for(&tagged, "taikai.availability_class"), "warm");
-    assert_eq!(
-        value_for(&tagged, "da.proof.tier"),
-        "hot",
-        "proof tier follows enforced storage class"
-    );
-    assert_eq!(value_for(&tagged, "taikai.replication.replicas"), "5");
-    assert_eq!(
-        value_for(&tagged, "taikai.replication.storage_class"),
-        "hot"
-    );
-    assert_eq!(
-        value_for(&tagged, "taikai.replication.hot_retention_secs"),
-        "7200"
-    );
-    assert_eq!(
-        value_for(&tagged, "taikai.replication.cold_retention_secs"),
-        "86400"
-    );
-    assert_eq!(value_for(&tagged, "da.proof.pdp.sample_window"), "32");
-    assert_eq!(value_for(&tagged, "da.proof.potr.sample_window"), "32");
-    let cache_hint_entry = tagged
-        .items
-        .iter()
-        .find(|entry| entry.key == "taikai.cache_hint")
-        .expect("cache hint present");
-    let cache_hint: Value = json::from_slice(&cache_hint_entry.value).expect("cache hint is JSON");
-    let cache_hint = cache_hint.as_object().expect("cache hint object");
-    assert_eq!(
-        cache_hint
-            .get("payload_blake3_hex")
-            .and_then(Value::as_str)
-            .expect("payload digest"),
-        hex::encode(payload_digest.as_ref())
-    );
-}
 async fn post_ingest(network: &Network, request: &DaIngestRequest) -> Result<Response> {
     let http = Client::new();
     let json_value = json::to_value(request)?;

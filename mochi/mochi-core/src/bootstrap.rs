@@ -1,7 +1,11 @@
 //! Helpers for rendering and writing local application bootstrap files.
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::{
-    fs, io,
-    path::{Path, PathBuf},
+    fs::{self, File, OpenOptions},
+    io::{self, Write as _},
+    path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 /// Relative path for the generated environment file.
 pub const ENV_LOCAL_FILE: &str = ".env.local";
@@ -12,7 +16,7 @@ pub const RUST_SAMPLE_FILE: &str = ".mochi/generated/rust/connect.rs";
 /// Relative path for the generated Kotlin sample.
 pub const KOTLIN_SAMPLE_FILE: &str = ".mochi/generated/kotlin/MochiConnect.kt";
 /// Inputs shared across generated bootstrap artifacts.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BootstrapInputs {
     /// Base HTTP address used by explorer-style API requests.
     pub api_base: String,
@@ -26,6 +30,22 @@ pub struct BootstrapInputs {
     pub account_id: Option<String>,
     /// Optional private key for the preferred dev signer.
     pub private_key: Option<String>,
+}
+impl std::fmt::Debug for BootstrapInputs {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BootstrapInputs")
+            .field("api_base", &self.api_base)
+            .field("torii_url", &self.torii_url)
+            .field("mcp_url", &self.mcp_url)
+            .field("chain_id", &self.chain_id)
+            .field("account_id", &self.account_id)
+            .field(
+                "private_key",
+                &self.private_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
 }
 impl BootstrapInputs {
     /// Render shell `export` lines for copy/paste-friendly local development.
@@ -133,6 +153,9 @@ impl BootstrapBundle {
 /// Errors raised while writing bootstrap artifacts.
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapWriteError {
+    /// An artifact path was absolute or attempted to leave the workspace root.
+    #[error("bootstrap artifact path must be a non-empty relative path: {path}")]
+    InvalidPath { path: PathBuf },
     /// One of the target files already exists and overwrite was not requested.
     #[error("bootstrap file already exists: {path}")]
     AlreadyExists { path: PathBuf },
@@ -146,19 +169,126 @@ pub fn write_bootstrap_bundle(
     bundle: &BootstrapBundle,
     replace_existing: bool,
 ) -> Result<Vec<PathBuf>, BootstrapWriteError> {
-    let mut written = Vec::with_capacity(bundle.artifacts.len());
+    let mut destinations = Vec::with_capacity(bundle.artifacts.len());
     for artifact in &bundle.artifacts {
+        if artifact.relative_path.as_os_str().is_empty()
+            || !artifact
+                .relative_path
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+        {
+            return Err(BootstrapWriteError::InvalidPath {
+                path: artifact.relative_path.clone(),
+            });
+        }
         let destination = artifact.path_in(workspace_root);
-        if destination.exists() && !replace_existing {
-            return Err(BootstrapWriteError::AlreadyExists { path: destination });
+        if !replace_existing {
+            match fs::symlink_metadata(&destination) {
+                Ok(_) => return Err(BootstrapWriteError::AlreadyExists { path: destination }),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
         }
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)?;
+        destinations.push(destination);
+    }
+
+    let mut written = Vec::with_capacity(bundle.artifacts.len());
+    for (artifact, destination) in bundle.artifacts.iter().zip(destinations) {
+        let parent = ensure_artifact_parent(workspace_root, &artifact.relative_path)?;
+        let private = artifact.relative_path == Path::new(ENV_LOCAL_FILE);
+        let (tmp_path, mut file) = create_artifact_temp(&parent, &destination, private)?;
+        let write_result = (|| -> io::Result<()> {
+            file.write_all(artifact.contents.as_bytes())?;
+            file.sync_all()
+        })();
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(error.into());
         }
-        fs::write(&destination, &artifact.contents)?;
+        let publish_result = if replace_existing {
+            fs::rename(&tmp_path, &destination)
+        } else {
+            fs::hard_link(&tmp_path, &destination)
+        };
+        if let Err(error) = publish_result {
+            let _ = fs::remove_file(&tmp_path);
+            if !replace_existing && error.kind() == io::ErrorKind::AlreadyExists {
+                return Err(BootstrapWriteError::AlreadyExists { path: destination });
+            }
+            return Err(error.into());
+        }
+        if !replace_existing {
+            fs::remove_file(&tmp_path)?;
+        }
+        #[cfg(unix)]
+        File::open(&parent)?.sync_all()?;
         written.push(destination);
     }
     Ok(written)
+}
+fn ensure_artifact_parent(workspace_root: &Path, relative_path: &Path) -> io::Result<PathBuf> {
+    fs::create_dir_all(workspace_root)?;
+    let mut current = workspace_root.to_path_buf();
+    let parent = relative_path.parent().unwrap_or_else(|| Path::new(""));
+    for component in parent.components() {
+        let Component::Normal(name) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "bootstrap artifact parent must stay under the workspace root",
+            ));
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "bootstrap artifact parent `{}` must be a real directory",
+                        current.display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                fs::create_dir(&current)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(current)
+}
+fn create_artifact_temp(
+    parent: &Path,
+    destination: &Path,
+    private: bool,
+) -> io::Result<(PathBuf, File)> {
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("bootstrap");
+    for _ in 0..32 {
+        let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = parent.join(format!(
+            ".{file_name}.mochi-tmp.{}.{id}",
+            std::process::id()
+        ));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(if private { 0o600 } else { 0o644 });
+        #[cfg(not(unix))]
+        let _ = private;
+        match options.open(&tmp_path) {
+            Ok(file) => return Ok((tmp_path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique bootstrap temporary file",
+    ))
 }
 /// Quote a shell value conservatively for copy/paste recipes.
 #[must_use]
@@ -215,7 +345,7 @@ export const irohaLocalDefaults: IrohaLocalConfig = {{
   mcpUrl: process.env.IROHA_MCP_URL ?? {mcp_url},
   chainId: process.env.IROHA_CHAIN_ID ?? "{chain_id}",
   accountId: process.env.IROHA_ACCOUNT_ID ?? {account_id},
-  privateKey: process.env.IROHA_PRIVATE_KEY ?? {private_key},
+  privateKey: process.env.IROHA_PRIVATE_KEY,
 }};
 "#,
         api_base = ensure_http_base(&inputs.api_base),
@@ -223,7 +353,6 @@ export const irohaLocalDefaults: IrohaLocalConfig = {{
         mcp_url = render_ts_optional(inputs.mcp_url.as_deref().map(ensure_http_base).as_deref(),),
         chain_id = inputs.chain_id,
         account_id = render_ts_optional(inputs.account_id.as_deref()),
-        private_key = render_ts_optional(inputs.private_key.as_deref()),
     )
 }
 fn render_rust_sample(inputs: &BootstrapInputs) -> String {
@@ -343,7 +472,11 @@ mod tests {
     }
     #[test]
     fn bootstrap_bundle_renders_expected_files() {
-        let bundle = BootstrapBundle::render(&sample_inputs());
+        let inputs = sample_inputs();
+        let debug = format!("{inputs:?}");
+        assert!(!debug.contains("private key value"));
+        assert!(debug.contains("[REDACTED]"));
+        let bundle = BootstrapBundle::render(&inputs);
         let paths = bundle
             .artifacts
             .iter()
@@ -368,6 +501,12 @@ mod tests {
                 .contents
                 .contains("IROHA_MCP_URL=http://127.0.0.1:8080/v1/mcp")
         );
+        let typescript = &bundle.artifacts[1].contents;
+        assert!(typescript.contains("privateKey: process.env.IROHA_PRIVATE_KEY"));
+        assert!(
+            !typescript.contains("private key value"),
+            "generated source must not embed signer secrets"
+        );
     }
     #[test]
     fn write_bootstrap_bundle_creates_files() {
@@ -380,6 +519,17 @@ mod tests {
         assert!(temp.path().join(TYPESCRIPT_SAMPLE_FILE).exists());
         assert!(temp.path().join(RUST_SAMPLE_FILE).exists());
         assert!(temp.path().join(KOTLIN_SAMPLE_FILE).exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mode = fs::metadata(temp.path().join(ENV_LOCAL_FILE))
+                .expect("env metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode & 0o077, 0, ".env.local must be owner-only");
+        }
     }
     #[test]
     fn write_bootstrap_bundle_rejects_existing_files_without_replace() {
@@ -402,5 +552,33 @@ mod tests {
         let contents =
             std::fs::read_to_string(temp.path().join(ENV_LOCAL_FILE)).expect("read env file");
         assert!(contents.contains("IROHA_CHAIN_ID=updated-chain"));
+    }
+    #[test]
+    fn write_bootstrap_bundle_rejects_paths_outside_workspace() {
+        let temp = TempDir::new().expect("temp dir");
+        let bundle = BootstrapBundle {
+            artifacts: vec![super::BootstrapArtifact {
+                relative_path: PathBuf::from("../outside"),
+                contents: "nope".to_owned(),
+            }],
+        };
+        let error = write_bootstrap_bundle(temp.path(), &bundle, false)
+            .expect_err("parent traversal must be rejected");
+        assert!(matches!(error, BootstrapWriteError::InvalidPath { .. }));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn write_bootstrap_bundle_rejects_symlinked_child_directory() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("temp dir");
+        let outside = TempDir::new().expect("outside temp dir");
+        let mochi_dir = temp.path().join(".mochi");
+        fs::create_dir(&mochi_dir).expect("create .mochi");
+        symlink(outside.path(), mochi_dir.join("generated")).expect("link generated directory");
+        let error = write_bootstrap_bundle(temp.path(), &BootstrapBundle::render(&sample_inputs()), false)
+            .expect_err("symlinked artifact parent must be rejected");
+        assert!(matches!(error, BootstrapWriteError::Io(_)));
+        assert!(!outside.path().join("typescript/connect.ts").exists());
     }
 }

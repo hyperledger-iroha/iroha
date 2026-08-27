@@ -34,7 +34,6 @@ struct CircuitRegistryInner {
     entries: HashMap<u64, CircuitState>,
     constant_rate_active: u64,
 }
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CircuitState {
     /// Remote socket address associated with the circuit.
@@ -50,7 +49,6 @@ pub struct CircuitState {
     /// Optional constant-rate capability details.
     pub constant_rate: Option<ConstantRateCapability>,
 }
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct KemSignature {
     /// Signature algorithm identifier.

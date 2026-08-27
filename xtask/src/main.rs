@@ -215,9 +215,6 @@ enum CommandKind {
         options: sorafs::ScoreboardDiffOptions,
         report: Option<PathBuf>,
     },
-    SorafsTaikaiCacheBundle {
-        options: Box<sorafs::TaikaiCacheBundleOptions>,
-    },
     SorafsBurnInCheck {
         options: sorafs::BurnInCheckOptions,
         output: Option<PathBuf>,
@@ -1237,9 +1234,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                     path.display()
                 );
             }
-        }
-        CommandKind::SorafsTaikaiCacheBundle { options } => {
-            sorafs::run_taikai_cache_bundle(*options)?;
         }
         CommandKind::SorafsBurnInCheck { options, output } => {
             let summary = sorafs::run_burn_in_check(options)?;
@@ -3050,40 +3044,6 @@ where
                     threshold_percent,
                 },
                 report,
-            })
-        }
-        "sorafs-taikai-cache-bundle" => {
-            let mut pending = args.peekable();
-            let mut profile_paths: Vec<PathBuf> = Vec::new();
-            let mut output_root: Option<PathBuf> = None;
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--profile" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --profile".into());
-                        };
-                        let path = sorafs::resolve_taikai_cache_profile_path(&value)?;
-                        profile_paths.push(path);
-                    }
-                    "-o" | "--out" | "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --out/--output".into());
-                        };
-                        output_root = Some(normalize_path(Path::new(&path))?);
-                    }
-                    flag => {
-                        return Err(
-                            format!("unknown flag for sorafs-taikai-cache-bundle: {flag}").into(),
-                        );
-                    }
-                }
-            }
-            let options = sorafs::TaikaiCacheBundleOptions {
-                profile_paths,
-                output_root: output_root.unwrap_or_else(sorafs::default_taikai_cache_output_root),
-            };
-            Ok(CommandKind::SorafsTaikaiCacheBundle {
-                options: Box::new(options),
             })
         }
         "taikai-anchor-bundle" => {

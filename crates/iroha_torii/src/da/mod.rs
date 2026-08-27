@@ -21,9 +21,9 @@ pub(crate) use spool::{
 };
 use std::collections::BTreeMap;
 #[cfg(feature = "app_api")]
-pub(crate) use taikai::taikai_ingest::recover_pending_lineages as recover_pending_taikai_lineages;
+pub use taikai::spawn_anchor_worker;
 #[cfg(feature = "app_api")]
-pub use taikai::{compute_taikai_ingest_tags, spawn_anchor_worker};
+pub(crate) use taikai::taikai_ingest::recover_pending_lineages as recover_pending_taikai_lineages;
 
 /// One generation-stable view of committed DA admission policy and lane incarnations.
 #[derive(Clone, Debug)]

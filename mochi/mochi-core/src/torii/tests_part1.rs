@@ -1,7 +1,7 @@
 use super::*;
 use futures::SinkExt;
 use httpmock::{
-    Method::{DELETE, GET, POST},
+    Method::{GET, POST},
     MockServer,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};

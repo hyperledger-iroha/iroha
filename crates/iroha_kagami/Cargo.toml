@@ -22,7 +22,6 @@ iroha_schema_gen.workspace = true
 iroha_primitives.workspace = true
 iroha_genesis.workspace = true
 iroha_test_samples.workspace = true
-iroha_version.workspace = true
 iroha_schema.workspace = true
 iroha_core = { workspace = true, features = ["node", "iroha-core-tests"], default-features = false }
 iroha_config.workspace = true
@@ -36,7 +35,6 @@ color-eyre.workspace = true
 derive_more.workspace = true
 toml = { version = "0.9.8" }
 
-tiny-keccak.workspace = true
 blake3.workspace = true
 hex = { workspace = true }
 base64.workspace = true
@@ -50,13 +48,9 @@ libc = "0.2.177"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [features]
-default = ["bls"]
 dev-tools = []
-bls = ["iroha_crypto/bls"]
 gost = ["iroha_crypto/gost"]
 sm = ["iroha_crypto/sm"]
-# Enable codec subcommands that depend on exhaustive Norito conversions.
-codec = []
 
 ## No build script is required anymore.
 ## Previously, a heavy build.rs generated sample binaries by depending on
@@ -66,16 +60,6 @@ codec = []
 [[bin]]
 name = "kagami"
 path = "src/main.rs"
-
-[[bin]]
-name = "iroha_onboarding_token_hash"
-path = "src/bin/iroha_onboarding_token_hash.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
-name = "pk3_genesis_binding_verify"
-path = "src/bin/pk3_genesis_binding_verify.rs"
-required-features = ["dev-tools"]
 
 [[bin]]
 name = "iroha_authenticated_tool_controller"

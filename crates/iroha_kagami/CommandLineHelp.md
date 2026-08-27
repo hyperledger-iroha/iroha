@@ -17,7 +17,6 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami genesis generate synthetic`↴](#kagami-genesis-generate-synthetic)
 * [`kagami genesis validate`↴](#kagami-genesis-validate)
 * [`kagami genesis validate-prepared`↴](#kagami-genesis-validate-prepared)
-* [`kagami genesis pop`↴](#kagami-genesis-pop)
 * [`kagami genesis embed-pop`↴](#kagami-genesis-embed-pop)
 * [`kagami genesis normalize`↴](#kagami-genesis-normalize)
 * [`kagami kagemusha`↴](#kagami-kagemusha)
@@ -61,7 +60,7 @@ Common tasks:
   kagami localnet --out-dir ./localnet
   kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml
   kagami keys --out-dir ./key-custody
-  kagami keys --algorithm bls_normal --pop --json
+  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
   kagami advanced markdown-help
 
 
@@ -143,10 +142,9 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `-p`, `--peers <COUNT>` — Number of peers to generate (minimum four)
 
   Default value: `4`
-* `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic keys
-* `--fresh-random-keys` — Generate every private key from a fresh OS-random, process-local seed.
+* `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic development keys
 
-   The seed is never accepted through argv, written to the generated bundle, or printed. This mode is intended for real first-release custody; use `--seed` only for reproducible development fixtures.
+   Omit this option to generate independent keys from operating-system entropy.
 * `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
 
   Default value: `00000000-0000-0000-0000-000000000000`
@@ -232,6 +230,8 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
 * `--no-cache` — Always pull or rebuild the image even if it is cached locally
 * `-o`, `--out-file <FILE>` — Path to the target Compose configuration file.
 
+   The file must be outside `--config-dir` and is published atomically.
+
    If the file exists, the app will prompt its overwriting. If the TTY is not interactive, the app will stop execution with a non-zero exit code. To overwrite the file anyway, pass the `--force` flag.
 * `-P`, `--print` — Print the generated configuration to stdout instead of writing it to the target file.
 
@@ -247,7 +247,7 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
 
 Generate cryptographic key pairs and optional validator Proofs-of-Possession
 
-**Usage:** `kagami keys [OPTIONS]`
+**Usage:** `kagami keys [OPTIONS] --out-dir <DIR>`
 
 ###### **Options:**
 
@@ -257,19 +257,13 @@ Generate cryptographic key pairs and optional validator Proofs-of-Possession
 
   Possible values: `ed25519`, `secp256k1`, `ml-dsa`, `bls_normal`, `bls_small`
 
-* `-p`, `--private-key <PRIVATE_KEY>` — A private key to generate the key-pair from
-
-   `--private-key` specifies the payload of the private key, while `--algorithm` specifies its algorithm.
 * `--seed-hex <HEX>` — A 32-byte secret key-generation seed encoded as 64 hexadecimal characters.
 
    This is for reproducible fixtures. Omit it for OS-random production keys.
-* `-j`, `--json` — Output the key-pair in JSON format
-* `--json-mh-prefixed` — Use algorithm-prefixed multihash strings in JSON (e.g., "ml-dsa:...")
-* `-c`, `--compact` — Output the key-pair without additional text
 * `--out-dir <DIR>` — Write the key pair into a new owner-only custody directory.
 
    The directory must not contain any existing entries. Files are written as `public.key` and `private.key`; `--pop` also writes `pop.hex`. The private key never passes through standard output.
-* `--pop` — Also output a BLS Proof-of-Possession (PoP) for this key (BLS-normal only). Printed as hex in JSON or plain hex in compact mode
+* `--pop` — Also output a BLS Proof-of-Possession (PoP) for this key (BLS-normal only). Written as `pop.hex` in the custody directory.
 
 
 
@@ -285,7 +279,6 @@ Commands related to genesis
 * `generate` — Generate a genesis configuration and standard-output in JSON format
 * `validate` — Validate a genesis JSON file and report invalid identifiers
 * `validate-prepared` — Verify one exact bound-manifest/signed-genesis/signer/hash bundle
-* `pop` — Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
 * `embed-pop` — Embed one or more PoPs into a genesis JSON manifest (inline `topology` entries carrying `pop_hex`)
 * `normalize` — Expand a genesis manifest and show the final ordered transactions
 
@@ -440,26 +433,6 @@ Verify one exact bound-manifest/signed-genesis/signer/hash bundle
 * `--peer-config <PATH>` — Effective validator configs whose complete roster and policy must reproduce the signed context. Repeat exactly four times in `taira-validator-1` through `-4` order
 * `--genesis-public-key <PUBLIC_KEY>` — Public key of the independently provisioned genesis signer
 * `--expected-hash <HASH>` — Exact signed genesis block-header hash
-
-
-
-## `kagami genesis pop`
-
-Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
-
-**Usage:** `kagami genesis pop [OPTIONS]`
-
-###### **Options:**
-
-* `--algorithm <ALGORITHM>` — Algorithm to use; must be `bls_normal` for consensus PoP
-
-  Default value: `bls_normal`
-* `--private-key <PRIVATE_KEY>` — Private key hex (multihash payload, not prefixed)
-* `--seed-hex <HEX>` — A 32-byte secret key-generation seed encoded as 64 hexadecimal characters.
-
-   This is for reproducible fixtures. Omit it for OS-random validator keys.
-* `--json` — Output JSON instead of plain text
-* `--expose-private-key` — Print the private key in plain-text output (disabled by default)
 
 
 

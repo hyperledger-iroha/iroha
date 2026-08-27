@@ -428,7 +428,6 @@ fn build_streaming_file_plan<P: PayloadSource>(
                 length: u32::try_from(boundary.length)
                     .map_err(|_| "streaming file chunk length exceeds u32".to_owned())?,
                 digest: blake3::hash(bytes).into(),
-                taikai_segment_hint: None,
             });
             emitted_offset = emitted_offset
                 .checked_add(boundary.length)
@@ -457,7 +456,6 @@ fn build_streaming_file_plan<P: PayloadSource>(
             length: u32::try_from(boundary.length)
                 .map_err(|_| "streaming file chunk length exceeds u32".to_owned())?,
             digest: blake3::hash(&pending).into(),
-            taikai_segment_hint: None,
         });
         emitted_offset = emitted_offset
             .checked_add(boundary.length)
@@ -554,7 +552,6 @@ fn build_streaming_directory_plan(
                     length: u32::try_from(boundary.length)
                         .map_err(|_| "streaming chunk length exceeds u32".to_owned())?,
                     digest: blake3::hash(bytes).into(),
-                    taikai_segment_hint: None,
                 });
                 emitted_offset = emitted_offset
                     .checked_add(boundary.length)
@@ -585,7 +582,6 @@ fn build_streaming_directory_plan(
                     length: u32::try_from(boundary.length)
                         .map_err(|_| "streaming chunk length exceeds u32".to_owned())?,
                     digest: blake3::hash(&pending).into(),
-                    taikai_segment_hint: None,
                 });
                 emitted_offset = emitted_offset
                     .checked_add(boundary.length)
@@ -1110,9 +1106,7 @@ fn export(
             .load_manifest()
             .map_err(|err| format!("failed to decode stored manifest: {err}"))?;
         let chunk_profile = chunk_profile_from_manifest(&manifest_v1)?;
-        let taikai_hint = sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1)
-            .map_err(|err| format!("failed to derive Taikai metadata: {err}"))?;
-        let plan = stored_manifest.to_car_plan_with_hint(chunk_profile, taikai_hint);
+        let plan = stored_manifest.to_car_plan(chunk_profile);
         let json_value = try_chunk_fetch_plan_to_json(&plan).map_err(|err| err.to_string())?;
         write_json_file(&path, json_value)?;
     }
@@ -1593,7 +1587,6 @@ mod tests {
                     offset,
                     length: u32::try_from(length).expect("default chunk length"),
                     digest: [0xA5; 32],
-                    taikai_segment_hint: None,
                 });
                 offset += length;
                 remaining -= length;

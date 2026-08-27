@@ -111,6 +111,8 @@ pub struct Args {
     no_cache: bool,
     /// Path to the target Compose configuration file.
     ///
+    /// The file must be outside `--config-dir` and is published atomically.
+    ///
     /// If the file exists, the app will prompt its overwriting. If the TTY is not
     /// interactive, the app will stop execution with a non-zero exit code.
     /// To overwrite the file anyway, pass the `--force` flag.
@@ -167,6 +169,7 @@ struct PreparedRuntimePeer {
     public_key: PublicKey,
 }
 const GENESIS_EXPECTED_HASH_RUNTIME_TARGET: &str = "/run/secrets/iroha_genesis_expected_hash";
+const MAX_PEER_OVERRIDE_BYTES_V1: u64 = 64 * 1024;
 fn read_exact_record(path: &Path, label: &str) -> color_eyre::Result<String> {
     const MAX_EXACT_RECORD_BYTES: u64 = 64 * 1024;
     let record = read_runtime_file_bounded(path, label, MAX_EXACT_RECORD_BYTES)?;
@@ -2977,15 +2980,6 @@ impl<T: Write> RunArgs<T> for Args {
             swarm
         };
         let schema = swarm.build();
-        let mut file;
-        let manifest_writer: &mut dyn Write = if args.print {
-            writer
-        } else {
-            use color_eyre::eyre::Context;
-            file = std::fs::File::create(&args.out_file)
-                .wrap_err("Could not open the target file.")?;
-            &mut file
-        };
         let banner = if args.no_banner {
             None
         } else {
@@ -3001,10 +2995,20 @@ impl<T: Write> RunArgs<T> for Args {
         let banner_refs = banner
             .as_ref()
             .map(|lines| lines.iter().map(String::as_str).collect::<Vec<_>>());
-        schema.write(
-            &mut std::io::BufWriter::new(manifest_writer),
-            banner_refs.as_deref(),
-        )?;
+        if args.print {
+            schema.write(&mut *writer, banner_refs.as_deref())?;
+        } else {
+            let output = crate::atomic_output::resolve_outside_directory(
+                &args.config_dir,
+                &args.out_file,
+                "prepared config directory",
+            )?;
+            crate::atomic_output::write_file(&output, ".kagami-compose-", |writer| {
+                schema
+                    .write(writer, banner_refs.as_deref())
+                    .map_err(Into::into)
+            })?;
+        }
         if !args.print {
             writeln!(
                 writer,
@@ -3045,18 +3049,13 @@ impl<T: Write> RunArgs<T> for Args {
     }
 }
 fn load_peer_overrides(path: &Path) -> color_eyre::Result<Vec<PeerOverride>> {
-    ensure!(
-        path.exists(),
-        "peer configuration {} does not exist",
-        path.display()
-    );
-    ensure!(
-        path.is_file(),
-        "peer configuration {} is not a file",
-        path.display()
-    );
-    let contents = fs::read_to_string(path)
-        .wrap_err_with(|| eyre!("failed to read peer configuration at {}", path.display()))?;
+    let contents = read_runtime_file_bounded(
+        path,
+        "peer override configuration",
+        MAX_PEER_OVERRIDE_BYTES_V1,
+    )?;
+    let contents = String::from_utf8(contents)
+        .wrap_err_with(|| eyre!("peer configuration is not UTF-8: {}", path.display()))?;
     parse_peer_override_toml(&contents)
         .wrap_err_with(|| eyre!("failed to parse peer configuration at {}", path.display()))
 }
@@ -3105,10 +3104,11 @@ fn parse_port(table: &toml::Table, field: &str) -> color_eyre::Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Args, GENESIS_EXPECTED_HASH_RUNTIME_TARGET, load_peer_overrides, load_prepared_bundle,
-        parse_peer_override_toml, parse_prepared_peer_config, read_runtime_file_bounded,
-        signed_genesis_consensus_metadata, tx_history_mandatory_alias_source,
-        validate_prepared_genesis, validate_runtime_projection_policy,
+        Args, GENESIS_EXPECTED_HASH_RUNTIME_TARGET, MAX_PEER_OVERRIDE_BYTES_V1,
+        load_peer_overrides, load_prepared_bundle, parse_peer_override_toml,
+        parse_prepared_peer_config, read_runtime_file_bounded, signed_genesis_consensus_metadata,
+        tx_history_mandatory_alias_source, validate_prepared_genesis,
+        validate_runtime_projection_policy,
     };
     use crate::{RunArgs, localnet::LocalnetOptions};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
@@ -3250,6 +3250,41 @@ mod tests {
         );
         assert!(!output.contains("IROHA_GENESIS_PRIVATE_KEY_FILE"));
         assert!(output.contains("next: docker compose"));
+    }
+    #[test]
+    fn compose_output_cannot_replace_config_bundle_input() {
+        let temp_dir = tempfile::tempdir().expect("compose safety directory");
+        let config_dir = temp_dir.path().join("cfg");
+        fs::create_dir_all(&config_dir).expect("create config directory");
+        let genesis_path = config_dir.join("genesis.json");
+        write_minimal_genesis(&genesis_path);
+        let original = fs::read(&genesis_path).expect("read original genesis");
+        let args = Args {
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("swarm-output-safety-dev".to_owned()),
+            healthcheck: false,
+            config_dir,
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: genesis_path.clone(),
+            print: false,
+            force: true,
+            no_banner: true,
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("config-bundle output must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("inside the prepared config directory")
+        );
+        assert_eq!(
+            fs::read(genesis_path).expect("read preserved genesis"),
+            original
+        );
     }
     #[test]
     #[expect(
@@ -3879,6 +3914,14 @@ api_port = 9001
         assert_eq!(overrides[1].p2p_port, 2001);
         assert_eq!(overrides[1].api_port, 9001);
         Ok(())
+    }
+    #[test]
+    fn load_peer_overrides_rejects_oversized_file() {
+        let file = tempfile::NamedTempFile::new().expect("create peer override input");
+        let oversized = usize::try_from(MAX_PEER_OVERRIDE_BYTES_V1).expect("limit fits usize") + 1;
+        fs::write(file.path(), vec![b' '; oversized]).expect("write oversized peer overrides");
+        let error = load_peer_overrides(file.path()).expect_err("oversized input must fail");
+        assert!(error.to_string().contains("exceeds"));
     }
     #[test]
     fn parse_peer_override_toml_rejects_empty_peer_list() {

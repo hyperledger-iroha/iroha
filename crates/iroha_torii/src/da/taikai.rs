@@ -18,14 +18,14 @@ use iroha_data_model::{
     nexus::LaneId,
     sorafs::pin_registry::StorageClass,
     taikai::{
-        GuardDirectoryId, SegmentDuration, SegmentTimestamp, TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1,
+        SegmentDuration, SegmentTimestamp, TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1,
         TAIKAI_ANCHOR_RECEIPT_VERSION_V1, TaikaiAliasBinding, TaikaiAnchorReceiptBodyV1,
         TaikaiAnchorReceiptV1, TaikaiAudioLayout, TaikaiAvailabilityClass, TaikaiCarPointer,
-        TaikaiCodec, TaikaiEnvelopeIndexes, TaikaiEventId, TaikaiGuardPolicy, TaikaiIngestPointer,
-        TaikaiParseError, TaikaiRenditionId, TaikaiRenditionRouteV1, TaikaiResolution,
-        TaikaiRoutingManifestV1, TaikaiSegmentEnvelopeV1, TaikaiSegmentSigningBodyV1,
-        TaikaiSegmentSigningManifestV1, TaikaiSegmentWindow, TaikaiStreamId, TaikaiTrackKind,
-        TaikaiTrackMetadata, is_canonical_taikai_anchor_base_id,
+        TaikaiCodec, TaikaiEnvelopeIndexes, TaikaiEventId, TaikaiIngestPointer, TaikaiParseError,
+        TaikaiRenditionId, TaikaiRenditionRouteV1, TaikaiResolution, TaikaiRoutingManifestV1,
+        TaikaiSegmentEnvelopeV1, TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1,
+        TaikaiSegmentWindow, TaikaiStreamId, TaikaiTrackKind, TaikaiTrackMetadata,
+        is_canonical_taikai_anchor_base_id,
     },
 };
 use iroha_futures::supervisor::ShutdownSignal;
@@ -69,7 +69,6 @@ pub(crate) const META_TAIKAI_REPLICATION_REPLICAS: &str = "taikai.replication.re
 pub(crate) const META_TAIKAI_REPLICATION_STORAGE: &str = "taikai.replication.storage_class";
 pub(crate) const META_TAIKAI_REPLICATION_HOT_SECS: &str = "taikai.replication.hot_retention_secs";
 pub(crate) const META_TAIKAI_REPLICATION_COLD_SECS: &str = "taikai.replication.cold_retention_secs";
-pub(crate) const META_TAIKAI_CACHE_HINT: &str = "taikai.cache_hint";
 pub(crate) const META_DA_PROOF_TIER: &str = "da.proof.tier";
 pub(crate) const META_DA_PDP_SAMPLE_WINDOW: &str = "da.proof.pdp.sample_window";
 pub(crate) const META_DA_POTR_SAMPLE_WINDOW: &str = "da.proof.potr.sample_window";
@@ -1322,7 +1321,6 @@ pub(crate) mod taikai_ingest {
         Ok(rendered.into_bytes())
     }
     pub(crate) fn build_envelope(
-        _request: &DaIngestRequest,
         manifest: &ManifestArtifacts,
         chunk_store: &ChunkStore,
         canonical_payload: &[u8],
@@ -3784,130 +3782,6 @@ pub(crate) fn validate_da_proof_tier(
     }
     Ok(())
 }
-/// Validate the Taikai cache hint metadata against the canonical payload.
-pub(crate) fn validate_taikai_cache_hint(
-    metadata: &ExtraMetadata,
-    payload_digest: &BlobDigest,
-    expected_payload_len: u64,
-) -> Result<(), (StatusCode, String)> {
-    let entry = metadata
-        .items
-        .iter()
-        .find(|entry| entry.key == META_TAIKAI_CACHE_HINT)
-        .ok_or_else(|| {
-            taikai_ingest::bad_request(
-                META_TAIKAI_CACHE_HINT,
-                "metadata entry is required for Taikai segments",
-            )
-        })?;
-    if entry.visibility != MetadataVisibility::Public
-        || !matches!(entry.encryption, MetadataEncryption::None)
-    {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_CACHE_HINT,
-            "metadata entry must be public and unencrypted",
-        ));
-    }
-    let hint_value: Value = json::from_slice(&entry.value).map_err(|err| {
-        taikai_ingest::bad_request(
-            META_TAIKAI_CACHE_HINT,
-            format!("failed to parse cache hint JSON: {err}"),
-        )
-    })?;
-    let hint = hint_value.as_object().ok_or_else(|| {
-        taikai_ingest::bad_request(META_TAIKAI_CACHE_HINT, "cache hint must be a JSON object")
-    })?;
-    let event = taikai_ingest::parse_name(metadata, META_TAIKAI_EVENT_ID)?;
-    let stream = taikai_ingest::parse_name(metadata, META_TAIKAI_STREAM_ID)?;
-    let rendition = taikai_ingest::parse_name(metadata, META_TAIKAI_RENDITION_ID)?;
-    let sequence_entry = metadata
-        .items
-        .iter()
-        .find(|entry| entry.key == META_TAIKAI_SEGMENT_SEQUENCE)
-        .ok_or_else(|| {
-            taikai_ingest::bad_request(
-                META_TAIKAI_CACHE_HINT,
-                "cache hint validation requires taikai.segment.sequence metadata",
-            )
-        })?;
-    if sequence_entry.visibility != MetadataVisibility::Public
-        || !matches!(sequence_entry.encryption, MetadataEncryption::None)
-    {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_SEGMENT_SEQUENCE,
-            "metadata entry must be public and unencrypted",
-        ));
-    }
-    let sequence_str = std::str::from_utf8(&sequence_entry.value).map_err(|_| {
-        taikai_ingest::bad_request(META_TAIKAI_SEGMENT_SEQUENCE, "value must be UTF-8")
-    })?;
-    let sequence = sequence_str.parse::<u64>().map_err(|err| {
-        taikai_ingest::bad_request(
-            META_TAIKAI_SEGMENT_SEQUENCE,
-            format!("invalid integer `{sequence_str}`: {err}"),
-        )
-    })?;
-    let expect_str = |key: &str| -> Result<&str, (StatusCode, String)> {
-        hint.get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                taikai_ingest::bad_request(
-                    META_TAIKAI_CACHE_HINT,
-                    format!("{key} is required in cache hint"),
-                )
-            })
-    };
-    let expect_u64 = |key: &str| -> Result<u64, (StatusCode, String)> {
-        hint.get(key).and_then(Value::as_u64).ok_or_else(|| {
-            taikai_ingest::bad_request(
-                META_TAIKAI_CACHE_HINT,
-                format!("{key} is required in cache hint"),
-            )
-        })
-    };
-    let event_value = expect_str("event")?;
-    let stream_value = expect_str("stream")?;
-    let rendition_value = expect_str("rendition")?;
-    if event_value != event.as_ref()
-        || stream_value != stream.as_ref()
-        || rendition_value != rendition.as_ref()
-    {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_CACHE_HINT,
-            "cache hint identifiers must match segment metadata",
-        ));
-    }
-    let sequence_value = expect_u64("sequence")?;
-    if sequence_value != sequence {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_CACHE_HINT,
-            "cache hint sequence must match segment metadata",
-        ));
-    }
-    let payload_len = expect_u64("payload_len")?;
-    if payload_len != expected_payload_len {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_CACHE_HINT,
-            "cache hint payload_len must match canonical payload size",
-        ));
-    }
-    let digest_hex = expect_str("payload_blake3_hex")?;
-    let digest_bytes = hex::decode(digest_hex).map_err(|err| {
-        taikai_ingest::bad_request(
-            META_TAIKAI_CACHE_HINT,
-            format!("payload_blake3_hex must be valid hex: {err}"),
-        )
-    })?;
-    if digest_bytes.as_slice() != payload_digest.as_ref() {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_CACHE_HINT,
-            "cache hint payload digest does not match canonical payload",
-        ));
-    }
-    Ok(())
-}
 #[derive(Debug)]
 /// Result details from validating a Taikai signing manifest.
 pub(crate) struct TaikaiSsmOutcome {
@@ -4210,9 +4084,8 @@ pub(crate) fn apply_taikai_ingest_tags(
     metadata: &mut ExtraMetadata,
     availability: Option<TaikaiAvailabilityClass>,
     retention: &RetentionPolicy,
-    payload_digest: BlobDigest,
     payload_len: u64,
-) -> Result<(), (StatusCode, String)> {
+) {
     let availability_class =
         availability.unwrap_or_else(|| TaikaiAvailabilityClass::from(retention.storage_class));
     upsert_metadata(
@@ -4256,50 +4129,6 @@ pub(crate) fn apply_taikai_ingest_tags(
         META_DA_POTR_SAMPLE_WINDOW,
         sample_window.to_string(),
     );
-    let event = taikai_ingest::parse_name(metadata, META_TAIKAI_EVENT_ID)?;
-    let stream = taikai_ingest::parse_name(metadata, META_TAIKAI_STREAM_ID)?;
-    let rendition = taikai_ingest::parse_name(metadata, META_TAIKAI_RENDITION_ID)?;
-    let sequence = taikai_ingest::parse_u64_metadata(metadata, META_TAIKAI_SEGMENT_SEQUENCE)?;
-    let mut hint = Map::new();
-    hint.insert("event".into(), Value::from(event.as_ref()));
-    hint.insert("stream".into(), Value::from(stream.as_ref()));
-    hint.insert("rendition".into(), Value::from(rendition.as_ref()));
-    hint.insert("sequence".into(), Value::from(sequence));
-    hint.insert("payload_len".into(), Value::from(payload_len));
-    hint.insert(
-        "payload_blake3_hex".into(),
-        Value::from(hex::encode(payload_digest.as_ref())),
-    );
-    let rendered_hint = json::to_vec(&Value::Object(hint)).map_err(|err| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to encode Taikai cache hint: {err}"),
-        )
-    })?;
-    upsert_metadata(metadata, META_TAIKAI_CACHE_HINT, rendered_hint);
-    Ok(())
-}
-/// Compute the Taikai ingest metadata enrichment applied by Torii.
-///
-/// # Errors
-///
-/// Returns a `(StatusCode, String)` when metadata serialization or tag
-/// computation fails for the supplied payload.
-pub fn compute_taikai_ingest_tags(
-    mut metadata: ExtraMetadata,
-    availability: Option<TaikaiAvailabilityClass>,
-    retention: &RetentionPolicy,
-    payload_digest: BlobDigest,
-    payload_len: u64,
-) -> Result<ExtraMetadata, (StatusCode, String)> {
-    apply_taikai_ingest_tags(
-        &mut metadata,
-        availability,
-        retention,
-        payload_digest,
-        payload_len,
-    )?;
-    Ok(metadata)
 }
 fn upsert_metadata(metadata: &mut ExtraMetadata, key: &str, value: impl Into<Vec<u8>>) {
     metadata.items.retain(|entry| entry.key != key);
