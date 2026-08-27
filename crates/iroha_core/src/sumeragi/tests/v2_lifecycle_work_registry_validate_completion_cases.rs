@@ -1,25 +1,41 @@
 #[cfg(feature = "bls")]
 #[test]
 fn ready_validate_commit_sign_publishes_one_atomic_live_transaction() {
-    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Commit, false);
+    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Commit, false, false);
 }
 
 #[cfg(feature = "bls")]
 #[test]
 fn ready_validate_prepare_sign_uses_typed_dispatch_and_exact_predecessor() {
-    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Prepare, false);
+    assert_ready_validate_vote_sign_live_transaction(
+        true,
+        wire::GlobalPhase::Prepare,
+        false,
+        false,
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn refanned_live_prepare_broadcast_finalization_allows_later_terminal_validate_retry() {
+    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Prepare, false, true);
 }
 
 #[cfg(feature = "bls")]
 #[test]
 fn certified_commit_supersedes_only_an_authenticated_exact_prepare_sign_completion() {
-    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Prepare, true);
+    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Prepare, true, false);
 }
 
 #[cfg(feature = "bls")]
 #[test]
 fn ready_validate_commit_sign_rejects_missing_ledger_store_and_fails_closed() {
-    assert_ready_validate_vote_sign_live_transaction(false, wire::GlobalPhase::Commit, false);
+    assert_ready_validate_vote_sign_live_transaction(
+        false,
+        wire::GlobalPhase::Commit,
+        false,
+        false,
+    );
 }
 
 #[cfg(feature = "bls")]

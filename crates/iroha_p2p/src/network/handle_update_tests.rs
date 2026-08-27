@@ -1,15 +1,15 @@
 #[cfg(test)]
 mod handle_update_tests {
-    use std::{
-        collections::HashSet,
-        sync::{Barrier, atomic::AtomicUsize},
-    };
+    use super::*;
     use iroha_config::parameters::actual::SoranetHandshake as ActualSoranetHandshake;
     use iroha_crypto::encryption::ChaCha20Poly1305;
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
+    use std::{
+        collections::HashSet,
+        sync::{Barrier, atomic::AtomicUsize},
+    };
     use tokio::sync::{mpsc, watch};
-    use super::*;
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     impl message::ClassifyTopic for Dummy {}
@@ -856,8 +856,6 @@ mod handle_update_tests {
         let (update_acl_tx, update_acl_rx) = control_update_channel();
         let (update_handshake_tx, update_handshake_rx) = control_update_channel();
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
-        let (service_message_tx, _service_message_rx) =
-            mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_safety_sender, _network_message_safety_rx) =
@@ -888,7 +886,6 @@ mod handle_update_tests {
                 update_acl_sender: update_acl_tx,
                 update_handshake_sender: update_handshake_tx,
                 update_consensus_caps_sender: update_consensus_caps_tx,
-                service_message_sender: service_message_tx,
                 network_message_high_sender,
                 network_message_safety_sender,
                 network_message_progress_sender,
@@ -956,8 +953,6 @@ mod handle_update_tests {
         let (update_acl_tx, update_acl_rx) = control_update_channel();
         let (update_handshake_tx, update_handshake_rx) = control_update_channel();
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
-        let (service_message_tx, _service_message_rx) =
-            mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
         let (network_message_high_sender, network_message_high_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_safety_sender, network_message_safety_rx) =
@@ -993,7 +988,6 @@ mod handle_update_tests {
             update_acl_sender: update_acl_tx,
             update_handshake_sender: update_handshake_tx,
             update_consensus_caps_sender: update_consensus_caps_tx,
-            service_message_sender: service_message_tx,
             network_message_high_sender,
             network_message_safety_sender,
             network_message_progress_sender,
@@ -1042,8 +1036,6 @@ mod handle_update_tests {
         let (update_acl_tx, update_acl_rx) = control_update_channel();
         let (update_handshake_tx, update_handshake_rx) = control_update_channel();
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
-        let (service_message_tx, _service_message_rx) =
-            mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_low_sender, _network_message_low_rx) =
@@ -1078,7 +1070,6 @@ mod handle_update_tests {
                 update_acl_sender: update_acl_tx,
                 update_handshake_sender: update_handshake_tx,
                 update_consensus_caps_sender: update_consensus_caps_tx,
-                service_message_sender: service_message_tx,
                 network_message_high_sender,
                 network_message_safety_sender: net_channel::channel_with_capacity(1).0,
                 network_message_progress_sender: net_channel::channel_with_capacity(1).0,

@@ -1,5 +1,378 @@
 // Durable autonomous-lane Queue release authority and claim finalization.
 impl Kura {
+    /// Retire one nonproducer replica without consuming the producer's Queue
+    /// reservation or ordered-release authority.
+    ///
+    /// The Queue token is acquired before this method is entered and retains
+    /// per-entrypoint transition fences through every Kura fsync below. It can
+    /// authenticate only exhaustive local Queue absence or a byte-identical
+    /// ordinary FIFO copy. Kura independently reopens the signed cursor and
+    /// exact payload before advancing claims and atomically publishing a
+    /// replica-specific Complete terminal outcome.
+    pub(crate) fn retire_autonomous_lane_slot_with_replica_queue_disposition<'queue>(
+        &self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        cursor_read: AutonomousLifecycleCursorRead,
+        authorization: AutonomousLaneReplicaQueueDispositionAuthorization<'queue>,
+    ) -> Result<()> {
+        if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
+            || retirement.network_id != expected_network_id
+            || retirement.epoch != expected_epoch
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica retirement has an unsupported version or chain context",
+            ));
+        }
+        let barrier = retirement.queue_release_barrier()?;
+        let expected_cursor = cursor_read.cursor().cloned().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica retirement lacks its completed signed lifecycle cursor",
+            )
+        })?;
+        let (_, local_actor) = expected_cursor.binding().local_validator_identity();
+        if local_actor == expected_cursor.binding().producer_actor_projection() {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "producer lifecycle cursor cannot use replica Queue retirement",
+            ));
+        }
+        let disposition = authorization
+            .consume_for_kura(&cursor_read, &barrier.ordered_keys)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "replica Queue disposition authority changed before Kura retirement",
+                )
+            })?;
+        let (exact_ordinary_fifo_preserved, source_disposition, _queue_fence) = match disposition {
+            AutonomousLaneReplicaQueueDisposition::ExactOrdinaryFifo(fence) => (
+                true,
+                AutonomousLifecycleReplicaQueueDispositionV1::ExactOrdinaryFifo,
+                fence,
+            ),
+            AutonomousLaneReplicaQueueDisposition::StrictQueueAbsent(fence) => (
+                false,
+                AutonomousLifecycleReplicaQueueDispositionV1::StrictQueueAbsent,
+                fence,
+            ),
+        };
+
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(retirement.lane_id)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let record = self
+            .read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                retirement.lane_id,
+                retirement.lane_block_height,
+                retirement.proposal_height,
+                expected_network_id,
+                expected_epoch,
+                Some(pending_canonical_bytes),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "replica retirement lost its exact executable payload",
+                )
+            })?;
+        let payload = &record.artifact.executable_payload;
+        if !retirement.matches_payload(payload)
+            || payload.reservation_keys.as_slice() != barrier.ordered_keys.as_slice()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "replica retirement differs from its durable payload or ordered Queue group",
+            ));
+        }
+        let durable_cursor =
+            self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(&entry, payload)?;
+        if durable_cursor != expected_cursor
+            || durable_cursor.binding().reservation_group_binding()
+                != lane_queue_reservation_group_binding_from_ordered_keys(
+                    payload.reservation_keys.iter(),
+                )
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica retirement signed cursor changed after Queue authorization",
+            ));
+        }
+        let (_, durable_local_actor) = durable_cursor.binding().local_validator_identity();
+        if durable_local_actor != local_actor
+            || durable_local_actor == durable_cursor.binding().producer_actor_projection()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica retirement cursor changed its nonproducer actor",
+            ));
+        }
+        let context =
+            AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?;
+        if context.actor != durable_local_actor
+            || context.actor == context.producer
+            || context.reservation_group != durable_cursor.binding().reservation_group_binding()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica retirement projection changed its signed actor or reservation group",
+            ));
+        }
+        let current = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                retirement.lane_block_height,
+                Some(pending_canonical_bytes),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "replica retirement has no current lane attempt",
+                )
+            })?;
+        let exact_attempt_is_current = current.artifact.executable_payload == *payload;
+        self.persist_autonomous_lane_slot_retirement_for_replica_locked(
+            pending_canonical_bytes,
+            &entry,
+            &record,
+            retirement,
+            expected_network_id,
+            expected_epoch,
+            exact_attempt_is_current,
+        )?;
+        let selected_count = u64::try_from(payload.entrypoint_hashes.len())?;
+        let released_prefix = if exact_attempt_is_current {
+            self.prepare_autonomous_lane_entrypoint_claim_release_for_replica_locked(
+                pending_canonical_bytes,
+                payload,
+                retirement,
+                exact_ordinary_fifo_preserved,
+            )?;
+            let (pending_prefix, released_prefix) = self
+                .autonomous_lane_entrypoint_replica_claim_release_progress_locked(
+                    payload,
+                    retirement,
+                    source_disposition,
+                )?;
+            if pending_prefix != selected_count || released_prefix > pending_prefix {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "replica retirement lacks the complete canonical claim prefix",
+                ));
+            }
+            released_prefix
+        } else {
+            self.require_autonomous_lane_replica_release_completed_or_superseded_locked(
+                &entry,
+                payload,
+                retirement,
+                source_disposition,
+            )?;
+            selected_count
+        };
+        let expected_reservation_state = if exact_ordinary_fifo_preserved {
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+        } else {
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT
+        };
+        if exact_attempt_is_current && released_prefix == 0 {
+            let observed = context
+                .observe_replica_queue_release_transition(exact_ordinary_fifo_preserved)
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?
+                .into_projection();
+            if observed.after.queue.reservation_state != expected_reservation_state {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "checked replica Queue observation changed its terminal disposition",
+                ));
+            }
+        } else {
+            // A nonzero prefix consists only of replica-specific claims that
+            // durably bind this exact Queue disposition. Reconstruct that
+            // crash prefix instead of replaying action 28 from prefix zero.
+            let recovered =
+                context.replica_queue_release_state(exact_ordinary_fifo_preserved, released_prefix);
+            if !production_in_flight_first_release_state_kernel(recovered)
+                || recovered.queue.reservation_state != expected_reservation_state
+                || recovered.release.released_prefix != released_prefix
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "replica retirement failed to reconstruct its durable Queue disposition prefix",
+                ));
+            }
+        }
+        if exact_attempt_is_current {
+            self.finalize_autonomous_lane_entrypoint_claim_release_for_replica_locked(
+                pending_canonical_bytes,
+                payload,
+                retirement,
+                exact_ordinary_fifo_preserved,
+            )?;
+            self.require_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                payload,
+                retirement,
+                source_disposition,
+            )?;
+        }
+        let source = AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+            retirement_hash: retirement.digest()?,
+            queue_disposition: source_disposition,
+        };
+        self.autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+            Some(pending_canonical_bytes),
+            &entry,
+            payload,
+            Some(retirement),
+            source,
+        )?;
+        let terminal = context.replica_queue_terminal_state(exact_ordinary_fifo_preserved);
+        if !production_in_flight_first_release_state_kernel(terminal)
+            || production_in_flight_first_release_terminal_owner(terminal).is_none()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica retirement failed its terminal ownership projection",
+            ));
+        }
+        let complete = self.persist_autonomous_lifecycle_replica_terminal_outcome_complete_locked(
+            pending_canonical_bytes,
+            &entry,
+            payload,
+            source,
+            terminal,
+        )?;
+        self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+            pending_canonical_bytes,
+            payload,
+            retirement,
+            source_disposition,
+            &complete,
+        )?;
+        // `_queue_fence` was declared before every Kura guard above. Rust's
+        // reverse drop order therefore releases sidecar/geometry/canonical/
+        // prune locks first and the Queue fence only after the Complete write
+        // and directory fsync, avoiding a Kura -> Queue lock edge.
+        Ok(())
+    }
+
+    /// Persist the retirement while the caller retains the same sidecar lock
+    /// used to revalidate the Queue-authorized signed cursor. Replica claim
+    /// preparation remains in the caller because it must use the
+    /// disposition-specific durable claim state.
+    fn persist_autonomous_lane_slot_retirement_for_replica_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        entry: &LaneConfigEntry,
+        record: &AutonomousLaneBlockDurableRecord,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        exact_attempt_is_current: bool,
+    ) -> Result<()> {
+        if let Some(existing) = record.retirement.as_ref() {
+            if existing == retirement {
+                return Ok(());
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path.clone(),
+                "conflicting autonomous replica slot retirement is already durable",
+            ));
+        }
+        if !exact_attempt_is_current {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path.clone(),
+                "historical replica attempt lacks its previously durable retirement",
+            ));
+        }
+        let (certified_data_path, certified_index_path) =
+            Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
+        if self
+            .read_active_certified_lane_block_artifact_from_paths_durability_attested_locked(
+                entry,
+                retirement.lane_block_height,
+                &certified_data_path,
+                &certified_index_path,
+                true,
+            )
+            .is_some()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                certified_data_path,
+                "certified autonomous lane block cannot be retired as a replica",
+            ));
+        }
+        let mut state = AutonomousLaneBlockViewState::from_artifact(&record.artifact);
+        state.retirement = Some(retirement.clone());
+        let authorization = self
+            .authorize_autonomous_lane_slot_retirement_persistence(
+                &record.artifact.executable_payload,
+                retirement,
+                &record.view_state_path,
+            )
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(record.view_state_path.clone(), message)
+            })?;
+        let projection: ProductionInFlightFirstReleaseTransitionProjection = authorization
+            .consume_for_persistence(
+                &record.artifact.executable_payload,
+                retirement,
+                &record.view_state_path,
+            )
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    record.view_state_path.clone(),
+                    "autonomous replica slot-retirement authority changed before persistence",
+                )
+            })?;
+        if projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path.clone(),
+                "autonomous replica slot-retirement authority names another transition",
+            ));
+        }
+        let checked =
+            check_production_in_flight_first_release_transition(projection).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    record.view_state_path.clone(),
+                    "autonomous replica slot-retirement persistence failed the composed transition gate",
+                )
+            })?;
+        if checked.into_projection() != projection {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path.clone(),
+                "checked autonomous replica slot-retirement projection changed before persistence",
+            ));
+        }
+        self.write_autonomous_lane_block_view_state_record_locked(
+            pending_canonical_bytes,
+            &record.artifact.executable_payload,
+            &state,
+            &record.view_state_path,
+            expected_network_id,
+            expected_epoch,
+        )?;
+        Ok(())
+    }
+
     /// Authenticate the exact Kura half of one release-barrier Queue snapshot.
     ///
     /// This path is strictly read-only: it neither repairs view state nor
@@ -265,6 +638,91 @@ impl Kura {
             AutonomousLaneQueueReleaseBarrierGate::DirectTest,
         )
         .map(drop)
+    }
+    /// Build an exact replica `ReplicaReleased*` crash cut without publishing
+    /// its terminal outcome. Production must use Queue's move-only fence via
+    /// `retire_autonomous_lane_slot_with_replica_queue_disposition`.
+    #[cfg(test)]
+    pub(crate) fn finalize_autonomous_lane_slot_replica_release_for_test(
+        &self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
+    ) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
+            || retirement.network_id != expected_network_id
+            || retirement.epoch != expected_epoch
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica claim test cut has an unsupported version or chain context",
+            ));
+        }
+        let entry = self.lane_storage_entry(retirement.lane_id)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let record = self
+            .read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                retirement.lane_id,
+                retirement.lane_block_height,
+                retirement.proposal_height,
+                expected_network_id,
+                expected_epoch,
+                Some(pending_canonical_bytes),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "replica claim test cut lost its exact payload attempt",
+                )
+            })?;
+        let payload = &record.artifact.executable_payload;
+        if record.retirement.as_ref() != Some(retirement) || !retirement.matches_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "replica claim test cut differs from its durable retirement",
+            ));
+        }
+        let exact_ordinary_fifo_preserved =
+            queue_disposition == AutonomousLifecycleReplicaQueueDispositionV1::ExactOrdinaryFifo;
+        self.prepare_autonomous_lane_entrypoint_claim_release_for_replica_locked(
+            pending_canonical_bytes,
+            payload,
+            retirement,
+            exact_ordinary_fifo_preserved,
+        )?;
+        let (_, released_prefix) = self
+            .autonomous_lane_entrypoint_replica_claim_release_progress_locked(
+                payload,
+                retirement,
+                queue_disposition,
+            )?;
+        if released_prefix != 0
+            || AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
+                .and_then(|context| {
+                    context.observe_replica_queue_release_transition(exact_ordinary_fifo_preserved)
+                })
+                .is_err()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica claim test cut does not begin at checked action 28",
+            ));
+        }
+        self.finalize_autonomous_lane_entrypoint_claim_release_for_replica_locked(
+            pending_canonical_bytes,
+            payload,
+            retirement,
+            exact_ordinary_fifo_preserved,
+        )
     }
     fn finalize_autonomous_lane_slot_release_inner(
         &self,

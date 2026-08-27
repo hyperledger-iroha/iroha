@@ -87,22 +87,27 @@ mod tests {
             delegation_test_challenge(0x32),
             Some(TEST_SORANET_TRANSPORT_BINDING),
         );
-        let first_decoded = decode_delegation(&first.canonical_signed_frame);
-        let second_decoded = decode_delegation(&second.canonical_signed_frame);
-        assert_eq!(first_decoded.certificate, second_decoded.certificate);
-        assert_ne!(first_decoded.proof, second_decoded.proof);
-        assert_ne!(first.binding, second.binding);
+        assert_eq!(
+            first.canonical_signed_frame.len(),
+            4_459,
+            "the absent channel binding defines the exact unbound V5 frame size"
+        );
         assert_eq!(
             second.canonical_signed_frame.len(),
             super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES,
             "the public-key encodings and present channel binding define the exact V5 cap"
         );
+        let first_decoded = decode_delegation(&first.canonical_signed_frame);
+        let second_decoded = decode_delegation(&second.canonical_signed_frame);
+        assert_eq!(first_decoded.certificate, second_decoded.certificate);
+        assert_ne!(first_decoded.proof, second_decoded.proof);
+        assert_ne!(first.binding, second.binding);
         let verified = super::verify_soranet_transport_delegation_v5(
-            &first.canonical_signed_frame,
+            &second.canonical_signed_frame,
             &network_id,
             &node_id,
-            &delegation_test_challenge(0x31),
-            None,
+            &delegation_test_challenge(0x32),
+            Some(TEST_SORANET_TRANSPORT_BINDING),
         )
         .expect("exact v5 frame");
         assert_eq!(
@@ -119,7 +124,24 @@ mod tests {
                 .authenticated_binding_digest(),
             &certificate.digest
         );
-        assert_eq!(verified.binding, first.binding);
+        assert_eq!(verified.binding, second.binding);
+
+        let mut oversized = second.canonical_signed_frame.clone();
+        oversized.push(0);
+        assert!(matches!(
+            super::verify_soranet_transport_delegation_v5(
+                &oversized,
+                &network_id,
+                &node_id,
+                &delegation_test_challenge(0x32),
+                Some(TEST_SORANET_TRANSPORT_BINDING),
+            )
+            .map_err(unwrap_delegation_error),
+            Err(crate::SoranetTransportDelegationError::FrameTooLarge {
+                found: 4_526,
+                max: 4_525,
+            })
+        ));
     }
     #[test]
     fn soranet_transport_v5_rejects_identity_nonce_binding_and_signature_substitution() {
@@ -319,13 +341,10 @@ mod tests {
         let transcript_a = super::soranet_admission_transcript(hello, &frame_a.binding);
         let transcript_b = super::soranet_admission_transcript(hello, &frame_b.binding);
         assert_ne!(transcript_a, transcript_b);
+        let handshake = SoranetHandshakeConfig::defaults();
         assert_ne!(
-            SoranetHandshakeConfig::defaults()
-                .pow_binding(&transcript_a)
-                .encode(),
-            SoranetHandshakeConfig::defaults()
-                .pow_binding(&transcript_b)
-                .encode()
+            handshake.pow_binding(&transcript_a),
+            handshake.pow_binding(&transcript_b)
         );
         let config = || {
             SoranetHandshakeConfig::new(

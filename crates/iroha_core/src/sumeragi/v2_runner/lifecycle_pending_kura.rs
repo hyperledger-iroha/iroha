@@ -499,6 +499,7 @@ fn run_pending_active_height(
                     kura.as_ref(),
                     &common_config.key_pair,
                     block_sync_server,
+                    DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                 )?;
                 drain_lane_relay_ingress(
                     lane_relay_rx,

@@ -489,6 +489,120 @@ fn terminal_current_serve_source_retention_retries_without_reopening_runtime() {
 }
 
 #[test]
+fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite_closed_drain() {
+    let run_inner = include_str!("../v2_runner/lifecycle_run_inner.rs");
+    let cut_start = run_inner
+        .find("if let Some(cut) = terminal_finalization_cut.as_ref()")
+        .expect("terminal finalization retains an explicit scheduler branch");
+    let cut_end = run_inner[cut_start..]
+        .find("} else if lane_only_completion_barrier")
+        .map(|offset| cut_start + offset)
+        .expect("ordinary lane-only service follows the terminal branch");
+    let terminal_branch = &run_inner[cut_start..cut_end];
+    assert!(terminal_branch.contains("reconcile_decided_lane_certified_serve("));
+    assert!(terminal_branch.contains("retry_decided_lane_recovery_exact_output("));
+    assert!(
+        !terminal_branch.contains("if pending_exact_output"),
+        "source-retained output cannot yield before finalized lane preflight"
+    );
+    assert!(
+        !terminal_branch.contains("drain_decided_lane_recovery_ingress("),
+        "a terminal cut cannot dequeue from still-open fair ingress"
+    );
+    assert!(
+        !terminal_branch.contains("drain_lane_relay_ingress("),
+        "a terminal cut cannot admit serialized lane-relay work"
+    );
+
+    let preflight_start = run_inner
+        .find("let rollover_ready = if finalization_ready")
+        .expect("authenticated finalization gates lane preflight");
+    let close_start = run_inner[preflight_start..]
+        .find("if !finalized_ingress_closed {")
+        .map(|offset| preflight_start + offset)
+        .expect("durable lane preflight gates physical ingress closure");
+    let open_preflight = &run_inner[preflight_start..close_start];
+    let preflight = open_preflight
+        .find("preflight_finalized_lane_rollover(")
+        .expect("the finalized carrier is recovered before closure");
+    let incomplete = open_preflight
+        .find("if finalization_ready && !rollover_ready")
+        .expect("an incomplete lane boundary retains its bounded corridor");
+    let drain = open_preflight[incomplete..]
+        .find("drain_decided_lane_recovery_ingress(")
+        .map(|offset| incomplete + offset)
+        .expect("the bounded corridor consumes one authenticated lane occurrence");
+    let dispatch = open_preflight[incomplete..]
+        .find("dispatch_lane_work_effects(")
+        .map(|offset| incomplete + offset)
+        .expect("the bounded corridor publishes preflight and ingress effects");
+    let retry = open_preflight[incomplete..]
+        .find("continue;")
+        .map(|offset| incomplete + offset)
+        .expect("an incomplete boundary re-enters preflight");
+    assert!(preflight < incomplete && incomplete < drain && drain < dispatch && dispatch < retry);
+    let final_output_retry = open_preflight
+        .rfind("retry_decided_lane_recovery_exact_output(")
+        .expect("successful preflight rechecks exact output immediately before closure");
+    let pending_output_yield = open_preflight
+        .find("if rollover_ready && terminal_exact_output_pending")
+        .expect("source-retained exact output keeps physical ingress open");
+    assert!(preflight < final_output_retry && final_output_retry < pending_output_yield);
+
+    let finite_drain = &run_inner[close_start..];
+    let close = finite_drain
+        .find("close_runner_ingress_for_finalized_drain")
+        .expect("finalization closes physical ingress");
+    let drain = finite_drain
+        .find("drain_decided_lane_recovery_ingress(")
+        .expect("the closed prefix retains decided-lane recovery");
+    let retire_mode = finite_drain
+        .find("DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix")
+        .expect("closed-prefix lane-local traffic is retired without adapter admission");
+    let dispatch = finite_drain
+        .find("dispatch_lane_work_effects(")
+        .expect("the finite prefix publishes only monotonic-safe output");
+    let final_output_retry = finite_drain[dispatch..]
+        .find("retry_decided_lane_recovery_exact_output(")
+        .map(|offset| dispatch + offset)
+        .expect("closed-prefix output is retried before empty-cut authentication");
+    let authenticate = finite_drain
+        .find("ensure_closed_drained_cut()")
+        .expect("the finite prefix is authenticated empty");
+    assert!(
+        close < drain
+            && drain < retire_mode
+            && retire_mode < dispatch
+            && dispatch < final_output_retry
+            && final_output_retry < authenticate
+    );
+
+    let late_cut = run_inner
+        .find("A Completion or executor slice can expose terminal state")
+        .expect("late terminal state re-enters the sealed top-of-loop corridor");
+    let planning_fence = run_inner
+        .find("let terminal_planning_fenced")
+        .expect("terminal planning remains explicitly fenced");
+    assert!(late_cut < planning_fence);
+
+    assert!(
+        run_inner.contains(
+            "if !terminal_planning_fenced\n            && pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)"
+        ),
+        "terminal finalization must not enqueue unrelated QueuePlan handoff output"
+    );
+
+    let height_driver = include_str!("../v2_runner/lifecycle_height_driver.rs");
+    let completion_cut = height_driver
+        .find("if terminal_finalization_cut.is_some() {\n                    // The sealed cut owns exactly the Completion-ranked turn.")
+        .expect("terminal Completion returns before advancing the cursor");
+    let runtime_turn = height_driver
+        .find("LifecycleRunnerRankTarget::Runtime =>")
+        .expect("the ordinary driver retains its Runtime arm");
+    assert!(completion_cut < runtime_turn);
+}
+
+#[test]
 fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traffic() {
     let (context, keys) = context();
     let round = wire::ConsensusRound {
@@ -549,6 +663,34 @@ fn drain_decided_lane_recovery_ingress_authorizes_lane_local_qc() {
         DecidedLaneRecoveryDrainAuthorization::LaneLocal
     ));
 }
+
+#[test]
+fn finalized_closed_prefix_retires_historical_lane_certificate_without_adapter_admission() {
+    let fixture =
+        super::super::v2_lane_work::tests::historical_autonomous_lane_certificate_fixture();
+    let sender = fixture
+        .certificate
+        .proposal
+        .descriptor
+        .validator_set
+        .first()
+        .expect("historical certificate retains one validator")
+        .clone();
+    let active_height = fixture.context.height.saturating_add(1);
+    let inbound = super::super::fair_v2_ingress_admit_for_test(
+        InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::LaneBlockCertificate(Box::new(fixture.certificate)),
+            sender,
+        ),
+    );
+    assert!(matches!(
+        prepare_decided_lane_recovery_ingress(&inbound, active_height),
+        DecidedLaneRecoveryIngressPreparation::LaneLocal
+    ));
+    retire_finalized_lane_local_ingress(inbound)
+        .expect("the finalized prefix consumes exact lane-local ownership without recovery work");
+}
+
 #[test]
 fn lifecycle_lane_local_selector_bypasses_only_productive_global_barrier() {
     let (_directory, ingress, gate, _global, semantic_origin) =

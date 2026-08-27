@@ -1374,6 +1374,209 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_while_queued_and_active
 }
 
 #[cfg(feature = "bls")]
+#[test]
+fn direct_cached_validate_successor_releases_retry_ordinal_before_parent_retirement() {
+    let handle = std::thread::Builder::new()
+        .name("direct-cached-validate-retry-release".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(direct_cached_validate_successor_releases_retry_ordinal_fixture)
+        .expect("spawn direct cached Validate retry-release fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+fn direct_cached_validate_successor_releases_retry_ordinal_fixture() {
+    // Reuse the view-zero committee fixture whose PrepareQC deterministically
+    // selects the remote certified-body Fetch path.
+    let marker = 0_u8;
+    let (mut fixture, _body_directory, mut body_store, durable) =
+        durable_validate_store_fixture_at_view(marker, 0);
+    let key = (durable.round(), durable.subject());
+    let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
+    let marker_outcome = body_store
+        .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+            Ok::<_, String>(commitment)
+        })
+        .expect("persist the direct cached Validate marker");
+    assert_eq!(
+        marker_outcome
+            .validated_receipt()
+            .map(ValidatedBodyReceipt::execution_commitment),
+        Some(commitment)
+    );
+
+    let keys = durable_store_keys(marker);
+    let now = std::time::Instant::now();
+    let runtime_directory = TempDir::new().expect("temporary direct cached Validate runtime");
+    let mut coordinator = ready_durable_validate_coordinator(&[&fixture]);
+    let ledger_directory =
+        TempDir::new().expect("temporary direct cached Validate lifecycle ledger");
+    coordinator
+        .attach_empty_test_ledger(ledger_directory.path())
+        .expect("attach direct cached Validate LedgerV1");
+    let (runtime_ordinal_authority, coordinator_ordinal_authority) =
+        authority::lifecycle_ordinal_authorities_after_high_watermark(coordinator.high_water());
+    let lifecycle_ordinals =
+        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+            runtime_ordinal_authority,
+        );
+    coordinator
+        .bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)
+        .expect("bind direct cached Validate actor-global ordinal authority");
+    let (runtime, retransmit_interval, _) = cold_ready_validate_runtime_at_durable(
+        &fixture,
+        &durable,
+        &keys,
+        runtime_directory.path(),
+        "direct-cached-parent.wal",
+        now,
+        lifecycle_ordinals,
+    );
+    let holder = take_dispatch_registry(&mut fixture);
+    let payload_directory = TempDir::new().expect("temporary direct cached payload store");
+    let (payload_store, serve_payloads) =
+        CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
+            payload_directory.path(),
+            fixture.verified.context(),
+        )
+        .expect("open empty direct cached Serve payload owner");
+    let mut owner = super::super::ProductionLifecycleOwnerV1 {
+        verified: fixture.verified.clone(),
+        coordinator,
+        registry: holder,
+        recovered_lifecycle_outputs: None,
+        payload_store,
+        serve_payloads,
+        body_store: Some(body_store),
+        body_store_identity: None,
+        kura_binding: None,
+        apply_service: None,
+        adapter_startup: None,
+        timeout_supersession_successor: None,
+    };
+    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+    let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    services.set_exact_output_admission_hook(|post, ticket| {
+        Err(
+            iroha_p2p::network::NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            },
+        )
+    });
+    let (mut executor, mut planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+        &mut services,
+        runtime,
+        std::sync::Arc::clone(&output_guard),
+        0,
+        2,
+    );
+    crate::sumeragi::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
+    executor
+        .arm_live_clocks(
+            super::super::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            now,
+        )
+        .expect("arm direct cached Validate clocks after service construction");
+
+    let validate_ordinal = fixture.lease.ordinal();
+    assert_eq!(
+        executor.validate_retry_lifecycle_ordinal_for_test(key),
+        Some(validate_ordinal),
+        "direct cached Validate open binds its exact retry authority"
+    );
+    assert_eq!(
+        owner
+            .dispatch_completion_for_test(&mut services, &mut executor, 0)
+            .expect("queue the direct cached Validate worker"),
+        super::super::ProductionCompletionDispatchV1::ValidateQueued {
+            ordinal: validate_ordinal,
+        }
+    );
+    assert!(matches!(
+        executor
+            .step(now + retransmit_interval, &mut services)
+            .expect("select the exact PrepareQC periodic refinement"),
+        crate::sumeragi::v2_effects::EffectExecutorStep::Advanced { effects: 1 }
+    ));
+    let output_summary = executor
+        .settle_pending_lifecycle_output_admissions(&mut owner, &mut services)
+        .expect("settle the PrepareQC paired with the cached Validate refinement");
+    assert_eq!(output_summary.newly_completed(), 1);
+    planner_io.activate_one_lifecycle_validate();
+    assert_eq!(
+        planner_io.execute_held_lifecycle_validate_fixture(
+            commitment,
+            std::sync::Arc::clone(&output_guard),
+        ),
+        0,
+        "the cached marker must bypass a second validation callback"
+    );
+    let completion = match services
+        .take_next_lifecycle_completion()
+        .expect("take the direct cached Validate completion")
+    {
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::Validate(completion) => completion,
+        _ => panic!("direct cached Validate worker produced a foreign completion class"),
+    };
+    let (executed, ack) = completion.into_publication_parts();
+    let publication = owner
+        .coordinator
+        .complete_durable_validate_dispatch(&mut owner.registry, executed)
+        .expect("publish the direct cached validated replacement");
+    let super::super::DurableValidateCompletionPublication::PublishedValidated(published) =
+        publication
+    else {
+        panic!("direct cached Validate must publish one validated replacement")
+    };
+    assert_eq!(published.lifecycle_ordinal(), validate_ordinal);
+    ack.acknowledge_after_publication();
+
+    let resolved = owner
+        .dispatch_ready_validate_successor_for_test(
+            &mut services,
+            &mut executor,
+            super::ReadyValidateSuccessorV1::from_validated(published),
+            0,
+        )
+        .expect("resolve the direct cached Validate successor");
+    let super::super::ReadyValidateSuccessorDispatchV1::Resolved(
+        super::super::ProductionCompletionDispatchV1::BodyStageAdvanced {
+            parent_ordinal,
+            child: LifecycleWorkClass::SignVote,
+            ..
+        },
+    ) = resolved
+    else {
+        panic!("Prepare-refined cached Validate must advance to its Sign child")
+    };
+    assert_eq!(parent_ordinal, validate_ordinal);
+    assert!(matches!(
+        owner.coordinator.records[&validate_ordinal].state,
+        LifecycleState::Terminal(TerminalOutcome::Advanced)
+    ));
+    assert!(
+        owner
+            .registry
+            .registry_for_test()
+            .entries
+            .keys()
+            .all(|address| address.ordinal != validate_ordinal),
+        "durable parent retirement must remove the exact Validate registry carrier"
+    );
+    assert_eq!(
+        executor.validate_retry_lifecycle_ordinal_for_test(key),
+        None,
+        "synchronous cached-successor dispatch must release the retired Validate row"
+    );
+    assert!(!output_guard.restart_required());
+    planner_io.detach(&mut services);
+}
+
+#[cfg(feature = "bls")]
 fn cold_ready_validate_logical_coordinator_snapshot(coordinator: &LifecycleCoordinator) -> String {
     let mut snapshot = coordinator.clone();
     snapshot.lifecycle_ordinal_authority = None;

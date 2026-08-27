@@ -2811,12 +2811,16 @@ case|lifecycle_decision_apply_scheduler_attestation_is_lineage_exact_and_io_boun
 region|declaration|registry|after|pub(super) struct ReadyLifecycleDecisionApplyAttestationV1|before|impl ReadyLifecycleDecisionApplyAttestationV1
 region|registry|registry|begin|-|end|-
 region|dispatch_key_match|registry|after|fn matches(|before|/// Move-only authority for one exact lifecycle Decision Apply worker dispatch.
+region|live_authority|registry|after|pub(in crate::sumeragi) struct LiveLifecycleDecisionApplyReconciliationAuthorityV1 {|before|struct LiveLifecycleDecisionApplyReconciliationAuthoritySealV1;
+region|live_authority_accessors|registry|after|impl LiveLifecycleDecisionApplyReconciliationAuthorityV1 {|before|/// Closed service demand authenticated for one Ready recovered Sign carrier.
+region|live_projection|registry|after|fn project_reconciliation(|before|fn project_completion(
 region|classifier|registry_recovery_impl|after|pub(super) fn attest_ready_lifecycle_decision_apply(|before|/// Project the exact Ready live Apply
 region|live_reconciliation|registry_recovery_impl|after|pub(super) fn prepare_ready_live_decision_apply_reconciliation(|before|/// Project one exact claimed lifecycle Decision Apply
 region|dispatch|registry_recovery_impl|after|pub(super) fn prepare_lifecycle_decision_apply_dispatch(|before|/// Bind one guarded Applied worker result
 region|holder|concrete_admission|after|pub(super) fn attest_ready_lifecycle_decision_apply(|before|/// Project a Ready live Apply
 region|holder_live|concrete_admission|after|pub(super) fn prepare_ready_live_decision_apply_reconciliation(|before|/// Project the exact claimed lifecycle Decision Apply
 region|successor_attestation|registry|after|pub(in crate::sumeragi) struct AttestedLifecycleDecisionApplySuccessorOutputsV1 {|before|fn terminal_direct_output_matches_record(
+region|successor_attestation|registry|at|pub(super) fn attest_lifecycle_decision_apply_successor_outputs<'a>(|before|fn owner_held_output_ordinals(
 region|successor_holder|concrete_admission|at|pub(in crate::sumeragi) fn attest_lifecycle_decision_apply_successor_outputs|before|/// Confirm the already-durable terminal frame
 region|periodic_batch|runtime|at|pub(in crate::sumeragi) fn exactly_follows_two_effect_batch(|before|fn validate_exact(&self) -> bool {
 region|executor_transition|effects|after|pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyExecutorDispatchV1|before|/// Executor-authenticated global application-mode debt
@@ -2846,6 +2850,9 @@ required|dispatch_key_match|self.lineage == lineage|Apply dispatch key stopped b
 required|registry|pub(super) const fn demand(&self)|Apply attestation registry surface omitted its typed demand accessor
 required|registry|pub(super) const fn dispatch_key(&self)|Apply attestation registry surface omitted its exact key accessor
 required|registry|impl Drop for ReadyLifecycleDecisionApplyAttestationSealV1|Apply attestation registry surface lost its seal
+required|live_authority|validate_predecessor_ordinal: u128|live Apply cleanup authority stopped retaining its exact Validate predecessor ordinal
+required|live_authority_accessors|pub(in crate::sumeragi) const fn validate_predecessor_ordinal(&self) -> u128|live Apply cleanup authority stopped exposing its immutable predecessor ordinal
+required|live_projection|validate_predecessor_ordinal: self.parent_address.ordinal|live Apply cleanup projection stopped copying the registry-authenticated Validate parent ordinal
 forbidden|registry|ReadyRecoveredDecisionApplyAttestation|retired recovered-only Apply attestation alias remains live
 forbidden|registry|RecoveredDecisionApplyDispatchKeyV1|retired recovered-only Apply dispatch-key alias remains live
 forbidden|registry|RecoveredDecisionApplyDispatchIdentityV1|retired recovered-only Apply dispatch-identity alias remains live
@@ -2928,7 +2935,7 @@ required|full_dispatch|reservation.preflight(&prepared)|Apply queue reservation 
 required|full_dispatch|live_apply_successor_outputs.remove(&ordinal)|Apply selection stopped consuming the exact local successor proof
 required|full_dispatch|.prepare_lifecycle_decision_apply_executor_dispatch(|Apply selection stopped binding executor proof installation to worker publication
 required|full_dispatch|reservation.commit(prepared, executor_dispatch)|Apply dispatch lost its atomic executor and worker queue publication
-order|full_dispatch|10|prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)|executor.exactly_owns_live_lifecycle_decision_apply(&authority)|attest_lifecycle_decision_apply_successor_outputs(|let fence = executor.lifecycle_reducer_fence_observation()|attest_ready_lifecycle_decision_apply(&self.coordinator, *ordinal)|services.capture_lifecycle_completion_capacity_census(probes)|.select_apply(ordinal)|live_apply_successor_outputs.remove(&ordinal)|.prepare_lifecycle_decision_apply_executor_dispatch(|reservation.commit(prepared, executor_dispatch)|live reconciliation, successor authentication, complete Ready authentication, frozen capacity, selection, and atomic queue publication must remain ordered
+order|full_dispatch|10|prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)|executor.exactly_owns_live_lifecycle_decision_apply(&authority)|attest_lifecycle_decision_apply_successor_outputs(|let fence = executor.lifecycle_reducer_fence_observation()|attest_ready_lifecycle_decision_apply(&self.coordinator, *ordinal)|services.capture_lifecycle_completion_capacity_census(probes)|.select_apply(ordinal)|live_apply_successor_outputs.remove(&ordinal)|.prepare_lifecycle_decision_apply_executor_dispatch(|reservation.commit(prepared, executor_dispatch)|live reconciliation, successor authentication, complete Ready authentication, frozen capacity, proof transfer, preparation, and atomic queue publication must remain ordered
 forbidden|full_dispatch|AuthenticatedRecoveredCompletionReadyV1|retired recovered-only completion census alias remains live
 forbidden|full_dispatch|RecoveredCompletionCapacityProbeV1|retired recovered-only capacity probe alias remains live
 forbidden|full_dispatch|capture_recovered_completion_capacity_census|retired recovered-only capacity capture alias remains live
@@ -2941,6 +2948,8 @@ region|prepare|registry_recovery_impl|after|pub(super) fn prepare_lifecycle_deci
 region|publication|registry_recovery_impl|after|pub(super) fn publish_lifecycle_decision_apply_terminal_transition|before|/// Prepare execution of one exact Ready durable Validate completion.
 region|adapter_preview|adapter|after|pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(|before|/// Decide whether an exact internal callback still needs a serialized
 region|runtime|runtime|after|pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(|before|fn timeout_vote_recovery_candidate_from_fair(
+region|live_predecessor_owner|effects|after|fn exactly_precedes_live_apply(|before|impl LiveLifecycleDecisionApplyOwnerV1
+region|validate_retry_authority|effects|after|fn exactly_owns_validate_retry_lifecycle_ordinal(|before|/// Release only the retry authority
 region|live_reconciliation|effects|after|pub(in crate::sumeragi) fn reconcile_live_lifecycle_decision_apply|before|/// Recheck that one Ready live Apply
 region|executor_prepare|effects|after|pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion|before|/// Install post-Ledger lifecycle Apply finality with no fallible tail.
 region|executor_commit|effects|after|pub(in crate::sumeragi) fn commit_lifecycle_decision_apply_finality|before|/// Whether production may consume and register another local proposal.
@@ -3017,10 +3026,24 @@ required|pending_dispatch|retained_effect_batch: &mut self.retained_effect_batch
 forbidden|pending_dispatch|self.lifecycle_decision_apply_successor_outputs = successor_outputs|successor proof became visible before worker queue publication
 required|runtime_apply_dispatch_gate|self.ingress.len() == 0|runtime Apply dispatch gate no longer requires an empty serialized ingress cut
 required|runtime|self.ingress.len() != 0|runtime completion no longer requires a universally drained ingress cut
+required|live_predecessor_owner|self.dispatch_key.lifecycle_ordinal() == validate_predecessor_ordinal|preliminary Validate owner stopped matching the registry-authenticated predecessor ordinal
+required|live_predecessor_owner|validate_predecessor_ordinal < authority.dispatch_key().lifecycle_ordinal()|preliminary Validate owner stopped preceding its exact Apply child
+required|validate_retry_authority|(Some(seal), None) => seal.lifecycle_ordinal() == Some(lifecycle_ordinal)|live Apply retry preflight stopped matching the exact durable Validate seal ordinal
+required|validate_retry_authority|(None, Some(marker)) => marker.lifecycle_ordinal == Some(lifecycle_ordinal)|live Apply retry preflight stopped matching the exact published Validate marker ordinal
+required|validate_retry_authority|(Some(_), Some(_))|live Apply retry preflight stopped rejecting duplicate retry authorities
+required|validate_retry_authority|(None, None) => false|live Apply retry preflight stopped distinguishing an absent retry authority
+required|live_reconciliation|let validate_predecessor_ordinal = authority.validate_predecessor_ordinal()|live Apply reconciliation stopped retaining the authenticated Validate predecessor ordinal
 required|live_reconciliation|owner.exactly_precedes_live_apply(&authority)|live Apply reconciliation stopped authenticating its preliminary Validate predecessor
-required|live_reconciliation|owner.dispatch_key.lifecycle_ordinal()|live Apply reconciliation stopped retaining the authenticated Validate predecessor ordinal
-required|live_reconciliation|.release_live_lifecycle_validate_successor(predecessor_ordinal)|live Apply reconciliation released retry authority with an ordinal other than the authenticated Validate predecessor
+required|live_reconciliation|validate_predecessor_ordinal >= dispatch_key.lifecycle_ordinal()|live Apply reconciliation stopped rejecting a predecessor outside the exact parent-before-child order
+required|live_reconciliation|.exactly_owns_validate_retry_lifecycle_ordinal(|live Apply reconciliation stopped preflighting the exact Validate retry authority
+required|live_reconciliation|live_apply_owner_already_exact|repeat live Apply reconciliation stopped authenticating its already-installed full owner
+required|live_reconciliation|validate_retry_authority_is_absent|repeat live Apply reconciliation stopped distinguishing absent retry authority from a mismatch
+required|live_reconciliation|self.release_live_lifecycle_validate_successor(validate_predecessor_ordinal)|queued live Apply reconciliation stopped releasing its exact preliminary Validate predecessor
+required|live_reconciliation|.release_validate_retry_lifecycle_ordinal(body_key, validate_predecessor_ordinal)|synchronous live Apply reconciliation stopped releasing its exact registry-authenticated Validate predecessor
+required|live_reconciliation|Ok(false) if live_apply_owner_already_exact => {}|repeat live Apply reconciliation stopped preserving exact post-release idempotence
+order|live_reconciliation|4|.exactly_owns_validate_retry_lifecycle_ordinal(|self.reconcile_decision_work(decision, true, services)|.release_validate_retry_lifecycle_ordinal(|self.live_lifecycle_decision_apply = Some(|exact retry preflight, Decision cleanup, synchronous predecessor release, and full Apply owner installation must remain ordered
 forbidden|live_reconciliation|release_live_lifecycle_validate_successor(dispatch_key.lifecycle_ordinal())|live Apply reconciliation confused the Apply child ordinal with its Validate predecessor
+forbidden|live_reconciliation|release_validate_retry_lifecycle_ordinal(body_key, dispatch_key.lifecycle_ordinal())|synchronous live Apply reconciliation confused the Apply child ordinal with its Validate predecessor
 required|executor_prepare|LifecycleDecisionApplyLineageV1::Live|executor preparation omitted the exact live owner branch
 required|executor_prepare|LifecycleDecisionApplyLineageV1::Recovered|executor preparation omitted the recovered no-live-owner branch
 required|executor_prepare|let lineage_owner_is_exact = match authority.lineage()|executor preparation stopped classifying the authority against its concrete lineage owner
@@ -3597,7 +3620,7 @@ required|selector|.filter(\pnext\p *next != u64::MAX)|selector lost maximum-gene
 required|body_store|Arc::ptr_eq(&self.0, &other.0)|body-store identity lost pointer equality
 forbidden|worker|fn lifecycle_capacity_queue_depth|worker must not expose raw lifecycle capacity depth
 order|ingress_plan|6|preflight_selected_target_work_absent()|prepare_certified_fetch_body_persistence(prepared)|preflight_certified_fetch_body_persistence(&task)|coordinator.plan_turn(inputs)|settle_turn(lease, super::TurnOutcome::Blocked(post_submit_wait))|commit_certified_fetch_body_persistence(task)|ingress transaction omitted {required}
-order|ingress_plan|11|ProductionIngressSchedulerInputsError::CoordinatorFaulted|ProductionIngressSchedulerInputsError::UnsettledLease|ProductionIngressSchedulerInputsError::ForeignModeObservation|ProductionIngressSchedulerInputsError::StaleModeObservation|services.matches_lifecycle_body_store(body_store_identity)|services.matches_lifecycle_executor_output_guard(executor)|ProductionIngressSchedulerInputsError::CompetingReadyWork|.prepare_selected_certified_fetch_admission(executor, &self.verified)|self.settle_certified_fetch_admission(admission)|.attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry)|.capture_lifecycle_capacity_rank(selector)|certified Fetch admission crossed a no-mutation gate or lost exact pre-Phase-A order
+order|ingress_plan|11|ProductionIngressSchedulerInputsError::CoordinatorFaulted|ProductionIngressSchedulerInputsError::UnsettledLease|ProductionIngressSchedulerInputsError::ForeignModeObservation|ProductionIngressSchedulerInputsError::StaleModeObservation|services.matches_lifecycle_body_store(body_store_identity)|services.matches_lifecycle_executor_output_guard(executor)|ProductionIngressSchedulerInputsError::CompetingReadyWork|.prepare_selected_certified_fetch_admission(executor, &self.verified)|.capture_lifecycle_capacity_rank(selector)|self.settle_certified_fetch_admission(admission)|.attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry)|certified Fetch admission crossed a no-mutation gate or lost exact pre-Phase-A order
 forbidden|registry|SchedulerReadyInputs::from_authenticated(|registry must not mint ready scheduler inputs
 forbidden|concrete|SchedulerReadyInputs::from_authenticated(|concrete admission must not mint ready scheduler inputs
 forbidden|selector|SchedulerReadyInputs::from_authenticated(|selector must not mint ready scheduler inputs

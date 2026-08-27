@@ -291,6 +291,9 @@ relay_hub_addresses = ["hub1.example.com:1337", "hub2.example.com:1337"]
 - Address preference (default): hostname first, then IPv6, then IPv4.
 - Stagger interval: configurable via `[network]` as `happy_eyeballs_stagger_ms` (default 100ms). Increase if you have very large peer lists and want to further reduce burst dials; decrease for faster failover on slow networks.
 - Per-address backoff: failed attempts back off independently per address with exponential jitter (up to 5s), avoiding stampedes.
+- A failed configured-peer dial retains exactly one pending retry at its backoff deadline. Reconnection therefore does not depend on a later topology update, gossip tick, or outbound application frame.
+- Replacing the peer-address snapshot revokes pending retries and backoff state for superseded endpoints; every due retry revalidates its exact `(PeerId, address)` before dialing.
+- A later termination from a superseded or differently advertised endpoint cannot restore that endpoint's authority. If the same configured identity still has a current endpoint, the actor schedules that replacement immediately through the normal topology, ACL, validator-roster, hub, and capacity gates.
 
 ### SCION Capability Dialing
 
@@ -541,8 +544,8 @@ ML-KEM processing:
    binding. The Ed25519 transport key signs its canonical encoding under
    `iroha:p2p:soranet-transport-proof:v5|`. The responder combines this fresh
    proof with the cached BLS certificate and sends the canonical Norito frame
-   behind a big-endian `u16` length. Empty, non-canonical, or larger-than-4,493
-   byte frames are rejected; 4,493 bytes is the exact maximum V5 frame with a
+   behind a big-endian `u16` length. Empty, non-canonical, or larger-than-4,525
+   byte frames are rejected; 4,525 bytes is the exact maximum V5 frame with a
    present binding.
 4. The initiator performs bounded canonical decoding and verifies the exact
    V5 certificate version, `NetworkId`, expected `PeerId`, challenge, transport

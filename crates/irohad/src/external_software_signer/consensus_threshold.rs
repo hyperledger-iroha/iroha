@@ -40,7 +40,7 @@ use iroha_data_model::{
 };
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
 use sha2::{Digest as _, Sha256};
-use std::{fmt, io::Read as _, path::Path, sync::Arc};
+use std::{fmt, path::Path, sync::Arc};
 use zeroize::{Zeroize as _, Zeroizing};
 
 /// Fixed supervisor credential containing global-beacon software shares.

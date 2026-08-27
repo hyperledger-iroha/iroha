@@ -38649,8 +38649,7 @@ fn parliament_timed_ovn_resource_index_tracks_only_the_active_retry() {
 
     let world = World::new();
     let mut block = world.block();
-    let mut transaction =
-        block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+    let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
     transaction
         .put_parliament_attempt(attempt)
         .expect("persist validated retry fixture");

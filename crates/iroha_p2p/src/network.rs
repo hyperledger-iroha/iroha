@@ -10075,10 +10075,9 @@ mod accept_stream_tests {
         F: Fn() -> u64,
     {
         let key_pair = test_node_key_pair();
-        let Some((mut network, std_listener)) = super::tests::network_fixture_with_listener::<T>(
-            key_pair.clone(),
-            test_transport_key_pair(),
-        ) else {
+        let Some((mut network, std_listener)) =
+            super::tests::network_fixture_with_listener::<T>(key_pair.clone())
+        else {
             return;
         };
         let listen_addr_std = std_listener.local_addr().unwrap();
@@ -12514,6 +12513,23 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 self.current_peers_addresses.push((hub_id, hub_addr));
             }
         }
+        // Address publication is a replacing authority snapshot. Revoke stale
+        // pending and backoff owners before scheduling the new endpoints so a
+        // retry retained across the update cannot dial a superseded address.
+        let configured_targets: HashSet<_> = self
+            .current_peers_addresses
+            .iter()
+            .map(|(peer_id, address)| (peer_id.clone(), address.to_string()))
+            .collect();
+        self.pending_connects.retain(|(_, peer)| {
+            configured_targets.contains(&(peer.id().clone(), peer.address().to_string()))
+        });
+        self.retry_backoff.retain(|peer_id, by_address| {
+            by_address.retain(|address, _| {
+                configured_targets.contains(&(peer_id.clone(), address.clone()))
+            });
+            !by_address.is_empty()
+        });
         // Recompute the set of peers allowed to relay frames (origin mismatch).
         self.relay_trusted_peers.clear();
         if !self.relay_hub_addresses.is_empty() {
@@ -13376,6 +13392,20 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             .entry(id.clone())
             .or_default()
             .insert(key, (when, next_base));
+        // The backoff entry is only an admission deadline; it does not wake the
+        // connection actor by itself.  Retain one exact pending dial owner so a
+        // failed configured-peer attempt resumes at that deadline even when no
+        // later topology update or outbound frame happens to arrive.
+        if let Some((pending_when, _)) = self
+            .pending_connects
+            .iter_mut()
+            .find(|(_, pending)| pending.id() == id && pending.address() == addr)
+        {
+            *pending_when = core::cmp::max(*pending_when, when);
+        } else {
+            self.pending_connects
+                .push((when, Peer::new(addr.clone(), id.clone())));
+        }
         BACKOFF_SCHEDULED.fetch_add(1, Ordering::Relaxed);
         iroha_logger::debug!(peer=%id, addr=%addr, delay=?next_base, until=?when, "Scheduled reconnect backoff");
     }
@@ -13392,6 +13422,35 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         self.current_peers_addresses
             .iter()
             .any(|(peer_id, address)| peer_id == peer.id() && address == peer.address())
+    }
+    fn has_configured_dial_identity(&self, id: &PeerId) -> bool {
+        self.current_peers_addresses
+            .iter()
+            .any(|(peer_id, _)| peer_id == id)
+    }
+    fn schedule_retry_for_terminated_peer(&mut self, failed: &Peer) {
+        let id = failed.id();
+        if !self.has_configured_dial_identity(id)
+            || !self.pending_reply_source_allows(id)
+            || (!self.current_topology.contains(id) && !self.relay_trusted_peers.contains(id))
+            || self.peers.contains_key(id)
+            || self
+                .connecting_peers
+                .values()
+                .any(|candidate| candidate.id() == id && candidate.address() == failed.address())
+        {
+            return;
+        }
+        if self.is_configured_dial_target(failed) {
+            self.schedule_backoff_addr(id, failed.address());
+        } else {
+            // The failed connection belonged to a configured identity but its
+            // endpoint has since been replaced (or it advertised a different
+            // public address). Reconcile the current snapshot immediately;
+            // the replacement endpoint has not failed and must not inherit the
+            // obsolete endpoint's exponential backoff.
+            self.update_topology();
+        }
     }
     fn is_permissioned_consensus(&self) -> bool {
         self.consensus_caps
@@ -13508,6 +13567,13 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 continue;
             }
             if !self.current_topology.contains(&id) && !self.relay_trusted_peers.contains(&id) {
+                continue;
+            }
+            if !self.is_configured_dial_target(&peer) {
+                // Pending attempts are capabilities minted by an exact address
+                // snapshot. Revalidate at execution time as a final fence
+                // against a concurrent or directly staged replacement.
+                self.reset_backoff_addr(&id, &addr);
                 continue;
             }
             if self.peers.contains_key(&id) {
@@ -14138,14 +14204,15 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         // independently of how far the connection progressed.
         self.incoming_pending.remove(&conn_id);
         self.incoming_active.remove(&conn_id);
+        // Remove the terminating attempt before retry reconciliation so the
+        // shared replacement check only observes other in-flight owners.
+        let pending_connect_peer = self.connecting_peers.remove(&conn_id);
         // Writer tickets were cancelled above. Delivery capability retirement
         // is deferred to the receiver-completion fence, so a stale predecessor
         // notice cannot strip reply authority from queued local work.
         // If termination happened before handshake, the `peer` is None.
         // In that case use the pending `connecting_peers` map to find which peer failed.
         if let Some(peer) = peer {
-            let should_retry = (was_outbound || self.is_configured_dial_target(&peer))
-                && self.pending_reply_source_allows(peer.id());
             if let Some(ref_peer) = self.peers.get(peer.id()) {
                 if ref_peer.conn_id == conn_id {
                     iroha_logger::debug!(conn_id, peer=%peer, "Peer terminated");
@@ -14161,24 +14228,17 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                     );
                 }
             }
-            // Only locally initiated connection instances are eligible for redial.
-            // Arbitrary inbound identities must not grow retry state.
-            let replacement_is_live = self.peers.contains_key(peer.id());
-            let replacement_is_connecting = self.connecting_peers.values().any(|connecting| {
-                connecting.id() == peer.id() && connecting.address() == peer.address()
-            });
-            if should_retry && !replacement_is_live && !replacement_is_connecting {
-                self.schedule_backoff_addr(peer.id(), peer.address());
-            }
+            // A current configured identity remains eligible even when the
+            // terminated tenure was inbound. Arbitrary inbound identities are
+            // excluded by the current address-authority snapshot.
+            self.schedule_retry_for_terminated_peer(&peer);
             self.clear_low_buckets(peer.id());
-            // Also drop any stale in-flight connecting entry for the same conn_id
-            self.connecting_peers.remove(&conn_id);
-        } else {
-            if let Some(pending_peer) = self.connecting_peers.remove(&conn_id) {
-                // Pre-handshake failure to connect — back off this address.
-                if was_outbound && self.pending_reply_source_allows(pending_peer.id()) {
-                    self.schedule_backoff_addr(pending_peer.id(), pending_peer.address());
-                }
+        } else if let Some(pending_peer) = pending_connect_peer {
+            // Pre-handshake failures are retryable only for locally initiated
+            // attempts. The shared helper then revalidates current identity,
+            // topology, ACL, and exact address authority.
+            if was_outbound {
+                self.schedule_retry_for_terminated_peer(&pending_peer);
             }
         }
     }
@@ -17842,6 +17902,7 @@ mod tests {
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
             control_update_channel();
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
+        let network_id = test_network_id("test-chain");
         let self_id = PeerId::from(key_pair.public_key().clone());
         let key_pair = Arc::new(key_pair);
         Some((
@@ -18194,11 +18255,174 @@ mod tests {
             "the released pending slot must be available to a later connection"
         );
     }
+    #[test]
+    fn failed_pre_handshake_dial_retains_exact_backoff_retry_owner() {
+        let_test_network!(network);
+        let peer = test_peer(socket_addr!(127.0.0.1:12092));
+        let conn_id = 92;
+        network.current_topology.insert(peer.id().clone());
+        network
+            .current_peers_addresses
+            .push((peer.id().clone(), peer.address().clone()));
+        network.connecting_peers.insert(conn_id, peer.clone());
+        network.outbound_connections.insert(conn_id);
+
+        network.peer_terminated(Terminated {
+            peer: None,
+            conn_id,
+        });
+
+        assert!(!network.connecting_peers.contains_key(&conn_id));
+        assert!(!network.outbound_connections.contains(&conn_id));
+        let key = peer.address().to_string();
+        let (retry_at, _) = network
+            .retry_backoff
+            .get(peer.id())
+            .and_then(|by_address| by_address.get(&key))
+            .copied()
+            .expect("failed outbound dial installs its backoff deadline");
+        assert_eq!(network.pending_connects.len(), 1);
+        let (pending_at, pending_peer) = &network.pending_connects[0];
+        assert_eq!(*pending_at, retry_at);
+        assert_eq!(pending_peer.id(), peer.id());
+        assert_eq!(pending_peer.address(), peer.address());
+    }
+    #[test]
+    fn address_snapshot_revokes_retained_retry_before_scheduling_replacement() {
+        let_test_network!(network);
+        let old_peer = test_peer(socket_addr!(127.0.0.1:12094));
+        let replacement_addr = socket_addr!(127.0.0.1:12095);
+        let conn_id = 94;
+        network.current_topology.insert(old_peer.id().clone());
+        network
+            .current_peers_addresses
+            .push((old_peer.id().clone(), old_peer.address().clone()));
+        network.connecting_peers.insert(conn_id, old_peer.clone());
+        network.outbound_connections.insert(conn_id);
+        network.peer_terminated(Terminated {
+            peer: None,
+            conn_id,
+        });
+        assert!(network.is_scheduled(old_peer.id(), old_peer.address()));
+        assert!(network.retry_backoff.contains_key(old_peer.id()));
+
+        network.set_current_peers_addresses(UpdatePeers(vec![(
+            old_peer.id().clone(),
+            replacement_addr.clone(),
+        )]));
+
+        assert!(
+            !network.retry_backoff.contains_key(old_peer.id()),
+            "a replacing address snapshot must revoke the old backoff owner"
+        );
+        assert_eq!(network.pending_connects.len(), 1);
+        assert_eq!(network.pending_connects[0].1.id(), old_peer.id());
+        assert_eq!(
+            network.pending_connects[0].1.address(),
+            &replacement_addr,
+            "only the replacement address may retain dial authority"
+        );
+    }
+    #[test]
+    fn replaced_address_cannot_be_reintroduced_by_stale_pre_handshake_termination() {
+        let_test_network!(network);
+        let old_peer = test_peer(socket_addr!(127.0.0.1:12096));
+        let replacement_addr = socket_addr!(127.0.0.1:12097);
+        let conn_id = 96;
+        network.current_topology.insert(old_peer.id().clone());
+        network
+            .current_peers_addresses
+            .push((old_peer.id().clone(), old_peer.address().clone()));
+        network.connecting_peers.insert(conn_id, old_peer.clone());
+        network.outbound_connections.insert(conn_id);
+
+        network.set_current_peers_addresses(UpdatePeers(vec![(
+            old_peer.id().clone(),
+            replacement_addr.clone(),
+        )]));
+        assert!(network.is_scheduled(old_peer.id(), &replacement_addr));
+
+        network.peer_terminated(Terminated {
+            peer: None,
+            conn_id,
+        });
+
+        assert!(
+            !network.is_scheduled(old_peer.id(), old_peer.address()),
+            "a stale termination cannot restore revoked address authority"
+        );
+        assert!(
+            network
+                .retry_backoff
+                .get(old_peer.id())
+                .is_none_or(|by_address| !by_address.contains_key(&old_peer.address().to_string())),
+            "a stale termination cannot restore revoked backoff state"
+        );
+        assert_eq!(network.pending_connects.len(), 1);
+        assert_eq!(network.pending_connects[0].1.id(), old_peer.id());
+        assert_eq!(network.pending_connects[0].1.address(), &replacement_addr);
+    }
+    #[test]
+    fn live_session_address_replacement_retries_current_endpoint() {
+        for locally_initiated in [false, true] {
+            let_test_network!(network);
+            let old_peer = test_peer(socket_addr!(127.0.0.1:12098));
+            let replacement_addr = socket_addr!(127.0.0.1:12099);
+            let conn_id = 98;
+            network.current_topology.insert(old_peer.id().clone());
+            network
+                .current_peers_addresses
+                .push((old_peer.id().clone(), old_peer.address().clone()));
+            let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
+            insert_dummy_ref_peer(
+                &mut network,
+                old_peer.id().clone(),
+                old_peer.address().clone(),
+                conn_id,
+                handle,
+            );
+            if locally_initiated {
+                network.outbound_connections.insert(conn_id);
+            }
+
+            network.set_current_peers_addresses(UpdatePeers(vec![(
+                old_peer.id().clone(),
+                replacement_addr.clone(),
+            )]));
+            assert!(
+                network.pending_connects.is_empty(),
+                "the replacement waits while the authenticated tenure is live"
+            );
+
+            network.peer_terminated(Terminated {
+                peer: Some(old_peer.clone()),
+                conn_id,
+            });
+
+            assert!(
+                !network.is_scheduled(old_peer.id(), old_peer.address()),
+                "the terminated address stays revoked"
+            );
+            assert!(
+                network
+                    .retry_backoff
+                    .get(old_peer.id())
+                    .is_none_or(|by_address| {
+                        !by_address.contains_key(&old_peer.address().to_string())
+                    }),
+                "the terminated address cannot regain backoff authority"
+            );
+            assert_eq!(network.pending_connects.len(), 1);
+            assert_eq!(network.pending_connects[0].1.id(), old_peer.id());
+            assert_eq!(network.pending_connects[0].1.address(), &replacement_addr);
+        }
+    }
     #[tokio::test(flavor = "current_thread")]
     async fn duplicate_configured_termination_does_not_advance_backoff_or_metrics() {
         let_test_network!(network);
         let peer = test_peer(socket_addr!(127.0.0.1:12093));
         let conn_id = 93;
+        network.current_topology.insert(peer.id().clone());
         network
             .current_peers_addresses
             .push((peer.id().clone(), peer.address().clone()));
@@ -18230,6 +18454,14 @@ mod tests {
             .and_then(|by_address| by_address.get(&key))
             .copied()
             .expect("configured dial target receives one reconnect schedule");
+        assert_eq!(
+            network.pending_connects.len(),
+            1,
+            "the backoff deadline must retain one runnable reconnect owner"
+        );
+        assert_eq!(network.pending_connects[0].0, first_schedule.0);
+        assert_eq!(network.pending_connects[0].1.id(), peer.id());
+        assert_eq!(network.pending_connects[0].1.address(), peer.address());
         network.peer_terminated(Terminated {
             peer: Some(peer.clone()),
             conn_id,
@@ -18244,6 +18476,12 @@ mod tests {
             after_duplicate, first_schedule,
             "a duplicate configured-target notice must not invoke the scheduler again; that same scheduler call owns both backoff advancement and metrics"
         );
+        assert_eq!(
+            network.pending_connects.len(),
+            1,
+            "a duplicate notice must not mint another reconnect owner"
+        );
+        assert_eq!(network.pending_connects[0].0, first_schedule.0);
         assert!(
             network.reply_route_tenures.contains_key(&conn_id),
             "duplicate rejection is exercised while receiver ownership keeps the terminated tenure present"
@@ -19827,6 +20065,9 @@ mod tests {
         let peer_id = random_peer_id();
         let addr = socket_addr!(127.0.0.1:45683);
         network.current_topology.insert(peer_id.clone());
+        network
+            .current_peers_addresses
+            .push((peer_id.clone(), addr.clone()));
         let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
         insert_dummy_ref_peer(&mut network, peer_id.clone(), addr.clone(), 93, handle);
         network
@@ -19845,6 +20086,9 @@ mod tests {
         let due = Peer::new(socket_addr!(127.0.0.1:45680), random_peer_id());
         network.current_topology.insert(due.id().clone());
         network
+            .current_peers_addresses
+            .push((due.id().clone(), due.address().clone()));
+        network
             .pending_connects
             .push((tokio::time::Instant::now(), due.clone()));
         network.process_pending_connects();
@@ -19858,6 +20102,41 @@ mod tests {
                 pending.id() == due.id() && pending.address() == due.address()
             }),
             "the capped dial must remain fairly scheduled for a later free slot"
+        );
+    }
+    #[test]
+    fn process_pending_connects_rejects_a_revoked_exact_address() {
+        let_test_network!(network);
+        let peer_id = random_peer_id();
+        let old_addr = socket_addr!(127.0.0.1:45684);
+        let replacement_addr = socket_addr!(127.0.0.1:45685);
+        network.current_topology.insert(peer_id.clone());
+        network
+            .current_peers_addresses
+            .push((peer_id.clone(), replacement_addr));
+        network.pending_connects.push((
+            tokio::time::Instant::now(),
+            Peer::new(old_addr.clone(), peer_id),
+        ));
+        network.retry_backoff.insert(
+            network.pending_connects[0].1.id().clone(),
+            HashMap::from([(
+                old_addr.to_string(),
+                (tokio::time::Instant::now(), Duration::from_millis(250)),
+            )]),
+        );
+
+        network.process_pending_connects();
+
+        assert!(network.pending_connects.is_empty());
+        assert!(
+            network.connecting_peers.is_empty(),
+            "a due retry cannot dial an address absent from the current authority snapshot"
+        );
+        assert!(network.outbound_connections.is_empty());
+        assert!(
+            network.retry_backoff.is_empty(),
+            "execution-time revocation must also clear stale per-address backoff"
         );
     }
     #[test]

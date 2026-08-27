@@ -57,11 +57,14 @@ impl ConcreteLifecycleWorkRegistry {
                         LifecycleDecisionApplyLineageV1::Recovered,
                     ) =>
             {
+                let validate_predecessor_ordinal =
+                    apply.validate_predecessor_ordinal_in_coordinator(coordinator)?;
                 (
                     LifecycleDecisionApplyLineageV1::Recovered,
                     apply.carrier.project_recovered_apply_completion(
                         LifecycleDecisionApplyCompletionProjectionPermitV1::new(),
                         address,
+                        validate_predecessor_ordinal,
                         completion,
                     )?,
                 )

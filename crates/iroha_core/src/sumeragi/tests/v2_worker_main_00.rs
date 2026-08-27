@@ -232,8 +232,10 @@ pub(in crate::sumeragi) fn certified_serve_inbound(
 struct SaturatedCompletionRuntime {
     queued: usize,
     capacity: usize,
+    admits_network_ingress: bool,
     next_lifecycle_ordinal: u128,
     effect_owners: BTreeMap<Hash, crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment>,
+    exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: Option<usize>,
 }
@@ -242,11 +244,18 @@ impl SaturatedCompletionRuntime {
         Self {
             queued,
             capacity,
+            admits_network_ingress: false,
             next_lifecycle_ordinal: 1,
             effect_owners: BTreeMap::new(),
+            exact_effect_ownership: None,
             external_lifecycle_owners: Vec::new(),
             external_lifecycle_owner_capacity: None,
         }
+    }
+    fn admitting_network_ingress(queued: usize, capacity: usize) -> Self {
+        let mut runtime = Self::new(queued, capacity);
+        runtime.admits_network_ingress = true;
+        runtime
     }
     fn reject_completion() -> Result<(), EnqueueError> {
         Err(EnqueueError::Full)
@@ -331,6 +340,16 @@ impl SaturatedCompletionRuntime {
     }
 }
 impl EffectRuntime for SaturatedCompletionRuntime {
+    fn can_admit_network_message_with_ingress_ownership(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        self.admits_network_ingress
+            && ingress_ownership.validate_exact()
+            && ingress_ownership.matches_message(&BlockMessage::V2(message.clone()))
+    }
+
     fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         Ok(RuntimeStep::Idle)
     }
@@ -344,6 +363,16 @@ impl EffectRuntime for SaturatedCompletionRuntime {
         &mut self,
         effects: &[AdapterEffect],
     ) -> Result<Vec<RuntimeEffectOwnership>, String> {
+        if let Some((expected, ownership)) = self.exact_effect_ownership.take() {
+            if effects == core::slice::from_ref(&expected)
+                && ownership.exactly_binds_adapter_effect(&expected)
+            {
+                return Ok(vec![ownership]);
+            }
+            return Err(
+                "saturated runtime exact effect ownership changed before transfer".to_owned(),
+            );
+        }
         let ownership = effects
             .iter()
             .map(|effect| self.effect_ownership(effect))

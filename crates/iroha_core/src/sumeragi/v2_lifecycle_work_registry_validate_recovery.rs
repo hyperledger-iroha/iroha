@@ -1382,6 +1382,7 @@ impl<'registry> ReadyDurableValidateAdapterPreviewError<'registry> {
             _failure: ReadyDurableValidateAdapterPreviewFailure::Adapter(error),
         }
     }
+
 }
 // DURABLE_VALIDATE_ASYNC_HANDOFF_DECLARATIONS_BEGIN
 /// Move-only registry authority detached from one exact durable Validate row.

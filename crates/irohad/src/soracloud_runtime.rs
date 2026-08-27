@@ -11660,7 +11660,15 @@ fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
         )
     })?;
     let effective_uid = rustix::process::geteuid().as_raw();
-    for (index, ancestor) in parent.ancestors().enumerate() {
+    // Relative paths end with an empty `Path` sentinel when walked through
+    // `ancestors()`. It does not name a filesystem entry (`.` is validated
+    // through the canonical pass below), so asking for its metadata would
+    // reject every fresh relative runtime directory with `ENOENT`.
+    for (index, ancestor) in parent
+        .ancestors()
+        .take_while(|ancestor| !ancestor.as_os_str().is_empty())
+        .enumerate()
+    {
         let metadata = fs::symlink_metadata(ancestor)?;
         let replaceable = metadata.mode() & 0o022 != 0;
         let sticky = metadata.mode() & 0o1000 != 0;
@@ -30451,6 +30459,39 @@ mod tests {
             "unexpected symlink rejection: {error}"
         );
         assert!(fs::read_dir(&redirected)?.next().is_none());
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn durable_inrou_egress_checkpoint_accepts_fresh_relative_state_dir() -> Result<()> {
+        use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
+
+        let current_dir = fs::canonicalize(".")?;
+        let temp_dir = tempfile::Builder::new()
+            .prefix("soracloud-relative-state-")
+            .tempdir_in(&current_dir)?;
+        let state_dir = temp_dir.path().join("storage/soracloud_runtime");
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700).create(&state_dir)?;
+        let checkpoint_dir = state_dir.join(SORACLOUD_INROU_EGRESS_CHECKPOINT_DIR);
+        assert!(!checkpoint_dir.exists());
+        let relative_state_dir = state_dir
+            .strip_prefix(&current_dir)
+            .wrap_err("derive relative Soracloud runtime state directory")?;
+        assert!(relative_state_dir.is_relative());
+
+        assert_eq!(
+            reconcile_inrou_egress_checkpoint_directory(
+                relative_state_dir,
+                &BTreeSet::new(),
+                8,
+            )?,
+            0
+        );
+        let checkpoint_metadata = fs::symlink_metadata(&checkpoint_dir)?;
+        assert!(checkpoint_metadata.is_dir());
+        assert_eq!(checkpoint_metadata.mode() & 0o077, 0);
+        assert!(fs::read_dir(&checkpoint_dir)?.next().is_none());
         Ok(())
     }
     #[cfg(unix)]

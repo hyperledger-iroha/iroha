@@ -1218,6 +1218,225 @@ fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() 
     );
 }
 #[test]
+fn remote_hint_free_loser_without_queue_reservation_binds_empty_winner() {
+    for retain_ordinary_fifo_copy in [true, false] {
+        let observer_disposition = if retain_ordinary_fifo_copy {
+            "exact ordinary FIFO"
+        } else {
+            "strict absence"
+        };
+        let (mut adapter, keys) =
+            autonomous_test_fixture(wire::ConsensusMode::Permissioned, false);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, false);
+        let journal_dir =
+            tempfile::tempdir().expect("remote observer reservation journal directory");
+        let journal_path = journal_dir.path().join("lane-reservations.norito");
+        let queue =
+            install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+
+        let (source_block, mut proposal) = planned_lane_candidate_block_for_route_at_view(
+            &adapter,
+            &keys,
+            0,
+            lane_id,
+            dataspace_id,
+        );
+        proposal.payload_block_hint = None;
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        let entrypoint = source_block
+            .external_entrypoints_cloned()
+            .next()
+            .expect("remote hint-free autonomous entrypoint");
+        {
+            let mut world = adapter.state.world.block();
+            world.accounts.insert(
+                entrypoint.authority().clone(),
+                AccountValue::new(AccountDetails::default()),
+            );
+            world.commit();
+        }
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+            std::borrow::Cow::Owned(entrypoint.clone()),
+        );
+        let routing_plan = queue
+            .route_plan_with_state(&accepted, adapter.state.as_ref())
+            .expect("resolve the remote observer routing plan");
+        let admission_context = queue
+            .plan_admission_context_with_state(adapter.state.as_ref(), &routing_plan)
+            .expect("capture the remote observer admission context");
+        let admission_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            adapter.state.network_id_ref(),
+            accepted.entrypoint(),
+            &routing_plan,
+            admission_context,
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("build the remote observer QueuePlan binding");
+        if retain_ordinary_fifo_copy {
+            queue
+                .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                    accepted,
+                    adapter.state.as_ref(),
+                    routing_plan.clone(),
+                    &admission_binding,
+                )
+                .expect("enqueue the exact ordinary FIFO replica");
+            install_autonomous_fixture_queue_plan_registry_value(
+                adapter.state.as_ref(),
+                &admission_binding,
+            );
+        }
+        let original_fifo = queue.fifo_snapshot_for_test();
+        if retain_ordinary_fifo_copy {
+            assert_eq!(
+                original_fifo,
+                vec![entrypoint.clone()],
+                "the observer fixture must retain the exact ordinary FIFO copy"
+            );
+        } else {
+            assert!(
+                original_fifo.is_empty(),
+                "the strict-absence observer fixture must begin without the entrypoint"
+            );
+        }
+        assert!(
+            queue.live_lane_reservations().is_empty(),
+            "a remote observer must not impersonate the producer's Queue reservation"
+        );
+
+        let mut reservation = LaneQueueReservationKeyV1 {
+            version: LaneQueueReservationKeyV1::VERSION,
+            entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: admission_binding.canonical_hash(),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id,
+            dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"remote-observer-reservation-owner"),
+            proposal_identity_hash: proposal.proposal_hash,
+        };
+        let producer = adapter
+            .expected_autonomous_lane_author(&proposal)
+            .expect("deterministic remote autonomous producer")
+            .clone();
+        bind_canonical_autonomous_reservation_identity(
+            &adapter,
+            &proposal,
+            &producer,
+            &mut reservation,
+        );
+        let producer_key = keys
+            .iter()
+            .find(|key| key.public_key() == producer.public_key())
+            .expect("remote autonomous producer key");
+        let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+            adapter.native_network_id(),
+            adapter.context.epoch,
+            proposal,
+            vec![entrypoint],
+            vec![reservation],
+            vec![routing_plan],
+            vec![None],
+            producer.clone(),
+            producer_key.private_key(),
+        )
+        .expect("signed remote hint-free autonomous payload");
+        assert_ne!(
+            adapter.local_peer, producer,
+            "the receiving validator must not impersonate the payload producer"
+        );
+        assert_eq!(
+            accept_lane_message_from(
+                &mut adapter,
+                BlockMessage::LaneExecutablePayload(payload.clone()),
+                producer,
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted,
+            "the authenticated remote hint-free payload must enter pending ownership"
+        );
+        assert_eq!(adapter.pending_autonomous_anchor_payloads.len(), 1);
+        assert!(queue.live_lane_reservations().is_empty());
+
+        let leader_index =
+            usize::try_from(adapter.context.leader(0)).expect("empty-winner leader index");
+        let winner_header = adapter
+            .merge_carrier_context_header(0)
+            .expect("exact empty-winner round header");
+        let empty_winner = BlockBuilder::new(winner_header)
+            .build_with_signature(
+                u64::try_from(leader_index).expect("leader index fits u64"),
+                keys[leader_index].private_key(),
+            )
+            .canonical_resultless_proposal();
+        let (_round, _subject) = mark_global_body_locked_for_block(&mut adapter, &empty_winner);
+        assert_eq!(
+            adapter.pending_autonomous_anchor_payloads.len(),
+            1,
+            "lock publication alone must retain the remote losing payload"
+        );
+        assert_ne!(
+            adapter.bind_locked_global_body(&empty_winner),
+            V2LaneIngressOutcome::Rejected,
+            "an empty winner must retire a non-Queue remote loser observed as {observer_disposition}"
+        );
+        assert!(
+            !adapter.output_guard.restart_required() && adapter.output_guard.acquire().is_some(),
+            "non-Queue losing retirement must not fail-stop the receiving validator"
+        );
+        assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
+        assert!(queue.live_lane_reservations().is_empty());
+        assert_eq!(
+            queue.fifo_snapshot_for_test(),
+            original_fifo,
+            "non-Queue retirement must preserve the {observer_disposition} disposition"
+        );
+        let descriptor = &payload.origin_proposal.descriptor;
+        assert_eq!(
+            adapter
+                .kura
+                .read_autonomous_lane_slot_retirement(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    adapter.native_network_id(),
+                    adapter.context.epoch,
+                )
+                .expect("read remote losing-slot retirement"),
+            Some(crate::kura::AutonomousLaneSlotRetirementV1::from_payload(
+                &payload
+            )),
+            "the receiver must durably retire the exact losing slot"
+        );
+        let terminal_outcome_path = adapter
+            .kura
+            .autonomous_lifecycle_terminal_outcome_path_for_test(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+            )
+            .expect("derive the remote losing terminal-outcome path");
+        assert!(
+            terminal_outcome_path.is_file(),
+            "remote losing retirement must publish exact terminal lifecycle evidence"
+        );
+        assert!(
+            adapter
+                .kura
+                .pending_autonomous_lifecycle_terminal_outcome_inventory()
+                .expect("inspect remote losing terminal outcomes")
+                .is_empty(),
+            "remote losing retirement must complete rather than strand Pending recovery"
+        );
+    }
+}
+#[test]
 fn autonomous_non_author_does_not_take_queue_ownership() {
     let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, false);
     let lane_id = LaneId::new(1);
@@ -1612,6 +1831,7 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
     };
     let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
     proposal.payload_block_hint = None;
+    proposal.proposal_hash = proposal.computed_proposal_hash();
     let entrypoint = source_block
         .external_entrypoints_cloned()
         .next()
@@ -1712,6 +1932,12 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
     let committed = ValidBlock::committed_from_replay_signed_block(carrier);
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
     assert!(
+        !adapter
+            .durable_completion_matches_finality(&finality)
+            .expect("inspect the direct-Decision lane durability boundary"),
+        "the finalized autonomous anchor must keep rollover open before canonical recovery"
+    );
+    assert!(
         adapter
             .kura
             .read_lane_block_execution_input(
@@ -1736,6 +1962,12 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
             )
             .is_some(),
         "receipt-bound recovery must persist execution input before READY"
+    );
+    assert!(
+        !adapter
+            .durable_completion_matches_finality(&finality)
+            .expect("inspect receipt-bound recovery before the READY quorum"),
+        "local canonical recovery cannot close ingress before the READY quorum returns"
     );
     let emitted_local_ready = adapter.drain_effects(usize::MAX).into_iter().any(|effect| {
         matches!(
@@ -1762,17 +1994,44 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
         &prepare_votes,
     )
     .expect("exact three-of-four READY votes form PrepareQC");
-    assert_eq!(
-        adapter.insert_lane_qc(prepare_qc, locked_round.view),
-        V2LaneIngressOutcome::Inserted
+    let commit_qc = lane_qc_for_phase(&proposal, quorum_keys, CertPhase::Commit);
+    let quorum_sender = PeerId::new(
+        quorum_keys
+            .first()
+            .expect("the fixed quorum is non-empty")
+            .public_key()
+            .clone(),
     );
-    assert_eq!(
-        adapter.insert_lane_qc(
-            lane_qc_for_phase(&proposal, quorum_keys, CertPhase::Commit),
+    let admit_quorum_message = |message| {
+        fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
+            message,
+            quorum_sender.clone(),
+        ))
+    };
+    let prepare_outcome = if local_signer_quorum {
+        adapter.insert_lane_qc(prepare_qc, locked_round.view)
+    } else {
+        adapter.accept_lane_message_with_ingress_ownership(
+            admit_quorum_message(BlockMessage::LaneBlockQc(prepare_qc)),
             locked_round.view,
-        ),
-        V2LaneIngressOutcome::Inserted
+        )
+    };
+    assert_eq!(prepare_outcome, V2LaneIngressOutcome::Inserted);
+    assert!(
+        !adapter
+            .durable_completion_matches_finality(&finality)
+            .expect("inspect the autonomous boundary after READY quorum"),
+        "READY durability alone cannot release rollover before CommitQC"
     );
+    let commit_outcome = if local_signer_quorum {
+        adapter.insert_lane_qc(commit_qc, locked_round.view)
+    } else {
+        adapter.accept_lane_message_with_ingress_ownership(
+            admit_quorum_message(BlockMessage::LaneBlockQc(commit_qc)),
+            locked_round.view,
+        )
+    };
+    assert_eq!(commit_outcome, V2LaneIngressOutcome::Inserted);
     assert_eq!(
         adapter
             .persist_anchored_sessions()
@@ -1797,6 +2056,12 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
         )
         .expect("READY and Commit votes produce a durable certificate");
     assert!(durable.prepare_qc.payload_availability_qc.is_some());
+    assert!(
+        adapter
+            .durable_completion_matches_finality(&finality)
+            .expect("validate completed autonomous durability"),
+        "the authenticated READY/Commit quorum must release the finalized preflight"
+    );
     assert!(
         adapter
             .durable_lane_rollover_authority(&finality)

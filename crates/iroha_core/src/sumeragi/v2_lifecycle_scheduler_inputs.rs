@@ -1365,6 +1365,45 @@ impl ProductionLifecycleOwnerV1 {
         self.classify_schedulable_completion_work(&schedulable, Some(fence))
     }
 
+    /// Project a bounded, payload-free terminal scheduler census for operators.
+    ///
+    /// LedgerV1 intentionally omits volatile Ready/Waiting generations and the
+    /// concrete carrier kind. This diagnostic preserves that privacy boundary
+    /// while making a retained direct output, refanned recovered Broadcast, or
+    /// obsolete paired Sign distinguishable in a live finalization stall.
+    pub(in crate::sumeragi) fn finalization_scheduler_diagnostic(
+        &self,
+        fence: crate::sumeragi::v2::LifecycleReducerFenceObservationV1,
+    ) -> String {
+        let classification = self.classify_completion_ready_work(fence);
+        let nonterminal = self
+            .coordinator
+            .records
+            .values()
+            .filter(|record| !matches!(record.state, LifecycleState::Terminal(_)))
+            .take(32)
+            .map(|record| {
+                format!(
+                    "{}:{:?}/{:?}/{:?}",
+                    record.ordinal, record.work_class, record.stage, record.state
+                )
+            })
+            .collect::<Vec<_>>();
+        let nonterminal_total = self
+            .coordinator
+            .records
+            .values()
+            .filter(|record| !matches!(record.state, LifecycleState::Terminal(_)))
+            .count();
+        let (registry_total, registry_entries) =
+            self.registry.registry().finalization_entry_kind_census();
+        format!(
+            "classification={classification:?} nonterminal_total={nonterminal_total} \
+             nonterminal={nonterminal:?} registry_total={registry_total} \
+             registry_entries={registry_entries:?}"
+        )
+    }
+
     /// Wake only a fence-expired direct Broadcast that globally precedes post-Apply cold output.
     ///
     /// The full schedulable census is reclassified before the reducer generation
@@ -2608,10 +2647,11 @@ impl ProductionLifecycleOwnerV1 {
                 if !reservation.preflight(&prepared) {
                     return Err(ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch);
                 }
+                let successor_outputs = live_apply_successor_outputs.remove(&ordinal);
                 let executor_dispatch = executor
                     .prepare_lifecycle_decision_apply_executor_dispatch(
                         &prepared,
-                        live_apply_successor_outputs.remove(&ordinal),
+                        successor_outputs,
                     )
                     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 reservation.commit(prepared, executor_dispatch);
@@ -2756,8 +2796,10 @@ impl ProductionLifecycleOwnerV1 {
     ///
     /// The retained publication token must still name the global Ready minimum
     /// and its complete registry coordinate. This path never observes or
-    /// acknowledges the worker completion FIFO. A live Apply successor also
-    /// installs its full executor retransmit owner before this method returns.
+    /// acknowledges the worker completion FIFO. The registry-authenticated
+    /// preliminary owner is installed before any outcome can terminalize the
+    /// Validate row; a live Apply successor then upgrades it to the full
+    /// executor retransmit owner before this method returns.
     pub(super) fn dispatch_ready_validate_successor(
         &mut self,
         services: &mut ProductionV2Services,
@@ -2802,6 +2844,17 @@ impl ProductionLifecycleOwnerV1 {
                 });
             }
         }
+        let (dispatch_key, round, subject, apply_is_authorized) = successor
+            .preliminary_retransmit_identity(attestation)
+            .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+        executor
+            .arm_live_lifecycle_validate_successor(
+                dispatch_key,
+                round,
+                subject,
+                apply_is_authorized,
+            )
+            .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
         let selected = self.dispatch_completion_requiring_ready_ordinal(
             services,
             executor,
@@ -2812,17 +2865,6 @@ impl ProductionLifecycleOwnerV1 {
             selected,
             ProductionCompletionDispatchV1::CapacityUnavailable { .. }
         ) {
-            let (dispatch_key, round, subject, apply_is_authorized) = successor
-                .preliminary_retransmit_identity(attestation)
-                .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
-            executor
-                .arm_live_lifecycle_validate_successor(
-                    dispatch_key,
-                    round,
-                    subject,
-                    apply_is_authorized,
-                )
-                .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
             return Ok(ReadyValidateSuccessorDispatchV1::CapacityUnavailable(
                 successor,
             ));
@@ -2835,17 +2877,6 @@ impl ProductionLifecycleOwnerV1 {
             if *selected_ordinal != ordinal {
                 return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
             }
-            let (dispatch_key, round, subject, apply_is_authorized) = successor
-                .preliminary_retransmit_identity(attestation)
-                .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
-            executor
-                .arm_live_lifecycle_validate_successor(
-                    dispatch_key,
-                    round,
-                    subject,
-                    apply_is_authorized,
-                )
-                .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
             let successor = successor
                 .retain_on_reducer_fence(*wait)
                 .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
@@ -2868,22 +2899,6 @@ impl ProductionLifecycleOwnerV1 {
         };
         if !exact {
             return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
-        }
-        if matches!(
-            selected,
-            ProductionCompletionDispatchV1::ValidateQueued { .. }
-        ) {
-            let (dispatch_key, round, subject, apply_is_authorized) = successor
-                .preliminary_retransmit_identity(attestation)
-                .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
-            executor
-                .arm_live_lifecycle_validate_successor(
-                    dispatch_key,
-                    round,
-                    subject,
-                    apply_is_authorized,
-                )
-                .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
         }
         Ok(ReadyValidateSuccessorDispatchV1::Resolved(selected))
     }

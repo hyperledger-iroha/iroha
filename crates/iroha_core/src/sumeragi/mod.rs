@@ -1130,13 +1130,13 @@ fn fair_v2_ingress_timeout_control_advances_owner(
         && round.height == owner.identity.height
         && view_advances
 }
-/// Whether a certified reducer input can retire the selected control owner.
+/// Whether a certified reducer input can advance the selected productive owner.
 ///
 /// Fair ingress observes only authenticated transport provenance at this
 /// point; the reducer still verifies the certificate and sender before any
 /// state transition. This dependency edge merely prevents a retained
-/// Proposal/Prepare/signing owner from hiding the TC or CommitQC that can
-/// supersede it.
+/// Proposal/Prepare/signing owner or body chunk from hiding the TC or CommitQC
+/// that can advance its exact height and view.
 fn fair_v2_ingress_certified_fence_escape_advances_owner(
     owner: &FairV2IngressLeaderWireToken,
     inbound: &InboundBlockMessage,

@@ -1526,6 +1526,57 @@ fn recovered_decision_validate_crash_prefix_restarts_once_then_stutters() {
 }
 
 #[test]
+fn recovered_decision_apply_predecessor_oracle_follows_non_adjacent_validate_continuation() {
+    let fixture = RecoveryFixture::new("decision-validate-predecessor-gap", 0x36);
+    let (_, projection) = recovered_decision_store_crash_prefix_fixture(&fixture);
+    let mut records = projection.validate_crash_prefix.records().to_vec();
+    let intervening_root = CausalRoot::new(LifecycleDigest::new(
+        *Hash::new(b"intervening actor-global row before recovered Decision Apply").as_ref(),
+    ));
+    records.push(unrelated_live_record(
+        fixture.lifecycle_context(),
+        OwnerId::new(intervening_root, 5),
+        5,
+        0xD9,
+    ));
+    let prefix = LifecycleLedgerV1::new(fixture.lifecycle_context(), 5, records, BTreeMap::new())
+        .expect("construct recovered Validate prefix with an intervening actor-global row");
+
+    let (successor, apply_ordinal, changed) = prefix
+        .stage_recovered_decision_apply_projection(&projection)
+        .expect("advance the non-adjacent recovered Validate predecessor");
+    assert!(changed);
+    assert_eq!(apply_ordinal, 6);
+    assert_eq!(successor.high_water(), 6);
+    assert_eq!(
+        successor.recovered_decision_apply_validate_predecessor_ordinal_projection(
+            &projection,
+            apply_ordinal,
+        ),
+        Some(4),
+        "the authenticated continuation, not Apply ordinal minus one, identifies Validate"
+    );
+    assert_eq!(
+        successor
+            .records()
+            .iter()
+            .find(|record| record.ordinal() == 5)
+            .expect("retain the intervening actor-global row")
+            .owner()
+            .first_admission_ordinal(),
+        5
+    );
+    assert_eq!(
+        successor.recovered_decision_apply_validate_predecessor_ordinal_projection(
+            &projection,
+            apply_ordinal - 1,
+        ),
+        None,
+        "a substituted Apply ordinal cannot authenticate predecessor retirement"
+    );
+}
+
+#[test]
 fn recovered_decision_store_restart_rejects_an_exact_child_key_collision() {
     let fixture = RecoveryFixture::new("decision-store-key-collision", 0x37);
     let (prefix, projection) = recovered_decision_store_crash_prefix_fixture(&fixture);

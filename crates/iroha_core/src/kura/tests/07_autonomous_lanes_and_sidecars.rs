@@ -837,6 +837,21 @@ fn first_release_kura_enum_tags_are_contiguous_and_unknown_tags_fail_closed() {
         )),
         2,
     );
+    assert_tag(
+        &AutonomousLaneEntrypointClaimStateV1::ReplicaReleased(
+            Hash::new(b"first-release replica released claim tag"),
+            AutonomousLifecycleReplicaQueueDispositionV1::StrictQueueAbsent,
+        ),
+        3,
+    );
+    assert_tag(
+        &AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(
+            Hash::new(b"first-release replica complete claim tag"),
+            AutonomousLifecycleReplicaQueueDispositionV1::StrictQueueAbsent,
+            Hash::new(b"first-release replica terminal outcome tag"),
+        ),
+        4,
+    );
 
     assert_tag(
         &AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
@@ -858,6 +873,21 @@ fn first_release_kura_enum_tags_are_contiguous_and_unknown_tags_fail_closed() {
         &AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease {
             retirement_hash: Hash::new(b"first-release retirement tag"),
         },
+        1,
+    );
+    assert_tag(
+        &AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+            retirement_hash: Hash::new(b"first-release replica retirement tag"),
+            queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1::StrictQueueAbsent,
+        },
+        2,
+    );
+    assert_tag(
+        &AutonomousLifecycleReplicaQueueDispositionV1::StrictQueueAbsent,
+        0,
+    );
+    assert_tag(
+        &AutonomousLifecycleReplicaQueueDispositionV1::ExactOrdinaryFifo,
         1,
     );
     assert_tag(
@@ -930,6 +960,7 @@ fn first_release_kura_enum_tags_are_contiguous_and_unknown_tags_fail_closed() {
     assert_unknown_tag_rejected::<AutonomousLifecycleCursorPhaseV1>();
     assert_unknown_tag_rejected::<AutonomousLaneEntrypointClaimStateV1>();
     assert_unknown_tag_rejected::<AutonomousLifecycleTerminalOutcomeSourceV1>();
+    assert_unknown_tag_rejected::<AutonomousLifecycleReplicaQueueDispositionV1>();
     assert_unknown_tag_rejected::<AutonomousLifecycleTerminalOutcomeStageV1>();
     assert_unknown_tag_rejected::<AutonomousLifecyclePayloadCustodySourceV1>();
     assert_unknown_tag_rejected::<LaneBlockExecutionSourceV1>();

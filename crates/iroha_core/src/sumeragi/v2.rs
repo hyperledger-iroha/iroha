@@ -3758,6 +3758,7 @@ pub(in crate::sumeragi) struct LifecycleDecisionApplyAdapterCompletionAuthorityV
     tag: reducer::EventTag,
     subject: wire::BlockSubject,
     dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+    validate_predecessor_ordinal: u128,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
 }
@@ -3769,6 +3770,10 @@ impl LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
     /// Return the complete immutable worker/registry ownership key.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         self.dispatch_key
+    }
+    /// Return the exact durable Validate row which advanced into this Apply.
+    pub(in crate::sumeragi) const fn validate_predecessor_ordinal(&self) -> u128 {
+        self.validate_predecessor_ordinal
     }
     /// Return the reducer incarnation authorized by the installed carrier.
     pub(in crate::sumeragi) const fn tag(&self) -> reducer::EventTag {
@@ -5580,6 +5585,7 @@ pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyAdapterCompletionV1
     event: reducer::Event,
     next_fence_generation: u64,
     dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+    validate_predecessor_ordinal: u128,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
     committed_status: wire::SumeragiV2Status,
@@ -5588,6 +5594,7 @@ pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyAdapterCompletionV1
 #[must_use = "lifecycle Apply finality must be installed in the exact executor"]
 pub(in crate::sumeragi) struct LifecycleDecisionApplyAdapterFinalityV1 {
     dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+    validate_predecessor_ordinal: u128,
     tag: reducer::EventTag,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
@@ -5600,6 +5607,7 @@ impl LifecycleDecisionApplyAdapterFinalityV1 {
         _permit: super::v2_effects::LifecycleDecisionApplyExecutorFinalityPermitV1,
     ) -> (
         LifecycleDecisionApplyDispatchKeyV1,
+        u128,
         reducer::EventTag,
         KuraV2CommitReceipt,
         wire::finality::V2FinalityArtifact,
@@ -5607,6 +5615,7 @@ impl LifecycleDecisionApplyAdapterFinalityV1 {
     ) {
         (
             self.dispatch_key,
+            self.validate_predecessor_ordinal,
             self.tag,
             self.receipt,
             self.artifact,
@@ -5906,6 +5915,21 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
             )
     }
 
+    /// Authenticate the exact durable Validate row which advanced into this
+    /// unchanged recovered Apply carrier.
+    pub(in crate::sumeragi) fn validate_predecessor_ordinal_in_ledger(
+        &self,
+        ledger: &LifecycleLedgerV1,
+        installed_apply_ordinal: u128,
+    ) -> Option<u128> {
+        self.exact_body_binding().then_some(())?;
+        ledger.recovered_decision_apply_validate_predecessor_ordinal(
+            &self.fetch,
+            &self.lineage,
+            installed_apply_ordinal,
+        )
+    }
+
     /// Return the attached physical digest.
     pub(in crate::sumeragi) fn installed_digest(&self) -> LifecycleDigest {
         LifecycleDigest::new(*self.apply_pending.exact_effect_identity().as_ref())
@@ -5967,6 +5991,7 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
         &self,
         permit: LifecycleDecisionApplyCompletionProjectionPermitV1,
         address: super::v2_lifecycle_coordinator::ConcreteWorkAddress,
+        validate_predecessor_ordinal: u128,
         completion: &super::v2_apply::LifecycleDecisionApplyCompletionV1,
     ) -> Option<LifecycleDecisionApplyAdapterCompletionAuthorityV1> {
         self.exact_body_binding().then_some(())?;
@@ -5975,6 +6000,7 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
             LifecycleDecisionApplyLineageV1::Recovered,
             self.context,
             address,
+            validate_predecessor_ordinal,
             self.installed_digest(),
             &self.apply_effect,
             &self.validated_receipt,
@@ -5989,6 +6015,7 @@ pub(in crate::sumeragi) fn project_live_decision_apply_completion(
     permit: LifecycleDecisionApplyCompletionProjectionPermitV1,
     context: LifecycleContext,
     address: super::v2_lifecycle_coordinator::ConcreteWorkAddress,
+    validate_predecessor_ordinal: u128,
     installed_digest: LifecycleDigest,
     effect: &AdapterEffect,
     validated_receipt: &ValidatedBodyReceipt,
@@ -5999,6 +6026,7 @@ pub(in crate::sumeragi) fn project_live_decision_apply_completion(
         LifecycleDecisionApplyLineageV1::Live,
         context,
         address,
+        validate_predecessor_ordinal,
         installed_digest,
         effect,
         validated_receipt,
@@ -6011,6 +6039,7 @@ fn project_lifecycle_decision_apply_completion(
     lineage: LifecycleDecisionApplyLineageV1,
     context: LifecycleContext,
     address: super::v2_lifecycle_coordinator::ConcreteWorkAddress,
+    validate_predecessor_ordinal: u128,
     installed_digest: LifecycleDigest,
     effect: &AdapterEffect,
     validated_receipt: &ValidatedBodyReceipt,
@@ -6028,6 +6057,8 @@ fn project_lifecycle_decision_apply_completion(
     let artifact = completion.artifact();
     let receipt = completion.receipt();
     if !key.matches_carrier(context, address, installed_digest, lineage)
+        || validate_predecessor_ordinal == 0
+        || validate_predecessor_ordinal >= key.lifecycle_ordinal()
         || completion.subject() != *subject
         || completion.certificate() != certificate
         || completion.validated_receipt() != validated_receipt
@@ -6049,6 +6080,7 @@ fn project_lifecycle_decision_apply_completion(
         tag: *tag,
         subject: *subject,
         dispatch_key: key,
+        validate_predecessor_ordinal,
         receipt: receipt.clone(),
         artifact: artifact.clone(),
     })
@@ -6069,6 +6101,7 @@ impl PreparedLifecycleDecisionApplyAdapterCompletionV1<'_> {
             event,
             next_fence_generation,
             dispatch_key,
+            validate_predecessor_ordinal,
             receipt,
             artifact,
             committed_status,
@@ -6084,6 +6117,7 @@ impl PreparedLifecycleDecisionApplyAdapterCompletionV1<'_> {
         adapter.log_body_progress(&event, reducer::StepDisposition::Applied, 0);
         LifecycleDecisionApplyAdapterFinalityV1 {
             dispatch_key,
+            validate_predecessor_ordinal,
             tag,
             receipt,
             artifact,
@@ -9317,6 +9351,30 @@ fn commit_qc_status(
     })
 }
 impl SumeragiV2Adapter {
+    /// Return whether the exact live Decision WAL source still awaits its
+    /// Validate-to-Apply body-frame join. This borrows the affine seal only;
+    /// lifecycle publication remains its sole consuming path.
+    pub(crate) fn has_exact_pending_live_decision_apply(
+        &self,
+        tag: reducer::EventTag,
+        decision_round: wire::ConsensusRound,
+        proposal_round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> bool {
+        self.pending_live_decision_apply
+            .as_ref()
+            .is_some_and(|sealed| {
+                sealed.exactly_binds_pending_apply_decision(
+                    tag,
+                    decision_round,
+                    proposal_round,
+                    subject,
+                    execution_commitment,
+                )
+            })
+    }
+
     /// Open the safety WAL, replay every complete frame, and resume durable work.
     ///
     /// Network ingress is never exposed before replay has completed.  The
@@ -14182,11 +14240,14 @@ impl SumeragiV2Adapter {
             tag,
             subject,
             dispatch_key,
+            validate_predecessor_ordinal,
             receipt,
             artifact,
         } = authority;
         if self.current_tag() != tag
             || !dispatch_key.matches_height_context(&self.wire_context)
+            || validate_predecessor_ordinal == 0
+            || validate_predecessor_ordinal >= dispatch_key.lifecycle_ordinal()
             || artifact.height_context != self.wire_context
             || artifact.subject != subject
             || receipt.height() != self.wire_context.height
@@ -14250,6 +14311,7 @@ impl SumeragiV2Adapter {
             event,
             next_fence_generation,
             dispatch_key,
+            validate_predecessor_ordinal,
             receipt,
             artifact,
             committed_status,
