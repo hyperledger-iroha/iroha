@@ -955,23 +955,22 @@ struct RetiredReplicaStartupFixture {
     payload: crate::lane_consensus::LaneExecutablePayloadV1,
     binding: AutonomousLifecycleAttemptBindingV1,
     initial_live: AutonomousLifecycleCursorV1,
-    retirement: crate::kura::AutonomousLaneSlotRetirementV1,
     kura: Arc<Kura>,
     state: State,
     queue: Arc<Queue>,
     generation: AutonomousLifecycleProcessGenerationClaim,
 }
 fn retired_replica_startup_fixture(
-    remove_fifo_owner: bool,
+    remove_one_fifo_owner: bool,
     claim_boundary: RetiredReplicaClaimRestartBoundary,
 ) -> RetiredReplicaStartupFixture {
     assert!(
-        !remove_fifo_owner
+        !remove_one_fifo_owner
             || matches!(
                 claim_boundary,
                 RetiredReplicaClaimRestartBoundary::AllReleasePending
             ),
-        "a missing-FIFO fixture cannot inject an authorized Released claim prefix",
+        "a partial-FIFO fixture cannot inject an authorized Released claim prefix",
     );
     let kura_dir = TempDir::new().expect("retired replica Kura directory");
     let queue_dir = TempDir::new().expect("retired replica Queue journal directory");
@@ -1108,19 +1107,20 @@ fn retired_replica_startup_fixture(
         kura.inject_autonomous_lane_first_released_claim_crash_cut_for_test(&payload, &retirement)
             .expect("persist exactly one Released claim before the replica restart");
     }
-    if remove_fifo_owner {
+    if remove_one_fifo_owner {
         assert_eq!(
             queue.remove_committed_hashes(
                 payload
                     .reservation_keys
                     .iter()
+                    .take(1)
                     .map(|key| key.entrypoint_hash),
                 None,
             ),
-            payload.entrypoints.len(),
-            "negative retired replica fixture must durably remove exact ordinary FIFO ownership",
+            1,
+            "negative retired replica fixture must durably create a mixed FIFO/absent cut",
         );
-        assert_eq!(queue.queued_len(), 0);
+        assert_eq!(queue.queued_len(), payload.entrypoints.len() - 1);
     }
     let descriptor = &payload.origin_proposal.descriptor;
     let retired = kura
@@ -1185,8 +1185,8 @@ fn retired_replica_startup_fixture(
     assert!(restarted_queue.live_lane_reservations().is_empty());
     assert_eq!(
         restarted_queue.queued_len(),
-        if remove_fifo_owner {
-            0
+        if remove_one_fifo_owner {
+            payload.entrypoints.len() - 1
         } else {
             payload.entrypoints.len()
         },
@@ -1200,7 +1200,6 @@ fn retired_replica_startup_fixture(
         payload,
         binding,
         initial_live,
-        retirement,
         kura: restarted,
         state: restarted_state,
         queue: restarted_queue,
@@ -1435,27 +1434,6 @@ fn retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_own
         false,
         RetiredReplicaClaimRestartBoundary::AllReleasePending,
     );
-    let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
-        fixture.payload.reservation_keys.iter(),
-    )
-    .expect("bind all-ReleasePending replica reservation group");
-    let pending = fixture
-        .kura
-        .authenticate_autonomous_lane_retirement_snapshot_evidence(
-            &fixture.payload,
-            &fixture.retirement,
-            reservation_group,
-            crate::kura::AutonomousLaneRetirementQueueSnapshotPhaseV1::Prepared,
-        )
-        .expect("authenticate restarted all-ReleasePending Kura prefix");
-    let pending_state = pending.recovered_state();
-    assert_eq!(
-        (
-            pending_state.release.pending_prefix,
-            pending_state.release.released_prefix,
-        ),
-        (2, 0),
-    );
     let snapshot = fixture
         .queue
         .lane_reservation_reconciliation_snapshot()
@@ -1510,22 +1488,12 @@ fn retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_own
     );
     assert!(fixture.queue.live_lane_reservations().is_empty());
     assert_eq!(fixture.queue.queued_len(), 2);
-    let completed = fixture
-        .kura
-        .authenticate_autonomous_lane_retirement_snapshot_evidence(
-            &fixture.payload,
-            &fixture.retirement,
-            reservation_group,
-            crate::kura::AutonomousLaneRetirementQueueSnapshotPhaseV1::Completed,
-        )
-        .expect("authenticate completed all-Released Kura prefix");
-    let completed_state = completed.recovered_state();
     assert_eq!(
-        (
-            completed_state.release.pending_prefix,
-            completed_state.release.released_prefix,
-        ),
-        (2, 2),
+        fixture
+            .kura
+            .autonomous_lane_replica_claim_seal_counts_for_test(&fixture.payload)
+            .expect("count completed all-Released replica claims"),
+        (0, 2),
     );
     assert!(
         fixture
@@ -1541,48 +1509,18 @@ fn retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_own
     assert_eq!(cursor.cursor(), Some(&fixture.initial_live));
 }
 #[test]
-#[allow(clippy::too_many_lines)]
-fn retired_nonqueue_replica_partial_released_prefix_resumes_on_startup_without_queue_owner() {
+fn retired_nonqueue_replica_rejects_legacy_partial_released_prefix() {
     let fixture =
         retired_replica_startup_fixture(false, RetiredReplicaClaimRestartBoundary::FirstReleased);
     assert_eq!(
         fixture.payload.entrypoint_hashes.len(),
         2,
-        "partial claim-prefix recovery requires exactly two entrypoints",
+        "legacy partial-prefix rejection requires exactly two entrypoints",
     );
-    let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
-        fixture.payload.reservation_keys.iter(),
-    )
-    .expect("bind partial Released-prefix reservation group");
-    let partial = fixture
-        .kura
-        .authenticate_autonomous_lane_retirement_snapshot_evidence(
-            &fixture.payload,
-            &fixture.retirement,
-            reservation_group,
-            crate::kura::AutonomousLaneRetirementQueueSnapshotPhaseV1::Prepared,
-        )
-        .expect("authenticate restarted Released/ReleasePending Kura prefix");
-    assert_eq!(
-        partial.phase(),
-        crate::kura::AutonomousLaneRetirementQueueSnapshotPhaseV1::Prepared,
-    );
-    assert_eq!(partial.reservation_group(), reservation_group);
-    assert_eq!(
-        partial.retirement_hash(),
-        fixture
-            .retirement
-            .digest()
-            .expect("hash partial-prefix retirement"),
-    );
-    let partial_state = partial.recovered_state();
-    assert!(partial_state.release.kura_retired);
-    assert_eq!(partial_state.release.pending_prefix, 2);
-    assert_eq!(partial_state.release.released_prefix, 1);
     let snapshot = fixture
         .queue
         .lane_reservation_reconciliation_snapshot()
-        .expect("capture retired replica startup Queue snapshot");
+        .expect("capture legacy partial-prefix Queue snapshot");
     assert!(snapshot.is_empty());
     let fifo_before = fixture.queue.fifo_snapshot_for_test();
     assert_eq!(
@@ -1593,143 +1531,13 @@ fn retired_nonqueue_replica_partial_released_prefix_resumes_on_startup_without_q
             .iter()
             .map(|key| key.entrypoint_hash)
             .collect::<Vec<_>>(),
-        "partial claim-prefix restart must retain exact FIFO barrier order",
+        "legacy partial-prefix restart must retain exact FIFO barrier order",
     );
     let queue_plan_before = std::fs::read(fixture.queue_dir.path().join("queue-plan.norito"))
-        .expect("read retired replica QueuePlan journal before startup");
+        .expect("read legacy partial-prefix QueuePlan journal before startup");
     let reservation_before =
         std::fs::read(fixture.queue_dir.path().join("lane-reservation.norito"))
-            .expect("read retired replica reservation journal before startup");
-    let recovered = reconcile_autonomous_lifecycle_startup(
-        &fixture.state,
-        &fixture.queue,
-        fixture.kura.as_ref(),
-        &fixture.context,
-        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(snapshot.clone(), Vec::new()),
-        AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
-        Some(&fixture.generation),
-        &fixture.local_peer,
-        &fixture.signer,
-    )
-    .expect("resume exact retired non-Queue replica release");
-    assert_eq!(recovered.completed_bootstraps(), 0);
-    assert_eq!(
-        recovered.recovered_attempts(),
-        0,
-        "a retired replica must not fabricate Crash/Recover/rehydration successors",
-    );
-    let (returned_snapshot, receipt, pending_groups) = recovered.into_queue_handoff();
-    assert_eq!(returned_snapshot, snapshot);
-    assert!(pending_groups.is_empty());
-    assert!(
-        fixture
-            .queue
-            .revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)
-            .expect("revalidate retired replica Queue receipt"),
-    );
-    assert_eq!(
-        fixture
-            .queue
-            .lane_reservation_reconciliation_snapshot()
-            .expect("recapture retired replica Queue snapshot"),
-        snapshot,
-        "FIFO-only replica release must not create a Queue reservation owner",
-    );
-    assert_eq!(
-        std::fs::read(fixture.queue_dir.path().join("queue-plan.norito"))
-            .expect("read retired replica QueuePlan journal after startup"),
-        queue_plan_before,
-        "FIFO authentication and Kura claim release must not mutate QueuePlan durability",
-    );
-    assert_eq!(
-        std::fs::read(fixture.queue_dir.path().join("lane-reservation.norito"))
-            .expect("read retired replica reservation journal after startup"),
-        reservation_before,
-        "FIFO authentication and Kura claim release must not mutate reservation durability",
-    );
-    assert!(fixture.queue.live_lane_reservations().is_empty());
-    assert_eq!(
-        fixture.queue.queued_len(),
-        fixture.payload.entrypoints.len()
-    );
-    assert_eq!(
-        fixture.queue.fifo_snapshot_for_test(),
-        fifo_before,
-        "partial claim-prefix completion must leave exact FIFO order unchanged",
-    );
-    assert!(
-        fixture
-            .kura
-            .pending_autonomous_lifecycle_terminal_outcome_inventory()
-            .expect("inspect completed retired replica terminal outcomes")
-            .is_empty(),
-        "startup must leave no Pending release outcome",
-    );
-    let descriptor = &fixture.payload.origin_proposal.descriptor;
-    let retired = fixture
-        .kura
-        .read_autonomous_lane_retired_attempt(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-            descriptor.proposal_height,
-            fixture.payload.network_id,
-            fixture.payload.epoch,
-        )
-        .expect("revalidate completed retired replica attempt")
-        .expect("completed retired replica attempt remains durable");
-    assert_eq!(retired.artifact.executable_payload, fixture.payload);
-    assert_eq!(retired.retirement, fixture.retirement);
-    let completed = fixture
-        .kura
-        .authenticate_autonomous_lane_retirement_snapshot_evidence(
-            &fixture.payload,
-            &fixture.retirement,
-            reservation_group,
-            crate::kura::AutonomousLaneRetirementQueueSnapshotPhaseV1::Completed,
-        )
-        .expect("authenticate completed two-claim Released prefix");
-    assert_eq!(
-        completed.phase(),
-        crate::kura::AutonomousLaneRetirementQueueSnapshotPhaseV1::Completed,
-    );
-    assert_eq!(completed.reservation_group(), reservation_group);
-    assert_eq!(
-        completed.retirement_hash(),
-        fixture
-            .retirement
-            .digest()
-            .expect("hash completed partial-prefix retirement"),
-    );
-    let completed_state = completed.recovered_state();
-    assert!(completed_state.release.kura_retired);
-    assert_eq!(completed_state.release.pending_prefix, 2);
-    assert_eq!(completed_state.release.released_prefix, 2);
-    let cursor = fixture
-        .kura
-        .read_autonomous_lifecycle_cursor(&fixture.payload, &fixture.binding, &fixture.generation)
-        .expect("read retired replica lifecycle cursor after startup");
-    assert_eq!(
-        cursor.cursor(),
-        Some(&fixture.initial_live),
-        "retired replica completion must preserve the old signed terminal-attempt cursor byte-for-byte",
-    );
-}
-#[test]
-fn retired_nonqueue_replica_startup_rejects_missing_fifo_before_claim_release() {
-    let fixture = retired_replica_startup_fixture(
-        true,
-        RetiredReplicaClaimRestartBoundary::AllReleasePending,
-    );
-    let snapshot = fixture
-        .queue
-        .lane_reservation_reconciliation_snapshot()
-        .expect("capture missing-FIFO replica Queue snapshot");
-    assert!(snapshot.is_empty());
-    let queue_plan_before = std::fs::read(fixture.queue_dir.path().join("queue-plan.norito"))
-        .expect("read missing-FIFO QueuePlan journal before startup");
-    let reservation_before =
-        std::fs::read(fixture.queue_dir.path().join("lane-reservation.norito"))
-            .expect("read missing-FIFO reservation journal before startup");
+            .expect("read legacy partial-prefix reservation journal before startup");
     let kura_before = durable_file_snapshot(fixture._kura_dir.path());
     let error = match reconcile_autonomous_lifecycle_startup(
         &fixture.state,
@@ -1742,7 +1550,69 @@ fn retired_nonqueue_replica_startup_rejects_missing_fifo_before_claim_release() 
         &fixture.local_peer,
         &fixture.signer,
     ) {
-        Ok(_) => panic!("missing ordinary FIFO ownership must block retired replica completion"),
+        Ok(_) => panic!("a generic Released prefix must not be relabelled as replica disposition"),
+        Err(error) => error,
+    };
+    assert!(error.contains("retired replica release completion failed"));
+    assert!(error.contains("conflicting retirement identity"));
+    assert_eq!(
+        fixture
+            .queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("recapture rejected legacy partial-prefix Queue snapshot"),
+        snapshot,
+    );
+    assert_eq!(
+        std::fs::read(fixture.queue_dir.path().join("queue-plan.norito"))
+            .expect("read rejected legacy partial-prefix QueuePlan journal"),
+        queue_plan_before,
+    );
+    assert_eq!(
+        std::fs::read(fixture.queue_dir.path().join("lane-reservation.norito"))
+            .expect("read rejected legacy partial-prefix reservation journal"),
+        reservation_before,
+    );
+    assert_eq!(
+        fixture.queue.fifo_snapshot_for_test(),
+        fifo_before,
+        "rejection must preserve the exact ordinary FIFO",
+    );
+    assert_eq!(durable_file_snapshot(fixture._kura_dir.path()), kura_before);
+    let cursor = fixture
+        .kura
+        .read_autonomous_lifecycle_cursor(&fixture.payload, &fixture.binding, &fixture.generation)
+        .expect("read rejected legacy partial-prefix lifecycle cursor");
+    assert_eq!(cursor.cursor(), Some(&fixture.initial_live));
+}
+#[test]
+fn retired_nonqueue_replica_startup_rejects_partial_fifo_before_claim_release() {
+    let fixture = retired_replica_startup_fixture(
+        true,
+        RetiredReplicaClaimRestartBoundary::AllReleasePending,
+    );
+    let snapshot = fixture
+        .queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture partial-FIFO replica Queue snapshot");
+    assert!(snapshot.is_empty());
+    let queue_plan_before = std::fs::read(fixture.queue_dir.path().join("queue-plan.norito"))
+        .expect("read partial-FIFO QueuePlan journal before startup");
+    let reservation_before =
+        std::fs::read(fixture.queue_dir.path().join("lane-reservation.norito"))
+            .expect("read partial-FIFO reservation journal before startup");
+    let kura_before = durable_file_snapshot(fixture._kura_dir.path());
+    let error = match reconcile_autonomous_lifecycle_startup(
+        &fixture.state,
+        &fixture.queue,
+        fixture.kura.as_ref(),
+        &fixture.context,
+        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(snapshot.clone(), Vec::new()),
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
+        Some(&fixture.generation),
+        &fixture.local_peer,
+        &fixture.signer,
+    ) {
+        Ok(_) => panic!("mixed ordinary FIFO ownership must block retired replica completion"),
         Err(error) => error,
     };
     assert!(error.contains("retired replica release completion failed"));
@@ -2292,7 +2162,11 @@ fn exercise_nonproducer_retired_attempt_startup(
         panic!("{queue_cut:?}/{claim_prefix:?}: reconcile nonproducer retirement: {error}")
     });
     assert_eq!(recovered.completed_bootstraps(), 0);
-    assert_eq!(recovered.recovered_attempts(), 1);
+    assert_eq!(
+        recovered.recovered_attempts(),
+        0,
+        "terminal replica completion must not fabricate Crash/Recover successors",
+    );
     let (returned_snapshot, receipt, pending_groups) = recovered.into_queue_handoff();
     assert_eq!(returned_snapshot, queue_snapshot_before);
     assert!(pending_groups.is_empty());
@@ -2343,7 +2217,10 @@ fn exercise_nonproducer_retired_attempt_startup(
         .cursor()
         .expect("recovered nonproducer cursor remains signed")
         .clone();
-    assert_eq!(recovered_cursor.owner_generation(), 2);
+    assert_eq!(
+        recovered_cursor, initial_live,
+        "terminal replica completion must preserve the old signed cursor byte-for-byte",
+    );
     drop(receipt);
 
     let repeated_snapshot = queue

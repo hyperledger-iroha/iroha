@@ -2007,57 +2007,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
 
-    /// Atomically replace one terminal direct-lifecycle Validate marker with
-    /// the exact pending admission which will replay its missing successor.
-    ///
-    /// Every fallible proof is completed while the immutable marker remains in
-    /// the catalog. Once the seal exists, the map swap consists only of exact
-    /// removals and infallible inserts, so a partial owner transition cannot be
-    /// observed or survive an error.
-    fn replace_terminal_published_validate_with_pending_admission(
-        &mut self,
-        key: (wire::ConsensusRound, wire::BlockSubject),
-        expected_marker: PublishedLifecycleValidateRetryMarkerV1,
-        effect: &AdapterEffect,
-        ownership: &RuntimeEffectOwnership,
-        pending: PendingDurableValidateAdmissionV1,
-        store_terminal: DurableStoreTerminalRetrySealV1,
-    ) -> Result<(), EffectExecutorError> {
-        if expected_marker.owns_live_lifecycle_row()
-            || self.published_lifecycle_validate_retry_markers.get(&key) != Some(&expected_marker)
-            || self.pending_durable_validate_admissions.contains_key(&key)
-            || self.durable_validate_retry_seals.contains_key(&key)
-            || self
-                .published_lifecycle_store_retry_markers
-                .contains_key(&key)
-        {
-            return Err(EffectExecutorError::Contract(
-                "terminal published Validate changed before lifecycle readmission".to_owned(),
-            ));
-        }
-        let seal = DurableValidateRetrySealV1::seal_exact(
-            effect,
-            ownership,
-            &pending,
-            Some(store_terminal),
-        )
-        .ok_or_else(|| {
-            EffectExecutorError::Contract(
-                "terminal published Validate could not seal its replacement retry owner".to_owned(),
-            )
-        })?;
-
-        let removed = self.published_lifecycle_validate_retry_markers.remove(&key);
-        assert_eq!(removed, Some(expected_marker));
-        let previous = self
-            .pending_durable_validate_admissions
-            .insert(key, pending);
-        assert!(previous.is_none());
-        let previous = self.durable_validate_retry_seals.insert(key, seal);
-        assert!(previous.is_none());
-        Ok(())
-    }
-
     fn bind_validate_retry_lifecycle_ordinal(
         &mut self,
         key: (wire::ConsensusRound, wire::BlockSubject),
