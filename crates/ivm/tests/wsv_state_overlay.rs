@@ -1,7 +1,6 @@
 //! WsvHost state overlay staging and commit/rollback behaviour.
 use ivm::{IVM, Memory, MockWorldStateView, PointerType, WsvHost, host::IVMHost, syscalls};
 use std::{
-    collections::HashMap,
     fs,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -65,8 +64,7 @@ fn overlay_stages_and_flushes_on_finish() {
     );
     let program = set_and_get_program();
     let mut vm = IVM::new(u64::MAX);
-    let host =
-        WsvHost::new_with_subject(MockWorldStateView::new(), sample_account(), HashMap::new());
+    let host = WsvHost::new_with_subject(MockWorldStateView::new(), sample_account());
     vm.set_host(host);
     {
         let host = vm
@@ -115,7 +113,7 @@ fn overlay_restores_snapshot_on_rollback() {
     let mut wsv = MockWorldStateView::new();
     wsv.sc_set("counter", initial).expect("seed durable state");
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, sample_account(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, sample_account());
     vm.set_host(host);
     {
         let host = vm
@@ -172,7 +170,7 @@ fn checkpoint_restore_flushes_persisted_wsv_state() {
     let mut wsv =
         MockWorldStateView::with_state_store(persist_path.clone()).expect("persisted WSV");
     wsv.sc_set("counter", initial).expect("seed durable state");
-    let mut host = WsvHost::new_with_subject(wsv, sample_account(), HashMap::new());
+    let mut host = WsvHost::new_with_subject(wsv, sample_account());
     let snapshot = host.checkpoint().expect("checkpoint captured");
     host.wsv
         .sc_set("counter", updated)
@@ -209,7 +207,7 @@ fn checkpoint_restore_persistence_failure_is_reported_without_panicking() {
         MockWorldStateView::with_state_store(persist_path).expect("persisted WSV available");
     wsv.sc_set("counter", b"1".to_vec())
         .expect("seed durable state");
-    let mut host = WsvHost::new_with_subject(wsv, original_caller.clone(), HashMap::new());
+    let mut host = WsvHost::new_with_subject(wsv, original_caller.clone());
     let snapshot = host.checkpoint().expect("checkpoint captured");
     host.wsv
         .sc_set("counter", b"9".to_vec())
@@ -242,7 +240,7 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
         MockWorldStateView::with_state_store(persist_path).expect("persisted mock WSV available");
     fs::write(&blocker, b"block").expect("blocker file");
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, sample_account(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, sample_account());
     vm.set_host(host);
     let p_path = state_path_tlv("counter");
     let p_val = make_tlv(

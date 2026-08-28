@@ -1767,7 +1767,9 @@ mod tests {
         let mut transaction = block.transaction();
         operation(&mut transaction)?;
         transaction.apply();
-        block.commit().expect("commit proof-outcome test block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit proof-outcome test block");
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
         Ok(())
     }

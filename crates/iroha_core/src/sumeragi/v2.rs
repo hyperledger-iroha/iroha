@@ -13849,7 +13849,7 @@ impl SumeragiV2Adapter {
     /// decided height are terminal. Body recovery and application
     /// completions remain owned because the decision may still need them before
     /// application. A unique current-tag completion whose full receipts match
-    /// the Decision remains in place for direct application. Stale exact
+    /// the Decision remains in place for canonical application. Stale exact
     /// completions are retired so the durable reconstruction path can re-enter
     /// the reducer.
     pub(crate) fn retire_deferred_proposal_work_after_decision(

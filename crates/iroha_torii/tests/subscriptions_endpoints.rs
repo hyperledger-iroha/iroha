@@ -219,7 +219,9 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         .execute(&BOB_ID, &mut stx)
         .expect("register billing trigger");
         stx.apply();
-        block.commit().expect("commit trigger registration");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit trigger registration");
     }
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;

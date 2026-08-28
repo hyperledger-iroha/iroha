@@ -41,7 +41,9 @@ fn grant_manage_confidential_params(state: &mut State) {
         .execute(&ALICE_ID, &mut stx)
         .expect("grant confidential permission");
     stx.apply();
-    block.commit().expect("commit grant block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit grant block");
 }
 fn sample_pedersen_params(id: u32) -> PedersenParams {
     PedersenParams {
@@ -85,7 +87,9 @@ fn publish_pedersen_params_inserts_record() {
         .execute_instruction(&mut stx, &ALICE_ID.clone(), publish)
         .expect("publish pedersen params");
     stx.apply();
-    block.commit().expect("commit publish block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit publish block");
     let view = state.view();
     let stored = view
         .world()
@@ -116,7 +120,9 @@ fn publish_pedersen_params_requires_permission() {
         other => panic!("unexpected error: {other:?}"),
     }
     drop(stx);
-    block.commit().expect("commit missing permission block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit missing permission block");
 }
 #[test]
 fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
@@ -183,7 +189,9 @@ fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-    block.commit().expect("commit pedersen duplicate block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit pedersen duplicate block");
 }
 #[test]
 fn set_pedersen_params_lifecycle_updates_entry() {
@@ -222,7 +230,9 @@ fn set_pedersen_params_lifecycle_updates_entry() {
             .expect("update lifecycle");
         stx_update.apply();
     }
-    block.commit().expect("commit pedersen lifecycle block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit pedersen lifecycle block");
     let view = state.view();
     let stored = view
         .world()
@@ -316,7 +326,7 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
         }
     }
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit pedersen lifecycle missing block");
 }
 #[test]
@@ -357,7 +367,9 @@ fn publish_poseidon_params_and_update_lifecycle() {
             .expect("update poseidon lifecycle");
         stx_update.apply();
     }
-    block.commit().expect("commit poseidon lifecycle block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit poseidon lifecycle block");
     let view = state.view();
     let stored = view
         .world()
@@ -452,6 +464,6 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
         other => panic!("unexpected error: {other:?}"),
     }
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit poseidon lifecycle missing block");
 }

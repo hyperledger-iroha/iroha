@@ -1,0 +1,5 @@
+error: #[skip_try_from] attribute should be applied to a newtype variant field, not a non-newtype field
+ --> tests/ui_fail/from_variant_skip_try_from_non_newtype.rs:6:9
+  |
+6 |         #[skip_try_from]
+  |         ^

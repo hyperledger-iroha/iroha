@@ -197,10 +197,10 @@ record them in the change ticket alongside the CLI/SDK logs.
   `gateway_manifest_id`/`gateway_manifest_cid`. `summary.json` must carry the
   same `manifest_id`/`manifest_cid` pair; mismatches cause
   `cargo xtask sorafs-adoption-check` to fail.
-- **Telemetry expectations:** If the capture includes an OpenTelemetry stream,
+- **Telemetry expectations:** If the capture includes a named telemetry source,
   run the adoption check with `--require-telemetry` so the report proves that
-  the emitted metrics were ingested (the command will warn when telemetry is
-  absent, which is required for air-gapped rehearsals).
+  the source label was retained (the command will warn when telemetry metadata
+  is absent, which is allowed for air-gapped rehearsals).
 
 Example adoption check invocation:
 

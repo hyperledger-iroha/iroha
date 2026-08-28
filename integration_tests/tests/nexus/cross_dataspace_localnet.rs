@@ -12,8 +12,7 @@ use iroha::{
         account::{Account, AccountId},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::consensus::{
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION, SumeragiCommittedLaneBlock,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK, SumeragiCommittedLaneBlock,
             SumeragiDiagnosticsStatus, SumeragiLanePayloadOwnership,
             SumeragiNativeAmxParticipantApplication, SumeragiNativeAmxParticipantApplicationState,
             committed_lane_block_status_counts_as_progress,
@@ -1250,7 +1249,6 @@ fn lane_domain_progress_is_applied(progress: &LaneDomainProgress) -> bool {
         && matches!(
             progress.execution_status.as_str(),
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
-                | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION
         )
 }
 fn latest_lane_domain_application_progress(
@@ -1281,7 +1279,6 @@ fn applied_lane_domain_progress(
                 && matches!(
                     block.execution_status.as_str(),
                     COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
-                        | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION
                 )
         })
     {
@@ -7225,8 +7222,7 @@ mod tests {
         block::consensus::{
             COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
             COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION, SumeragiCommittedLaneBlock,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK, SumeragiCommittedLaneBlock,
             SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus, SumeragiLanePayloadOwnership,
             SumeragiNativeAmxParticipantApplication, SumeragiNativeAmxParticipantApplicationState,
         },
@@ -7962,7 +7958,7 @@ mod tests {
             quorum,
             quorum,
             quorum,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
         );
         ready_latest.lane_incarnation = incarnation;
         ready_latest.proposal_hash = test_hash(0xA9);
@@ -8410,28 +8406,28 @@ mod tests {
             .is_none(),
             "an unapplied latest row must block receipt-backed application progress"
         );
-        let direct_applied_latest = sample_committed_lane_block(
+        let canonically_applied_latest = sample_committed_lane_block(
             LaneId::new(DS1_LANE_INDEX),
             DataSpaceId::new(DS1_ID_U64),
             4,
             quorum,
             quorum,
             quorum,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
         );
-        let direct_applied_status = SumeragiDiagnosticsStatus {
-            committed_lane_blocks: vec![applied_lower.clone(), direct_applied_latest],
+        let canonically_applied_status = SumeragiDiagnosticsStatus {
+            committed_lane_blocks: vec![applied_lower.clone(), canonically_applied_latest],
             ..empty_sumeragi_diagnostics()
         };
         assert_eq!(
             latest_lane_domain_application_progress(
-                &direct_applied_status,
+                &canonically_applied_status,
                 LaneId::new(DS1_LANE_INDEX),
                 DataSpaceId::new(DS1_ID_U64),
             )
             .map(|progress| progress.lane_block_height),
             Some(4),
-            "direct execution receipt status should satisfy applied progress"
+            "canonical receipt status should satisfy applied progress"
         );
         let mut unavailable_applied = applied_lower;
         unavailable_applied.executable_payload_available = false;
@@ -8478,7 +8474,7 @@ mod tests {
             quorum,
             quorum,
             quorum,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
         );
         applied_top.proposal_hash = test_hash(0x70);
         let status = SumeragiDiagnosticsStatus {

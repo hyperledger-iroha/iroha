@@ -1,4 +1,4 @@
-"""Regression tests for the FASTPQ macOS Metal toolchain bootstrap."""
+"""Regression tests for FASTPQ's read-only macOS Metal toolchain probe."""
 
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ def build_script(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture
 def fake_toolchain(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """Create deterministic xcrun, xcodebuild, metal, and metallib stand-ins."""
+    """Create deterministic xcrun, metal, and metallib stand-ins."""
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -92,9 +92,6 @@ def fake_toolchain(tmp_path: Path) -> tuple[Path, Path, Path]:
 printf 'xcrun' >> "$FASTPQ_TEST_TOOL_LOG"
 for argument in "$@"; do printf '|%s' "$argument" >> "$FASTPQ_TEST_TOOL_LOG"; done
 printf '\n' >> "$FASTPQ_TEST_TOOL_LOG"
-if [ "$#" -eq 1 ] && [ "$1" = "--kill-cache" ]; then
-    exit "${FASTPQ_TEST_XCRUN_CACHE_STATUS:-0}"
-fi
 if [ ! -f "$FASTPQ_TEST_TOOLCHAIN_READY" ]; then
     printf 'toolchain unavailable\n' >&2
     exit 1
@@ -107,25 +104,18 @@ esac
 """,
     )
     _write_executable(
-        fake_bin / "xcodebuild",
-        """#!/bin/sh
-printf 'xcodebuild' >> "$FASTPQ_TEST_TOOL_LOG"
-for argument in "$@"; do printf '|%s' "$argument" >> "$FASTPQ_TEST_TOOL_LOG"; done
-printf '\n' >> "$FASTPQ_TEST_TOOL_LOG"
-if [ -n "${FASTPQ_TEST_XCODEBUILD_STATUS:-}" ]; then
-    printf 'component service unavailable\n' >&2
-    exit "$FASTPQ_TEST_XCODEBUILD_STATUS"
-fi
-: > "$FASTPQ_TEST_TOOLCHAIN_READY"
-""",
-    )
-    _write_executable(
         fake_bin / "metal",
         """#!/bin/sh
 printf 'metal' >> "$FASTPQ_TEST_TOOL_LOG"
 for argument in "$@"; do printf '|%s' "$argument" >> "$FASTPQ_TEST_TOOL_LOG"; done
 printf '\n' >> "$FASTPQ_TEST_TOOL_LOG"
-if [ "$#" -eq 1 ] && [ "$1" = "-v" ]; then exit 0; fi
+if [ "$#" -eq 1 ] && [ "$1" = "-v" ]; then
+    if [ -n "${FASTPQ_TEST_BROKEN_METAL:-}" ]; then
+        printf 'compiler probe failed\n' >&2
+        exit 8
+    fi
+    exit 0
+fi
 if [ -n "${FASTPQ_TEST_NO_TOOL_OUTPUT:-}" ]; then exit 0; fi
 output=
 while [ "$#" -gt 0 ]; do
@@ -177,7 +167,7 @@ def _run_build_script(
     if prepopulate_outputs:
         for filename in (
             "ntt_stage.air",
-            "poseidon2.air",
+            "poseidon.air",
             "bn254.air",
             "fastpq.metallib",
         ):
@@ -229,7 +219,7 @@ def test_working_compiler_and_linker_do_not_trigger_download(
     assert "fastpq.metallib" in completed.stdout
 
 
-def test_missing_toolchain_downloads_exact_component_then_redetects(
+def test_missing_toolchain_reports_manual_remediation_without_mutating_host(
     build_script: Path,
     fake_toolchain: tuple[Path, Path, Path],
     tmp_path: Path,
@@ -237,15 +227,19 @@ def test_missing_toolchain_downloads_exact_component_then_redetects(
     completed, log = _run_build_script(build_script, fake_toolchain, tmp_path)
 
     assert completed.returncode == 0, completed.stderr
-    download = "xcodebuild|-downloadComponent|MetalToolchain"
-    assert log.count(download) == 1
-    assert log.index(download) < log.index("xcrun|--kill-cache")
-    assert log.index("xcrun|--kill-cache") < log.index("metal|-v")
-    assert log.index("metal|-v") < log.index("metallib|-v")
-    assert "fastpq.metallib" in completed.stdout
+    assert log == [
+        "xcrun|-sdk|macosx|--find|metal",
+        "xcrun|--find|metal",
+    ]
+    assert not any(line.startswith("xcodebuild|") for line in log)
+    assert not any("--kill-cache" in line for line in log)
+    assert "Metal compiler/linker is unavailable" in completed.stdout
+    assert "xcodebuild -downloadComponent MetalToolchain" in completed.stdout
+    assert "FASTPQ_SKIP_GPU_BUILD=1" in completed.stdout
+    assert "cargo:rustc-env=FASTPQ_METAL_LIB=" in completed.stdout
 
 
-def test_broken_linker_triggers_download_and_actionable_redetection_error(
+def test_broken_linker_reports_probe_error_without_redetection_or_host_mutation(
     build_script: Path,
     fake_toolchain: tuple[Path, Path, Path],
     tmp_path: Path,
@@ -255,24 +249,22 @@ def test_broken_linker_triggers_download_and_actionable_redetection_error(
         fake_toolchain,
         tmp_path,
         initially_ready=True,
-        extra_env={
-            "FASTPQ_TEST_BROKEN_METALLIB": "1",
-            "FASTPQ_TEST_XCRUN_CACHE_STATUS": "6",
-        },
+        extra_env={"FASTPQ_TEST_BROKEN_METALLIB": "1"},
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert log.count("xcodebuild|-downloadComponent|MetalToolchain") == 1
-    assert log.count("metallib|-v") == 2
-    assert "compiler/linker redetection failed" in completed.stdout
-    assert "`xcrun --kill-cache` exited with exit status: 6" in completed.stdout
+    assert not any(line.startswith("xcodebuild|") for line in log)
+    assert not any("--kill-cache" in line for line in log)
+    assert log.count("metal|-v") == 1
+    assert log.count("metallib|-v") == 1
+    assert "linker probe failed" in completed.stdout
     assert "xcode-select -p" in completed.stdout
     assert "xcodebuild -downloadComponent MetalToolchain" in completed.stdout
     assert "FASTPQ_SKIP_GPU_BUILD=1" in completed.stdout
     assert "cargo:rustc-env=FASTPQ_METAL_LIB=" in completed.stdout
 
 
-def test_download_failure_reports_status_and_remediation(
+def test_broken_compiler_reports_probe_error_and_manual_remediation(
     build_script: Path,
     fake_toolchain: tuple[Path, Path, Path],
     tmp_path: Path,
@@ -281,15 +273,19 @@ def test_download_failure_reports_status_and_remediation(
         build_script,
         fake_toolchain,
         tmp_path,
-        extra_env={"FASTPQ_TEST_XCODEBUILD_STATUS": "9"},
+        initially_ready=True,
+        extra_env={"FASTPQ_TEST_BROKEN_METAL": "1"},
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert log.count("xcodebuild|-downloadComponent|MetalToolchain") == 1
-    assert "exited with exit status: 9" in completed.stdout
-    assert "stderr: component service unavailable" in completed.stdout
+    assert not any(line.startswith("xcodebuild|") for line in log)
+    assert not any("--kill-cache" in line for line in log)
+    assert log.count("metal|-v") == 1
+    assert "compiler probe failed" in completed.stdout
     assert "xcode-select -p" in completed.stdout
+    assert "xcodebuild -downloadComponent MetalToolchain" in completed.stdout
     assert "FASTPQ_SKIP_GPU_BUILD=1" in completed.stdout
+    assert "cargo:rustc-env=FASTPQ_METAL_LIB=" in completed.stdout
 
 
 def test_success_without_fresh_compiler_output_rejects_stale_artifacts(

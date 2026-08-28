@@ -1141,7 +1141,9 @@ mod tests {
         .execute(&owner, &mut tx)
         .expect("claim identifier");
         tx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
         let claims = state.world.identifier_claims.view();
         let claim = claims.get(&opaque_id).expect("claim should be indexed");
         assert_eq!(claim.policy_id, policy_id);
@@ -1174,7 +1176,9 @@ mod tests {
         .execute(&owner, &mut tx)
         .expect("revoke identifier");
         tx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
         assert!(
             state
                 .world
@@ -1661,7 +1665,9 @@ mod tests {
         .execute(&owner, &mut tx)
         .expect("claim initial identifier");
         tx.apply();
-        block.commit().expect("commit first block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit first block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 101, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1682,7 +1688,9 @@ mod tests {
         .execute(&replacement, &mut tx)
         .expect("reclaim expired identifier");
         tx.apply();
-        block.commit().expect("commit second block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit second block");
         let claim = state
             .world
             .identifier_claims

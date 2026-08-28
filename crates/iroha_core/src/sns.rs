@@ -2462,7 +2462,7 @@ pub fn apply_with_state_block<T>(
     let out = mutation(&mut transaction)?;
     transaction.apply();
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .map_err(|err| SnsError::Internal(format!("failed to commit SNS state block: {err}")))?;
     Ok(out)
 }

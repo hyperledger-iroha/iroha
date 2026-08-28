@@ -812,7 +812,9 @@ async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
     peers.push(local_peer_id.clone());
     peers.push(fallback_peer_id.clone());
     peers.apply();
-    block.commit().expect("commit npos peer roster");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit npos peer roster");
     let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);

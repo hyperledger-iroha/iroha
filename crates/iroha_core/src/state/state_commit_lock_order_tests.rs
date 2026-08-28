@@ -1,12 +1,12 @@
+use super::*;
+use crate::kura::Kura;
+use iroha_data_model::{block::BlockHeader, nexus::LaneConfig as LaneConfigModel};
+use nonzero_ext::nonzero;
 use std::{
     sync::{Arc, Barrier, mpsc},
     thread,
     time::{Duration, Instant},
 };
-use iroha_data_model::{block::BlockHeader, nexus::LaneConfig as LaneConfigModel};
-use nonzero_ext::nonzero;
-use super::*;
-use crate::kura::Kura;
 #[test]
 fn state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock() {
     let kura = Kura::blank_kura_for_testing();
@@ -20,7 +20,9 @@ fn state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock(
     let handle = thread::spawn(move || {
         commit_barrier.wait();
         let block = commit_state.block(header);
-        block.commit().expect("commit should succeed");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit should succeed");
     });
     barrier.wait();
     let start = Instant::now();
@@ -75,7 +77,7 @@ fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
     let commit_handle = thread::spawn(move || {
         commit_barrier.wait();
         let block = commit_state.block(header);
-        block.commit().expect("commit");
+        block.commit_empty_block_for_testing().expect("commit");
         let _ = commit_done.send(());
     });
     barrier.wait();
@@ -124,7 +126,9 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
         commit_release_rx
             .recv()
             .expect("wait for lifecycle catalog publication");
-        block.commit().expect("commit prebuilt block");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit prebuilt block");
         let _ = commit_done.send("commit");
     });
     block_ready_rx

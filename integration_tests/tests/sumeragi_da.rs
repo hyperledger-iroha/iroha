@@ -232,7 +232,6 @@ fn large_da_network_builder(peers: usize, payload_bytes: usize) -> NetworkBuilde
         .with_config_layer(|layer| {
             let gas_account = ALICE_ID.to_string();
             layer
-                .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(
                     ["torii", "max_content_len"],

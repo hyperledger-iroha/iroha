@@ -195,16 +195,8 @@ fn classify_committed_lane_block_execution_status(
     if receipt_conflicts() {
         return Status::ApplicationReceiptConflictsWithPreflight;
     }
-    if let Some(format) = matching_receipt() {
-        return match format {
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
-                Status::StateAppliedByDirectExecution
-            }
-            LaneBlockApplicationReceiptArtifactFormat::Current
-            | LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                Status::StateAppliedByCanonicalBlock
-            }
-        };
+    if matching_receipt().is_some() {
+        return Status::StateAppliedByCanonicalBlock;
     }
     if !predecessor_is_applied() {
         return Status::AwaitingPredecessorApplication;
@@ -22832,21 +22824,12 @@ pub(super) mod tests {
         let cases = [
             (
                 true,
-                Some(LaneBlockApplicationReceiptArtifactFormat::DirectExecution),
+                Some(LaneBlockApplicationReceiptArtifactFormat::Current),
                 false,
                 Some(true),
                 true,
                 true,
                 Status::ApplicationReceiptConflictsWithPreflight,
-            ),
-            (
-                false,
-                Some(LaneBlockApplicationReceiptArtifactFormat::DirectExecution),
-                false,
-                Some(true),
-                false,
-                false,
-                Status::StateAppliedByDirectExecution,
             ),
             (
                 false,

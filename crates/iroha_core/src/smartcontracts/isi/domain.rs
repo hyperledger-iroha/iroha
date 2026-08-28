@@ -7060,7 +7060,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account with UAID");
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let bindings = view
             .world()
@@ -7113,7 +7113,9 @@ mod tests {
             "duplicate account should not be inserted"
         );
         tx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
         let view = state.view();
         assert_eq!(view.world().uaid_accounts().get(&uaid), Some(&first_id));
     }
@@ -7141,7 +7143,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("unregister account");
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         assert!(
             view.world().uaid_dataspaces().get(&uaid).is_none(),
@@ -8805,7 +8807,7 @@ mod tests {
             25
         );
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
     }
     #[test]
     fn asset_registration_is_independent_of_legacy_offline_metadata() {

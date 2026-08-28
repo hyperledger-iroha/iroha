@@ -192,7 +192,7 @@ fn state_with_soracloud_permission_on_chain(
         },
     );
     state_transaction.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     Ok(state)
 }
 #[test]

@@ -68,7 +68,7 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
    unavailable/refusing signers, and malformed or non-verifying output fail
    closed.
 5. Point gateway at admission registry (`sorafs_manifest::provider_admission`).
-6. Configure telemetry exporter (Prometheus/OpenTelemetry).
+6. Configure the Prometheus scrape target and structured-log aggregation.
 7. Set up payload-free log aggregation for token issuance/revocation outcomes.
 
 ## 3. Operational Procedures

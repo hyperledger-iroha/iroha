@@ -1360,7 +1360,9 @@ mod tests {
             Quantity::from(1_100u32)
         );
         stx.apply();
-        block.commit().expect("commit succeeds");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit succeeds");
         let view = state.view();
         assert!(view.world.repo_agreements().get(&agreement_id).is_some());
     }
@@ -1376,7 +1378,9 @@ mod tests {
         )
         .expect("repo execution");
         stx.apply();
-        block.commit().expect("commit succeeds");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit succeeds");
         let view = state.view();
         let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
             predicate.equals("id", agreement_id.to_string())
@@ -1421,7 +1425,9 @@ mod tests {
         );
         execute_repo_with_consents(&mut stx, instruction).expect("repo execution");
         stx.apply();
-        block.commit().expect("commit succeeds");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit succeeds");
         let view = state.view();
         assert!(
             view.world
@@ -1472,7 +1478,9 @@ mod tests {
         let mut stx = block.transaction();
         stx.world.remove_repo_agreement_entry(&agreement_id);
         stx.apply();
-        block.commit().expect("commit succeeds");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit succeeds");
         let view = state.view();
         assert!(
             view.world
@@ -1607,7 +1615,9 @@ mod tests {
             Quantity::from(1_100u32)
         );
         stx.apply();
-        block.commit().expect("commit succeeds");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit succeeds");
         let view = state.view();
         let stored = view
             .world
@@ -1636,7 +1646,7 @@ mod tests {
             )
             .expect("repo opens");
             stx.apply();
-            block.commit().expect("commit");
+            block.commit_world_overlay_for_testing().expect("commit");
         }
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, maturity_ms - 1, 0);
         let mut block = state.block(header);
@@ -1710,7 +1720,7 @@ mod tests {
             instruction.rate_bps = 0;
             execute_repo_with_consents(&mut stx, instruction).expect("repo opens");
             stx.apply();
-            block.commit().expect("commit");
+            block.commit_world_overlay_for_testing().expect("commit");
         }
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, maturity_ms, 0);
         let mut block = state.block(header);
@@ -1755,7 +1765,7 @@ mod tests {
                 repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id);
             execute_repo_with_consents(&mut stx, repo_instruction).expect("repo execute");
             stx.apply();
-            block.commit().expect("commit");
+            block.commit_world_overlay_for_testing().expect("commit");
         }
         let settlement_ms: u64 = 1_704_000_000_000 + super::MS_PER_DAY;
         let stored_agreement = {
@@ -1876,7 +1886,7 @@ mod tests {
             .expect_err("a settled repo identifier must be one-shot");
         assert!(replay_error.to_string().contains("already settled"));
         stx.apply();
-        block.commit().expect("commit");
+        block.commit_world_overlay_for_testing().expect("commit");
         let view = state.view();
         assert!(
             view.world
@@ -1912,7 +1922,9 @@ mod tests {
                 "opening should have required exact owner-issued consent permissions"
             );
             stx.apply();
-            block.commit().expect("commit open agreement");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit open agreement");
         }
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, maturity_ms, 0);
         let mut block = state.block(header);
@@ -1971,7 +1983,7 @@ mod tests {
             )
             .expect("repo execute");
             stx.apply();
-            block.commit().expect("commit");
+            block.commit_world_overlay_for_testing().expect("commit");
         }
         let settlement_ms = initiation_ms + super::MS_PER_DAY;
         let stored_agreement = {
@@ -2095,7 +2107,7 @@ mod tests {
             extra_collateral,
         );
         stx.apply();
-        block.commit().expect("commit");
+        block.commit_world_overlay_for_testing().expect("commit");
         let view = state.view();
         assert!(
             view.world
@@ -2130,7 +2142,7 @@ mod tests {
             );
             execute_repo_with_consents(&mut stx, instruction).expect("repo execute");
             stx.apply();
-            block.commit().expect("commit");
+            block.commit_world_overlay_for_testing().expect("commit");
         }
         let settlement_ms = initiation_ms + super::MS_PER_DAY;
         let stored_agreement = {
@@ -2228,7 +2240,7 @@ mod tests {
             "custodian collateral should return to the initiator"
         );
         stx.apply();
-        block.commit().expect("commit");
+        block.commit_world_overlay_for_testing().expect("commit");
         let view = state.view();
         assert!(
             view.world
@@ -2255,7 +2267,7 @@ mod tests {
             )
             .expect("repo execute");
             stx.apply();
-            block.commit().expect("commit");
+            block.commit_world_overlay_for_testing().expect("commit");
         }
         let margin_timestamp_ms = super::MS_PER_DAY;
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, margin_timestamp_ms, 0);
@@ -2277,7 +2289,7 @@ mod tests {
         assert!(roles.contains(&(ALICE_ID.clone(), RepoAccountRole::Initiator)));
         assert!(roles.contains(&(BOB_ID.clone(), RepoAccountRole::Counterparty)));
         stx.apply();
-        block.commit().expect("commit");
+        block.commit_world_overlay_for_testing().expect("commit");
         let view = state.view();
         let recorded = view
             .world
@@ -2302,7 +2314,7 @@ mod tests {
             )
             .expect("repo execute");
             stx.apply();
-            block.commit().expect("commit");
+            block.commit_world_overlay_for_testing().expect("commit");
         }
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, super::MS_PER_DAY / 2, 0);
         let mut block = state.block(header);
@@ -2492,7 +2504,7 @@ mod tests {
             )
             .expect("repo execute");
             stx.apply();
-            block.commit().expect("commit");
+            block.commit_world_overlay_for_testing().expect("commit");
         }
         frames.push(capture_proof_stage(
             &state,
@@ -2510,7 +2522,7 @@ mod tests {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("margin call execute");
             stx.apply();
-            block.commit().expect("commit");
+            block.commit_world_overlay_for_testing().expect("commit");
         }
         frames.push(capture_proof_stage(
             &state,
@@ -2558,7 +2570,7 @@ mod tests {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("reverse repo execute");
             stx.apply();
-            block.commit().expect("commit");
+            block.commit_world_overlay_for_testing().expect("commit");
         }
         frames.push(capture_proof_stage(
             &state,

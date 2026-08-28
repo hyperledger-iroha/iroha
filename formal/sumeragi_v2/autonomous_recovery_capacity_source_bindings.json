@@ -26,11 +26,6 @@
       "invariant": "MLAutonomousPredecessorGloballyApplied"
     },
     {
-      "mode": "DirectExecutionAutonomousPredecessor",
-      "config": "multilane_autonomous_recovery_capacity_direct_execution_predecessor_bug.cfg",
-      "invariant": "MLAutonomousPredecessorGloballyApplied"
-    },
-    {
       "mode": "StartupRepairBeforeEnvelope",
       "config": "multilane_autonomous_recovery_capacity_startup_repair_before_envelopes_bug.cfg",
       "invariant": "MLStartupRepairAfterCarrierEnvelopes"
@@ -249,26 +244,6 @@
         "state.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
         "malformed-frontier",
         "!malformed.certified_autonomous_lane_block_predecessor_is_globally_applied_cached"
-      ]
-    },
-    {
-      "id": "autonomous_predecessor_direct_execution_rejection",
-      "invariant": "MLAutonomousPredecessorGloballyApplied",
-      "coverage": "invariant_chain",
-      "path": "crates/iroha_core/src/state/autonomous_predecessor_application_tests.rs",
-      "kind": "fn",
-      "symbol": "autonomous_lane_predecessor_rejects_direct_execution_receipt",
-      "required_tokens": [
-        "persist_direct_lane_block_application_receipt(&input, &preflight)",
-        "lane_block_predecessor_application_receipt_available_without_sidecar_repair",
-        "!kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "!state.certified_autonomous_lane_block_predecessor_is_globally_applied_cached"
-      ],
-      "ordered_tokens": [
-        "persist_direct_lane_block_application_receipt(&input, &preflight)",
-        "lane_block_predecessor_application_receipt_available_without_sidecar_repair",
-        "!kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "!state.certified_autonomous_lane_block_predecessor_is_globally_applied_cached"
       ]
     },
     {

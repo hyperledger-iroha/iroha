@@ -6,7 +6,7 @@ use crate::{
 };
 use fastpq_isi::StarkParameterSet;
 use iroha_crypto::Hash;
-/// Domain separator applied to the Stage 1 commitment payload.
+/// Domain separator applied to the V1 commitment payload.
 const TRACE_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:trace_commitment";
 /// Compute the deterministic commitment over a transition batch.
 ///
@@ -69,8 +69,10 @@ pub fn trace_commitment_from_digests(
     trace: &Trace,
     column_digests: &ColumnDigests,
 ) -> Result<Hash> {
-    let root =
-        merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
+    let root = merkle_root_with_first_level(
+        column_digests.leaves(),
+        column_digests.first_level_parents(),
+    );
     let rows: u64 = trace
         .rows
         .try_into()
@@ -152,13 +154,13 @@ mod tests {
             b"asset/xor/alice".to_vec(),
             u64::to_le_bytes(1_000).to_vec(),
             u64::to_le_bytes(1_100).to_vec(),
-            OperationKind::Mint,
+            OperationKind::MetaSet,
         ));
         batch.push(StateTransition::new(
             b"asset/xor/bob".to_vec(),
             u64::to_le_bytes(500).to_vec(),
             u64::to_le_bytes(475).to_vec(),
-            OperationKind::Burn,
+            OperationKind::MetaSet,
         ));
         batch.sort();
         batch
@@ -188,41 +190,24 @@ mod tests {
                     to_bytes(&vec![transcript]).expect("encode transcripts"),
                 );
             }
-            "mint" => {
+            "metadata" => {
                 batch.push(StateTransition::new(
-                    b"asset/xor/reserve".to_vec(),
-                    u64_bytes(4_096),
-                    u64_bytes(5_120),
-                    OperationKind::Mint,
+                    b"metadata/reserve".to_vec(),
+                    b"old".to_vec(),
+                    b"new".to_vec(),
+                    OperationKind::MetaSet,
                 ));
                 batch.push(StateTransition::new(
-                    b"asset/xor/treasury".to_vec(),
-                    u64_bytes(64),
-                    u64_bytes(1_024),
-                    OperationKind::Mint,
-                ));
-            }
-            "burn" => {
-                batch.push(StateTransition::new(
-                    b"asset/xor/liability".to_vec(),
-                    u64_bytes(8_192),
-                    u64_bytes(6_656),
-                    OperationKind::Burn,
-                ));
-                batch.push(StateTransition::new(
-                    b"asset/xor/supply".to_vec(),
-                    u64_bytes(16_384),
-                    u64_bytes(14_848),
-                    OperationKind::Burn,
+                    b"metadata/treasury".to_vec(),
+                    b"pending".to_vec(),
+                    b"active".to_vec(),
+                    OperationKind::MetaSet,
                 ));
             }
             other => panic!("unknown fixture {other}"),
         }
         batch.sort();
         batch
-    }
-    fn u64_bytes(value: u64) -> Vec<u8> {
-        value.to_le_bytes().to_vec()
     }
     fn sample_transfer_transcript() -> TransferTranscript {
         let mut delta = TransferDeltaTranscript {
@@ -317,11 +302,8 @@ mod tests {
     }
     #[test]
     fn trace_commitment_rejects_parameter_mismatch_before_trace_build() {
-        let params = CANONICAL_PARAMETER_SETS
-            .iter()
-            .find(|set| set.name == "fastpq-lane-latency")
-            .copied()
-            .expect("canonical latency parameter set");
+        let mut params = CANONICAL_PARAMETER_SETS[0];
+        params.name = "test-mismatched-parameter";
         let batch = sample_batch();
         let err = trace_commitment(&params, &batch).unwrap_err();
         assert!(matches!(
@@ -329,7 +311,7 @@ mod tests {
             Error::ParameterMismatch {
                 expected,
                 actual
-            } if expected == "fastpq-lane-latency" && actual == "fastpq-lane-balanced"
+            } if expected == "test-mismatched-parameter" && actual == "fastpq-lane-balanced"
         ));
     }
     #[test]
@@ -387,17 +369,14 @@ mod tests {
             .find(|set| set.name == "fastpq-lane-balanced")
             .copied()
             .expect("canonical balanced parameter set");
-        let latency = CANONICAL_PARAMETER_SETS
-            .iter()
-            .find(|set| set.name == "fastpq-lane-latency")
-            .copied()
-            .expect("canonical latency parameter set");
+        let mut other_parameter_set = balanced;
+        other_parameter_set.name = "test-other-parameter";
         let trace = synthetic_trace();
         let digests = ColumnDigests::new(vec![1, 2, 3], None);
         let base =
             trace_commitment_from_digests(&balanced, &trace, &digests).expect("base commitment");
-        let other_parameter =
-            trace_commitment_from_digests(&latency, &trace, &digests).expect("parameter change");
+        let other_parameter = trace_commitment_from_digests(&other_parameter_set, &trace, &digests)
+            .expect("parameter change");
         assert_ne!(base, other_parameter);
         let mut row_changed = trace.clone();
         row_changed.rows = 2;
@@ -426,7 +405,7 @@ mod tests {
         assert_ne!(base, other_leaves);
     }
     #[test]
-    fn trace_commitment_from_digests_uses_fused_parent_roots() {
+    fn trace_commitment_from_digests_uses_precomputed_parent_roots() {
         let params = CANONICAL_PARAMETER_SETS
             .iter()
             .find(|set| set.name == "fastpq-lane-balanced")
@@ -435,12 +414,12 @@ mod tests {
         let trace = synthetic_trace();
         let leaves = vec![11, 22, 33, 44];
         let scalar = ColumnDigests::new(leaves.clone(), None);
-        let fused = ColumnDigests::new(leaves, Some(vec![55, 66]));
+        let precomputed = ColumnDigests::new(leaves, Some(vec![55, 66]));
         let scalar_commitment =
             trace_commitment_from_digests(&params, &trace, &scalar).expect("scalar commitment");
-        let fused_commitment =
-            trace_commitment_from_digests(&params, &trace, &fused).expect("fused commitment");
-        assert_ne!(scalar_commitment, fused_commitment);
+        let precomputed_commitment = trace_commitment_from_digests(&params, &trace, &precomputed)
+            .expect("precomputed commitment");
+        assert_ne!(scalar_commitment, precomputed_commitment);
     }
     #[test]
     fn append_length_prefixed_writes_little_endian_length_and_payload() {
@@ -461,18 +440,15 @@ mod tests {
         let cases = [
             ("synthetic", sample_batch()),
             ("transfer", build_fixture("transfer")),
-            ("mint", build_fixture("mint")),
-            ("burn", build_fixture("burn")),
+            ("metadata", build_fixture("metadata")),
         ];
         for (label, batch) in cases {
             let commitment = trace_commitment(&params, &batch).expect("trace commitment");
             let trace = build_trace(&batch).expect("build trace");
-            let data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+            let data = derive_polynomial_data(&trace, &planner);
             let digests = hash_columns_from_coefficients(
                 &trace,
                 &data.coefficients,
-                &planner,
-                ExecutionMode::Cpu,
                 crate::trace::PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
             );
             let manual =
@@ -494,12 +470,11 @@ mod tests {
         let cases = [
             ("synthetic", sample_batch()),
             ("transfer", build_fixture("transfer")),
-            ("mint", build_fixture("mint")),
-            ("burn", build_fixture("burn")),
+            ("metadata", build_fixture("metadata")),
         ];
         for (label, batch) in cases {
             let trace = build_trace(&batch).expect("trace");
-            let mut data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+            let data = derive_polynomial_data(&trace, &planner);
             let row_hashes = backend::hash_trace_rows(data.lde_columns());
             let extended = backend::extend_row_hashes(
                 &planner,

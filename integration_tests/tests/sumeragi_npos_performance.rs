@@ -1,8 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Baseline performance harness for `NPoS` Sumeragi with a 1-second signed cadence.
 //! The scenario captures telemetry snapshots while producing a fixed number of
-//! blocks, aggregates phase latency EMAs, queue depths, and throughput, then
-//! persists a JSON summary for reporting.
+//! blocks, aggregates queue depths and throughput, then persists a JSON summary
+//! for reporting.
 use eyre::{Context as _, Result, bail, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
@@ -17,7 +17,6 @@ use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use nonzero_ext::nonzero;
 use norito::json::{self, JsonSerialize, Map, Value};
 use std::{
-    collections::BTreeMap,
     fs,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
@@ -31,21 +30,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 // This is a bounded-progress guard for contended full-workspace runs, not the
 // nominal 1s latency target. Seven-peer NPoS baselines under full telemetry can
 // absorb multiple quorum-timeout recoveries while still producing useful
-// samples; the phase EMA assertions below keep the latency checks strict.
+// samples; the signed-cadence block-spacing assertion below keeps progress bounded.
 const BASELINE_BLOCK_SPACING_MAX_MS: f64 = 15_000.0;
 // Keep the collection timeout above `SAMPLE_BLOCKS * BASELINE_BLOCK_SPACING_MAX_MS`
 // so slow-but-failing runs report the bounded-progress assertion instead of a
 // premature sampling timeout.
 const SAMPLE_TIMEOUT: Duration = Duration::from_secs(240);
-// Grouped integration runs add startup serialization and telemetry sampling
-// jitter on slower hosts, so phase EMA budgets need slack beyond the nominal
-// 1s target. Propose, commit, and precommit samples can include two bounded
-// recovery windows under slow host scheduling.
-const RECOVERY_PHASE_EMA_MAX_MS: f64 = 8_000.0;
-const COMMIT_EMA_MAX_MS: f64 = RECOVERY_PHASE_EMA_MAX_MS;
-const PREVOTE_EMA_MAX_MS: f64 = 1_200.0;
-const PRECOMMIT_EMA_MAX_MS: f64 = RECOVERY_PHASE_EMA_MAX_MS;
-const PROPOSE_EMA_MAX_MS: f64 = RECOVERY_PHASE_EMA_MAX_MS;
 const QUEUE_STRESS_SCENARIO_NAME: &str = "npos_queue_backpressure_stress";
 const QUEUE_CAPACITY: i64 = 24;
 const QUEUE_CAPACITY_PER_USER: i64 = 24;
@@ -283,9 +273,7 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         .with_block_cadence(Duration::from_millis(BLOCK_TIME_MS))
         .with_npos_consensus()
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+            layer.write("telemetry_profile", "full");
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
@@ -333,16 +321,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
-    let phases: &[&str] = &[
-        "propose",
-        "collect_da",
-        "collect_prevote",
-        "collect_precommit",
-        "collect_aggregator",
-        "commit",
-    ];
-    let mut phase_samples: BTreeMap<&'static str, Vec<f64>> =
-        phases.iter().map(|&phase| (phase, Vec::new())).collect();
     let mut queue_depth_samples = Vec::new();
     let mut queue_peer_max_samples = Vec::new();
     let mut view_change_installs = Vec::new();
@@ -372,14 +350,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
             .await
             .wrap_err("read metrics response body")?;
         let reader = MetricsReader::new(&metrics_body);
-        for &phase in phases {
-            let key = format!("sumeragi_phase_latency_ema_ms{{phase=\"{phase}\"}}");
-            if let Some(value) = reader.get_optional(&key)
-                && let Some(samples) = phase_samples.get_mut(phase)
-            {
-                samples.push(value);
-            }
-        }
         if let Some(depth) = reader.get_optional("sumeragi_bg_post_queue_depth") {
             queue_depth_samples.push(depth);
         }
@@ -433,53 +403,10 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         observed_block_time_ms,
         BASELINE_BLOCK_SPACING_MAX_MS
     );
-    let phase_stats: BTreeMap<&'static str, Stats> = phase_samples
-        .into_iter()
-        .filter_map(|(phase, samples)| Stats::from_samples(&samples).map(|stats| (phase, stats)))
-        .collect();
-    let commit_stats = phase_stats
-        .get("commit")
-        .ok_or_else(|| eyre!("missing commit phase EMA samples"))?;
-    ensure!(
-        commit_stats.max <= COMMIT_EMA_MAX_MS,
-        "commit EMA exceeded budget: {:.2} ms (budget {:.2} ms)",
-        commit_stats.max,
-        COMMIT_EMA_MAX_MS
-    );
-    let prevote_stats = phase_stats
-        .get("collect_prevote")
-        .ok_or_else(|| eyre!("missing collect_prevote EMA samples"))?;
-    ensure!(
-        prevote_stats.max <= PREVOTE_EMA_MAX_MS,
-        "collect_prevote EMA exceeded budget: {:.2} ms (budget {:.2} ms)",
-        prevote_stats.max,
-        PREVOTE_EMA_MAX_MS
-    );
-    let precommit_stats = phase_stats
-        .get("collect_precommit")
-        .ok_or_else(|| eyre!("missing collect_precommit EMA samples"))?;
-    ensure!(
-        precommit_stats.max <= PRECOMMIT_EMA_MAX_MS,
-        "collect_precommit EMA exceeded budget: {:.2} ms (budget {:.2} ms)",
-        precommit_stats.max,
-        PRECOMMIT_EMA_MAX_MS
-    );
-    let propose_stats = phase_stats
-        .get("propose")
-        .ok_or_else(|| eyre!("missing propose EMA samples"))?;
-    ensure!(
-        propose_stats.max <= PROPOSE_EMA_MAX_MS,
-        "propose EMA exceeded budget: {:.2} ms (budget {:.2} ms)",
-        propose_stats.max,
-        PROPOSE_EMA_MAX_MS
-    );
     let queue_depth_stats = Stats::from_samples(&queue_depth_samples);
     let queue_peer_max_stats = Stats::from_samples(&queue_peer_max_samples);
     let view_change_stats = Stats::from_samples(&view_change_installs);
-    let mut phase_map = Map::new();
-    for (phase, stats) in &phase_stats {
-        phase_map.insert((*phase).into(), stats.to_value());
-    }
+    let telemetry_samples = queue_depth_stats.as_ref().map_or(0, |stats| stats.samples);
     let mut queue_map = Map::new();
     if let Some(stats) = queue_depth_stats {
         queue_map.insert("bg_post_depth".into(), stats.to_value());
@@ -534,12 +461,11 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         );
         Value::Object(obj)
     });
-    summary_root.insert("phase_latency_ema_ms".into(), Value::Object(phase_map));
     summary_root.insert("queue".into(), Value::Object(queue_map));
     summary_root.insert("view_changes".into(), Value::Object(view_change_map));
     summary_root.insert(
         "telemetry_samples".into(),
-        json_value(&(commit_stats.samples as u64)),
+        json_value(&(telemetry_samples as u64)),
     );
     summary_root.insert("final_height".into(), {
         let mut obj = Map::new();
@@ -579,7 +505,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["queue", "capacity"], QUEUE_CAPACITY)
                 .write(["queue", "capacity_per_user"], QUEUE_CAPACITY_PER_USER);
@@ -644,7 +569,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         .wrap_err("compose metrics URL")?;
     let http = integration_tests::http::client();
     let mut observed_saturation = queue_backpressure_rejects > 0;
-    let mut observed_deferrals = 0.0;
     let mut max_queue_depth = 0.0;
     let mut queue_capacity = 0.0;
     let start = Instant::now();
@@ -681,13 +605,7 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         {
             observed_saturation = true;
         }
-        if let Some(deferrals) =
-            reader.get_optional("sumeragi_pacemaker_backpressure_deferrals_total")
-            && deferrals > 0.0
-        {
-            observed_deferrals = deferrals;
-        }
-        if observed_saturation && observed_deferrals > 0.0 {
+        if observed_saturation {
             break;
         }
         sleep(QUEUE_SATURATION_POLL_INTERVAL).await;
@@ -695,10 +613,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     ensure!(
         observed_saturation,
         "queue saturation gauge never rose above zero"
-    );
-    ensure!(
-        observed_deferrals > 0.0,
-        "revision-4 queue backpressure deferral counter remained zero"
     );
     let mut summary_root = Map::new();
     summary_root.insert("scenario".into(), json_value(&QUEUE_STRESS_SCENARIO_NAME));
@@ -717,14 +631,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         map.insert("max_depth".into(), json_value(&max_queue_depth));
         map.insert("capacity_reported".into(), json_value(&queue_capacity));
         map.insert("saturated".into(), json_value(&observed_saturation));
-        Value::Object(map)
-    });
-    summary_root.insert("backpressure".into(), {
-        let mut map = Map::new();
-        map.insert(
-            "pacemaker_deferrals_total".into(),
-            json_value(&observed_deferrals),
-        );
         Value::Object(map)
     });
     let summary_value = Value::Object(summary_root);

@@ -47,9 +47,7 @@ const TELEMETRY_REQUIRED_KEYS: &[&str] = &[
 ];
 fn builder_with_full_telemetry() -> NetworkBuilder {
     NetworkBuilder::new().with_config_layer(|layer| {
-        layer
-            .write("telemetry_enabled", true)
-            .write("telemetry_profile", "full");
+        layer.write("telemetry_profile", "full");
     })
 }
 struct MetricsReader {

@@ -4,7 +4,6 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
-use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -48,7 +47,7 @@ fn create_transfer_set_nft_with_tlv() {
     wsv.add_account_unchecked(alice.clone());
     wsv.add_account_unchecked(bob.clone());
     wsv.add_account_unchecked(carol.clone());
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Create NFT nft0 for alice

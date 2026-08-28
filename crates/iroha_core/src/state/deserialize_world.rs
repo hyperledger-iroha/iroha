@@ -6794,6 +6794,28 @@ fn parse_world(
 ) -> Result<World, json::Error> {
     if let Some(actual) = map.source_order.as_ref() {
         let expected = canonical_world_field_order();
+        const EMPTY_PRIVATE_SETTLEMENT_MIGRATION_FIELDS: [&str; 7] = [
+            "private_settlement_governance",
+            "private_settlement_pools",
+            "private_settlement_roots",
+            "private_settlement_nullifiers",
+            "private_settlement_outputs",
+            "private_settlement_receipts",
+            "private_settlement_aborts",
+        ];
+        let private_settlement_fields_present = EMPTY_PRIVATE_SETTLEMENT_MIGRATION_FIELDS
+            .iter()
+            .filter(|field| map.contains_key(field))
+            .count();
+        if private_settlement_fields_present != 0
+            && private_settlement_fields_present != EMPTY_PRIVATE_SETTLEMENT_MIGRATION_FIELDS.len()
+        {
+            return Err(json::Error::InvalidField {
+                field: "world.private_settlement_state".to_owned(),
+                message: "private-settlement snapshot maps must be either all present or all absent for empty-state migration"
+                    .to_owned(),
+            });
+        }
         if let Some(unknown) = actual.iter().find(|key| !expected.contains(key)) {
             return Err(json::Error::InvalidField {
                 field: format!("world.{unknown}"),
@@ -6801,7 +6823,12 @@ fn parse_world(
                     .to_owned(),
             });
         }
-        if actual != expected {
+        let migrated_expected = expected
+            .iter()
+            .filter(|field| !EMPTY_PRIVATE_SETTLEMENT_MIGRATION_FIELDS.contains(&field.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if actual != expected && actual != &migrated_expected {
             return Err(json::Error::InvalidField {
                 field: "world".to_owned(),
                 message: "snapshot world fields are not in canonical schema order".to_owned(),
@@ -7110,6 +7137,47 @@ fn parse_world(
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     > = take_required(&mut map, "privacy_activations")?;
+    let private_settlement_governance: Storage<
+        PrivateSettlementPoolKeyV1,
+        PrivateSettlementPoolGovernanceProjectionV1,
+    > = take_optional(&mut map, "private_settlement_governance")?.unwrap_or_default();
+    let private_settlement_pools: Storage<
+        PrivateSettlementPoolKeyV1,
+        PrivateSettlementPoolStateV1,
+    > = take_optional(&mut map, "private_settlement_pools")?.unwrap_or_default();
+    let private_settlement_roots: Storage<
+        PrivateSettlementRootKeyV1,
+        PrivateSettlementRootProvenanceV1,
+    > = take_optional(&mut map, "private_settlement_roots")?.unwrap_or_default();
+    let private_settlement_nullifiers: Storage<
+        PrivateSettlementNullifierKeyV1,
+        PrivateSettlementFinalizationReferenceV1,
+    > = take_optional(&mut map, "private_settlement_nullifiers")?.unwrap_or_default();
+    let private_settlement_outputs: Storage<
+        PrivateSettlementOutputKeyV1,
+        PrivateSettlementOutputRecordV1,
+    > = take_optional(&mut map, "private_settlement_outputs")?.unwrap_or_default();
+    let private_settlement_receipts: Storage<
+        Hash,
+        iroha_data_model::nexus::PrivateSettlementReceiptV1,
+    > = take_optional(&mut map, "private_settlement_receipts")?.unwrap_or_default();
+    let private_settlement_aborts: Storage<
+        Hash,
+        iroha_data_model::nexus::PrivateSettlementAbortReceiptV1,
+    > = take_optional(&mut map, "private_settlement_aborts")?.unwrap_or_default();
+    crate::private_settlement::global_state::validate_private_settlement_persisted_state_v1(
+        &private_settlement_governance.view(),
+        &private_settlement_pools.view(),
+        &private_settlement_roots.view(),
+        &private_settlement_nullifiers.view(),
+        &private_settlement_outputs.view(),
+        &private_settlement_receipts.view(),
+        &private_settlement_aborts.view(),
+    )
+    .map_err(|error| json::Error::InvalidField {
+        field: "world.private_settlement_state".to_owned(),
+        message: error.to_string(),
+    })?;
     let privacy_pgc_accounts: Storage<
         crate::privacy_state::PrivacyPgcAccountKeyV1,
         crate::privacy_state::PrivacyPgcAccountStateV1,
@@ -7310,8 +7378,6 @@ fn parse_world(
     let repo_agreements = take_required(&mut map, "repo_agreements")?;
     let settlement_receipts = take_required(&mut map, "settlement_receipts")?;
     let kagemusha_replay_keys = take_required(&mut map, "kagemusha_replay_keys")?;
-    let direct_lane_block_application_markers =
-        take_required(&mut map, "direct_lane_block_application_markers")?;
     let lane_relay_emergency_validators =
         take_required(&mut map, "lane_relay_emergency_validators")?;
     let manifest_aliases = take_required(&mut map, "manifest_aliases")?;
@@ -7442,6 +7508,13 @@ fn parse_world(
         runtime_upgrades,
         privacy_consensus_policy,
         privacy_activations,
+        private_settlement_governance,
+        private_settlement_pools,
+        private_settlement_roots,
+        private_settlement_nullifiers,
+        private_settlement_outputs,
+        private_settlement_receipts,
+        private_settlement_aborts,
         privacy_pgc_accounts,
         privacy_pgc_pool_invariants,
         privacy_nullifiers,
@@ -7545,7 +7618,6 @@ fn parse_world(
         repo_agreements_by_custodian: Storage::default(),
         settlement_receipts,
         kagemusha_replay_keys,
-        direct_lane_block_application_markers,
         domain_committees,
         domain_endorsement_policies,
         domain_endorsements,
@@ -8245,7 +8317,6 @@ pub(super) fn default_zk() -> iroha_config::parameters::actual::Zk {
             metal_threadgroup_width: None,
             metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
             metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
-            metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         },
         stark: iroha_config::parameters::actual::Stark::default(),
         sccp: iroha_config::parameters::actual::Sccp::default(),
@@ -9308,6 +9379,229 @@ mod decode_tests {
         assert!(
             SnapshotJsonMap::parse(r#"{"first":0,"first":1}"#, "fixture").is_err(),
             "duplicate signed snapshot fields must fail closed"
+        );
+    }
+    fn omit_world_snapshot_fields(encoded: &str, omitted: &[&str]) -> String {
+        let parsed = SnapshotJsonMap::parse(encoded, "world").expect("parse canonical World");
+        let order = parsed
+            .source_order
+            .as_ref()
+            .expect("borrowed snapshot retains source order");
+        let mut migrated = String::from("{");
+        let mut first = true;
+        for field in order {
+            if omitted.contains(&field.as_str()) {
+                continue;
+            }
+            let SnapshotJsonField::Borrowed { raw } =
+                parsed.fields.get(field).expect("source-order field exists")
+            else {
+                unreachable!("parsed snapshot fields are borrowed")
+            };
+            if !first {
+                migrated.push(',');
+            }
+            first = false;
+            migrated.push_str(&json::to_json(field).expect("encode field name"));
+            migrated.push(':');
+            migrated.push_str(raw);
+        }
+        migrated.push('}');
+        migrated
+    }
+    #[test]
+    fn private_settlement_snapshot_migration_is_all_or_nothing() {
+        const FIELDS: [&str; 7] = [
+            "private_settlement_governance",
+            "private_settlement_pools",
+            "private_settlement_roots",
+            "private_settlement_nullifiers",
+            "private_settlement_outputs",
+            "private_settlement_receipts",
+            "private_settlement_aborts",
+        ];
+        let encoded = json::to_json(&World::default()).expect("serialize default World");
+        let ivm = IVM::new(0);
+        let seed = IvmSeed {
+            ivm: &ivm,
+            _marker: PhantomData,
+        };
+
+        let migrated = omit_world_snapshot_fields(&encoded, &FIELDS);
+        let restored = parse_world(
+            SnapshotJsonMap::parse(&migrated, "world").expect("parse legacy World"),
+            &seed,
+        )
+        .expect("legacy World defaults the complete empty private-settlement projection");
+        assert!(
+            restored
+                .private_settlement_governance
+                .view()
+                .iter()
+                .next()
+                .is_none()
+        );
+        assert!(
+            restored
+                .private_settlement_pools
+                .view()
+                .iter()
+                .next()
+                .is_none()
+        );
+
+        let partial = omit_world_snapshot_fields(&encoded, &FIELDS[..1]);
+        let error = match parse_world(
+            SnapshotJsonMap::parse(&partial, "world").expect("parse partial World"),
+            &seed,
+        ) {
+            Ok(_) => panic!("partially missing private-settlement maps must fail closed"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains(
+                "private-settlement snapshot maps must be either all present or all absent"
+            ),
+            "unexpected partial-migration error: {error}"
+        );
+    }
+    #[test]
+    fn private_settlement_snapshot_roundtrip_validates_governed_pool_projection() {
+        let fixture = crate::private_settlement::sidecar_store::tests::sidecar_fixture();
+        let route = fixture.pool_governance.body.route;
+        let pool_id = fixture.pool_governance.body.pool_id;
+        let restricted_asset_canary = fixture.pool_governance.body.asset_definition_id.to_string();
+        let restricted_salt_canary = fixture.pool_governance.body.asset_binding_salt;
+        let governance =
+            PrivateSettlementPoolGovernanceProjectionV1::from_restricted(&fixture.pool_governance)
+                .expect("restricted governance projects only after validation");
+        let mut world = World::default();
+        let plan = plan_private_settlement_pool_bootstrap_v1(
+            &world.private_settlement_governance.view(),
+            &world.private_settlement_pools.view(),
+            &world.private_settlement_roots.view(),
+            governance,
+            &[iroha_data_model::privacy::PrivacyCommitmentV1::new(
+                [0xE1; 32],
+            )],
+            5,
+        )
+        .expect("governed pool bootstrap validates")
+        .expect("new governed pool produces writes");
+        world
+            .private_settlement_governance
+            .insert(plan.key, plan.governance);
+        world.private_settlement_pools.insert(plan.key, plan.pool);
+        world
+            .private_settlement_roots
+            .insert(plan.root_key, plan.root_provenance);
+
+        let encoded = json::to_json(&world).expect("serialize governed settlement pool");
+        assert!(
+            !encoded.contains("asset_definition_id")
+                && !encoded.contains("asset_binding_salt")
+                && !encoded.contains(&restricted_asset_canary)
+                && !encoded.contains(&hex::encode(restricted_salt_canary))
+                && !encoded.contains(&hex::encode_upper(restricted_salt_canary))
+                && !encoded
+                    .as_bytes()
+                    .windows(restricted_salt_canary.len())
+                    .any(|window| window == restricted_salt_canary),
+            "canonical World snapshot must never contain restricted pool asset/salt canaries"
+        );
+        let ivm = IVM::new(0);
+        let restored = parse_world(
+            SnapshotJsonMap::parse(&encoded, "world").expect("parse governed pool World"),
+            &IvmSeed {
+                ivm: &ivm,
+                _marker: PhantomData,
+            },
+        )
+        .expect("restore governed pool World");
+        assert_eq!(
+            restored
+                .view()
+                .private_settlement_pool_head_v1(route, pool_id),
+            Some((plan.root_key.epoch, plan.root_key.root))
+        );
+
+        {
+            let mut roots = world.private_settlement_roots.block();
+            roots.remove(plan.root_key);
+            roots.commit();
+        }
+        let corrupt = json::to_json(&world).expect("serialize corrupt governed pool projection");
+        let error = match parse_world(
+            SnapshotJsonMap::parse(&corrupt, "world").expect("parse corrupt World"),
+            &IvmSeed {
+                ivm: &ivm,
+                _marker: PhantomData,
+            },
+        ) {
+            Ok(_) => panic!("missing governed pool root must fail restore"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("private-settlement pool transition is invalid"),
+            "unexpected private-settlement restore error: {error}"
+        );
+    }
+
+    #[test]
+    fn private_settlement_finalized_snapshot_roundtrip_restores_all_seven_maps() {
+        let world = crate::private_settlement::global_state::tests::finalized_world_fixture();
+        let receipt = {
+            let receipts = world.private_settlement_receipts.view();
+            receipts
+                .iter()
+                .next()
+                .map(|(_, receipt)| receipt.clone())
+                .expect("finalized fixture receipt")
+        };
+        let abort = {
+            let aborts = world.private_settlement_aborts.view();
+            aborts
+                .iter()
+                .next()
+                .map(|(_, abort)| abort.clone())
+                .expect("finalized fixture abort")
+        };
+        let encoded = json::to_json(&world).expect("serialize finalized settlement World");
+        let ivm = IVM::new(0);
+        let restored = parse_world(
+            SnapshotJsonMap::parse(&encoded, "world").expect("parse finalized settlement World"),
+            &IvmSeed {
+                ivm: &ivm,
+                _marker: PhantomData,
+            },
+        )
+        .expect("restore every private-settlement map");
+
+        assert_eq!(restored.private_settlement_governance.view().len(), 2);
+        assert_eq!(restored.private_settlement_pools.view().len(), 2);
+        assert_eq!(restored.private_settlement_roots.view().len(), 4);
+        assert_eq!(restored.private_settlement_nullifiers.view().len(), 4);
+        assert_eq!(restored.private_settlement_outputs.view().len(), 6);
+        assert_eq!(restored.private_settlement_receipts.view().len(), 1);
+        assert_eq!(restored.private_settlement_aborts.view().len(), 1);
+        assert_eq!(
+            restored
+                .view()
+                .private_settlement_receipt_v1(&receipt.manifest.bundle_id),
+            Some(&receipt)
+        );
+        assert_eq!(
+            restored
+                .view()
+                .private_settlement_abort_v1(&abort.bundle_id),
+            Some(&abort)
+        );
+        assert_eq!(
+            json::to_json(&restored).expect("re-encode restored settlement World"),
+            encoded,
+            "canonical restart must preserve every public settlement byte"
         );
     }
     #[test]

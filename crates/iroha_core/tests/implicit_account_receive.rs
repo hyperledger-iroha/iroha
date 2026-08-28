@@ -113,7 +113,9 @@ fn install_global_policy(state: &State, authority: &AccountId, policy: AccountAd
         .execute(authority, &mut stx)
         .expect("set global account admission policy");
     stx.apply();
-    block.commit().expect("commit policy update");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit policy update");
 }
 #[test]
 fn transfer_to_missing_account_creates_account_by_default() {
@@ -137,7 +139,9 @@ fn transfer_to_missing_account_creates_account_by_default() {
     let mut ivm_cache = IvmCache::new();
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     assert!(result.is_ok(), "transfer must succeed: {result:?}");
-    state_block.commit().expect("commit state");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit state");
     let created_via_key: Name = "iroha:created_via".parse().expect("metadata key");
     let details = state
         .view()
@@ -195,7 +199,9 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
         ),
         "unexpected error: {err:?}"
     );
-    state_block.commit().expect("commit state");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit state");
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u32));
     assert!(
         state.view().world().accounts().get(&dest).is_none(),
@@ -223,7 +229,9 @@ fn multiple_receipts_in_one_tx_create_account_once() {
     let mut ivm_cache = IvmCache::new();
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     assert!(result.is_ok(), "transfer must succeed: {result:?}");
-    state_block.commit().expect("commit state");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit state");
     let dest_asset_id = AssetId::new(asset_def_id, dest.clone());
     assert_eq!(balance(&state, &dest_asset_id), Quantity::from(12_u32));
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(38_u32));
@@ -270,7 +278,9 @@ fn transaction_quota_limits_implicit_accounts() {
         ),
         "unexpected error: {err:?}"
     );
-    state_block.commit().expect("commit state");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit state");
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(40_u32));
     assert!(
         state.view().world().accounts().get(&dest1).is_none(),
@@ -336,7 +346,9 @@ fn block_quota_limits_creations_across_transactions() {
         ),
         "unexpected error: {err:?}"
     );
-    state_block.commit().expect("commit state");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit state");
     let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
     assert_eq!(balance(&state, &dest1_asset_id), Quantity::from(10_u32));
     assert!(
@@ -386,7 +398,9 @@ fn missing_default_role_rejects_in_pipeline() {
         ),
         "unexpected error: {err:?}"
     );
-    state_block.commit().expect("commit state");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit state");
     assert!(
         state.view().world().accounts().get(&dest).is_none(),
         "account must not be created on failure"
@@ -415,7 +429,9 @@ fn implicit_account_can_spend_without_roles() {
     let mut ivm_cache = IvmCache::new();
     let (_, res1) = block1.validate_transaction(accepted1, &mut ivm_cache);
     assert!(res1.is_ok(), "first transfer should succeed: {res1:?}");
-    block1.commit().expect("commit first block");
+    block1
+        .commit_world_overlay_for_testing()
+        .expect("commit first block");
     let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
     assert_eq!(balance(&state, &bob_asset_id), Quantity::from(7_u32));
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(13_u32));
@@ -438,7 +454,9 @@ fn implicit_account_can_spend_without_roles() {
         res2.is_ok(),
         "implicit account should be able to spend: {res2:?}"
     );
-    block2.commit().expect("commit second block");
+    block2
+        .commit_world_overlay_for_testing()
+        .expect("commit second block");
     assert_eq!(balance(&state, &bob_asset_id), Quantity::from(2_u32));
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(18_u32));
 }
@@ -464,7 +482,9 @@ fn multi_receipts_within_transaction_succeed_in_open_domain() {
     let mut ivm_cache = IvmCache::new();
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     assert!(result.is_ok(), "batched transfers must succeed: {result:?}");
-    state_block.commit().expect("commit state");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit state");
     let created_via_key: Name = "iroha:created_via".parse().expect("metadata key");
     for dest in [&dest1, &dest2] {
         let details = state
@@ -526,7 +546,9 @@ fn tx_cap_rejects_multiple_implicit_creations() {
         ),
         "unexpected error: {err:?}"
     );
-    state_block.commit().expect("commit state");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit state");
     assert!(
         state.view().world().accounts().get(&dest1).is_none(),
         "dest1 must not exist after rejection"

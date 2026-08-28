@@ -13,8 +13,7 @@ mutation boundaries:
   2. READY-bearing autonomous successor admission accepts only the exact WSV
      frontier, a carrier-revalidated MergeExecution receipt, or an exact
      canonical-block/results-revalidated Current receipt; hash-only lane
-     ownership and DirectExecution receipts are not economic application
-     evidence;
+     ownership is not economic application evidence;
   3. startup repair cannot consume capacity before carrier envelopes have
      been reconstructed;
   4. certification creates durable pair and bundle capacity obligations, so
@@ -47,8 +46,7 @@ RecoveryCapacityModes ==
    "PrunePeakDropsReservationEnvelope",
    "DebugAppendBeforeCarrierReservation",
    "DebugRestartDropsAccounting",
-   "HashOnlyAutonomousPredecessor",
-   "DirectExecutionAutonomousPredecessor"}
+   "HashOnlyAutonomousPredecessor"}
 
 CarrierNStatuses == {"Incomplete", "Recovered", "Terminal", "Receipted"}
 CarrierNSources ==
@@ -56,8 +54,7 @@ CarrierNSources ==
    "TerminalProofN", "ReceiptProofN"}
 AutonomousPredecessorEvidence ==
   {"None", "HashOnlyOwnership", "ExactWsvFrontier",
-   "MergeReceiptCarrierRevalidated", "CanonicalReceiptRevalidated",
-   "DirectExecutionReceipt"}
+   "MergeReceiptCarrierRevalidated", "CanonicalReceiptRevalidated"}
 StartupPhases == {"Cold", "EnvelopesReconstructed", "Repairing", "Published"}
 DebugPhases == {"Idle", "CarrierReserved", "Appended", "RestartPending",
                 "RestartAccounted"}
@@ -221,13 +218,6 @@ ObserveHashOnlyAutonomousPredecessor ==
   /\ autonomousPredecessorEvidence' = "HashOnlyOwnership"
   /\ autonomousPredecessorAdmitted' =
        (Mode = "HashOnlyAutonomousPredecessor")
-  /\ UNCHANGED <<CarrierVars, StartupVars, FrontierVars, PeakVars, DebugVars>>
-
-ObserveDirectExecutionAutonomousPredecessor ==
-  /\ autonomousPredecessorEvidence = "None"
-  /\ autonomousPredecessorEvidence' = "DirectExecutionReceipt"
-  /\ autonomousPredecessorAdmitted' =
-       (Mode = "DirectExecutionAutonomousPredecessor")
   /\ UNCHANGED <<CarrierVars, StartupVars, FrontierVars, PeakVars, DebugVars>>
 
 AdmitAutonomousPredecessorFromExactWsvFrontier ==
@@ -438,7 +428,6 @@ Next ==
   \/ DischargeCarrierNWithTerminalProof
   \/ DischargeCarrierNWithReceiptProof
   \/ ObserveHashOnlyAutonomousPredecessor
-  \/ ObserveDirectExecutionAutonomousPredecessor
   \/ AdmitAutonomousPredecessorFromExactWsvFrontier
   \/ AdmitAutonomousPredecessorFromRevalidatedMergeReceipt
   \/ AdmitAutonomousPredecessorFromRevalidatedCanonicalReceipt
@@ -511,8 +500,6 @@ MLAutonomousPredecessorGloballyApplied ==
          \in {"ExactWsvFrontier", "MergeReceiptCarrierRevalidated",
               "CanonicalReceiptRevalidated"}
   /\ (autonomousPredecessorEvidence = "HashOnlyOwnership") =>
-       ~autonomousPredecessorAdmitted
-  /\ (autonomousPredecessorEvidence = "DirectExecutionReceipt") =>
        ~autonomousPredecessorAdmitted
 
 MLCertifiedFrontierCapacityReconstructable ==

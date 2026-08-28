@@ -282,8 +282,7 @@ create_every_ms = 60_000
 store_dir = "./storage/snapshot"
 
 [telemetry]
-name = "test"
-url = "http://test.com"
+url = "ws://test.com"
 min_retry_period_ms = 5_000
 max_retry_delay_exponent = 4
 

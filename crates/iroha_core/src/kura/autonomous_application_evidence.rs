@@ -5,7 +5,7 @@ impl Kura {
     /// Ordinary lane work can be the globally applied predecessor of later
     /// autonomous work. Its application proof is a `Current` receipt rather
     /// than a merge receipt, so it must be admitted explicitly without also
-    /// admitting hash-only snapshots or direct-execution receipts.
+    /// admitting hash-only snapshots.
     pub(crate) fn canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,

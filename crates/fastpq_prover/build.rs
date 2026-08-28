@@ -10,11 +10,9 @@ use std::{
     process::{Command, Output},
 };
 
-const METAL_TOOLCHAIN_DOWNLOAD_COMMAND: &str = "xcodebuild -downloadComponent MetalToolchain";
 const METAL_TOOLCHAIN_REMEDIATION: &str = "verify that `xcode-select -p` or `DEVELOPER_DIR` selects a full Xcode installation and accept any pending Xcode license, then run `xcodebuild -downloadComponent MetalToolchain` manually; set `FASTPQ_SKIP_GPU_BUILD=1` only to opt out and use runtime Metal source compilation";
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=FASTPQ_GPU");
     println!("cargo:rerun-if-env-changed=FASTPQ_SKIP_GPU_BUILD");
     println!("cargo:rerun-if-env-changed=CUDA_HOME");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
@@ -26,9 +24,8 @@ fn main() {
     println!("cargo:rerun-if-changed=metal/include/params.h");
     println!("cargo:rerun-if-changed=metal/kernels/field.metal");
     println!("cargo:rerun-if-changed=metal/kernels/ntt_stage.metal");
-    println!("cargo:rerun-if-changed=metal/kernels/poseidon2.metal");
+    println!("cargo:rerun-if-changed=metal/kernels/poseidon.metal");
     println!("cargo:rerun-if-changed=metal/kernels/bn254.metal");
-    let cuda_feature = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let skip_gpu_build = env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some();
@@ -43,11 +40,11 @@ fn main() {
             println!("cargo:rustc-env=FASTPQ_METAL_LIB=");
         }
     }
-    if !cuda_feature && !fastpq_gpu_feature {
+    if !fastpq_gpu_feature {
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
         return;
     }
-    if target_os == "macos" && !cuda_feature {
+    if target_os == "macos" {
         // Metal hosts skip the static CUDA path; the runtime will fall back to the Metal
         // backend without surfacing an unnecessary warning.
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
@@ -107,53 +104,9 @@ fn nvcc_available() -> bool {
         .unwrap_or(false)
 }
 fn ensure_metal_toolchain() -> Result<(), String> {
-    let initial_error = match metal_toolchain_status() {
-        Ok(()) => return Ok(()),
-        Err(error) => error,
-    };
-    println!(
-        "cargo:warning=FASTPQ Metal compiler/linker is unavailable ({initial_error}); running `{METAL_TOOLCHAIN_DOWNLOAD_COMMAND}`"
-    );
-    let download = Command::new("xcodebuild")
-        .args(["-downloadComponent", "MetalToolchain"])
-        .output()
-        .map_err(|error| {
-            metal_toolchain_bootstrap_error(&format!(
-                "failed to launch `{METAL_TOOLCHAIN_DOWNLOAD_COMMAND}` after the initial health check failed ({initial_error}): {error}"
-            ))
-        })?;
-    if !download.status.success() {
-        return Err(metal_toolchain_bootstrap_error(&format!(
-            "`{METAL_TOOLCHAIN_DOWNLOAD_COMMAND}` exited with {} after the initial health check failed ({initial_error}): {}",
-            download.status,
-            command_diagnostic(&download)
-        )));
-    }
-    // Clear xcrun's negative lookup cache before resolving the newly installed tools.
-    let cache_error = match Command::new("xcrun").arg("--kill-cache").output() {
-        Ok(output) if output.status.success() => None,
-        Ok(output) => Some(format!(
-            "`xcrun --kill-cache` exited with {}: {}",
-            output.status,
-            command_diagnostic(&output)
-        )),
-        Err(error) => Some(format!("failed to launch `xcrun --kill-cache`: {error}")),
-    };
-    match metal_toolchain_status() {
-        Ok(()) => Ok(()),
-        Err(redetection_error) => {
-            let cache_context = cache_error
-                .map(|error| format!("; additionally, {error}"))
-                .unwrap_or_default();
-            Err(metal_toolchain_bootstrap_error(&format!(
-                "the download completed, but compiler/linker redetection failed: {redetection_error}{cache_context}"
-            )))
-        }
-    }
-}
-
-fn metal_toolchain_bootstrap_error(problem: &str) -> String {
-    format!("Metal Toolchain bootstrap failed: {problem}; {METAL_TOOLCHAIN_REMEDIATION}")
+    metal_toolchain_status().map_err(|problem| {
+        format!("Metal compiler/linker is unavailable: {problem}; {METAL_TOOLCHAIN_REMEDIATION}")
+    })
 }
 
 fn metal_toolchain_status() -> Result<(), String> {
@@ -187,7 +140,7 @@ fn compile_metal_shaders() -> Result<(), String> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);
     let kernels = [
         ("ntt_stage", Path::new("metal/kernels/ntt_stage.metal")),
-        ("poseidon2", Path::new("metal/kernels/poseidon2.metal")),
+        ("poseidon", Path::new("metal/kernels/poseidon.metal")),
         ("bn254", Path::new("metal/kernels/bn254.metal")),
     ];
     let include_dir = Path::new("metal/include");

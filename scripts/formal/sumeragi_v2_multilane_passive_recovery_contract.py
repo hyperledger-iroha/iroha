@@ -178,7 +178,7 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         (
             "autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair",
             "lane_block_application_receipt_available_without_sidecar_repair",
-            "read_lane_block_application_receipt_without_sidecar_repair",
+            "ExecutionStatus::StateAppliedByCanonicalBlock",
             "lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair",
             "read_preflighted_lane_block_execution_input_for_application_without_sidecar_repair",
             "lane_block_execution_preflight_has_rejections_without_sidecar_repair",
@@ -521,7 +521,7 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
         (
             "autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair",
             "lane_block_application_receipt_available_without_sidecar_repair",
-            "read_lane_block_application_receipt_without_sidecar_repair",
+            "ExecutionStatus::StateAppliedByCanonicalBlock",
             "lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair",
             "read_preflighted_lane_block_execution_input_for_application_without_sidecar_repair",
             "lane_block_execution_preflight_has_rejections_without_sidecar_repair",

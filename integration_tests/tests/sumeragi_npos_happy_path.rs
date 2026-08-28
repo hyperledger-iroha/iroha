@@ -13,7 +13,6 @@ use tokio::time::sleep;
 const BLOCK_TARGET: u64 = 6;
 const METRIC_ATTEMPTS: usize = 40;
 const METRIC_INTERVAL: Duration = Duration::from_millis(250);
-const PACEMAKER_EMA_BUDGET_MS: f64 = 8_000.0;
 const BG_QUEUE_DEPTH_BUDGET: f64 = 16.0;
 const LARGE_PAYLOAD_BYTES: usize = 1024 * 1024;
 const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(480);
@@ -37,7 +36,6 @@ fn npos_builder() -> NetworkBuilder {
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["network", "max_frame_bytes"], NETWORK_FRAME_BUDGET_BYTES)
                 .write(
@@ -105,13 +103,7 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     let http = integration_tests::http::client();
     let torii = client.torii_url.clone();
     let metrics_url = torii.join("metrics").wrap_err("compose metrics URL")?;
-    ensure_metrics_within_bounds(
-        &http,
-        &metrics_url,
-        PACEMAKER_EMA_BUDGET_MS,
-        BG_QUEUE_DEPTH_BUDGET,
-    )
-    .await?;
+    ensure_metrics_within_bounds(&http, &metrics_url, BG_QUEUE_DEPTH_BUDGET).await?;
     network.shutdown().await;
     Ok(())
 }
@@ -195,7 +187,6 @@ async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Res
 async fn ensure_metrics_within_bounds(
     http: &reqwest::Client,
     url: &reqwest::Url,
-    phase_budget_ms: f64,
     queue_budget: f64,
 ) -> eyre::Result<()> {
     let mut last_snapshot = String::new();
@@ -218,25 +209,9 @@ async fn ensure_metrics_within_bounds(
         let queue_depth_max = reader
             .max_with_prefix("sumeragi_bg_post_queue_depth_by_peer")
             .ok_or_else(|| eyre!("missing per-peer background queue depth metrics"))?;
-        let phases = [
-            "propose",
-            "collect_da",
-            "collect_prevote",
-            "collect_precommit",
-            "commit",
-        ];
-        let phase_values = phases.map(|phase| {
-            let key = format!("sumeragi_phase_latency_ema_ms{{phase=\"{phase}\"}}");
-            (phase, reader.get(&key))
-        });
-        let phases_ok = phase_values
-            .iter()
-            .all(|(_, value)| *value > 0.0 && *value <= phase_budget_ms);
-        last_summary = format!(
-            "queue_depth={queue_depth}, queue_depth_max={queue_depth_max}, phases={phase_values:?}"
-        );
+        last_summary = format!("queue_depth={queue_depth}, queue_depth_max={queue_depth_max}");
         last_snapshot = snapshot;
-        if phases_ok && queue_depth <= queue_budget && queue_depth_max <= queue_budget {
+        if queue_depth <= queue_budget && queue_depth_max <= queue_budget {
             return Ok(());
         }
         if attempt + 1 < METRIC_ATTEMPTS {

@@ -51,7 +51,9 @@ fn unlocks_after_expiry_height() {
         stx.apply();
         // Drain events (none expected yet)
         sblock1.world.take_external_events();
-        sblock1.commit().expect("commit block at H=1");
+        sblock1
+            .commit_empty_block_for_testing()
+            .expect("commit block at H=1");
     }
     // Block H=2: still not unlocked
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -70,7 +72,9 @@ fn unlocks_after_expiry_height() {
                     )
             )
         }));
-        sblock2.commit().expect("commit block at H=2");
+        sblock2
+            .commit_empty_block_for_testing()
+            .expect("commit block at H=2");
     }
     // Block H=3: unlock should occur
     let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
@@ -87,6 +91,8 @@ fn unlocks_after_expiry_height() {
                     )
                 )
         )));
-        sblock3.commit().expect("commit block at H=3");
+        sblock3
+            .commit_empty_block_for_testing()
+            .expect("commit block at H=3");
     }
 }

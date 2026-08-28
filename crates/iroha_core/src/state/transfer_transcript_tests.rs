@@ -1,9 +1,9 @@
 // Transfer-transcript tests remain in the parent state test module.
+use super::*;
+use crate::kura::Kura;
 use iroha_data_model::block::BlockHeader;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
-use super::*;
-use crate::kura::Kura;
 fn sample_delta(amount: u32) -> TransferDeltaTranscript {
     TransferDeltaTranscript {
         from_account: (*ALICE_ID).clone(),
@@ -356,7 +356,9 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     }
     let events_seq = block_seq.world.take_external_events();
     let transcripts_seq = block_seq.drain_transfer_transcripts();
-    block_seq.commit().expect("commit sequential block");
+    block_seq
+        .commit_world_overlay_for_testing()
+        .expect("commit sequential block");
     let (world_det, _, _) = build_transfer_world(None);
     let kura_det = Kura::blank_kura_for_testing();
     let query_det = crate::query::store::LiveQueryStore::start_test();
@@ -382,7 +384,9 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
         .expect("detached transfer merge");
     let events_det = block_det.world.take_external_events();
     let transcripts_det = block_det.drain_transfer_transcripts();
-    block_det.commit().expect("commit detached block");
+    block_det
+        .commit_world_overlay_for_testing()
+        .expect("commit detached block");
     let (world_existing_tx, _, _) = build_transfer_world(None);
     let kura_existing_tx = Kura::blank_kura_for_testing();
     let query_existing_tx = crate::query::store::LiveQueryStore::start_test();
@@ -404,7 +408,7 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     let events_existing_tx = block_existing_tx.world.take_external_events();
     let transcripts_existing_tx = block_existing_tx.drain_transfer_transcripts();
     block_existing_tx
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit existing-transaction detached block");
     let second_call_hash = iroha_crypto::Hash::prehashed([8_u8; iroha_crypto::Hash::LENGTH]);
     let (world_batch, _, _) = build_transfer_world(None);
@@ -445,7 +449,9 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     assert_eq!(block_batch.committed_fragment_count(), 2);
     let events_batch = block_batch.world.take_external_events();
     let transcripts_batch = block_batch.drain_transfer_transcripts();
-    block_batch.commit().expect("commit batch detached block");
+    block_batch
+        .commit_world_overlay_for_testing()
+        .expect("commit batch detached block");
     assert_eq!(events_seq, events_det);
     assert_eq!(events_seq, events_existing_tx);
     assert_eq!(transcripts_seq, transcripts_det);

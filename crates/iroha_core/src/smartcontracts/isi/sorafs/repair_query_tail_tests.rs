@@ -342,7 +342,9 @@ fn repair_escalation_and_provider_appeal_are_atomic_and_idempotent() {
     .expect_err("slash proposal permits only one appeal");
     assert!(smart_contract_error_message(&duplicate_appeal).contains("single appeal"));
     transaction.apply();
-    block.commit().expect("commit repair escalation block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit repair escalation block");
     state.push_block_hash_for_testing(block_hash);
     let view = state.view();
     let task = FindSorafsRepairTask::new(report.ticket_id.0, None)

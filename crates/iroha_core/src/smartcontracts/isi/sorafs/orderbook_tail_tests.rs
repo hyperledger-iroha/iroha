@@ -389,7 +389,9 @@ fn corrupted_authoritative_state_fails_closed_before_new_mutation() {
         &vec![0xFF; 16]
     );
     stx.apply();
-    block.commit().expect("commit corrupt order query fixture");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit corrupt order query fixture");
     state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
     assert!(
         FindSorafsOrderbookOrders::new(None, None, None, 10)

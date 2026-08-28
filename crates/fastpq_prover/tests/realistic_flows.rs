@@ -34,16 +34,6 @@ fn governance_batch() -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     annotate_inputs(&mut batch, 7);
     batch.push(StateTransition::new(
-        b"role/council@governance/permission/vote.sora".to_vec(),
-        encode_u64(0),
-        encode_u64(1),
-        OperationKind::RoleGrant {
-            role_id: vec![0xA1; 32],
-            permission_id: vec![0xB2; 32],
-            epoch: 42,
-        },
-    ));
-    batch.push(StateTransition::new(
         b"account/governance.ballot@governance/metadata/ballot_2025_02".to_vec(),
         vec![],
         vec![1],
@@ -124,7 +114,7 @@ fn assert_strict_state_profile_rejects(mut batch: TransitionBatch) {
     ));
 }
 #[test]
-fn governance_flow_fails_closed_without_permission_witnesses() {
+fn opaque_governance_flow_fails_closed_under_transfer_semantics() {
     assert_strict_state_profile_rejects(governance_batch());
 }
 #[test]

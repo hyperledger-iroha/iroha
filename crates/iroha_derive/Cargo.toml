@@ -15,23 +15,24 @@ workspace = true
 default = []
 futures = []
 config_base = []
-telemetry = []
-trybuild-tests = ["dep:trybuild"]
+telemetry = ["futures"]
+trybuild-tests = ["dep:trybuild", "config_base", "telemetry"]
 
 [lib]
 proc-macro = true
 
 [dependencies]
 
-syn = { workspace = true, features = ["default", "full", "extra-traits", "visit-mut"] }
+syn = { workspace = true, features = ["default", "full"] }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
 manyhow = { workspace = true }
-darling = { workspace = true }
 iroha_derive_primitives = { path = "../iroha_derive_primitives" }
 trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
+# TODO: Remove this lockfile-preserving pin during the next authorized Cargo.lock refresh.
+darling = { workspace = true }
 iroha_macro = { workspace = true }
 iroha_config_base = { workspace = true }
 

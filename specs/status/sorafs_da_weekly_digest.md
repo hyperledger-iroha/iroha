@@ -38,7 +38,7 @@ summary: Checklist for DA ingestion/replication/PDP-PoTR evidence shared with st
 |--------|-------|--------|-------|
 | `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity` (avg) | {{ retention_ratio }} % | {{ retention_target }} % | {{ retention_notes }} |
 | Finalized replication completions within SLA (weekly registry export) | {{ sla_met }} | Track trend | {{ sla_notes }} |
-| `torii_sorafs_slash_proposals_total` (weekly delta) | {{ slash_delta }} | 0 unless planned | {{ slash_notes }} |
+| Finalized repair slash proposals (weekly audit-event export) | {{ slash_delta }} | 0 unless planned | {{ slash_notes }} |
 
 ## Alerts & Follow-Ups
 

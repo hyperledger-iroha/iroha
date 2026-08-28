@@ -1974,7 +1974,7 @@ fn create_manifest_setup_with_seed(
         }
         tx.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit manifest status timestamp block");
         *next_height += 1;
     }
@@ -2076,7 +2076,9 @@ fn ensure_authority_registered(
         .expect("mint SoraFS fee balance for test authority");
     }
     tx.apply();
-    block.commit().expect("commit authority registration block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit authority registration block");
 }
 fn attach_governance_revocation(
     harness: &ToriiHarness,
@@ -2138,7 +2140,9 @@ fn attach_governance_revocation(
         );
     }
     tx.apply();
-    block.commit().expect("commit governance metadata block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit governance metadata block");
     *next_height += 1;
 }
 #[allow(clippy::too_many_arguments)]
@@ -2204,7 +2208,9 @@ fn bind_alias_with_proof(
         }
     }
     tx.apply();
-    block.commit().expect("commit alias binding block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit alias binding block");
 }
 #[tokio::test]
 async fn sorafs_routes_disabled_when_cache_off() {

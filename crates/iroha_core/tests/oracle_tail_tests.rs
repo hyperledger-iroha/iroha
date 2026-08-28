@@ -128,7 +128,7 @@ fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
         &base_attestation,
     );
     stx.apply();
-    sb.commit().expect("commit block");
+    sb.commit_world_overlay_for_testing().expect("commit block");
     // Expired attestation rejected.
     let mut sb = state.block(header(2));
     let mut stx = sb.transaction();
@@ -161,7 +161,8 @@ fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
     .execute(&provider, &mut stx)
     .expect("revoke binding");
     stx.apply();
-    sb.commit().expect("commit revoke block");
+    sb.commit_world_overlay_for_testing()
+        .expect("commit revoke block");
     let view = state.view();
     assert!(
         view.world()

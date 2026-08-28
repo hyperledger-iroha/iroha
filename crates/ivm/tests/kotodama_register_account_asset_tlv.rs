@@ -3,7 +3,6 @@ use ivm::{
     IVM, MockWorldStateView, PermissionToken, kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::WsvHost,
 };
-use std::collections::HashMap;
 mod common;
 #[test]
 fn kotodama_register_account_and_unregister_asset() {
@@ -34,9 +33,7 @@ fn kotodama_register_account_and_unregister_asset() {
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-    let account_map: HashMap<u64, ivm::mock_wsv::AccountId> = HashMap::new();
-    let asset_map: HashMap<u64, ivm::AssetDefinitionId> = HashMap::new();
-    let host = WsvHost::new_with_subject_map(wsv, caller.clone(), account_map, asset_map);
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

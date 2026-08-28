@@ -423,7 +423,9 @@ mod tests {
         };
         stx.world.insert_proof_record(rec_rejected);
         stx.apply();
-        block.commit().expect("commit proof registry snapshot");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit proof registry snapshot");
         let filters = ProofFilters {
             backend: Some(backend),
             status: Some(ProofStatus::Verified),
@@ -501,7 +503,9 @@ mod tests {
         };
         stx.world.insert_proof_record(rec_submitted);
         stx.apply();
-        block.commit().expect("commit proof registry snapshot");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit proof registry snapshot");
         // Filter proofs verified at or above height 20 -> should only include id_late
         let filters_min_only = ProofFilters {
             backend: Some(backend),
@@ -625,7 +629,9 @@ mod tests {
         let (_, plain) = plain_record("halo2/ipa", [0x03; 32], ProofStatus::Verified, Some(7));
         stx.world.insert_proof_record(plain);
         stx.apply();
-        block.commit().expect("commit bridge filter snapshot");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit bridge filter snapshot");
         let rows = list_for_filters(
             &state,
             ProofFilters {
@@ -675,7 +681,9 @@ mod tests {
             stx.world.insert_proof_record(record);
         }
         stx.apply();
-        block.commit().expect("commit pagination snapshot");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit pagination snapshot");
 
         let filters = ProofFilters {
             backend: None,

@@ -76,7 +76,7 @@ impl Kura {
         )
         .is_some_and(|artifact| artifact.proposal == *proposal)
     }
-    /// Read a direct-execution preflight without publishing missing evidence.
+    /// Read an execution preflight without publishing missing evidence.
     pub(crate) fn read_lane_block_execution_preflight_without_sidecar_repair(
         &self,
         lane_id: LaneId,
@@ -666,11 +666,6 @@ impl Kura {
                     artifact,
                     repair_missing_sidecars,
                 ),
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
-                .lane_block_application_receipt_matches_direct_preflight(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
             LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
                 if repair_missing_sidecars {
                     self.lane_block_application_receipt_matches_merge_log(artifact)
@@ -690,11 +685,6 @@ impl Kura {
         match artifact.format {
             LaneBlockApplicationReceiptArtifactFormat::Current => self
                 .lane_block_application_receipt_matches_canonical_results(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
-                .lane_block_application_receipt_matches_direct_preflight(
                     artifact,
                     repair_missing_sidecars,
                 ),
@@ -719,11 +709,6 @@ impl Kura {
         match artifact.format {
             LaneBlockApplicationReceiptArtifactFormat::Current => self
                 .lane_block_application_receipt_matches_canonical_results(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
-                .lane_block_application_receipt_matches_direct_preflight(
                     artifact,
                     repair_missing_sidecars,
                 ),

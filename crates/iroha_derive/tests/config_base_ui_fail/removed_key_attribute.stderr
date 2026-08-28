@@ -1,0 +1,5 @@
+error: unexpected token; expected `default`, `env`, or `nested`
+ --> tests/config_base_ui_fail/removed_key_attribute.rs:7:14
+  |
+7 |     #[config(key = "legacy")]
+  |              ^^^

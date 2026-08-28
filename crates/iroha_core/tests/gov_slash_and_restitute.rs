@@ -119,7 +119,7 @@ fn seed_slash_snapshot(
         .asset_mut(slash_asset_id)
         .expect("slash asset") = Quantity::from(40_u64);
     seed_tx.apply();
-    let _ = seed_block.commit();
+    let _ = seed_block.commit_empty_block_for_testing();
 }
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -174,7 +174,7 @@ fn double_vote_slashes_plain_lock() {
             .execute(&ALICE_ID, &mut stx1)
             .expect("first ballot should succeed");
         stx1.apply();
-        let _ = sblock1.commit();
+        let _ = sblock1.commit_empty_block_for_testing();
     }
     // Block 2: conflicting direction triggers slash + rejection.
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -206,7 +206,7 @@ fn double_vote_slashes_plain_lock() {
     }));
     // Commit side effects so the slash is reflected in state for inspection.
     stx2.apply();
-    let _ = sblock2.commit();
+    let _ = sblock2.commit_empty_block_for_testing();
     // Escrow should now hold 16 (20 - 20% slash), slash receiver 4.
     let view = state.view();
     let escrow_asset_id = AssetId::new(def_id.clone(), escrow_id);
@@ -339,7 +339,7 @@ fn restitution_restores_slashed_balance() {
             )
         }));
         stx.apply();
-        let _ = sblock.commit();
+        let _ = sblock.commit_world_overlay_for_testing();
     }
     let view = state.view();
     let lock = view
@@ -400,7 +400,7 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
         .execute(&ALICE_ID, &mut state_transaction)
         .expect("grant restitution permission");
         state_transaction.apply();
-        let _ = block.commit();
+        let _ = block.commit_empty_block_for_testing();
     }
     let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -417,7 +417,7 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
     // Deliberately apply the errored overlay to prove the helper itself did not
     // stage any custody or lock mutation before its ledger preflight failed.
     state_transaction.apply();
-    let _ = block.commit();
+    let _ = block.commit_empty_block_for_testing();
     let view = state.view();
     let lock = view
         .world()

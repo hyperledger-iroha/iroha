@@ -433,9 +433,7 @@ use iroha_data_model::{
         },
     },
 };
-use iroha_telemetry::metrics::{
-    global_or_default, global_sorafs_gc_otel, global_sorafs_reconciliation_otel,
-};
+use iroha_telemetry::metrics::global_or_default;
 use norito::codec::Encode as NoritoEncode;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 #[cfg(test)]
@@ -14129,14 +14127,12 @@ impl NodeHandle {
             report.errors = report.errors.saturating_add(1);
             iroha_logger::warn!("GC sweep skipped: storage backend disabled");
             global_or_default().inc_sorafs_gc_runs(RESULT_ERROR);
-            global_sorafs_gc_otel().record_run(RESULT_ERROR);
             return report;
         };
         if let Err(err) = storage.ensure_durability_healthy() {
             report.errors = report.errors.saturating_add(1);
             iroha_logger::error!(%err, "GC sweep skipped: storage backend fail-stopped");
             global_or_default().inc_sorafs_gc_runs(RESULT_ERROR);
-            global_sorafs_gc_otel().record_run(RESULT_ERROR);
             return report;
         }
         let gc_guard = match self.gc_mutation_lock.lock() {
@@ -14145,7 +14141,6 @@ impl NodeHandle {
                 report.errors = report.errors.saturating_add(1);
                 iroha_logger::error!("GC sweep skipped: mutation lock poisoned");
                 global_or_default().inc_sorafs_gc_runs(RESULT_ERROR);
-                global_sorafs_gc_otel().record_run(RESULT_ERROR);
                 return report;
             }
         };
@@ -14153,7 +14148,6 @@ impl NodeHandle {
         let max_deletions = self.gc_config.max_deletions_per_run() as usize;
         if max_deletions == 0 {
             global_or_default().inc_sorafs_gc_runs(RESULT_SUCCESS);
-            global_sorafs_gc_otel().record_run(RESULT_SUCCESS);
             return report;
         }
         let Some(provider_id) = self.capacity_usage().provider_id else {
@@ -14162,7 +14156,6 @@ impl NodeHandle {
                 "GC sweep skipped: provider identity is unavailable for repair-ledger filtering"
             );
             global_or_default().inc_sorafs_gc_runs(RESULT_ERROR);
-            global_sorafs_gc_otel().record_run(RESULT_ERROR);
             return report;
         };
         let active_repair_tasks = repair_projection
@@ -14214,7 +14207,6 @@ impl NodeHandle {
                     "GC retention blocked by active repair tasks"
                 );
                 global_or_default().inc_sorafs_gc_blocked(GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1);
-                global_sorafs_gc_otel().record_blocked(GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1);
                 let payload = GcAuditPayloadV1 {
                     version: GC_AUDIT_PAYLOAD_VERSION_V1,
                     manifest_digest: digest,
@@ -14249,7 +14241,6 @@ impl NodeHandle {
                     "GC retention blocked by active deal window"
                 );
                 global_or_default().inc_sorafs_gc_blocked(GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1);
-                global_sorafs_gc_otel().record_blocked(GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1);
                 let payload = GcAuditPayloadV1 {
                     version: GC_AUDIT_PAYLOAD_VERSION_V1,
                     manifest_digest: digest,
@@ -14281,7 +14272,6 @@ impl NodeHandle {
                         "GC retention blocked by shared chunks"
                     );
                     global_or_default().inc_sorafs_gc_blocked(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1);
-                    global_sorafs_gc_otel().record_blocked(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1);
                     let payload = GcAuditPayloadV1 {
                         version: GC_AUDIT_PAYLOAD_VERSION_V1,
                         manifest_digest: digest,
@@ -14353,7 +14343,6 @@ impl NodeHandle {
             });
             global_or_default().inc_sorafs_gc_evictions(reason);
             global_or_default().add_sorafs_gc_freed_bytes(reason, freed_bytes);
-            global_sorafs_gc_otel().record_eviction(reason, freed_bytes);
         }
         global_or_default()
             .set_sorafs_gc_expired_snapshot(expired_count, oldest_expired_age.unwrap_or(0));
@@ -14363,7 +14352,6 @@ impl NodeHandle {
             RESULT_ERROR
         };
         global_or_default().inc_sorafs_gc_runs(result);
-        global_sorafs_gc_otel().record_run(result);
         self.schedulers
             .update_storage_bytes(storage.total_bytes(), self.config.max_capacity_bytes().0);
         report
@@ -14381,13 +14369,9 @@ impl NodeHandle {
                 global_or_default().inc_sorafs_reconciliation_runs("success");
                 global_or_default()
                     .set_sorafs_reconciliation_divergence_count(u64::from(report.divergence_count));
-                global_sorafs_reconciliation_otel().record_run("success");
-                global_sorafs_reconciliation_otel()
-                    .record_divergence(u64::from(report.divergence_count));
             }
             Err(_) => {
                 global_or_default().inc_sorafs_reconciliation_runs("error");
-                global_sorafs_reconciliation_otel().record_run("error");
             }
         }
         result

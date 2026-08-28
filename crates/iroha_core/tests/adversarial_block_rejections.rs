@@ -188,7 +188,9 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     );
     let (_, valid_result) = state_block.validate_transaction(valid_transfer, &mut ivm_cache);
     assert!(valid_result.is_ok(), "well-formed transfer should succeed");
-    state_block.commit().expect("commit state");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit state");
     // Only the valid transfer applies: Alice loses 10, Bob gains 10.
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(40_u64));
     assert_eq!(balance(&state, &bob_asset_id), Quantity::from(10_u64));

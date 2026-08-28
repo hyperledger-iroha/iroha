@@ -1481,7 +1481,7 @@ fn seed_da_admission_parameter(app: &crate::SharedAppState, parameter: CustomPar
         .set_parameter(Parameter::Custom(parameter));
     transaction.apply();
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit governed DA admission test parameter");
 }
 

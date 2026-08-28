@@ -2127,19 +2127,23 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         );
     }
 }
-fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
+fn application_receipt_snapshot_preserves_sparse_entries() {
     for include_current_receipt in [false, true] {
         let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
         let lane_id = LaneId::from(1);
         let lane_entry = lane_config.entry(lane_id).expect("lane entry");
         let mut generator = DummyBlocks::new();
-        let first = dummy_block_with_lane_payload_ownership_from_generator(
+        let mut first = dummy_block_with_lane_payload_ownership_from_generator(
             &mut generator,
             lane_id,
             lane_entry.dataspace_id,
             1,
-        );
+        )
+        .as_ref()
+        .clone();
+        attach_ok_results_to_block(&mut first);
+        let first = Arc::new(first);
         let mut second = dummy_block_with_lane_payload_ownership_from_generator(
             &mut generator,
             lane_id,
@@ -2152,12 +2156,16 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
             attach_ok_results_to_block(&mut second);
         }
         let second = Arc::new(second);
-        let third = dummy_block_with_lane_payload_ownership_from_generator(
+        let mut third = dummy_block_with_lane_payload_ownership_from_generator(
             &mut generator,
             lane_id,
             lane_entry.dataspace_id,
             3,
-        );
+        )
+        .as_ref()
+        .clone();
+        attach_ok_results_to_block(&mut third);
+        let third = Arc::new(third);
         let proposal = |block: &SignedBlock| {
             lane_block_proposal_from_ownership(
                 block
@@ -2178,47 +2186,14 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
             .expect("store second lane block");
         kura.store_block(Arc::clone(&third))
             .expect("store third lane block");
-        let persist_direct = |proposal: &LaneBlockProposalV1,
-                              preflight_state_height: u64,
-                              state_hash_marker: &'static [u8]| {
-            let recovered = kura
-                .recover_lane_block_payload(proposal)
-                .expect("recover direct lane payload");
-            kura.persist_lane_block_execution_input(&recovered)
-                .expect("persist direct execution input");
-            let input = kura
-                .read_lane_block_execution_input(
-                    proposal.descriptor.lane_id,
-                    proposal.descriptor.lane_block_height,
-                )
-                .expect("read direct execution input");
-            let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                state_hash_marker,
-            )));
-            let result =
-                TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
-            kura.persist_lane_block_execution_preflight(
-                &input,
-                preflight_state_height,
-                state_hash,
-                vec![result],
-            )
-            .expect("persist direct execution preflight");
-            let preflight = kura
-                .read_lane_block_execution_preflight(
-                    proposal.descriptor.lane_id,
-                    proposal.descriptor.lane_block_height,
-                )
-                .expect("read direct execution preflight");
-            kura.persist_direct_lane_block_application_receipt(&input, &preflight)
-                .expect("persist direct application receipt");
-        };
-        persist_direct(&first_proposal, 11, b"direct-snapshot-first-state");
+        kura.persist_lane_block_application_receipt(&first_proposal)
+            .expect("persist first canonical receipt");
         if include_current_receipt {
             kura.persist_lane_block_application_receipt(&second_proposal)
                 .expect("persist intervening current-format receipt");
         }
-        persist_direct(&third_proposal, 13, b"direct-snapshot-third-state");
+        kura.persist_lane_block_application_receipt(&third_proposal)
+            .expect("persist third canonical receipt");
         for entry in kura
             .lane_storage_entries
             .lock()
@@ -2238,7 +2213,7 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
                 });
             match &mut pair {
                 BoundProgressPair::Absent(namespace) => assert!(
-                    kura.sync_bound_progress_absence(namespace, "direct snapshot fixture absence"),
+                    kura.sync_bound_progress_absence(namespace, "receipt snapshot fixture absence"),
                     "lane {} absent receipt namespace must attest",
                     entry.lane_id.as_u32()
                 ),
@@ -2246,7 +2221,7 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
                     let heights = kura
                         .bound_indexed_sidecar_payload_heights(
                             bound,
-                            "direct snapshot fixture",
+                            "receipt snapshot fixture",
                             usize::MAX,
                         )
                         .unwrap_or_else(|error| {
@@ -2268,7 +2243,7 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
                         );
                     }
                     assert!(
-                        kura.sync_bound_progress_sidecar(bound, "direct snapshot fixture receipt"),
+                        kura.sync_bound_progress_sidecar(bound, "receipt snapshot fixture"),
                         "lane {} receipt pair must attest",
                         entry.lane_id.as_u32()
                     );
@@ -2293,35 +2268,16 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
         assert!(
             structural
                 .iter()
-                .filter(|receipt| {
-                    receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
-                })
+                .filter(|receipt| receipt.format == LaneBlockApplicationReceiptArtifactFormat::Current)
                 .all(|receipt| kura
                     .lane_block_application_receipt_matches_available_evidence(receipt, true)),
-            "every structurally captured direct receipt must retain its preflight evidence"
+            "every structurally captured receipt must retain its canonical evidence"
         );
         assert_eq!(
             kura.active_lane_block_application_receipts_structural_snapshot(),
             Some(structural),
             "a second full occupied-entry scan must match exactly"
         );
-        let snapshot = kura.direct_lane_block_application_receipts_snapshot();
-        assert_eq!(
-            snapshot
-                .iter()
-                .map(|receipt| receipt.proposal.descriptor.lane_block_height)
-                .collect::<Vec<_>>(),
-            vec![1, 3],
-            "{} must not hide either direct receipt",
-            if include_current_receipt {
-                "an intervening Current receipt"
-            } else {
-                "a sparse zero index entry"
-            }
-        );
-        assert!(snapshot.iter().all(|receipt| {
-            receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
-        }));
     }
 }
 mod progress_witness_durability {
@@ -2334,8 +2290,8 @@ mod progress_witness_durability {
         super::certified_lane_block_strict_retry_reissues_every_barrier();
     }
     #[test]
-    fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
-        super::direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries();
+    fn application_receipt_snapshot_preserves_sparse_entries() {
+        super::application_receipt_snapshot_preserves_sparse_entries();
     }
     #[test]
     fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {

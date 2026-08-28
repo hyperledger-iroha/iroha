@@ -255,8 +255,7 @@ fn build_onboarding_test_context_with(
         &queue,
         &local_peer_id,
         tokio::sync::broadcast::channel(1).0,
-        true,
-        false,
+        iroha_config::parameters::actual::TelemetryProfile::Operator,
     );
     drop(init_guard);
     OnboardingTestContext {

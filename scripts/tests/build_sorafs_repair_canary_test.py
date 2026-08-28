@@ -99,9 +99,6 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--handoff-digest-hex", HANDOFF_DIGEST])
         for target in MODULE.REQUIRED_GOVERNANCE_TARGETS:
             args.extend(["--handoff-target", target])
-    elif kind == "observability":
-        for metric in MODULE.REQUIRED_METRICS:
-            args.extend(["--metric", metric])
     elif kind == "governance_approval":
         args.extend(
             [
@@ -188,6 +185,20 @@ def test_retired_global_route_status_override_is_rejected(
     captured = capsys.readouterr()
     assert "unrecognized arguments: --route-status-code 200" in captured.err
     assert not canary_path(tmp_path, "worker_lifecycle").exists()
+
+
+def test_retired_observability_metric_inventory_is_rejected(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("observability", tmp_path)
+    args.extend(["--metric", "torii_sorafs_repair_tasks_total"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "unrecognized arguments: --metric" in captured.err
+    assert not canary_path(tmp_path, "observability").exists()
 
 
 def test_builds_payload_free_governance_handoff_canary(tmp_path: Path) -> None:
@@ -561,12 +572,6 @@ def test_failure_event_inventory_rejects_placeholder_marker(
             "--handoff-target",
             MODULE.REQUIRED_GOVERNANCE_TARGETS[0],
             "unreviewed-handoff-target",
-        ),
-        (
-            "observability",
-            "--metric",
-            MODULE.REQUIRED_METRICS[0],
-            "unreviewed-repair-metric",
         ),
     ),
 )

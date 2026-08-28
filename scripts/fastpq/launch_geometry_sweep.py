@@ -3,7 +3,7 @@
 Launch geometry sweep helper for FASTPQ Metal benchmarks.
 
 This utility runs ``fastpq_metal_bench`` across a set of environment variable
-overrides (FFT/LDE column batches, queue fan-out, Poseidon pipeline knobs) and
+overrides (FFT/LDE column batches, queue fan-out, and Poseidon lane width) and
 captures the resulting JSON artefacts alongside per-run stdout/stderr logs. It
 also classifies each run (stable vs unstable) using configurable heuristics and
 emits a CSV matrix so performance engineers can sort and compare launch shapes.
@@ -126,19 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated FASTPQ_METAL_QUEUE_FANOUT values (1-4 or 'auto').",
     )
     parser.add_argument(
-        "--poseidon-columns",
-        default="auto",
-        help="Comma-separated FASTPQ_POSEIDON_PIPE_COLUMNS values (16-256 or 'auto').",
-    )
-    parser.add_argument(
         "--poseidon-lanes",
         default="auto",
         help="Comma-separated FASTPQ_METAL_POSEIDON_LANES values (32-256 or 'auto').",
-    )
-    parser.add_argument(
-        "--poseidon-batch",
-        default="auto",
-        help="Comma-separated FASTPQ_METAL_POSEIDON_BATCH values (1-32 or 'auto').",
     )
     parser.add_argument(
         "--rows",
@@ -453,9 +443,7 @@ def _write_matrix(
         "env_fft",
         "env_lde",
         "env_fanout",
-        "env_pipe",
         "env_lanes",
-        "env_batch",
         "total_gpu_ms",
         "total_cpu_ms",
         "total_speedup",
@@ -507,9 +495,7 @@ def _write_matrix(
                     env.get("FASTPQ_METAL_FFT_COLUMNS"),
                     env.get("FASTPQ_METAL_LDE_COLUMNS"),
                     env.get("FASTPQ_METAL_QUEUE_FANOUT"),
-                    env.get("FASTPQ_POSEIDON_PIPE_COLUMNS"),
                     env.get("FASTPQ_METAL_POSEIDON_LANES"),
-                    env.get("FASTPQ_METAL_POSEIDON_BATCH"),
                     totals.get("gpu_ms"),
                     totals.get("cpu_ms"),
                     totals.get("speedup_ratio"),
@@ -585,9 +571,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         ("fft_columns", args.fft_columns, "FASTPQ_METAL_FFT_COLUMNS", "fft", 1, 32),
         ("lde_columns", args.lde_columns, "FASTPQ_METAL_LDE_COLUMNS", "lde", 1, 32),
         ("queue_fanout", args.queue_fanout, "FASTPQ_METAL_QUEUE_FANOUT", "fanout", 1, 4),
-        ("poseidon_columns", args.poseidon_columns, "FASTPQ_POSEIDON_PIPE_COLUMNS", "pipe", 16, 256),
         ("poseidon_lanes", args.poseidon_lanes, "FASTPQ_METAL_POSEIDON_LANES", "lanes", 32, 256),
-        ("poseidon_batch", args.poseidon_batch, "FASTPQ_METAL_POSEIDON_BATCH", "batch", 1, 32),
     ]
 
     specs = []

@@ -3794,7 +3794,7 @@ pub(crate) mod tests {
         }
         transaction.apply();
         state_block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit rotated key lifecycle and finalized pulse atomically");
         state.push_block_hash_for_testing(committed_hash);
         let committed_snapshot_hashes = state

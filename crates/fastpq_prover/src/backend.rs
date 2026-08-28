@@ -4,7 +4,7 @@ use crate::{
     overrides, pack_bytes, poseidon,
     proof::{AirConstraintOpening, FriQueryOpening, FriRoundOpening, PublicIO},
     trace::{
-        PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
+        PoseidonPipelinePolicy, build_trace, derive_polynomial_data,
         hash_columns_from_coefficients, hash_trace_merkle_pairs_with_mode,
         merkle_root_with_first_level_with_mode,
     },
@@ -34,7 +34,19 @@ const FRI_LEAF_DOMAIN: &[u8] = b"fastpq:v1:fri:leaf";
 const AIR_TRACE_LEAF_DOMAIN: &[u8] = b"fastpq:v1:air:trace:leaf";
 const AIR_COMPOSITION_LEAF_DOMAIN: &[u8] = b"fastpq:v1:air:composition:leaf";
 const TRACE_NODE_DOMAIN: &[u8] = b"fastpq:v1:trace:node";
-pub const LOOKUP_PRODUCT_DOMAIN: &str = "fastpq:v1:lookup:product";
+/// Maximum number of domain-separated Poseidon messages materialised at once.
+///
+/// Large AIR domains can contain hundreds of thousands of wide rows. Keeping
+/// the intermediate, length-prefixed limbs bounded avoids retaining multiple
+/// full row-major copies while still leaving enough work to amortise a GPU
+/// dispatch.
+const POSEIDON_LIMB_BATCH_CHUNK_MESSAGES: usize = 4_096;
+/// Soft cap for prepared limbs held by one Poseidon scratch batch (8 MiB).
+///
+/// A single message may cross the cap, but V1's verifier row-width limit keeps
+/// that overshoot bounded. This prevents an adversarially wide valid schema
+/// from multiplying the message-count cap into a much larger allocation.
+const POSEIDON_LIMB_BATCH_CHUNK_LIMBS: usize = 1 << 20;
 const FRI_FINAL_DOMAIN: &str = "fastpq:v1:fri:final";
 #[cfg(feature = "fastpq-gpu")]
 // Small grouped limb batches are cheaper and safer on the scalar path than a fixed Metal dispatch.
@@ -56,14 +68,13 @@ static EXECUTION_MODE_OBSERVER: OnceLock<RwLock<Option<Arc<ExecutionModeObserver
     OnceLock::new();
 pub const TRANSCRIPT_TAG_INIT: &str = "fastpq:v1:init";
 pub const TRANSCRIPT_TAG_ROOTS: &str = "fastpq:v1:roots";
-pub const TRANSCRIPT_TAG_GAMMA: &str = "fastpq:v1:gamma";
 pub const TRANSCRIPT_TAG_ALPHA_PREFIX: &str = "fastpq:v1:alpha";
 pub const TRANSCRIPT_TAG_AIR_ROOTS: &str = "fastpq:v1:air_roots";
 pub const TRANSCRIPT_TAG_QUERY_INDEX: &str = "fastpq:v1:query_index";
 pub const TRANSCRIPT_TAG_BETA_PREFIX: &str = "fastpq:v1:beta";
 pub const TRANSCRIPT_TAG_FRI_LAYER_PREFIX: &str = "fastpq:v1:fri_layer";
-const AIR_BOOLEAN_RESIDUE_COUNT: usize = 8;
-const AIR_RELATION_RESIDUE_COUNT: usize = 4;
+const AIR_BOOLEAN_RESIDUE_COUNT: usize = 3;
+const AIR_RELATION_RESIDUE_COUNT: usize = 3;
 const AIR_STABLE_RESIDUE_COUNT: usize = crate::trace::METADATA_COMMITMENT_LIMBS + 2;
 /// Number of V1 AIR composition challenges derived from the transcript.
 ///
@@ -243,23 +254,39 @@ fn gpu_available() -> bool {
                 }
                 detected
             });
-            backend.is_some()
+            usable_runtime_backend(*backend).is_some()
         }
-        GpuOverride::Auto => GPU_BACKEND
-            .get_or_init(|| {
+        GpuOverride::Auto => {
+            let backend = GPU_BACKEND.get_or_init(|| {
                 let backend = detect_gpu_backend();
                 log_detected_backend(backend);
                 backend
-            })
-            .is_some(),
+            });
+            usable_runtime_backend(*backend).is_some()
+        }
     }
 }
 pub fn current_gpu_backend() -> Option<GpuBackend> {
     if GPU_BACKEND.get().is_none() {
         let _ = gpu_available();
     }
-    GPU_BACKEND.get().and_then(|backend| *backend)
+    usable_runtime_backend(GPU_BACKEND.get().and_then(|backend| *backend))
 }
+fn usable_runtime_backend(backend: Option<GpuBackend>) -> Option<GpuBackend> {
+    #[cfg(any(test, feature = "fastpq-gpu"))]
+    let cuda_quarantined =
+        matches!(backend, Some(GpuBackend::Cuda)) && crate::fastpq_cuda::backend_quarantined();
+    #[cfg(not(any(test, feature = "fastpq-gpu")))]
+    let cuda_quarantined = false;
+    runtime_backend(backend, cuda_quarantined)
+}
+fn runtime_backend(backend: Option<GpuBackend>, cuda_quarantined: bool) -> Option<GpuBackend> {
+    match backend {
+        Some(GpuBackend::Cuda) if cuda_quarantined => None,
+        backend => backend,
+    }
+}
+#[cfg(any(test, feature = "dev-tools"))]
 fn default_batch_execution_mode() -> ExecutionMode {
     if current_gpu_backend().is_some() {
         ExecutionMode::Gpu
@@ -636,6 +663,18 @@ mod detection_tests {
         assert_eq!(resolve_backend(availability(&[])), None);
     }
     #[test]
+    fn quarantined_cuda_is_removed_from_cached_availability() {
+        assert_eq!(runtime_backend(Some(GpuBackend::Cuda), true), None);
+        assert_eq!(
+            runtime_backend(Some(GpuBackend::Cuda), false),
+            Some(GpuBackend::Cuda)
+        );
+        assert_eq!(
+            runtime_backend(Some(GpuBackend::Metal), true),
+            Some(GpuBackend::Metal)
+        );
+    }
+    #[test]
     fn backend_support_map_excludes_unimplemented_backends() {
         assert!(!gpu_backend_supported_in_build(GpuBackend::OpenCl));
         assert!(!gpu_backend_supported_in_build(GpuBackend::Norito));
@@ -803,7 +842,7 @@ mod observer_tests {
         );
         let batch = TransitionBatch::new(params.name, crate::PublicInputs::default());
         backend
-            .prove(&batch, &PublicIO::default(), 1, 1)
+            .prove(&batch, &PublicIO::default(), 1)
             .expect("configured backend proof");
 
         let (requested, resolved, _) = execution_rx
@@ -833,7 +872,7 @@ mod observer_tests {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
         let batch = TransitionBatch::new(params.name, crate::PublicInputs::default());
 
-        derive_batch_commitments(&params, &batch, &PublicIO::default(), 1, 1)
+        derive_batch_commitments(&params, &batch, &PublicIO::default(), 1)
             .expect("canonical commitments");
 
         let modes = rx.try_iter().collect::<Vec<_>>();
@@ -968,19 +1007,19 @@ fn metal_library_path() -> Option<String> {
             .map(str::to_owned)
     })
 }
-/// Preview backend configuration used by the FASTPQ prover.
+/// Internal backend configuration used by the FASTPQ prover.
 #[derive(Debug, Clone, Copy)]
-pub struct BackendConfig {
+pub(crate) struct BackendConfig {
     /// Canonical parameter set driving this backend instance.
-    pub params: StarkParameterSet,
+    params: StarkParameterSet,
     /// Execution mode used for FFT/LDE computations.
-    pub execution_mode: ExecutionMode,
+    execution_mode: ExecutionMode,
     /// Poseidon pipeline override (defaults to [`ExecutionMode::Auto`]).
-    pub poseidon_mode: PoseidonExecutionMode,
+    poseidon_mode: PoseidonExecutionMode,
 }
 impl BackendConfig {
     /// Construct a configuration from a canonical parameter set.
-    pub fn new(params: StarkParameterSet) -> Self {
+    pub(crate) fn new(params: StarkParameterSet) -> Self {
         Self {
             params,
             execution_mode: ExecutionMode::Cpu,
@@ -989,99 +1028,83 @@ impl BackendConfig {
     }
     /// Override the execution mode used by the backend.
     #[must_use]
-    pub fn with_execution_mode(mut self, mode: ExecutionMode) -> Self {
+    pub(crate) fn with_execution_mode(mut self, mode: ExecutionMode) -> Self {
         self.execution_mode = mode;
         self
     }
     /// Override the Poseidon pipeline execution mode used by the backend.
     #[must_use]
-    pub fn with_poseidon_mode(mut self, mode: PoseidonExecutionMode) -> Self {
+    pub(crate) fn with_poseidon_mode(mut self, mode: PoseidonExecutionMode) -> Self {
         self.poseidon_mode = mode;
         self
     }
     /// Return the requested execution mode.
     #[must_use]
-    pub fn execution_mode(&self) -> ExecutionMode {
+    pub(crate) fn execution_mode(&self) -> ExecutionMode {
         self.execution_mode
     }
     /// Return the configured Poseidon pipeline mode.
     #[must_use]
-    pub fn poseidon_mode(&self) -> PoseidonExecutionMode {
+    pub(crate) fn poseidon_mode(&self) -> PoseidonExecutionMode {
         self.poseidon_mode
     }
 }
-/// Trait describing the behaviour of a FASTPQ prover backend.
-pub trait Backend {
-    /// Attempt to generate a proof artifact for the supplied batch.
-    ///
-    /// # Errors
-    fn prove(
-        &self,
-        batch: &TransitionBatch,
-        public_io: &PublicIO,
-        protocol_version: u16,
-        params_version: u16,
-    ) -> Result<BackendArtifact>;
-}
-/// Deterministic artifact emitted by the backend after running the placeholder
-/// FASTPQ pipeline.  This mirrors the minimal data the verifier needs to
+/// Deterministic artifact emitted by the production backend.
+///
+/// This mirrors the minimal data the verifier needs to
 /// reconstruct the Fiat–Shamir transcript and query openings.
 #[derive(Debug, Clone)]
-pub struct BackendArtifact {
+pub(crate) struct BackendArtifact {
     /// Canonical parameter set name.
-    pub parameter: String,
-    /// Number of real trace rows prior to padding.
-    pub trace_rows: u32,
+    pub(crate) parameter: String,
+    /// Canonical commitment over the parameterised trace.
+    pub(crate) trace_commitment: Hash,
     /// Poseidon Merkle root over column commitments.
-    pub trace_root: u64,
+    pub(crate) trace_root: u64,
     /// Poseidon Merkle root over row-major AIR trace openings.
-    pub air_trace_root: u64,
+    pub(crate) air_trace_root: u64,
     /// Poseidon Merkle root over AIR composition evaluations.
-    pub air_composition_root: u64,
+    pub(crate) air_composition_root: u64,
     /// Poseidon Merkle root over the low-degree extension leaf hashes.
-    pub lookup_root: u64,
-    /// Number of evaluation rows committed under `lookup_root`.
-    pub lde_domain_size: u32,
-    /// Lookup grand-product accumulator over the permission witness column.
-    pub lookup_grand_product: u64,
-    /// Lookup Fiat–Shamir challenge (`γ`).
-    pub lookup_challenge: u64,
-    /// Composition challenges sampled after `γ`.
-    pub alphas: Vec<u64>,
-    /// FRI folding arity advertised by the parameter set.
-    pub fri_arity: u32,
-    /// Low-degree extension blowup factor.
-    pub fri_blowup: u32,
+    pub(crate) lde_root: u64,
+    /// Number of evaluation rows committed under `lde_root`.
+    pub(crate) lde_domain_size: u32,
+    /// Composition challenges sampled after the LDE and trace roots.
+    pub(crate) alphas: Vec<u64>,
     /// Poseidon hash of each FRI layer plus the terminal root.
-    pub fri_layers: Vec<u64>,
+    pub(crate) fri_layers: Vec<u64>,
     /// Fiat–Shamir challenges used for each FRI folding round.
-    pub fri_betas: Vec<u64>,
+    pub(crate) fri_betas: Vec<u64>,
     /// Sampled query openings into the evaluation domain.
-    pub query_openings: Vec<(u32, u64)>,
+    pub(crate) query_openings: Vec<(u32, u64)>,
     /// Full LDE leaf chunks containing each queried evaluation.
-    pub query_chunks: Vec<Vec<u64>>,
+    pub(crate) query_chunks: Vec<Vec<u64>>,
     /// Merkle authentication paths for each queried evaluation chunk.
-    pub query_paths: Vec<Vec<u64>>,
+    pub(crate) query_paths: Vec<Vec<u64>>,
     /// Sampled AIR row/composition openings.
-    pub air_openings: Vec<AirConstraintOpening>,
+    pub(crate) air_openings: Vec<AirConstraintOpening>,
     /// Per-round FRI openings for sampled query indices.
-    pub fri_query_openings: Vec<FriQueryOpening>,
+    pub(crate) fri_query_openings: Vec<FriQueryOpening>,
 }
 /// Concrete backend implementing the deterministic FASTPQ STARK pipeline.
 #[derive(Debug, Clone)]
-pub struct StarkBackend {
+pub(crate) struct StarkBackend {
     config: BackendConfig,
 }
 impl StarkBackend {
     /// Create a backend from a canonical configuration.
-    pub fn new(config: BackendConfig) -> Self {
+    pub(crate) fn new(config: BackendConfig) -> Self {
         Self { config }
     }
     /// Expose the configured execution mode, primarily for tests.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     #[must_use]
-    pub fn execution_mode(&self) -> ExecutionMode {
+    pub(crate) fn execution_mode(&self) -> ExecutionMode {
         self.config.execution_mode()
+    }
+
+    pub(crate) fn parameter_name(&self) -> &'static str {
+        self.config.params.name
     }
 }
 /// Hash the low-degree extension evaluations into Merkle leaves grouped by the
@@ -1089,6 +1112,7 @@ impl StarkBackend {
 ///
 /// # Errors
 /// Returns an error if hashing a chunk into the Merkle leaf domain fails.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn hash_lde_leaves(evaluations: &[u64], arity: u32) -> Result<Vec<u64>> {
     hash_lde_leaves_with_mode(evaluations, arity, default_batch_execution_mode())
 }
@@ -1101,16 +1125,15 @@ fn hash_lde_leaves_with_mode(
         return Ok(Vec::new());
     }
     let chunk = lde_chunk_size(arity);
-    let mut messages = Vec::with_capacity(evaluations.len().div_ceil(chunk));
-    for (idx, group) in evaluations.chunks(chunk).enumerate() {
+    let messages = evaluations.chunks(chunk).enumerate().map(|(idx, group)| {
         let mut limbs = Vec::with_capacity(group.len() + 1);
         limbs.push(u64::try_from(idx).map_err(|_| Error::QueryIndexOverflow { index: idx })?);
         limbs.extend(group.iter().copied());
-        messages.push(limbs);
-    }
-    hash_with_domain_limb_batches(LDE_LEAF_DOMAIN, &messages, mode)
+        Ok(limbs)
+    });
+    hash_with_domain_limb_batches_from_iter(LDE_LEAF_DOMAIN, messages, mode)
 }
-/// Hash one LDE leaf chunk using the same domain as [`hash_lde_leaves`].
+/// Hash one LDE leaf chunk using the same domain as the batched LDE leaf commitment.
 ///
 /// # Errors
 /// Returns an error if the leaf index cannot be represented as a field limb.
@@ -1162,124 +1185,181 @@ fn hash_air_trace_rows_with_mode(columns: &[Vec<u64>], mode: ExecutionMode) -> R
     let column_count = u64::try_from(columns.len()).map_err(|_| Error::PayloadLengthOverflow {
         length: columns.len(),
     })?;
-    let mut messages = Vec::with_capacity(row_count);
-    for row_index in 0..row_count {
+    let messages = (0..row_count).map(|row_index| {
         let row_index_field =
             u64::try_from(row_index).map_err(|_| Error::QueryIndexOverflow { index: row_index })?;
-        let row = air_row_at(columns, row_index)?;
-        let mut limbs = Vec::with_capacity(row.len() + 2);
+        let mut limbs = Vec::with_capacity(columns.len() + 2);
         limbs.push(row_index_field);
         limbs.push(column_count);
-        limbs.extend(row);
-        messages.push(limbs);
-    }
-    hash_with_domain_limb_batches(AIR_TRACE_LEAF_DOMAIN, &messages, mode)
+        limbs.extend(columns.iter().map(|column| column[row_index]));
+        Ok(limbs)
+    });
+    hash_with_domain_limb_batches_from_iter(AIR_TRACE_LEAF_DOMAIN, messages, mode)
 }
 /// Hash all AIR composition leaves.
 ///
 /// # Errors
 /// Returns an error if leaf hashing fails.
 fn hash_air_composition_leaves_with_mode(values: &[u64], mode: ExecutionMode) -> Result<Vec<u64>> {
-    let mut messages = Vec::with_capacity(values.len());
-    for (index, value) in values.iter().copied().enumerate() {
+    let messages = values.iter().copied().enumerate().map(|(index, value)| {
         let index = u64::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?;
-        messages.push(vec![index, value]);
-    }
-    hash_with_domain_limb_batches(AIR_COMPOSITION_LEAF_DOMAIN, &messages, mode)
+        Ok([index, value])
+    });
+    hash_with_domain_limb_batches_from_iter(AIR_COMPOSITION_LEAF_DOMAIN, messages, mode)
 }
 
-fn packed_column_value(column_names: &[String], row: &[u64], prefix: &str) -> u64 {
+#[derive(Debug)]
+struct AirColumnLayout {
+    boolean_selectors: [usize; AIR_BOOLEAN_RESIDUE_COUNT],
+    operation_selectors: [usize; 2],
+    s_active: usize,
+    s_transfer: usize,
+    delta: usize,
+    value_old_limbs: Vec<usize>,
+    value_new_limbs: Vec<usize>,
+    stable_columns: [usize; AIR_STABLE_RESIDUE_COUNT],
+}
+
+impl AirColumnLayout {
+    fn from_names<S: AsRef<str>>(column_names: &[S]) -> Result<Self> {
+        let required = |name: &str| -> Result<usize> {
+            column_names
+                .iter()
+                .position(|column| column.as_ref() == name)
+                .ok_or_else(|| Error::MissingColumn(name.to_owned()))
+        };
+        let s_active = required("s_active")?;
+        let s_transfer = required("s_transfer")?;
+        let s_meta_set = required("s_meta_set")?;
+        let delta = required("delta")?;
+        let mut stable_columns = [0usize; AIR_STABLE_RESIDUE_COUNT];
+        for (limb, column) in stable_columns[..crate::trace::METADATA_COMMITMENT_LIMBS]
+            .iter_mut()
+            .enumerate()
+        {
+            *column = required(&format!("metadata_hash_limb_{limb}"))?;
+        }
+        stable_columns[crate::trace::METADATA_COMMITMENT_LIMBS] = required("dsid")?;
+        stable_columns[crate::trace::METADATA_COMMITMENT_LIMBS + 1] = required("slot")?;
+        Ok(Self {
+            boolean_selectors: [s_active, s_transfer, s_meta_set],
+            operation_selectors: [s_transfer, s_meta_set],
+            s_active,
+            s_transfer,
+            delta,
+            value_old_limbs: contiguous_limb_columns(column_names, "value_old_limb_"),
+            value_new_limbs: contiguous_limb_columns(column_names, "value_new_limb_"),
+            stable_columns,
+        })
+    }
+}
+
+fn contiguous_limb_columns<S: AsRef<str>>(column_names: &[S], prefix: &str) -> Vec<usize> {
+    let mut columns = Vec::new();
+    for limb in 0usize.. {
+        let name = format!("{prefix}{limb}");
+        let Some(index) = column_names
+            .iter()
+            .position(|column| column.as_ref() == name.as_str())
+        else {
+            break;
+        };
+        columns.push(index);
+    }
+    columns
+}
+
+fn packed_column_value_at<F>(columns: &[usize], value_at: &F) -> u64
+where
+    F: Fn(usize) -> u64,
+{
     let mut value = 0u64;
     let mut radix_power = FIELD_ONE;
     let limb_radix = 1u64 << 56;
-    for limb in 0usize.. {
-        let name = format!("{prefix}{limb}");
-        let Some(index) = column_names.iter().position(|column| column == &name) else {
-            break;
-        };
-        value = add_mod(value, mul_mod(row[index], radix_power));
+    for &column in columns {
+        value = add_mod(value, mul_mod(value_at(column), radix_power));
         radix_power = mul_mod(radix_power, limb_radix);
     }
     value
+}
+
+fn air_constraint_residues_with_layout<C, N>(
+    layout: &AirColumnLayout,
+    current: C,
+    next: N,
+) -> [u64; AIR_COMPOSITION_ALPHA_COUNT]
+where
+    C: Fn(usize) -> u64,
+    N: Fn(usize) -> u64,
+{
+    let mut residues = [0u64; AIR_COMPOSITION_ALPHA_COUNT];
+    let mut residue_index = 0;
+    for &selector in &layout.boolean_selectors {
+        residues[residue_index] = mul_mod(current(selector), sub_mod(current(selector), FIELD_ONE));
+        residue_index += 1;
+    }
+    let operation_sum = layout
+        .operation_selectors
+        .iter()
+        .fold(0u64, |sum, &selector| add_mod(sum, current(selector)));
+    residues[residue_index] = sub_mod(current(layout.s_active), operation_sum);
+    residue_index += 1;
+    residues[residue_index] = mul_mod(
+        next(layout.s_active),
+        sub_mod(FIELD_ONE, current(layout.s_active)),
+    );
+    residue_index += 1;
+    let value_old = packed_column_value_at(&layout.value_old_limbs, &current);
+    let value_new = packed_column_value_at(&layout.value_new_limbs, &current);
+    let expected_delta = sub_mod(value_new, value_old);
+    residues[residue_index] = mul_mod(
+        current(layout.s_transfer),
+        sub_mod(expected_delta, current(layout.delta)),
+    );
+    residue_index += 1;
+    for &stable in &layout.stable_columns {
+        residues[residue_index] = sub_mod(current(stable), next(stable));
+        residue_index += 1;
+    }
+    debug_assert_eq!(residue_index, AIR_COMPOSITION_ALPHA_COUNT);
+    residues
 }
 
 fn air_constraint_residues_for_rows(
     column_names: &[String],
     current: &[u64],
     next: &[u64],
-) -> Result<Vec<u64>> {
+) -> Result<[u64; AIR_COMPOSITION_ALPHA_COUNT]> {
     if current.len() != column_names.len() || next.len() != column_names.len() {
         return Err(Error::AirOpeningMismatch {
             index: current.len(),
         });
     }
-    let get = |name: &str| -> Result<usize> {
-        column_names
-            .iter()
-            .position(|column| column == name)
-            .ok_or_else(|| Error::MissingColumn(name.to_owned()))
-    };
-    let s_active = get("s_active")?;
-    let s_transfer = get("s_transfer")?;
-    let s_mint = get("s_mint")?;
-    let s_burn = get("s_burn")?;
-    let s_role_grant = get("s_role_grant")?;
-    let s_role_revoke = get("s_role_revoke")?;
-    let s_meta_set = get("s_meta_set")?;
-    let s_perm = get("s_perm")?;
-    let delta = get("delta")?;
-    let metadata_hash_limbs = (0..crate::trace::METADATA_COMMITMENT_LIMBS)
-        .map(|limb| get(&format!("metadata_hash_limb_{limb}")))
-        .collect::<Result<Vec<_>>>()?;
-    let dsid = get("dsid")?;
-    let slot = get("slot")?;
-    let mut residues = Vec::with_capacity(AIR_COMPOSITION_ALPHA_COUNT);
-    for selector in [
-        s_active,
-        s_transfer,
-        s_mint,
-        s_burn,
-        s_role_grant,
-        s_role_revoke,
-        s_meta_set,
-        s_perm,
-    ] {
-        residues.push(mul_mod(
-            current[selector],
-            sub_mod(current[selector], FIELD_ONE),
-        ));
+    let layout = AirColumnLayout::from_names(column_names)?;
+    Ok(air_constraint_residues_with_layout(
+        &layout,
+        |column| current[column],
+        |column| next[column],
+    ))
+}
+
+fn validate_air_composition_alphas(alphas: &[u64]) -> Result<()> {
+    if alphas.len() != AIR_COMPOSITION_ALPHA_COUNT {
+        return Err(Error::AirChallengeCountMismatch {
+            expected: AIR_COMPOSITION_ALPHA_COUNT,
+            actual: alphas.len(),
+        });
     }
-    let operation_sum = [
-        s_transfer,
-        s_mint,
-        s_burn,
-        s_role_grant,
-        s_role_revoke,
-        s_meta_set,
-    ]
-    .into_iter()
-    .fold(0u64, |sum, selector| add_mod(sum, current[selector]));
-    residues.push(sub_mod(current[s_active], operation_sum));
-    let permission_sum = add_mod(current[s_role_grant], current[s_role_revoke]);
-    residues.push(sub_mod(current[s_perm], permission_sum));
-    residues.push(mul_mod(
-        next[s_active],
-        sub_mod(FIELD_ONE, current[s_active]),
-    ));
-    let numeric_selector = [s_transfer, s_mint, s_burn]
-        .into_iter()
-        .fold(0u64, |sum, selector| add_mod(sum, current[selector]));
-    let value_old = packed_column_value(column_names, current, "value_old_limb_");
-    let value_new = packed_column_value(column_names, current, "value_new_limb_");
-    let expected_delta = sub_mod(value_new, value_old);
-    residues.push(mul_mod(
-        numeric_selector,
-        sub_mod(expected_delta, current[delta]),
-    ));
-    for stable in metadata_hash_limbs.into_iter().chain([dsid, slot]) {
-        residues.push(sub_mod(current[stable], next[stable]));
-    }
-    Ok(residues)
+    Ok(())
+}
+
+fn combine_air_constraint_residues(alphas: &[u64], residues: &[u64]) -> u64 {
+    alphas
+        .iter()
+        .zip(residues)
+        .fold(0u64, |acc, (&alpha, &residue)| {
+            add_mod(acc, mul_mod(alpha, residue))
+        })
 }
 
 /// Evaluate the sampled FASTPQ AIR composition value for two adjacent rows.
@@ -1293,25 +1373,9 @@ pub fn air_composition_value_for_rows(
     next: &[u64],
     alphas: &[u64],
 ) -> Result<u64> {
-    if alphas.len() != AIR_COMPOSITION_ALPHA_COUNT {
-        return Err(Error::AirChallengeCountMismatch {
-            expected: AIR_COMPOSITION_ALPHA_COUNT,
-            actual: alphas.len(),
-        });
-    }
+    validate_air_composition_alphas(alphas)?;
     let residues = air_constraint_residues_for_rows(column_names, current, next)?;
-    if residues.len() != AIR_COMPOSITION_ALPHA_COUNT {
-        return Err(Error::AirChallengeCountMismatch {
-            expected: AIR_COMPOSITION_ALPHA_COUNT,
-            actual: residues.len(),
-        });
-    }
-    Ok(alphas
-        .iter()
-        .zip(residues)
-        .fold(0u64, |acc, (&alpha, residue)| {
-            add_mod(acc, mul_mod(alpha, residue))
-        }))
+    Ok(combine_air_constraint_residues(alphas, &residues))
 }
 /// Evaluate FASTPQ AIR composition values over all row openings.
 ///
@@ -1336,13 +1400,28 @@ pub fn air_composition_values(
             len: row_count,
         });
     }
-    (0..row_count)
-        .map(|index| {
-            let current = air_row_at(columns, index)?;
-            let next = air_row_at(columns, (index + next_step) % row_count)?;
-            air_composition_value_for_rows(column_names, &current, &next, alphas)
-        })
-        .collect()
+    if row_count == 0 {
+        return Ok(Vec::new());
+    }
+    validate_air_composition_alphas(alphas)?;
+    if columns.len() != column_names.len() {
+        return Err(Error::AirOpeningMismatch {
+            index: columns.len(),
+        });
+    }
+    let layout = AirColumnLayout::from_names(column_names)?;
+    let next_step = next_step % row_count;
+    let mut values = Vec::with_capacity(row_count);
+    for index in 0..row_count {
+        let next_index = (index + next_step) % row_count;
+        let residues = air_constraint_residues_with_layout(
+            &layout,
+            |column| columns[column][index],
+            |column| columns[column][next_index],
+        );
+        values.push(combine_air_constraint_residues(alphas, &residues));
+    }
+    Ok(values)
 }
 fn air_row_at(columns: &[Vec<u64>], row_index: usize) -> Result<Vec<u64>> {
     columns
@@ -1360,29 +1439,26 @@ fn air_row_at(columns: &[Vec<u64>], row_index: usize) -> Result<Vec<u64>> {
 }
 
 fn ensure_base_trace_constraints(trace: &crate::trace::Trace) -> Result<()> {
+    if trace.padded_len == 0 {
+        return Ok(());
+    }
     let column_names = trace
         .columns
         .iter()
-        .map(|column| column.name.clone())
+        .map(|column| column.name.as_str())
         .collect::<Vec<_>>();
+    let layout = AirColumnLayout::from_names(&column_names)?;
     for row_index in 0..trace.padded_len {
         let next_index = row_index
             .checked_add(1)
             .filter(|next| *next < trace.padded_len)
             .unwrap_or(row_index);
-        let current = trace
-            .columns
-            .iter()
-            .map(|column| column.values[row_index])
-            .collect::<Vec<_>>();
-        let next = trace
-            .columns
-            .iter()
-            .map(|column| column.values[next_index])
-            .collect::<Vec<_>>();
-        let residues = air_constraint_residues_for_rows(&column_names, &current, &next)?;
-        if residues.len() != AIR_COMPOSITION_ALPHA_COUNT || residues.iter().any(|value| *value != 0)
-        {
+        let residues = air_constraint_residues_with_layout(
+            &layout,
+            |column| trace.columns[column].values[row_index],
+            |column| trace.columns[column].values[next_index],
+        );
+        if residues.iter().any(|value| *value != 0) {
             return Err(Error::AirConstraintMismatch { index: row_index });
         }
     }
@@ -1499,6 +1575,7 @@ pub fn open_query_chunks(
 ///
 /// # Errors
 /// Returns an error if hashing an internal Merkle level fails.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn merkle_paths_for_queries(
     leaves: &[u64],
     query_indices: &[usize],
@@ -1690,36 +1767,7 @@ fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
     sponge.absorb_slice(values);
     sponge.squeeze()
 }
-/// Compute the Fiat–Shamir lookup grand product accumulator over the supplied
-/// selector and witness evaluations using the canonical Goldilocks field
-/// arithmetic.
-///
-/// # Errors
-///
-/// Returns [`Error::LookupColumnLengthMismatch`] when the selector and witness
-/// columns do not contain the same number of evaluations.
-pub fn compute_lookup_grand_product(
-    selector_values: &[u64],
-    witness_values: &[u64],
-    gamma: u64,
-) -> Result<u64> {
-    if selector_values.len() != witness_values.len() {
-        return Err(Error::LookupColumnLengthMismatch {
-            selector_len: selector_values.len(),
-            witness_len: witness_values.len(),
-        });
-    }
-    let mut acc = FIELD_ONE;
-    let mut running = Vec::with_capacity(witness_values.len());
-    for (&selector, &witness) in selector_values.iter().zip(witness_values.iter()) {
-        if selector != 0 {
-            acc = mul_mod(acc, add_mod(witness, gamma));
-        }
-        running.push(acc);
-    }
-    Ok(poseidon::hash_field_elements_cpu(&running))
-}
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn hash_trace_rows(columns: &[Vec<u64>]) -> Vec<u64> {
     hash_trace_rows_with_mode(columns, default_batch_execution_mode())
 }
@@ -1845,7 +1893,7 @@ pub fn fold_with_fri(
     domain_offset: u64,
     transcript: &mut Transcript,
 ) -> Result<(Vec<u64>, Vec<u64>)> {
-    if arity != 8 && arity != 16 {
+    if arity != 8 {
         return Err(Error::FriArity(arity));
     }
     if evaluations.is_empty() {
@@ -1916,7 +1964,7 @@ fn fold_with_fri_opening_layers(
     mode: ExecutionMode,
 ) -> Result<FriOpeningLayers> {
     let arity = params.fri.arity;
-    if arity != 8 && arity != 16 {
+    if arity != 8 {
         return Err(Error::FriArity(arity));
     }
     if evaluations.is_empty() {
@@ -2345,7 +2393,6 @@ struct BatchPreparationContext<'a> {
     batch: &'a TransitionBatch,
     public_io: &'a PublicIO,
     protocol_version: u16,
-    params_version: u16,
     transcript_trace_root: Option<u64>,
     execution_mode: ExecutionMode,
     poseidon_policy: PoseidonPipelinePolicy,
@@ -2353,14 +2400,12 @@ struct BatchPreparationContext<'a> {
 
 #[derive(Debug)]
 struct PreparedBatch {
-    trace_rows: u32,
+    trace_commitment: Hash,
     trace_root: u64,
     air_trace_root: u64,
     air_composition_root: u64,
     lde_root: u64,
     lde_domain_size: u32,
-    lookup_grand_product: u64,
-    gamma: u64,
     alphas: Vec<u64>,
     lde_columns: Vec<Vec<u64>>,
     lde_values: Vec<u64>,
@@ -2374,18 +2419,18 @@ struct PreparedBatch {
 /// Batch-derived commitments which a proof is required to advertise exactly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchDerivedCommitments {
+    /// Canonical commitment over the parameterised trace.
+    pub trace_commitment: Hash,
     /// Canonical base-trace commitment.
     pub trace_root: u64,
     /// Canonical commitment to the LDE trace rows used by AIR openings.
     pub air_trace_root: u64,
     /// Canonical commitment to the AIR composition evaluations.
     pub air_composition_root: u64,
-    /// Canonical LDE/lookup commitment.
-    pub lookup_root: u64,
+    /// Canonical LDE commitment.
+    pub lde_root: u64,
     /// Canonical LDE evaluation-domain size.
     pub lde_domain_size: u32,
-    /// Canonical lookup grand-product accumulator.
-    pub lookup_grand_product: u64,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2395,7 +2440,6 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         batch,
         public_io,
         protocol_version,
-        params_version,
         transcript_trace_root,
         execution_mode,
         poseidon_policy,
@@ -2417,7 +2461,7 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         .collect::<Vec<_>>();
     let planner = Planner::new(params);
     let poseidon_mode = poseidon_policy.resolved();
-    let polynomial_data = derive_polynomial_data(&trace, &planner, execution_mode);
+    let polynomial_data = derive_polynomial_data(&trace, &planner);
     let transfer_plan = polynomial_data.transfer_plan().clone();
     if transfer_plan.total_deltas() > 0 {
         tracing::debug!(
@@ -2428,16 +2472,13 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
             "transfer gadget witnesses planned"
         );
     }
-    let column_digests = hash_columns_from_coefficients(
-        &trace,
-        &polynomial_data.coefficients,
-        &planner,
-        execution_mode,
-        poseidon_policy,
-    );
+    let column_digests =
+        hash_columns_from_coefficients(&trace, &polynomial_data.coefficients, poseidon_policy);
+    let trace_commitment =
+        crate::digest::trace_commitment_from_digests(params, &trace, &column_digests)?;
     let derived_trace_root = merkle_root_with_first_level_with_mode(
         column_digests.leaves(),
-        column_digests.fused_parents(),
+        column_digests.first_level_parents(),
         poseidon_mode,
     );
     let trace_root = transcript_trace_root.unwrap_or(derived_trace_root);
@@ -2456,23 +2497,12 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         public_io,
         params.name,
         protocol_version,
-        params_version,
         TRANSCRIPT_TAG_INIT,
     )?;
     transcript.append_message(
         TRANSCRIPT_TAG_ROOTS,
         &[lde_root.to_le_bytes(), trace_root.to_le_bytes()].concat(),
     );
-    let gamma = transcript.challenge_field(TRANSCRIPT_TAG_GAMMA);
-    let selector_index =
-        column_index(&trace, "s_perm").ok_or_else(|| Error::MissingColumn("s_perm".to_string()))?;
-    let witness_index = column_index(&trace, "perm_hash")
-        .ok_or_else(|| Error::MissingColumn("perm_hash".to_string()))?;
-    let lookup_grand_product = compute_lookup_grand_product(
-        &lde_columns[selector_index],
-        &lde_columns[witness_index],
-        gamma,
-    )?;
     let mut alphas = Vec::with_capacity(AIR_COMPOSITION_ALPHA_COUNT);
     for idx in 0..AIR_COMPOSITION_ALPHA_COUNT {
         let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
@@ -2494,18 +2524,13 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
         ]
         .concat(),
     );
-    transcript.append_message(LOOKUP_PRODUCT_DOMAIN, &lookup_grand_product.to_le_bytes());
-    let trace_rows =
-        u32::try_from(trace.rows).map_err(|_| Error::TraceLengthOverflow { rows: trace.rows })?;
     Ok(PreparedBatch {
-        trace_rows,
+        trace_commitment,
         trace_root,
         air_trace_root,
         air_composition_root,
         lde_root,
         lde_domain_size,
-        lookup_grand_product,
-        gamma,
         alphas,
         lde_columns,
         lde_values,
@@ -2517,42 +2542,48 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
     })
 }
 
-/// Recompute every proof-carried root and accumulator that is deterministic from the batch.
+/// Recompute every proof-carried root that is deterministic from the batch.
 pub fn derive_batch_commitments(
     params: &StarkParameterSet,
     batch: &TransitionBatch,
     public_io: &PublicIO,
     protocol_version: u16,
-    params_version: u16,
 ) -> Result<BatchDerivedCommitments> {
     let prepared = prepare_batch(&BatchPreparationContext {
         params,
         batch,
         public_io,
         protocol_version,
-        params_version,
         transcript_trace_root: None,
         execution_mode: ExecutionMode::Cpu,
         poseidon_policy: PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
     })?;
     Ok(BatchDerivedCommitments {
+        trace_commitment: prepared.trace_commitment,
         trace_root: prepared.trace_root,
         air_trace_root: prepared.air_trace_root,
         air_composition_root: prepared.air_composition_root,
-        lookup_root: prepared.lde_root,
+        lde_root: prepared.lde_root,
         lde_domain_size: prepared.lde_domain_size,
-        lookup_grand_product: prepared.lookup_grand_product,
     })
 }
 
 impl StarkBackend {
+    pub(crate) fn prove(
+        &self,
+        batch: &TransitionBatch,
+        public_io: &PublicIO,
+        protocol_version: u16,
+    ) -> Result<BackendArtifact> {
+        self.prove_inner(batch, public_io, protocol_version, None)
+    }
+
     #[allow(clippy::too_many_lines)]
     fn prove_inner(
         &self,
         batch: &TransitionBatch,
         public_io: &PublicIO,
         protocol_version: u16,
-        params_version: u16,
         transcript_trace_root: Option<u64>,
     ) -> Result<BackendArtifact> {
         let execution_mode = self.config.execution_mode().resolve();
@@ -2560,14 +2591,12 @@ impl StarkBackend {
             PoseidonPipelinePolicy::new(self.config.poseidon_mode(), execution_mode);
         let poseidon_mode = poseidon_policy.resolved();
         let PreparedBatch {
-            trace_rows,
+            trace_commitment,
             trace_root,
             air_trace_root,
             air_composition_root,
             lde_root,
             lde_domain_size,
-            lookup_grand_product,
-            gamma,
             alphas,
             lde_columns,
             lde_values,
@@ -2581,7 +2610,6 @@ impl StarkBackend {
             batch,
             public_io,
             protocol_version,
-            params_version,
             transcript_trace_root,
             execution_mode,
             poseidon_policy,
@@ -2631,17 +2659,13 @@ impl StarkBackend {
         )?;
         Ok(BackendArtifact {
             parameter: self.config.params.name.to_string(),
-            trace_rows,
+            trace_commitment,
             trace_root,
             air_trace_root,
             air_composition_root,
-            lookup_root: lde_root,
+            lde_root,
             lde_domain_size,
-            lookup_grand_product,
-            lookup_challenge: gamma,
             alphas,
-            fri_arity: self.config.params.fri.arity,
-            fri_blowup: self.config.params.fri.blowup_factor,
             fri_layers,
             fri_betas,
             query_openings,
@@ -2653,33 +2677,14 @@ impl StarkBackend {
     }
 
     #[cfg(test)]
-    pub fn prove_with_transcript_trace_root(
+    pub(crate) fn prove_with_transcript_trace_root(
         &self,
         batch: &TransitionBatch,
         public_io: &PublicIO,
         protocol_version: u16,
-        params_version: u16,
         trace_root: u64,
     ) -> Result<BackendArtifact> {
-        self.prove_inner(
-            batch,
-            public_io,
-            protocol_version,
-            params_version,
-            Some(trace_root),
-        )
-    }
-}
-
-impl Backend for StarkBackend {
-    fn prove(
-        &self,
-        batch: &TransitionBatch,
-        public_io: &PublicIO,
-        protocol_version: u16,
-        params_version: u16,
-    ) -> Result<BackendArtifact> {
-        self.prove_inner(batch, public_io, protocol_version, params_version, None)
+        self.prove_inner(batch, public_io, protocol_version, Some(trace_root))
     }
 }
 #[derive(Debug, Clone)]
@@ -2691,16 +2696,10 @@ impl Transcript {
         public_io: &PublicIO,
         parameter: &str,
         protocol_version: u16,
-        params_version: u16,
         tag: &str,
     ) -> Result<Self> {
         let mut transcript = Self { state: Vec::new() };
-        let payload = norito::core::to_bytes(&(
-            protocol_version,
-            params_version,
-            parameter,
-            public_io.clone(),
-        ))?;
+        let payload = norito::core::to_bytes(&(protocol_version, parameter, public_io.clone()))?;
         transcript.append_message(tag, &payload);
         Ok(transcript)
     }
@@ -2724,11 +2723,12 @@ impl Transcript {
         self.challenge_field(&tag)
     }
     pub fn challenge_bytes(&mut self, tag: &str) -> [u8; Hash::LENGTH] {
-        let mut payload = self.state.clone();
         let tag_len = u32::try_from(tag.len()).expect("transcript challenge tag fits u32");
-        payload.extend_from_slice(&tag_len.to_le_bytes());
-        payload.extend_from_slice(tag.as_bytes());
-        let digest = Hash::new(&payload);
+        let checkpoint = self.state.len();
+        self.state.extend_from_slice(&tag_len.to_le_bytes());
+        self.state.extend_from_slice(tag.as_bytes());
+        let digest = Hash::new(&self.state);
+        self.state.truncate(checkpoint);
         self.state.extend_from_slice(digest.as_ref());
         digest.into()
     }
@@ -2741,7 +2741,8 @@ impl Transcript {
     }
 }
 fn hash_with_domain(domain: &[u8], values: &[u64]) -> Result<u64> {
-    let limbs = hash_with_domain_limbs(domain, values)?;
+    let (domain_len, domain_limbs) = prepare_domain_limbs(domain)?;
+    let limbs = hash_with_prepared_domain_limbs(domain_len, &domain_limbs, values)?;
     Ok(poseidon::hash_field_elements_cpu(&limbs))
 }
 fn hash_with_domain_limb_batches(
@@ -2749,34 +2750,90 @@ fn hash_with_domain_limb_batches(
     messages: &[Vec<u64>],
     mode: ExecutionMode,
 ) -> Result<Vec<u64>> {
-    if messages.is_empty() {
-        return Ok(Vec::new());
-    }
-    let limbs = messages
-        .iter()
-        .map(|values| hash_with_domain_limbs(domain, values))
-        .collect::<Result<Vec<_>>>()?;
-    Ok(hash_poseidon_limb_batches(&limbs, mode))
+    hash_with_domain_limb_batches_from_iter(
+        domain,
+        messages.iter().map(|message| Ok(message.as_slice())),
+        mode,
+    )
 }
-fn hash_with_domain_limbs(domain: &[u8], values: &[u64]) -> Result<Vec<u64>> {
-    let mut payload = Vec::with_capacity(values.len() * 8);
+
+fn hash_with_domain_limb_batches_from_iter<I, M>(
+    domain: &[u8],
+    mut messages: I,
+    mode: ExecutionMode,
+) -> Result<Vec<u64>>
+where
+    I: ExactSizeIterator<Item = Result<M>>,
+    M: AsRef<[u64]>,
+{
+    let (domain_len, domain_limbs) = prepare_domain_limbs(domain)?;
+    let mut hashes = Vec::with_capacity(messages.len());
+    loop {
+        let remaining = messages.len();
+        let mut limbs = Vec::with_capacity(remaining.min(POSEIDON_LIMB_BATCH_CHUNK_MESSAGES));
+        let mut prepared_limb_count = 0usize;
+        for _ in 0..POSEIDON_LIMB_BATCH_CHUNK_MESSAGES {
+            let Some(message) = messages.next() else {
+                break;
+            };
+            let message = message?;
+            let prepared =
+                hash_with_prepared_domain_limbs(domain_len, &domain_limbs, message.as_ref())?;
+            prepared_limb_count = prepared_limb_count.saturating_add(prepared.len());
+            limbs.push(prepared);
+            if prepared_limb_count >= POSEIDON_LIMB_BATCH_CHUNK_LIMBS {
+                break;
+            }
+        }
+        if limbs.is_empty() {
+            break;
+        }
+        hashes.extend(hash_poseidon_limb_batches(&limbs, mode));
+    }
+    Ok(hashes)
+}
+
+/// Pack the fixed domain prefix once for a sequence of leaf hashes.
+fn prepare_domain_limbs(domain: &[u8]) -> Result<(u64, Vec<u64>)> {
+    let packed = pack_bytes(domain);
+    let length = u64::try_from(packed.length).map_err(|_| Error::ValueWidth {
+        length: packed.length,
+    })?;
+    Ok((length, packed.limbs))
+}
+
+/// Build one length-framed Poseidon input using an already packed domain.
+fn hash_with_prepared_domain_limbs(
+    domain_len: u64,
+    domain_limbs: &[u64],
+    values: &[u64],
+) -> Result<Vec<u64>> {
+    let payload_capacity = values
+        .len()
+        .checked_mul(core::mem::size_of::<u64>())
+        .ok_or(Error::ValueWidth {
+            length: values.len(),
+        })?;
+    let mut payload = Vec::with_capacity(payload_capacity);
     for value in values {
         payload.extend_from_slice(&value.to_le_bytes());
     }
-    let domain_packed = pack_bytes(domain);
     let payload_packed = pack_bytes(&payload);
-    let mut limbs = Vec::with_capacity(domain_packed.limbs.len() + payload_packed.limbs.len() + 2);
-    let domain_len = u64::try_from(domain_packed.length).map_err(|_| Error::ValueWidth {
-        length: domain_packed.length,
-    })?;
-    limbs.push(domain_len);
-    limbs.extend(domain_packed.limbs);
     let payload_len = u64::try_from(payload_packed.length).map_err(|_| Error::ValueWidth {
         length: payload_packed.length,
     })?;
+    let mut limbs = Vec::with_capacity(domain_limbs.len() + payload_packed.limbs.len() + 2);
+    limbs.push(domain_len);
+    limbs.extend_from_slice(domain_limbs);
     limbs.push(payload_len);
     limbs.extend(payload_packed.limbs);
     Ok(limbs)
+}
+
+#[cfg(all(test, feature = "fastpq-gpu"))]
+fn hash_with_domain_limbs(domain: &[u8], values: &[u64]) -> Result<Vec<u64>> {
+    let (domain_len, domain_limbs) = prepare_domain_limbs(domain)?;
+    hash_with_prepared_domain_limbs(domain_len, &domain_limbs, values)
 }
 fn hash_poseidon_limb_batches(messages: &[Vec<u64>], mode: ExecutionMode) -> Vec<u64> {
     if messages.is_empty() {
@@ -2972,16 +3029,8 @@ mod tests {
             let key = format!("asset/xor/account-{idx:04}").into_bytes();
             let idx_u64 = u64::try_from(idx).expect("sample batch index fits u64");
             let pre = idx_u64.to_le_bytes().to_vec();
-            let op = if idx % 2 == 0 {
-                OperationKind::Mint
-            } else {
-                OperationKind::Burn
-            };
-            let post_value = if matches!(&op, OperationKind::Burn) {
-                idx_u64 - 1
-            } else {
-                idx_u64.wrapping_add(1)
-            };
+            let op = OperationKind::MetaSet;
+            let post_value = idx_u64.wrapping_add(1);
             let post = post_value.to_le_bytes().to_vec();
             batch.push(StateTransition::new(key, pre, post, op));
         }
@@ -2994,7 +3043,6 @@ mod tests {
             &crate::proof::PublicIO::default(),
             "fastpq-lane-balanced",
             1,
-            1,
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
@@ -3004,6 +3052,27 @@ mod tests {
         assert_ne!(a, 0);
         assert_ne!(b, 0);
         assert_ne!(a, b);
+    }
+    #[test]
+    fn transcript_challenge_matches_the_append_only_reference() {
+        let mut transcript = Transcript::initialise(
+            &crate::proof::PublicIO::default(),
+            "fastpq-lane-balanced",
+            1,
+            TRANSCRIPT_TAG_INIT,
+        )
+        .expect("transcript");
+        transcript.append_message("tag", b"payload");
+
+        let tag = "gamma";
+        let mut reference_payload = transcript.state.clone();
+        let tag_len = u32::try_from(tag.len()).expect("reference tag length fits u32");
+        reference_payload.extend_from_slice(&tag_len.to_le_bytes());
+        reference_payload.extend_from_slice(tag.as_bytes());
+        let expected: [u8; Hash::LENGTH] = Hash::new(reference_payload).into();
+
+        assert_eq!(transcript.challenge_bytes(tag), expected);
+        assert!(transcript.state.ends_with(&expected));
     }
     #[test]
     fn open_queries_rejects_out_of_range() {
@@ -3025,7 +3094,7 @@ mod tests {
         ));
     }
     #[test]
-    fn merkle_paths_verify_against_lookup_root_for_single_leaf() {
+    fn merkle_paths_verify_against_lde_root_for_single_leaf() {
         let evaluations = vec![42u64];
         let leaves = hash_lde_leaves(&evaluations, 8).expect("hash leaves");
         let root = merkle_root(&leaves);
@@ -3037,7 +3106,7 @@ mod tests {
         assert!(!verify_merkle_path(leaf, leaf, 0, &[]).expect("empty path is noncanonical"));
     }
     #[test]
-    fn merkle_paths_verify_against_lookup_root_for_odd_leaf_count() {
+    fn merkle_paths_verify_against_lde_root_for_odd_leaf_count() {
         let chunk_size = lde_chunk_size(8);
         let evaluations = (0..(chunk_size * 3 - 1))
             .map(|idx| u64::try_from(idx).expect("index fits u64"))
@@ -3133,6 +3202,120 @@ mod tests {
         }
     }
     #[test]
+    fn air_composition_columnar_pass_matches_row_helper() {
+        let trace = build_trace(&sample_batch(5)).expect("trace");
+        let column_names = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+        let mut columns = trace
+            .columns
+            .iter()
+            .map(|column| column.values.clone())
+            .collect::<Vec<_>>();
+        let active = column_names
+            .iter()
+            .position(|column| column == "s_active")
+            .expect("active selector column");
+        let metadata = column_names
+            .iter()
+            .position(|column| column == "metadata_hash_limb_3")
+            .expect("metadata commitment column");
+        columns[active][0] = 2;
+        columns[metadata][1] = add_mod(columns[metadata][1], FIELD_ONE);
+        let alphas = (1..=AIR_COMPOSITION_ALPHA_COUNT)
+            .map(|alpha| u64::try_from(alpha).expect("AIR challenge index fits u64"))
+            .collect::<Vec<_>>();
+        let next_step = 1;
+        let expected = (0..trace.padded_len)
+            .map(|row_index| {
+                let current = air_row_at(&columns, row_index)?;
+                let next = air_row_at(&columns, (row_index + next_step) % trace.padded_len)?;
+                air_composition_value_for_rows(&column_names, &current, &next, &alphas)
+            })
+            .collect::<Result<Vec<_>>>()
+            .expect("row-wise AIR composition");
+
+        assert_eq!(
+            air_composition_values(&column_names, &columns, &alphas, next_step)
+                .expect("columnar AIR composition"),
+            expected
+        );
+        assert!(expected.iter().any(|value| *value != 0));
+
+        let large_step = usize::MAX;
+        assert_eq!(
+            air_composition_values(&column_names, &columns, &alphas, large_step)
+                .expect("large next-step offset"),
+            air_composition_values(
+                &column_names,
+                &columns,
+                &alphas,
+                large_step % trace.padded_len,
+            )
+            .expect("reduced next-step offset")
+        );
+    }
+    #[test]
+    fn air_column_layout_preserves_schema_error_order() {
+        let trace = build_trace(&sample_batch(2)).expect("trace");
+        let column_names = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+        let columns = trace
+            .columns
+            .iter()
+            .map(|column| column.values.clone())
+            .collect::<Vec<_>>();
+        let alphas = vec![FIELD_ONE; AIR_COMPOSITION_ALPHA_COUNT];
+        let missing_index = column_names
+            .iter()
+            .position(|column| column == "s_transfer")
+            .expect("transfer selector column");
+        let mut missing_names = column_names.clone();
+        missing_names.remove(missing_index);
+        let mut missing_columns = columns.clone();
+        missing_columns.remove(missing_index);
+
+        let err = air_composition_values(&missing_names, &missing_columns, &alphas, 1)
+            .expect_err("missing selector must reject the schema");
+        assert!(matches!(err, Error::MissingColumn(name) if name == "s_transfer"));
+
+        let err = air_composition_values(&missing_names, &missing_columns, &[], 1)
+            .expect_err("challenge validation precedes schema validation");
+        assert!(matches!(
+            err,
+            Error::AirChallengeCountMismatch {
+                expected: AIR_COMPOSITION_ALPHA_COUNT,
+                actual: 0
+            }
+        ));
+
+        let mut short_names = column_names.clone();
+        short_names.pop();
+        let err = air_composition_values(&short_names, &columns, &alphas, 1)
+            .expect_err("row width validation precedes schema validation");
+        assert!(matches!(
+            err,
+            Error::AirOpeningMismatch { index } if index == columns.len()
+        ));
+
+        let mut missing_trace = trace;
+        missing_trace.columns.remove(missing_index);
+        let err = ensure_base_trace_constraints(&missing_trace)
+            .expect_err("base trace pass must validate its layout");
+        assert!(matches!(err, Error::MissingColumn(name) if name == "s_transfer"));
+
+        assert!(
+            air_composition_values(&[], &[Vec::new()], &[], 0)
+                .expect("empty domains retain their validation behavior")
+                .is_empty()
+        );
+    }
+    #[test]
     fn base_trace_constraint_check_rejects_non_boolean_selector() {
         let mut trace = build_trace(&sample_batch(2)).expect("trace");
         let selector = trace
@@ -3153,9 +3336,27 @@ mod tests {
             b"asset/xor/account-multi-limb".to_vec(),
             before.to_le_bytes().to_vec(),
             after.to_le_bytes().to_vec(),
-            OperationKind::Mint,
+            OperationKind::MetaSet,
         ));
-        let trace = build_trace(&batch).expect("trace");
+        let mut trace = build_trace(&batch).expect("trace");
+        trace
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "s_meta_set")
+            .expect("metadata selector")
+            .values[0] = 0;
+        trace
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "s_transfer")
+            .expect("transfer selector")
+            .values[0] = 1;
+        trace
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "delta")
+            .expect("delta column")
+            .values[0] = sub_mod(after, before);
         ensure_base_trace_constraints(&trace).expect("multi-limb delta must satisfy the AIR");
     }
     #[test]
@@ -3203,7 +3404,7 @@ mod tests {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
         let planner = crate::Planner::new(&params);
         let trace = build_trace(&sample_batch(8)).expect("trace");
-        let mut data = crate::trace::derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+        let data = crate::trace::derive_polynomial_data(&trace, &planner);
         let lde_columns = data.lde_columns();
         assert_eq!(
             hash_trace_rows_with_mode(lde_columns, ExecutionMode::Gpu),
@@ -3229,6 +3430,94 @@ mod tests {
                 .expect("cpu batched");
         assert_eq!(cpu_batched, expected);
         assert_eq!(batched, expected);
+    }
+    #[test]
+    fn domain_hash_iterator_preserves_order_across_chunk_boundary() {
+        let message_count = POSEIDON_LIMB_BATCH_CHUNK_MESSAGES + 1;
+        let expected = (0..message_count)
+            .map(|index| {
+                let index = u64::try_from(index).expect("test message index fits u64");
+                hash_with_domain(AIR_TRACE_LEAF_DOMAIN, &[index]).expect("scalar hash")
+            })
+            .collect::<Vec<_>>();
+        let messages = (0..message_count)
+            .map(|index| Ok([u64::try_from(index).expect("test message index fits u64")]));
+
+        let batched = hash_with_domain_limb_batches_from_iter(
+            AIR_TRACE_LEAF_DOMAIN,
+            messages,
+            ExecutionMode::Cpu,
+        )
+        .expect("chunked hashes");
+
+        assert_eq!(batched, expected);
+    }
+    #[test]
+    fn air_leaf_batches_match_scalar_reference() {
+        let row_count = 33usize;
+        let columns = vec![
+            (0..row_count)
+                .map(|index| u64::try_from(index).expect("test row index fits u64"))
+                .collect::<Vec<_>>(),
+            (0..row_count)
+                .map(|index| u64::try_from(index * 3 + 1).expect("test trace value fits u64"))
+                .collect::<Vec<_>>(),
+            (0..row_count)
+                .map(|index| u64::try_from(index * 7 + 2).expect("test trace value fits u64"))
+                .collect::<Vec<_>>(),
+        ];
+        let expected_trace = (0..row_count)
+            .map(|row_index| {
+                let row = columns
+                    .iter()
+                    .map(|column| column[row_index])
+                    .collect::<Vec<_>>();
+                hash_air_trace_row(row_index, &row).expect("scalar AIR trace hash")
+            })
+            .collect::<Vec<_>>();
+        let composition_values = (0..row_count)
+            .map(|index| u64::try_from(index * 11 + 3).expect("test composition value fits u64"))
+            .collect::<Vec<_>>();
+        let expected_composition = composition_values
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, value)| {
+                hash_air_composition_leaf(index, value).expect("scalar AIR composition hash")
+            })
+            .collect::<Vec<_>>();
+
+        for mode in [ExecutionMode::Cpu, ExecutionMode::Gpu] {
+            assert_eq!(
+                hash_air_trace_rows_with_mode(&columns, mode).expect("AIR trace hashes"),
+                expected_trace
+            );
+            assert_eq!(
+                hash_air_composition_leaves_with_mode(&composition_values, mode)
+                    .expect("AIR composition hashes"),
+                expected_composition
+            );
+        }
+    }
+    #[test]
+    fn lde_leaf_batches_match_scalar_reference() {
+        let arity = 8;
+        let chunk_size = lde_chunk_size(arity);
+        let evaluations = (0..(chunk_size * 33 - 1))
+            .map(|index| u64::try_from(index).expect("test evaluation index fits u64"))
+            .collect::<Vec<_>>();
+        let expected = evaluations
+            .chunks(chunk_size)
+            .enumerate()
+            .map(|(index, values)| hash_lde_chunk(index, values).expect("scalar LDE leaf hash"))
+            .collect::<Vec<_>>();
+
+        for mode in [ExecutionMode::Cpu, ExecutionMode::Gpu] {
+            assert_eq!(
+                hash_lde_leaves_with_mode(&evaluations, arity, mode).expect("LDE leaf hashes"),
+                expected
+            );
+        }
     }
     #[cfg(feature = "fastpq-gpu")]
     #[test]
@@ -3278,7 +3567,6 @@ mod tests {
             &crate::proof::PublicIO::default(),
             "fastpq-lane-balanced",
             1,
-            1,
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
@@ -3307,7 +3595,6 @@ mod tests {
             &crate::proof::PublicIO::default(),
             "fastpq-lane-balanced",
             1,
-            1,
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
@@ -3330,7 +3617,6 @@ mod tests {
             &crate::proof::PublicIO::default(),
             "fastpq-lane-balanced",
             1,
-            1,
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
@@ -3343,7 +3629,6 @@ mod tests {
         let mut transcript = Transcript::initialise(
             &crate::proof::PublicIO::default(),
             "fastpq-lane-balanced",
-            1,
             1,
             TRANSCRIPT_TAG_INIT,
         )
@@ -3360,42 +3645,11 @@ mod tests {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
         let planner = crate::Planner::new(&params);
         let trace = build_trace(&sample_batch(8)).expect("trace");
-        let mut data = crate::trace::derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+        let data = crate::trace::derive_polynomial_data(&trace, &planner);
         let hashes = hash_trace_rows(data.lde_columns());
         let expected = trace.padded_len
             * usize::try_from(params.fri.blowup_factor).expect("blowup fits usize");
         assert_eq!(hashes.len(), expected);
-    }
-    #[test]
-    fn lookup_grand_product_consumes_lde_witness() {
-        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
-        let planner = crate::Planner::new(&params);
-        let trace = build_trace(&sample_batch(4)).expect("trace");
-        let mut data = crate::trace::derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
-        let perm_index =
-            crate::trace::column_index(&trace, "perm_hash").expect("perm column present");
-        let selector_index =
-            crate::trace::column_index(&trace, "s_perm").expect("selector column present");
-        let gamma = 7;
-        let lde_columns = data.lde_columns();
-        let product = compute_lookup_grand_product(
-            lde_columns[selector_index].as_slice(),
-            lde_columns[perm_index].as_slice(),
-            gamma,
-        )
-        .expect("matching lookup column lengths");
-        assert_ne!(product, 0);
-    }
-    #[test]
-    fn lookup_grand_product_rejects_mismatched_column_lengths() {
-        let err = compute_lookup_grand_product(&[1, 0], &[7], 3).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::LookupColumnLengthMismatch {
-                selector_len: 2,
-                witness_len: 1
-            }
-        ));
     }
     #[test]
     fn low_level_backend_rejects_wide_trace_schema_before_allocation() {
@@ -3412,7 +3666,7 @@ mod tests {
 
         let backend = StarkBackend::new(BackendConfig::new(params));
         let err = backend
-            .prove(&batch, &crate::proof::PublicIO::default(), 1, 1)
+            .prove(&batch, &crate::proof::PublicIO::default(), 1)
             .expect_err("wide trace schema must fail before materialisation");
         assert!(matches!(
             err,
@@ -3508,7 +3762,6 @@ mod tests {
             &crate::proof::PublicIO::default(),
             params.name,
             1,
-            1,
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
@@ -3558,7 +3811,6 @@ mod tests {
             &crate::proof::PublicIO::default(),
             params.name,
             1,
-            1,
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
@@ -3578,7 +3830,6 @@ mod tests {
         let mut transcript_again = Transcript::initialise(
             &crate::proof::PublicIO::default(),
             params.name,
-            1,
             1,
             TRANSCRIPT_TAG_INIT,
         )
@@ -3701,7 +3952,6 @@ mod tests {
             &crate::proof::PublicIO::default(),
             params.name,
             1,
-            1,
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
@@ -3718,7 +3968,6 @@ mod tests {
         let mut reference_transcript = Transcript::initialise(
             &crate::proof::PublicIO::default(),
             params.name,
-            1,
             1,
             TRANSCRIPT_TAG_INIT,
         )
@@ -3762,7 +4011,6 @@ mod tests {
             &crate::proof::PublicIO::default(),
             params.name,
             1,
-            1,
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
@@ -3781,7 +4029,6 @@ mod tests {
         let mut reference_transcript = Transcript::initialise(
             &crate::proof::PublicIO::default(),
             params.name,
-            1,
             1,
             TRANSCRIPT_TAG_INIT,
         )
@@ -3846,14 +4093,12 @@ mod tests {
                     &crate::proof::PublicIO::default(),
                     params.name,
                     1,
-                    1,
                     TRANSCRIPT_TAG_INIT,
                 )
                 .expect("transcript");
                 let mut transcript_b = Transcript::initialise(
                     &crate::proof::PublicIO::default(),
                     params.name,
-                    1,
                     1,
                     TRANSCRIPT_TAG_INIT,
                 )

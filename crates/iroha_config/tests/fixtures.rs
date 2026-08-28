@@ -406,6 +406,57 @@ fn nexus_axt_fields_load_from_fixture() {
     assert_eq!(config.nexus.axt.replay_retention_slots.get(), 256);
 }
 #[test]
+fn nexus_atomic_private_settlement_fields_load_from_fixture() {
+    let config = load_config_from_fixtures("nexus_atomic_private_settlement_full.toml")
+        .expect("private-settlement config should be valid");
+    let private = &config.nexus.atomic_private_settlement;
+    assert!(private.enabled);
+    assert_eq!(private.activation_height, Some(100_000));
+    assert_eq!(private.max_participants.get(), 16);
+    assert_eq!(private.proof_profile_version.get(), 1);
+    assert_eq!(
+        private
+            .capsule_padding_classes_bytes
+            .iter()
+            .map(|bytes| bytes.get())
+            .collect::<Vec<_>>(),
+        vec![4_096, 16_384, 65_536, 262_144]
+    );
+    assert_eq!(
+        private
+            .permitted_policy_versions
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+}
+#[test]
+fn nexus_atomic_private_settlement_rejects_invalid_participant_bound() {
+    let result = load_config_from_fixtures("bad.nexus_atomic_private_settlement_participants.toml");
+    assert!(result.is_err(), "one-leg private bundles must be rejected");
+}
+#[test]
+fn nexus_atomic_private_settlement_requires_activation_height_and_canonical_bounds() {
+    use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let private = NexusAtomicPrivateSettlement {
+        enabled: true,
+        activation_height: None,
+        capsule_padding_classes_bytes: vec![16_384, 4_096],
+        permitted_policy_versions: vec![1, 1],
+        ..NexusAtomicPrivateSettlement::default()
+    };
+    let nexus = Nexus {
+        atomic_private_settlement: private,
+        ..Nexus::default()
+    };
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+#[test]
 fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
     let report = load_config_from_fixtures("bad.sumeragi_legacy_v1_fields.toml")
         .expect_err("retired v1 actor/global-RBC schema must be rejected");

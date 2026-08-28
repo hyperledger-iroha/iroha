@@ -62,14 +62,11 @@ pub struct MetalOverrides {
     pub dispatch_trace: bool,
     /// Whether to print Metal device enumeration details during GPU discovery.
     pub debug_enum: bool,
-    /// Whether to dump fused Poseidon pipeline failures to stderr.
-    pub debug_fused: bool,
 }
 static METAL_MAX_IN_FLIGHT_OVERRIDE: OnceLock<Option<usize>> = OnceLock::new();
 static METAL_THREADGROUP_OVERRIDE: OnceLock<Option<u64>> = OnceLock::new();
 static METAL_DISPATCH_TRACE_OVERRIDE: OnceLock<Option<bool>> = OnceLock::new();
 static METAL_DEBUG_ENUM_OVERRIDE: OnceLock<Option<bool>> = OnceLock::new();
-static METAL_DEBUG_FUSED_OVERRIDE: OnceLock<Option<bool>> = OnceLock::new();
 static ENV_OVERRIDES_LOCKED: AtomicBool = AtomicBool::new(false);
 /// Apply Metal overrides provided by the host configuration.
 ///
@@ -96,11 +93,6 @@ pub fn apply_metal_overrides(overrides: MetalOverrides) -> Result<(), &'static s
         overrides.debug_enum,
         "FASTPQ Metal enumeration-debug override already configured",
     )?;
-    set_bool_override(
-        &METAL_DEBUG_FUSED_OVERRIDE,
-        overrides.debug_fused,
-        "FASTPQ Poseidon fused-debug override already configured",
-    )?;
     freeze_env_overrides();
     Ok(())
 }
@@ -123,11 +115,6 @@ pub fn metal_dispatch_trace_override() -> Option<bool> {
 #[allow(dead_code)]
 pub fn metal_debug_enum_override() -> Option<bool> {
     METAL_DEBUG_ENUM_OVERRIDE.get().copied().flatten()
-}
-/// Resolve the configured Poseidon fused-debug override, if any.
-#[allow(dead_code)]
-pub fn metal_debug_fused_override() -> Option<bool> {
-    METAL_DEBUG_FUSED_OVERRIDE.get().copied().flatten()
 }
 /// Whether configuration has been applied, freezing runtime env fallbacks.
 #[allow(dead_code)]
@@ -204,20 +191,17 @@ mod tests {
         assert_eq!(metal_threadgroup_override(), None);
         assert_eq!(metal_dispatch_trace_override(), None);
         assert_eq!(metal_debug_enum_override(), None);
-        assert_eq!(metal_debug_fused_override(), None);
         apply_metal_overrides(MetalOverrides {
             max_in_flight: Some(4),
             threadgroup_size: Some(64),
             dispatch_trace: true,
             debug_enum: true,
-            debug_fused: true,
         })
         .expect("overrides apply");
         assert_eq!(metal_max_in_flight_override(), Some(4));
         assert_eq!(metal_threadgroup_override(), Some(64));
         assert_eq!(metal_dispatch_trace_override(), Some(true));
         assert_eq!(metal_debug_enum_override(), Some(true));
-        assert_eq!(metal_debug_fused_override(), Some(true));
         assert!(env_overrides_locked());
         assert_eq!(guard_env_override(|| Some(9usize)), None);
         assert_eq!(guard_hits.get(), 1);
@@ -227,7 +211,6 @@ mod tests {
             threadgroup_size: Some(64),
             dispatch_trace: true,
             debug_enum: true,
-            debug_fused: true,
         })
         .expect("idempotent overrides");
     }

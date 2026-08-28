@@ -38,11 +38,11 @@ python3 scripts/fastpq/export_poseidon_microbench.py \
 ```
 
 Omit `--output` to have the script drop the file under `benchmarks/poseidon/` with a timestamped
-name automatically. The helper accepts both wrapped bundles (with `benchmarks.poseidon_microbench`)
-and raw `fastpq_metal_bench*.json` captures, so you can export historical data even before the new
-wrapper fields were introduced. The generated JSON keeps the metadata (host labels, backend, capture
-time) so Grafana dashboards, CI gates, and reviewers can diff microbench trends without unpacking
-the full bundle.
+name automatically. The helper can convert raw captures for archival analysis, but current release
+evidence must come from a wrapped bundle and carry explicit `operation_filter` and `column_count`
+metadata. The history updater rejects exports missing either field. The generated JSON keeps the
+metadata (host labels, backend, capture time) so dashboards and reviewers can compare complete
+microbench records without unpacking the full bundle.
 
 ## Aggregating manifests
 
@@ -54,8 +54,10 @@ python3 scripts/fastpq/aggregate_poseidon_microbench.py \
   --output benchmarks/poseidon/manifest.json
 ```
 
-CI jobs and dashboards can read `benchmarks/poseidon/manifest.json` to compare default/scalar means
-and the recorded speedups without scanning the individual files.
+The checked-in 2025 summaries and manifest are retained as archival captures; they predate the
+current required metadata and are not inputs to release gates or the current history updater.
+Regenerate the exports and manifest from current wrapped bundles before using them in CI or a
+release report.
 
 ## Generating CSV summaries
 

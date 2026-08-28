@@ -404,7 +404,7 @@ fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result
     })
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let record = world
@@ -642,7 +642,7 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
     })
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let ops_record = world
@@ -899,7 +899,7 @@ fn record_agent_autonomy_execution_is_exactly_once_and_audited() -> Result<(), e
             .contains("already has an authoritative execution")
     );
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let record = world

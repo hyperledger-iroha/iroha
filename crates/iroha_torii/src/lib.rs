@@ -212,8 +212,6 @@ use iroha_config::{
 };
 #[cfg(feature = "app_api")]
 use iroha_core::state::StateBlock;
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::Telemetry;
 use iroha_core::telemetry::{SorafsGatewayRequestMetricLabels, SorafsGatewayResponseMetricLabels};
 use iroha_core::{
     EventsSender,
@@ -930,6 +928,8 @@ mod mcp;
 mod musubi;
 #[cfg(feature = "app_api")]
 mod predicates;
+#[cfg(feature = "app_api")]
+mod private_settlement;
 mod router;
 pub(crate) mod routing;
 mod runtime;
@@ -1029,8 +1029,8 @@ pub use routing::{
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
     handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
     handle_v1_kaigi_relays_sse, handle_v1_sumeragi_diagnostics, handle_v1_sumeragi_leader,
-    handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params, handle_v1_sumeragi_qc,
-    handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
+    handle_v1_sumeragi_params, handle_v1_sumeragi_qc, handle_v1_sumeragi_status,
+    handle_v1_sumeragi_status_sse,
 };
 pub use runtime::{
     ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
@@ -34146,34 +34146,6 @@ async fn handler_sumeragi_status_sse(
 }
 
 #[cfg(feature = "telemetry")]
-async fn handler_pacemaker_status(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/pacemaker",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/pacemaker",
-            &app.telemetry,
-        ));
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    routing::handle_v1_sumeragi_pacemaker(&app.telemetry, accept).await
-}
-#[cfg(feature = "telemetry")]
 async fn handler_sumeragi_leader(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -44792,6 +44764,8 @@ pub struct Torii {
         Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
     #[cfg(feature = "app_api")]
     musubi_search: Arc<RwLock<iroha_core::musubi_search::MusubiSearchIndexV1>>,
+    #[cfg(feature = "app_api")]
+    private_settlement_runtime: private_settlement::PrivateSettlementToriiRuntimeV1,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
     telemetry: routing::MaybeTelemetry,
@@ -44983,6 +44957,12 @@ pub struct Torii {
 pub struct ToriiRuntimeDeps {
     telemetry: routing::MaybeTelemetry,
     #[cfg(feature = "app_api")]
+    private_settlement_availability_signer:
+        Option<Arc<iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1>>,
+    #[cfg(feature = "app_api")]
+    private_settlement_phase_signer:
+        Option<Arc<iroha_core::private_settlement::PrivateSettlementPhaseSignerV1>>,
+    #[cfg(feature = "app_api")]
     parliament_tle_release_coordinator:
         Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
     bootle_lantern_issuance_provider_registry: Option<
@@ -45103,6 +45083,10 @@ impl ToriiRuntimeDeps {
         Self {
             telemetry,
             #[cfg(feature = "app_api")]
+            private_settlement_availability_signer: None,
+            #[cfg(feature = "app_api")]
+            private_settlement_phase_signer: None,
+            #[cfg(feature = "app_api")]
             parliament_tle_release_coordinator: Arc::new(
                 iroha_core::tle_release::TleReleaseCoordinatorV1::without_signer(),
             ),
@@ -45207,6 +45191,33 @@ impl ToriiRuntimeDeps {
         coordinator: Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
     ) -> Self {
         self.parliament_tle_release_coordinator = coordinator;
+        self
+    }
+    /// Attach the node-owned bounded BLS signer for private-settlement DA shares.
+    ///
+    /// The capability exposes only fsync-after-store availability signing and
+    /// never returns its retained private key.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_private_settlement_availability_signer(
+        mut self,
+        signer: Arc<iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1>,
+    ) -> Self {
+        self.private_settlement_availability_signer = Some(signer);
+        self
+    }
+    /// Attach the node-owned bounded BLS signer for private-settlement phases.
+    ///
+    /// The capability signs Prepare only after complete verification and
+    /// durable staging, and signs Commit only after the exact complete barrier
+    /// and local durable Prepare QC have been verified.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_private_settlement_phase_signer(
+        mut self,
+        signer: Arc<iroha_core::private_settlement::PrivateSettlementPhaseSignerV1>,
+    ) -> Self {
+        self.private_settlement_phase_signer = Some(signer);
         self
     }
     /// Attach the deployment-owned Bootle/Lantern issuance provider registry.
@@ -46883,7 +46894,6 @@ impl Torii {
         let app_state = builder.state().clone();
         mount_catalog_route_rows!(
             builder, telemetry;
-            PACEMAKER => operator_get(handler_pacemaker_status, app_state);
             DEBUG_AXT_CACHE => operator_get(handler_debug_axt_cache, app_state);
             DEBUG_WITNESS => operator_get(handler_debug_witness, app_state);
         );
@@ -48508,55 +48518,91 @@ impl Torii {
     fn add_runtime_governance_routes(&self, builder: &mut RouterBuilder) {
         self.add_cataloged_runtime_governance_routes(builder);
     }
-    /// Construct `Torii` using the classic telemetry arguments (`Telemetry` + enabled flag).
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(feature = "telemetry")]
-    /// Construct `Torii` with runtime telemetry configuration.
-    pub fn new(
-        chain_id: ChainId,
-        network_id: NetworkId,
-        kiso: KisoHandle,
-        config: Config,
-        queue: Arc<Queue>,
-        events: EventsSender,
-        query_service: LiveQueryStoreHandle,
-        kura: Arc<Kura>,
-        state: Arc<CoreState>,
-        da_receipt_signer: KeyPair,
-        online_peers: OnlinePeersProvider,
-        telemetry: Telemetry,
-        telemetry_enabled: bool,
-    ) -> Self {
-        let profile = if telemetry_enabled {
-            TelemetryProfile::Operator
-        } else {
-            TelemetryProfile::Disabled
-        };
-        let handle = if telemetry_enabled {
-            routing::MaybeTelemetry::from_profile(Some(telemetry), profile)
-        } else {
-            routing::MaybeTelemetry::from_profile(None, profile)
-        };
-        Self::new_with_handle(
-            chain_id,
-            network_id,
-            kiso,
-            config,
-            queue,
-            events,
-            query_service,
-            kura,
-            state,
-            da_receipt_signer,
-            online_peers,
-            None,
-            handle,
-        )
+    #[cfg(feature = "app_api")]
+    fn add_private_settlement_routes(&self, builder: &mut RouterBuilder) {
+        use iroha_core::private_settlement::PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1;
+        use route_catalog::private_settlement as routes;
+
+        let app_state = builder.state().clone();
+        let runtime = self.private_settlement_runtime.clone();
+        let upload_limit = usize::try_from(PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1)
+            .expect("private-settlement sidecar limit fits usize");
+        builder.route(
+            &routes::AVAILABILITY_SHARE,
+            catalog_post(private_settlement::handler_availability_share)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
+        );
+        builder.route(
+            &routes::PREPARE_VOTE,
+            catalog_post(private_settlement::handler_prepare_vote)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
+        );
+        builder.route(
+            &routes::COMMIT_VOTE,
+            catalog_post(private_settlement::handler_commit_vote)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
+        );
+        builder.route(
+            &routes::PHASE_CERTIFICATE,
+            catalog_post(private_settlement::handler_phase_certificate)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
+        );
+        builder.route(
+            &routes::LEG_UPLOAD,
+            catalog_post(private_settlement::handler_leg_upload)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
+        );
+        builder.route(
+            &routes::LEG_STATUS,
+            catalog_get(private_settlement::handler_leg_status)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), 0),
+        );
+        builder.route(
+            &routes::COMMITTEE_PROOF,
+            catalog_get(private_settlement::handler_committee_proof)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_identity_bound(app_state.clone()),
+        );
+        builder.route(
+            &routes::AUDITOR_CAPSULE,
+            catalog_get(private_settlement::handler_auditor_capsule)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_identity_bound(app_state.clone()),
+        );
+        builder.route(
+            &routes::AUDITOR_APPROVAL,
+            catalog_post(private_settlement::handler_auditor_approval)
+                .layer(axum::extract::DefaultBodyLimit::max(upload_limit))
+                .layer(axum::Extension(runtime))
+                .authenticated_identity_bound(app_state.clone()),
+        );
+        builder.route(
+            &routes::BUNDLE_SUBMIT,
+            catalog_post(private_settlement::handler_bundle_submit)
+                .authenticated_canonical_account_body(app_state, upload_limit),
+        );
+        builder.route(
+            &routes::BUNDLE_STATUS,
+            catalog_get(private_settlement::handler_bundle_status)
+                .layer(axum::Extension(self.private_settlement_runtime.clone())),
+        );
+        builder.route(
+            &routes::BUNDLE_RECEIPT,
+            catalog_get(private_settlement::handler_bundle_receipt)
+                .layer(axum::Extension(self.private_settlement_runtime.clone())),
+        );
     }
-    /// Construct `Torii` when the telemetry feature is disabled.
+    /// Construct `Torii` with telemetry disabled.
+    ///
+    /// Embeddings that provide telemetry must use [`Self::new_with_handle`] and
+    /// pass an explicit [`routing::MaybeTelemetry`] profile.
     #[allow(clippy::too_many_arguments)]
-    #[cfg(not(feature = "telemetry"))]
-    /// Construct `Torii` when telemetry support is disabled.
     pub fn new(
         chain_id: ChainId,
         network_id: NetworkId,
@@ -49959,6 +50005,17 @@ impl Torii {
         } else {
             select_initial_musubi_search_index(rebuild_musubi_search_index(state.as_ref(), None))
         }));
+        #[cfg(feature = "app_api")]
+        let private_settlement_runtime = private_settlement::PrivateSettlementToriiRuntimeV1::open(
+            state.as_ref(),
+            kura.store_root(),
+            emergency_fast,
+            runtime_deps.private_settlement_availability_signer.clone(),
+            runtime_deps.private_settlement_phase_signer.clone(),
+        )
+        .unwrap_or_else(|error| {
+            panic!("invalid atomic private-settlement sidecar runtime: {error}")
+        });
         Self {
             chain_id: Arc::new(chain_id),
             signed_query_admission,
@@ -49973,6 +50030,8 @@ impl Torii {
             parliament_tle_release_coordinator,
             #[cfg(feature = "app_api")]
             musubi_search,
+            #[cfg(feature = "app_api")]
+            private_settlement_runtime,
             bootle_lantern_issuance_runtime,
             online_peers,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -50868,6 +50927,8 @@ impl Torii {
         self.add_profiling_routes(&mut builder);
         // Runtime/Governance routes that require state
         self.add_runtime_governance_routes(&mut builder);
+        #[cfg(feature = "app_api")]
+        self.add_private_settlement_routes(&mut builder);
         // Transaction, Contracts, VK
         self.add_transaction_routes(&mut builder);
         self.add_da_routes(&mut builder);
@@ -51247,6 +51308,14 @@ impl Torii {
         } else {
             self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone())
         };
+        #[cfg(feature = "app_api")]
+        if !emergency_fast {
+            private_settlement::spawn_private_settlement_finality_reconciliation_v1(
+                self.private_settlement_runtime.clone(),
+                Arc::clone(&self.state),
+                shutdown_signal.clone(),
+            );
+        }
         #[cfg(feature = "app_api")]
         if !emergency_fast && let Some(runtime) = &self.por_runtime {
             runtime.clone().spawn(shutdown_signal.clone());

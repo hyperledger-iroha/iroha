@@ -78,7 +78,9 @@ fn axt_replay_ledger_survives_state_restart() {
         })
         .expect("exact AXT sequence should stage");
         stx.apply();
-        block.commit().expect("commit recorded envelope");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit recorded envelope");
     }
     let replay_key = AxtHandleReplayKey::from_handle(dsid, &handle_fragment.handle);
     state.set_axt_policy(
@@ -204,7 +206,7 @@ fn axt_replay_ledger_prunes_after_retention_window() {
         stx.apply();
     }
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit recorded envelope before pruning");
     let replay_key = AxtHandleReplayKey::from_handle(dsid, &handle_fragment.handle);
     let budget_key = AxtHandleBudgetKey::from_handle(&handle_fragment.handle);

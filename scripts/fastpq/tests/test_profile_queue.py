@@ -25,7 +25,7 @@ def test_summarize_report_extracts_metrics() -> None:
     assert summary.column_staging is not None
     assert summary.column_staging["batches"] == 48
     assert summary.poseidon_pipeline is not None
-    assert summary.poseidon_pipeline["pipe_depth"] == 2
+    assert summary.poseidon_pipeline["columns"] == 128
     assert summary.phase_metrics["fft"]["wait_ratio"] == pytest.approx(0.142, rel=1e-3)
     assert summary.phase_max_wait_ratio["fft"] == pytest.approx(0.142, rel=1e-3)
     markdown = _render_markdown([summary])

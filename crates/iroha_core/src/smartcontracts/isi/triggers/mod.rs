@@ -1396,7 +1396,7 @@ mod tests {
             .unwrap();
         // Commit the permission grant and execute in the next block
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let mut state_block2 = state.block(BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
             None,
@@ -1923,7 +1923,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         // Active IDs should include the trigger id
         {
             let mut ids = collect_active_trigger_ids(&state);
@@ -1944,7 +1944,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx2)
             .unwrap();
         stx2.apply();
-        state_block2.commit().unwrap();
+        state_block2.commit_world_overlay_for_testing().unwrap();
         // Active IDs should no longer include the trigger id
         {
             let ids2 = collect_active_trigger_ids(&state);
@@ -1995,7 +1995,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
@@ -2046,7 +2046,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
@@ -2095,7 +2095,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
@@ -2114,7 +2114,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().any(|id| id == &trigger_id),
@@ -2163,7 +2163,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
@@ -2182,7 +2182,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().any(|id| id == &trigger_id),
@@ -2228,7 +2228,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().any(|id| id == &trigger_id),
@@ -2247,7 +2247,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
@@ -2296,7 +2296,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
@@ -2315,7 +2315,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().any(|id| id == &trigger_id),
@@ -2334,7 +2334,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
@@ -2477,7 +2477,7 @@ mod tests {
                 .unwrap();
         }
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let mut ids: Vec<_> = ValidQuery::execute(
             FindTriggers,

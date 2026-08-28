@@ -91,9 +91,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse()
         .expect("public input key is a Name");
     let host =
-        WsvHost::new_with_subject(wsv, alice_subject, Default::default()).with_public_inputs(
-            BTreeMap::from([(input_name, tlv(PointerType::NoritoBytes, &record))]),
-        );
+        WsvHost::new_with_subject(wsv, alice_subject).with_public_inputs(BTreeMap::from([(
+            input_name,
+            tlv(PointerType::NoritoBytes, &record),
+        )]));
     // 4) Create the VM, attach the host, and select the public wrapper.
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

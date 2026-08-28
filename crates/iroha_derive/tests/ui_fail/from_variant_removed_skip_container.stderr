@@ -1,0 +1,5 @@
+error: cannot find attribute `skip_container` in this scope
+ --> tests/ui_fail/from_variant_removed_skip_container.rs:5:13
+  |
+5 |     Value(#[skip_container] Box<u8>),
+  |             ^^^^^^^^^^^^^^

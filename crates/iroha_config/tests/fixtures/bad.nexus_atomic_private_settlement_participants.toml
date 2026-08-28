@@ -1,0 +1,6 @@
+extends = "base.toml"
+
+[nexus]
+
+[nexus.atomic_private_settlement]
+max_participants = 1

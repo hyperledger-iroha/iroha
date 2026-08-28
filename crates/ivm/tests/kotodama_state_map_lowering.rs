@@ -5,7 +5,6 @@ use ivm::{
     kotodama::{compiler::Compiler as KotodamaCompiler, ir, parser, semantic},
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
-use std::collections::HashMap;
 mod common;
 fn encoded_state_path(name: &str, key: i64) -> String {
     let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
@@ -141,7 +140,7 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&code).expect("load loop program");

@@ -199,7 +199,7 @@ def summarize_regeneration_hint(backend: Any, operation_filter: str | None) -> s
     if isinstance(backend, str) and backend.startswith("metal"):
         return (
             "- Regenerate with `fastpq_metal_bench` plus "
-            "`scripts/fastpq/wrap_benchmark.py` after each macOS nightly run."
+            "`scripts/fastpq/wrap_benchmark.py` after each macOS lab run."
             f"{focused}"
         )
     return (

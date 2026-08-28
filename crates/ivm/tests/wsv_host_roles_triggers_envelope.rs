@@ -24,7 +24,7 @@ fn json_admin_envelopes_are_rejected_for_every_a0_tag_without_mutation() {
             .parse()
             .expect("public key"),
     );
-    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
     let mut vm = IVM::new(u64::MAX);
     let envelope =
         Json::from_str_norito(r#"{"payload":{"name":"legacy"},"type":"wsv.create_trigger"}"#)

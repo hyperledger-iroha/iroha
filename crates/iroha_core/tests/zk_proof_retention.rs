@@ -105,7 +105,9 @@ fn proof_records_pruned_to_cap_per_backend() {
             .expect("verify proof");
         stx.apply();
     }
-    block.commit().expect("commit block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit block");
     // After insertions, retained proof records for this backend should be <= cap
     let view = state.view();
     let count_halo2_ipa = view
@@ -161,7 +163,9 @@ fn manual_prune_instruction_applies_new_cap() {
             .expect("verify proof");
         stx.apply();
     }
-    block.commit().expect("commit block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit block");
     // Tighten retention policy and prune explicitly.
     let mut zk = state.zk.clone();
     zk.proof_history_cap = 1;
@@ -179,7 +183,9 @@ fn manual_prune_instruction_applies_new_cap() {
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), prune)
         .expect("prune proofs");
     stx.apply();
-    prune_block.commit().expect("commit prune block");
+    prune_block
+        .commit_world_overlay_for_testing()
+        .expect("commit prune fixture overlay");
     let view = state.view();
     let remaining = view
         .world()

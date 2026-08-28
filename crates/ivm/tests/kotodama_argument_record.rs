@@ -7,10 +7,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     pointer_abi::PointerType,
 };
-use std::{
-    collections::{BTreeMap, HashMap},
-    fs,
-};
+use std::{collections::BTreeMap, fs};
 mod common;
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -40,8 +37,7 @@ fn host_with_arguments(inputs: BTreeMap<Name, Vec<u8>>) -> WsvHost {
             .parse()
             .expect("sample public key"),
     );
-    WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new())
-        .with_public_inputs(inputs)
+    WsvHost::new_with_subject(MockWorldStateView::new(), caller).with_public_inputs(inputs)
 }
 #[test]
 fn shared_sdk_fixture_is_generated_and_validated_by_rust() {

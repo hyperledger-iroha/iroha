@@ -133,7 +133,9 @@ fn ivm_host_shadow_execute_matches_native_execute() {
         }
         let events = tx.world.take_external_events();
         tx.apply();
-        block.commit().expect("commit direct block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit direct block");
         events
     };
     // CoreHost path via syscalls.
@@ -170,7 +172,9 @@ fn ivm_host_shadow_execute_matches_native_execute() {
         });
         let events = tx.world.take_external_events();
         tx.apply();
-        block.commit().expect("commit host block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit host block");
         events
     };
     let direct_data = data_event_debug(direct_events);

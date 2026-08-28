@@ -1724,7 +1724,6 @@ mod tests {
             metal_threadgroup_width: None,
             metal_trace: false,
             metal_debug_enum: false,
-            metal_debug_fused: false,
         }
     }
     fn checked_nexus_fee_relay_key_fixture() -> KeyPair {

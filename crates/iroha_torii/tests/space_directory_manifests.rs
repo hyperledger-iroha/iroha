@@ -463,8 +463,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         &queue_rev,
         &local_peer_id_rev,
         tokio::sync::broadcast::channel(1).0,
-        true,
-        false,
+        iroha_config::parameters::actual::TelemetryProfile::Operator,
     );
     // Inactive filter returns revoked manifest.
     let app = torii_rev.router();

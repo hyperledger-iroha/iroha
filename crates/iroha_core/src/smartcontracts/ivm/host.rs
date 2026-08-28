@@ -17192,7 +17192,7 @@ seiyaku StaleRuntimeBinding {
         }
         tx.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit contract permission grant block");
     }
     fn grant_asset_ops_to_account(state: &State, authority: &AccountId, account_id: AccountId) {
@@ -17364,7 +17364,7 @@ seiyaku StaleRuntimeBinding {
         if result.is_ok() {
             stx.apply();
             block
-                .commit()
+                .commit_world_overlay_for_testing()
                 .expect("commit contract call transaction block");
         }
         result
@@ -20068,7 +20068,9 @@ seiyaku OpaqueInstructionSubmission {
             .execute(&authority, &mut tx)
             .expect("bind alias");
         tx.apply();
-        block.commit().expect("commit permissions");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit permissions");
         let first_view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&first_view);
@@ -20094,7 +20096,9 @@ seiyaku OpaqueInstructionSubmission {
             .execute(&authority, &mut tx)
             .expect("rebind alias");
         tx.apply();
-        block.commit().expect("commit alias rebind");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit alias rebind");
         let rebound_view = state.view();
         host.set_query_state(&rebound_view);
         let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
@@ -20126,7 +20130,9 @@ seiyaku OpaqueInstructionSubmission {
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.apply();
-        block.commit().expect("commit catalog");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit catalog");
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
@@ -20169,7 +20175,9 @@ seiyaku OpaqueInstructionSubmission {
             .expect("merchant account exists")
             .set_label(Some(alias));
         tx.apply();
-        block.commit().expect("commit label-only alias state");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit label-only alias state");
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
@@ -20212,7 +20220,9 @@ seiyaku OpaqueInstructionSubmission {
             .execute(&authority, &mut tx)
             .expect("bind alias");
         tx.apply();
-        block.commit().expect("commit alias setup");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit alias setup");
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
@@ -20316,7 +20326,9 @@ seiyaku OpaqueInstructionSubmission {
             .execute(&authority, &mut tx)
             .expect("bind domain-qualified alias");
         tx.apply();
-        block.commit().expect("commit permissions");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit permissions");
         let first_view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&first_view);
@@ -20339,7 +20351,9 @@ seiyaku OpaqueInstructionSubmission {
             .execute(&authority, &mut tx)
             .expect("rebind domain-qualified alias");
         tx.apply();
-        block.commit().expect("commit alias rebind");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit alias rebind");
         let rebound_view = state.view();
         host.set_query_state(&rebound_view);
         let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
@@ -20444,7 +20458,9 @@ seiyaku OpaqueInstructionSubmission {
             .execute(&authority, &mut tx)
             .expect("bind domain-qualified alias");
         tx.apply();
-        block.commit().expect("commit alias setup");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit alias setup");
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
@@ -20549,7 +20565,9 @@ seiyaku OpaqueInstructionSubmission {
             .execute(&authority, &mut tx)
             .expect("bind domain-qualified alias");
         tx.apply();
-        block.commit().expect("commit alias setup");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit alias setup");
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
@@ -21719,7 +21737,7 @@ seiyaku EffectfulView {
             .insert(record.code_hash, malicious_manifest);
         tx.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit adversarial registered-manifest mutation");
         for _ in 0..2 {
             let (result, vm, durable_state_overlay) = call_contract_syscall(
@@ -22857,12 +22875,14 @@ seiyaku Callee {
             AliasContractSetupV1::Invalid => {}
         }
         tx.apply();
-        block.commit().expect(match case.setup {
-            AliasContractSetupV1::DomainlessWithoutBinding
-            | AliasContractSetupV1::DomainWithoutBinding => "commit alias permissions",
-            AliasContractSetupV1::Invalid => "commit catalog",
-            _ => "commit alias setup",
-        });
+        block
+            .commit_world_overlay_for_testing()
+            .expect(match case.setup {
+                AliasContractSetupV1::DomainlessWithoutBinding
+                | AliasContractSetupV1::DomainWithoutBinding => "commit alias permissions",
+                AliasContractSetupV1::Invalid => "commit catalog",
+                _ => "commit alias setup",
+            });
         rebound_alias
     }
     fn install_alias_contract_case(
@@ -22969,7 +22989,9 @@ seiyaku Callee {
             .execute(&fixture.authority, &mut tx)
             .expect("rebind merchant alias");
         tx.apply();
-        block.commit().expect("commit alias rebind");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit alias rebind");
         let pay_payload = Json::from_str_norito(r#"{"amount":"1"}"#).expect("pay payload");
         execute_contract_call_transaction(
             &fixture.state,
@@ -23196,7 +23218,7 @@ seiyaku Callee {
         let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         state
             .block(genesis_header)
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);

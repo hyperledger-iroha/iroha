@@ -3796,14 +3796,14 @@ impl LaneBlockExecutionInputArtifact {
         norito::encode_canonical(self)
     }
 }
-/// Known metadata format variants for durable lane-block direct-execution preflights.
+/// Known metadata format variants for durable lane-block execution preflights.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockExecutionPreflightArtifactFormat {
     #[codec(index = 0)]
-    /// Non-committing direct-execution preflight result for recovered lane input.
+    /// Non-committing execution preflight result for recovered lane input.
     Current,
 }
-/// Durable result of non-committing direct-execution preflight for a lane block.
+/// Durable result of a non-committing execution preflight for a lane block.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockExecutionPreflightArtifact {
@@ -3828,7 +3828,7 @@ pub struct LaneBlockExecutionPreflightArtifact {
 }
 impl LaneBlockExecutionPreflightArtifact {
     const FORMAT_LABEL: &'static str = "lane.execution_preflight";
-    /// Construct a durable direct-execution preflight result from recovered input.
+    /// Construct a durable execution preflight result from recovered input.
     #[must_use]
     pub fn new(
         input: &LaneBlockExecutionInputArtifact,
@@ -3880,13 +3880,10 @@ pub enum LaneBlockApplicationReceiptArtifactFormat {
     /// Canonical global block results proving lane payload state application.
     Current,
     #[codec(index = 1)]
-    /// Direct standalone execution results proving lane payload state application.
-    DirectExecution,
-    #[codec(index = 2)]
     /// Canonical merge-batch execution results proving lane payload state application.
     MergeExecution,
 }
-/// Durable receipt proving a certified standalone lane block has committed results.
+/// Durable receipt proving that a certified lane block has committed results.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockApplicationReceiptArtifact {
@@ -3896,9 +3893,9 @@ pub struct LaneBlockApplicationReceiptArtifact {
     pub proposal: LaneBlockProposalV1,
     /// Exact authenticated source of the applied executable payload.
     pub source: LaneBlockExecutionSourceV1,
-    /// Canonical block height, or committed preflight base height for direct execution.
+    /// Canonical block height carrying the application result.
     pub application_block_height: u64,
-    /// Canonical block hash, or committed preflight base WSV hash for direct execution.
+    /// Canonical block hash carrying the application result.
     pub application_block_hash: HashOf<BlockHeader>,
     /// Accepted entrypoint indices in the canonical block body.
     pub entrypoint_indices: Vec<u64>,
@@ -4032,44 +4029,6 @@ impl LaneBlockApplicationReceiptArtifact {
             merge_settlement_hash: None,
         }
     }
-    /// Construct a durable application receipt from clean direct-execution preflight results.
-    #[must_use]
-    pub fn new_direct_execution(
-        input: &LaneBlockExecutionInputArtifact,
-        preflight: &LaneBlockExecutionPreflightArtifact,
-    ) -> Option<Self> {
-        let application_block_hash = preflight.preflight_state_hash?;
-        if preflight.has_rejections()
-            || input.proposal != preflight.proposal
-            || input.source != preflight.source
-            || input.proposal.descriptor.accepted_candidate_indices != preflight.entrypoint_indices
-            || input.entrypoint_hashes != preflight.entrypoint_hashes
-        {
-            return None;
-        }
-        Some(Self {
-            format: LaneBlockApplicationReceiptArtifactFormat::DirectExecution,
-            proposal: input.proposal.clone(),
-            source: input.source.clone(),
-            application_block_height: preflight.preflight_state_height,
-            application_block_hash,
-            entrypoint_indices: preflight.entrypoint_indices.clone(),
-            entrypoint_hashes: preflight.entrypoint_hashes.clone(),
-            result_hashes: preflight.result_hashes.clone(),
-            results: preflight.results.clone(),
-            merge_epoch_id: None,
-            merge_entry_hash: None,
-            merge_carrier_block_height: None,
-            merge_carrier_block_hash: None,
-            merge_source_bundle_hash: None,
-            merge_batch_identity_hash: None,
-            merge_batch_hash: None,
-            merge_base_state_hash: None,
-            merge_write_set_root: None,
-            merge_expected_post_state_hash: None,
-            merge_settlement_hash: None,
-        })
-    }
     fn new_merge_execution(
         entry: &MergeLedgerEntry,
         batch: &MergeExecutionBatch,
@@ -4112,7 +4071,6 @@ impl LaneBlockApplicationReceiptArtifact {
     pub fn format_label(&self) -> &'static str {
         match self.format {
             LaneBlockApplicationReceiptArtifactFormat::Current
-            | LaneBlockApplicationReceiptArtifactFormat::DirectExecution
             | LaneBlockApplicationReceiptArtifactFormat::MergeExecution => Self::FORMAT_LABEL,
         }
     }

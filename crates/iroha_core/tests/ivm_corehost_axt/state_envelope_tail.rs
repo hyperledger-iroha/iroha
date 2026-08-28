@@ -827,7 +827,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         .expect("exact replay-ledger AXT sequence should stage");
     stx.apply();
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit replay envelope before restart");
     anchor_axt_test_header(&mut state, committed_header);
     let view = state.view();

@@ -4324,7 +4324,9 @@ mod tests {
         let mut transaction = block.transaction();
         operation(&mut transaction)?;
         transaction.apply();
-        block.commit().expect("commit orderbook test block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit orderbook test block");
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
         Ok(())
     }
@@ -5268,7 +5270,9 @@ mod tests {
         assert_eq!(status.settlement_receipts, 0);
         assert_eq!(status.settlement_channels, 0);
         stx.apply();
-        block.commit().expect("commit order query fixture");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit order query fixture");
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
         let view = state.view();
         let first_page = FindSorafsOrderbookOrders::new(None, None, None, 2)
@@ -6546,7 +6550,9 @@ mod tests {
             .expect("query receipt by id");
         assert_eq!(queried.receipt_id, first.receipt_id);
         stx.apply();
-        block.commit().expect("commit receipt query fixture");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit receipt query fixture");
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
         let view = state.view();
         let first_page = FindSorafsOrderbookReceipts::new(None, Some(first.channel_id), None, 1)

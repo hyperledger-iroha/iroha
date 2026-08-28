@@ -1,26 +1,8 @@
 //! Canonical FASTPQ STARK parameter definitions.
-/// Description of the scalar field used by the proof system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FieldDescriptor {
-    /// Human-readable name of the field.
-    pub name: &'static str,
-    /// Prime modulus written in decimal form for ease of reference.
-    pub modulus_decimal: &'static str,
-    /// Extension degree used for FRI (1 = base field).
-    pub extension_degree: u32,
-}
-/// Description of the hash functions used by the STARK.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HashDescriptor {
-    /// Hash used for Merkle commitments.
-    pub trace_commitment: &'static str,
-    /// Hash used for the Fiat-Shamir transcript.
-    pub transcript: &'static str,
-}
 /// Parameters that configure FRI round structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FriParameters {
-    /// Folding arity per round (supported values: 8 or 16).
+    /// Folding arity per round (V1 requires 8).
     pub arity: u32,
     /// Overall trace domain expansion (`blowup factor`).
     pub blowup_factor: u32,
@@ -35,10 +17,6 @@ pub struct FriParameters {
 pub struct StarkParameterSet {
     /// Stable identifier (used in manifests and telemetry).
     pub name: &'static str,
-    /// Declared generic collision-security ceiling in bits.
-    pub target_security_bits: u32,
-    /// Bit grinding actually applied before FRI challenges are sampled.
-    pub grinding_bits: u32,
     /// Log₂ size of the trace domain (`N_trace = 2^trace_log_size`).
     pub trace_log_size: u32,
     /// Primitive `2^trace_log_size` root of unity for the trace domain.
@@ -50,44 +28,20 @@ pub struct StarkParameterSet {
     pub lde_log_size: u32,
     /// Primitive `2^lde_log_size` root of unity for the evaluation domain.
     pub lde_root: u64,
-    /// Width of the permutation product domain (rows participating in the lookup grand product).
-    pub permutation_size: u32,
-    /// Optional log₂ size of the lookup evaluation domain if it differs from the trace domain.
-    pub lookup_log_size: Option<u32>,
-    /// Coset offset applied to the evaluation domain (1 for the base subgroup).
+    /// Coset offset applied to the evaluation domain; V1 requires it to lie
+    /// outside the LDE subgroup.
     pub omega_coset: u64,
-    /// Field descriptor (base + extension degree).
-    pub field: FieldDescriptor,
-    /// Hash descriptor for commitments + transcript.
-    pub hash: HashDescriptor,
     /// FRI parameterisation.
     pub fri: FriParameters,
 }
-/// Goldilocks prime (2^64 - 2^32 + 1) used without an extension field.
-pub const GOLDILOCKS_BASE: FieldDescriptor = FieldDescriptor {
-    name: "Goldilocks",
-    modulus_decimal: "18446744069414584321",
-    extension_degree: 1,
-};
-/// Dense-MDS Poseidon commitment hash with the Iroha Blake2b-256 transcript.
-pub const POSEIDON_GOLDILOCKS_X7_BLAKE2B: HashDescriptor = HashDescriptor {
-    trace_commitment: "Poseidon(Goldilocks,x^7,t=3,r=2,RF=8,RP=57)",
-    transcript: "Blake2b-256 (Iroha Hash marker)",
-};
 /// Canonical parameters targeting balanced prover throughput.
 pub const FASTPQ_CANONICAL_BALANCED: StarkParameterSet = StarkParameterSet {
     name: "fastpq-lane-balanced",
-    target_security_bits: 32,
-    grinding_bits: 0,
     trace_log_size: 16,
-    trace_root: 0xbe5b_4f4b_47ee_4647,
+    trace_root: 0x11a8_cf07_fa6a_f903,
     lde_log_size: 19,
-    lde_root: 0xa9c4_68a3_57df_6e13,
-    permutation_size: 65_536,
-    lookup_log_size: Some(19),
-    omega_coset: 0xfd0e_69f9_a98e_e946,
-    field: GOLDILOCKS_BASE,
-    hash: POSEIDON_GOLDILOCKS_X7_BLAKE2B,
+    lde_root: 0x8584_a585_229f_b11b,
+    omega_coset: 0xb6a3_8ed4_23da_ef71,
     fri: FriParameters {
         arity: 8,
         blowup_factor: 8,
@@ -95,30 +49,8 @@ pub const FASTPQ_CANONICAL_BALANCED: StarkParameterSet = StarkParameterSet {
         queries: 46,
     },
 };
-/// Canonical parameters optimised for latency-sensitive lanes.
-pub const FASTPQ_CANONICAL_LATENCY: StarkParameterSet = StarkParameterSet {
-    name: "fastpq-lane-latency",
-    target_security_bits: 32,
-    grinding_bits: 0,
-    trace_log_size: 16,
-    trace_root: 0x701a_f10f_692d_2482,
-    lde_log_size: 20,
-    lde_root: 0x41ad_09f5_526e_af8f,
-    permutation_size: 65_536,
-    lookup_log_size: Some(20),
-    omega_coset: 0x4ee3_6cc3_ce25_5211,
-    field: GOLDILOCKS_BASE,
-    hash: POSEIDON_GOLDILOCKS_X7_BLAKE2B,
-    fri: FriParameters {
-        arity: 16,
-        blowup_factor: 16,
-        max_reductions: 6,
-        queries: 34,
-    },
-};
-/// Ordered slice of canonical parameter sets (stable order: balanced, latency).
-pub const CANONICAL_PARAMETER_SETS: [StarkParameterSet; 2] =
-    [FASTPQ_CANONICAL_BALANCED, FASTPQ_CANONICAL_LATENCY];
+/// Canonical FASTPQ parameter catalogue.
+pub const CANONICAL_PARAMETER_SETS: [StarkParameterSet; 1] = [FASTPQ_CANONICAL_BALANCED];
 /// Look up a canonical parameter set by name.
 pub fn find_by_name(name: &str) -> Option<&'static StarkParameterSet> {
     CANONICAL_PARAMETER_SETS.iter().find(|set| set.name == name)
@@ -146,20 +78,12 @@ mod tests {
     }
 
     #[test]
-    fn canonical_sets_declare_target_and_shape() {
+    fn canonical_set_declares_v1_shape() {
         for set in CANONICAL_PARAMETER_SETS {
-            assert_eq!(set.target_security_bits, 32);
-            assert_eq!(set.grinding_bits, 0);
-            assert_eq!(set.field, GOLDILOCKS_BASE);
-            assert_eq!(set.field.extension_degree, 1);
-            assert!((set.fri.arity == 8) || (set.fri.arity == 16));
+            assert_eq!(set.fri.arity, 8);
             assert_eq!(set.fri.blowup_factor, set.fri.arity);
             assert!(set.fri.max_reductions >= 6);
             assert!(set.fri.queries >= 30);
-            assert_eq!(u64::from(set.permutation_size), 1u64 << set.trace_log_size);
-            if let Some(lookup_log) = set.lookup_log_size {
-                assert!(lookup_log <= set.lde_log_size);
-            }
             assert_ne!(set.trace_root, 0);
             assert_ne!(set.lde_root, 0);
             assert_ne!(set.omega_coset, 0);
@@ -169,15 +93,8 @@ mod tests {
     fn lookup_finds_sets() {
         let balanced = find_by_name("fastpq-lane-balanced").expect("balanced params");
         assert_eq!(balanced.fri.arity, 8);
-        assert_eq!(balanced.hash, POSEIDON_GOLDILOCKS_X7_BLAKE2B);
-        assert_eq!(
-            balanced.hash.trace_commitment,
-            "Poseidon(Goldilocks,x^7,t=3,r=2,RF=8,RP=57)"
-        );
-        assert_eq!(balanced.hash.transcript, "Blake2b-256 (Iroha Hash marker)");
-        assert!(find_by_name("fastpq-lane-latency").is_some());
         assert!(find_by_name("unknown").is_none());
-        assert_eq!(balanced.permutation_size, 1 << balanced.trace_log_size);
+        assert_eq!(CANONICAL_PARAMETER_SETS, [FASTPQ_CANONICAL_BALANCED]);
     }
 
     #[test]

@@ -16,7 +16,6 @@
 # soranet_transport_private_key = "802620..." # required matching transport private key; keep distinct from node and streaming identities
 # chain_discriminant = 0x02F1              # I105 prefix / chain discriminant; override for dev/test networks.
 
-telemetry_enabled = true
 telemetry_profile = "operator"  # {disabled, operator, extended, developer, full}
 
 # trusted_peers = [
@@ -250,8 +249,7 @@ expected_hash_file = "genesis.expected_hash"
 # store_dir = "./storage/snapshot"
 
 [telemetry]
-# Master switch: enable telemetry outputs via `telemetry_enabled` and choose capability bundles via `telemetry_profile`.
-# name =
+# `telemetry_profile = "disabled"` is the sole telemetry kill switch.
 # url =
 # min_retry_period_ms = 1_000
 # max_retry_delay_exponent = 4

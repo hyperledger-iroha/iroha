@@ -365,13 +365,11 @@ impl DaReceiptCursorIndex {
         sequence: u64,
         block_height: u64,
     ) -> Result<(), DaReceiptCursorError> {
-        let cursor = Self::next_cursor(
-            self.by_lane_epoch.get(&lane_epoch).copied(),
-            lane_epoch,
-            sequence,
-            block_height,
-        )?;
-        self.by_lane_epoch.insert(lane_epoch, cursor);
+        let current = self.by_lane_epoch.get(&lane_epoch).copied();
+        let cursor = Self::next_cursor(current, lane_epoch, sequence, block_height)?;
+        if current.is_none_or(|current| current.sequence != cursor.sequence) {
+            self.by_lane_epoch.insert(lane_epoch, cursor);
+        }
         Ok(())
     }
     /// Record all cursors present in the commitment bundle.
@@ -415,9 +413,10 @@ impl DaReceiptCursorIndex {
                 .get(&lane_epoch)
                 .copied()
                 .or_else(|| self.by_lane_epoch.get(&lane_epoch).copied());
-            let cursor =
-                Self::next_cursor(current, lane_epoch, record.sequence, block_height)?;
-            updates.insert(lane_epoch, cursor);
+            let cursor = Self::next_cursor(current, lane_epoch, record.sequence, block_height)?;
+            if current.is_none_or(|current| current.sequence != cursor.sequence) {
+                updates.insert(lane_epoch, cursor);
+            }
             advanced.push((lane_epoch, record.sequence));
         }
         Ok(DaReceiptCursorPlan { advanced, updates })
@@ -1246,6 +1245,35 @@ mod tests {
             plan.advanced,
             vec![(LaneEpoch::new(target_lane, 1), 2)],
             "planning work must scale with touched lane/epoch keys, not the full cursor index"
+        );
+    }
+    #[test]
+    fn receipt_cursor_bundle_plan_skips_idempotent_updates() {
+        let lane_epoch = LaneEpoch::new(LaneId::new(7), 3);
+        let mut index = DaReceiptCursorIndex::default();
+        index
+            .record(lane_epoch, 5, 11)
+            .expect("seed receipt cursor");
+        let duplicate = sample_record(&sample_receipt(7, 3, 5), 5);
+        let plan = index
+            .plan_bundle(12, std::slice::from_ref(&duplicate))
+            .expect("idempotent receipt cursor bundle plan");
+        assert!(
+            plan.updates.is_empty(),
+            "an idempotent record must not schedule a B-tree replacement"
+        );
+        assert_eq!(plan.advanced, vec![(lane_epoch, 5)]);
+        index
+            .record_bundle(12, std::slice::from_ref(&duplicate))
+            .expect("idempotent receipt cursor bundle commit");
+        assert_eq!(
+            index
+                .by_lane_epoch
+                .get(&lane_epoch)
+                .expect("retained receipt cursor")
+                .last_block_height,
+            11,
+            "idempotent replay must retain the original advancement height"
         );
     }
     #[test]

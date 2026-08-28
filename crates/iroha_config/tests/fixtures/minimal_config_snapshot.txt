@@ -2096,13 +2096,8 @@ Root {
             audited_height: None,
         },
     },
-    telemetry_enabled: true,
     telemetry_profile: Operator,
     telemetry: None,
-    telemetry_redaction: TelemetryRedaction {
-        mode: Strict,
-        allowlist: [],
-    },
     telemetry_integrity: TelemetryIntegrity {
         enabled: true,
         state_dir: None,
@@ -2409,7 +2404,6 @@ Root {
             metal_threadgroup_width: None,
             metal_trace: false,
             metal_debug_enum: false,
-            metal_debug_fused: false,
         },
         stark: Stark {
             enabled: false,
