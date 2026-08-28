@@ -206,9 +206,21 @@ if (Encoding.UTF8.GetString(canonicalMessage) != expectedMessage)
     throw new InvalidOperationException("Canonical request package smoke failed");
 }
 
-EthereumMainnetSccp.RequireMainnetChainId(EthereumMainnetSccp.MainnetChainId);
-EthereumMainnetSccp.RequireInboundRoute(EthereumMainnetSccp.DomainEthereum, EthereumMainnetSccp.DomainSora);
-EthereumMainnetSccp.RequireOutboundRoute(EthereumMainnetSccp.DomainSora, EthereumMainnetSccp.DomainEthereum);
+var inboundLane = new SccpLaneIdV1(
+    SccpNetworkV1.EthereumMainnet,
+    SccpNetworkV1.SoraTaira);
+var outboundLane = new SccpLaneIdV1(
+    SccpNetworkV1.SoraTaira,
+    SccpNetworkV1.EthereumMainnet);
+if (SccpNetworkV1.EthereumMainnet.ProfileKey() != "ethereum-mainnet"
+    || SccpNetworkV1.EthereumMainnet.DomainId() != 1u
+    || !inboundLane.IsInbound
+    || inboundLane.IsOutbound
+    || !outboundLane.IsOutbound
+    || outboundLane.IsInbound)
+{
+    throw new InvalidOperationException("Packed SCCP route model is unavailable");
+}
 if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 23u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {

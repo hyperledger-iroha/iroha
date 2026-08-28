@@ -135,12 +135,15 @@ def test_csharp_sdk_package_consumer_script_pins_real_package_consumption() -> N
         "Hyperledger.Iroha.Sccp",
         "Ed25519Signer.Verify(message, signature, publicKey)",
         "BuildCanonicalQueryString(\"?z=last&a=hello%20world\")",
-        "EthereumMainnetSccp.RequireMainnetChainId",
-        "EthereumMainnetSccp.RequireInboundRoute",
-        "EthereumMainnetSccp.RequireOutboundRoute",
+        "SccpNetworkV1.EthereumMainnet.ProfileKey()",
+        "SccpNetworkV1.EthereumMainnet.DomainId() != 1u",
+        "new SccpLaneIdV1(",
+        "!inboundLane.IsInbound",
+        "!outboundLane.IsOutbound",
     )
     for marker in required_markers:
         assert marker in script
+    assert "EthereumMainnetSccp" not in script
 
 
 def test_csharp_sdk_package_consumer_stages_and_uses_pinned_dotnet_sdk(
