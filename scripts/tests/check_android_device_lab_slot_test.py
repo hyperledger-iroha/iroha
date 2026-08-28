@@ -171,16 +171,43 @@ def with_read_bytes_failure(target_path: Path, callback):
 
 def with_open_failure(target_path: Path, callback):
     original_open = Path.open
+    original_os_open = os.open
 
     def failing_open(path: Path, *args, **kwargs):
         if path == target_path:
             raise OSError("simulated open failure")
         return original_open(path, *args, **kwargs)
 
+    def failing_os_open(path, flags, *args, **kwargs):
+        try:
+            candidate = Path(path)
+        except TypeError:
+            candidate = None
+        dir_fd = kwargs.get("dir_fd")
+        relative_target = False
+        if candidate == Path(target_path.name) and isinstance(dir_fd, int):
+            try:
+                parent_stat = target_path.parent.stat()
+                opened_parent_stat = os.fstat(dir_fd)
+                relative_target = (
+                    parent_stat.st_dev,
+                    parent_stat.st_ino,
+                ) == (
+                    opened_parent_stat.st_dev,
+                    opened_parent_stat.st_ino,
+                )
+            except OSError:
+                relative_target = False
+        if candidate == target_path or relative_target:
+            raise OSError("simulated open failure")
+        return original_os_open(path, flags, *args, **kwargs)
+
     try:
         Path.open = failing_open
+        os.open = failing_os_open
         return callback()
     finally:
+        os.open = original_os_open
         Path.open = original_open
 
 
@@ -2805,6 +2832,81 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertTrue(
             any("does not match the KRV4 file" in error for error in errors), errors
+        )
+
+    def test_candidate_artifact_measurement_rejects_regular_file_swap_after_pin(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_signed_evidence_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                signer = create_test_signer(root / "keys")
+                slot = create_slot(
+                    root / "slots",
+                    "pixel6",
+                    device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                    signer,
+                )
+                binding = json.loads(
+                    (
+                        slot / device_lab.KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH
+                    ).read_text(encoding="utf-8")
+                )
+                relative = binding["artifact_inventory"][0]["path"]
+                artifact_path = slot / relative
+                replacement_payload = bytearray(artifact_path.read_bytes())
+                replacement_payload[-1] ^= 0x01
+                swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
+
+                def swapping_validate(
+                    slot_path: Path,
+                    candidate_relative: str,
+                    **kwargs: str,
+                ):
+                    nonlocal pinned_artifact, swapped
+                    pin, validate_errors = original_validate(
+                        slot_path,
+                        candidate_relative,
+                        **kwargs,
+                    )
+                    pinned_artifact = pin
+                    if pin is not None and pin.path == artifact_path and not validate_errors and not swapped:
+                        artifact_path.unlink()
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
+                        swapped = True
+                    return pin, validate_errors
+
+                device_lab._validate_signed_evidence_artifact_for_digest = (
+                    swapping_validate
+                )
+                errors: list[str] = []
+                measured = device_lab._candidate_artifact_measurement(
+                    slot,
+                    relative,
+                    errors,
+                )
+        finally:
+            device_lab._validate_signed_evidence_artifact_for_digest = original_validate
+
+        self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        with self.assertRaises(OSError):
+            os.fstat(pinned_artifact.descriptor)
+        self.assertIsNone(measured)
+        self.assertEqual(
+            errors,
+            [f"candidate artifact {relative} changed while being opened"],
         )
 
     def test_candidate_binding_requires_production_capability_to_remain_false(self) -> None:
@@ -5585,6 +5687,37 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             ],
         )
 
+    def test_file_read_snapshot_detects_same_inode_content_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / "artifact.bin"
+            artifact.write_bytes(b"original")
+            original_stat = artifact.lstat()
+            artifact.write_bytes(b"replacement content")
+            replacement_stat = artifact.lstat()
+
+        self.assertEqual(
+            (original_stat.st_dev, original_stat.st_ino),
+            (replacement_stat.st_dev, replacement_stat.st_ino),
+        )
+        self.assertNotEqual(
+            device_lab._file_read_snapshot(original_stat),
+            device_lab._file_read_snapshot(replacement_stat),
+        )
+
+    def test_artifact_read_flags_pin_without_following_or_blocking(self) -> None:
+        read_flags = device_lab._artifact_read_open_flags()
+
+        for flag_name in ("O_CLOEXEC", "O_NOFOLLOW", "O_NONBLOCK"):
+            flag = getattr(os, flag_name, 0)
+            if flag:
+                self.assertEqual(read_flags & flag, flag)
+
+        directory_flags = device_lab._artifact_directory_open_flags()
+        for flag_name in ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK"):
+            flag = getattr(os, flag_name, 0)
+            if flag:
+                self.assertEqual(directory_flags & flag, flag)
+
     def test_manifest_artifact_digest_uses_lstat_before_relative_ancestor_is_symlink_preflight(
         self,
     ) -> None:
@@ -5648,19 +5781,29 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp:
                 slot = create_slot(Path(temp), "slot-a")
                 artifact_path = slot / "logs" / "runtime.log"
+                replacement_payload = b"R" * artifact_path.stat().st_size
                 swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
 
                 def swapping_validate(slot_path: Path, relative: str):
-                    nonlocal swapped
-                    artifact, artifact_stat, errors = original_validate(
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(
                         slot_path,
                         relative,
                     )
-                    if artifact == artifact_path and not errors and not swapped:
+                    pinned_artifact = pin
+                    if pin is not None and pin.path == artifact_path and not errors and not swapped:
                         artifact_path.unlink()
-                        write_text(artifact_path, "replacement runtime log\n")
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
                         swapped = True
-                    return artifact, artifact_stat, errors
+                    return pin, errors
 
                 device_lab._validate_manifest_artifact_for_digest = swapping_validate
 
@@ -5673,8 +5816,180 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             device_lab._validate_manifest_artifact_for_digest = original_validate
 
         self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        with self.assertRaises(OSError):
+            os.fstat(pinned_artifact.descriptor)
         self.assertIsNone(digest)
-        self.assertEqual(replacement_bytes, b"replacement runtime log\n")
+        self.assertEqual(replacement_bytes, replacement_payload)
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt references artifact changed while being read "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_manifest_artifact_digest_rejects_in_place_mutation_after_pin(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_manifest_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                artifact_path = slot / "logs" / "runtime.log"
+                replacement_payload = b"R" * artifact_path.stat().st_size
+                mutated = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
+
+                def mutating_validate(slot_path: Path, relative: str):
+                    nonlocal mutated, pinned_artifact
+                    pin, errors = original_validate(slot_path, relative)
+                    pinned_artifact = pin
+                    if (
+                        pin is not None
+                        and pin.path == artifact_path
+                        and not errors
+                        and not mutated
+                    ):
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
+                        mutated = True
+                    return pin, errors
+
+                device_lab._validate_manifest_artifact_for_digest = mutating_validate
+                digest, errors = device_lab._manifest_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+                replacement_stat = artifact_path.lstat()
+        finally:
+            device_lab._validate_manifest_artifact_for_digest = original_validate
+
+        self.assertTrue(mutated)
+        assert pinned_artifact is not None
+        self.assertEqual(
+            (replacement_stat.st_dev, replacement_stat.st_ino),
+            (
+                pinned_artifact.opened_stat.st_dev,
+                pinned_artifact.opened_stat.st_ino,
+            ),
+        )
+        self.assertTrue(pinned_artifact.closed)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt references artifact changed while being read "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_manifest_artifact_digest_rejects_ancestor_swap_after_pin(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_manifest_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                logs_path = slot / "logs"
+                moved_logs_path = slot / "logs-pinned"
+                swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
+
+                def swapping_validate(slot_path: Path, relative: str):
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(slot_path, relative)
+                    pinned_artifact = pin
+                    if pin is not None and not errors and not swapped:
+                        logs_path.rename(moved_logs_path)
+                        try:
+                            logs_path.symlink_to(moved_logs_path, target_is_directory=True)
+                        except (NotImplementedError, OSError) as exc:
+                            pin.close()
+                            moved_logs_path.rename(logs_path)
+                            self.skipTest(f"symlinks unavailable: {exc}")
+                        swapped = True
+                    return pin, errors
+
+                device_lab._validate_manifest_artifact_for_digest = swapping_validate
+                digest, errors = device_lab._manifest_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+        finally:
+            device_lab._validate_manifest_artifact_for_digest = original_validate
+
+        self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        for descriptor in (
+            pinned_artifact.descriptor,
+            *pinned_artifact.directory_descriptors,
+        ):
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt references artifact changed while being read "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_manifest_artifact_digest_rejects_slot_parent_swap_after_pin(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_manifest_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                slots_path = root / "slots"
+                moved_slots_path = root / "slots-pinned"
+                slot = create_slot(slots_path, "slot-a")
+                swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
+
+                def swapping_validate(slot_path: Path, relative: str):
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(slot_path, relative)
+                    pinned_artifact = pin
+                    if pin is not None and not errors and not swapped:
+                        slots_path.rename(moved_slots_path)
+                        try:
+                            slots_path.symlink_to(
+                                moved_slots_path,
+                                target_is_directory=True,
+                            )
+                        except (NotImplementedError, OSError) as exc:
+                            pin.close()
+                            moved_slots_path.rename(slots_path)
+                            self.skipTest(f"symlinks unavailable: {exc}")
+                        swapped = True
+                    return pin, errors
+
+                device_lab._validate_manifest_artifact_for_digest = swapping_validate
+                digest, errors = device_lab._manifest_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+        finally:
+            device_lab._validate_manifest_artifact_for_digest = original_validate
+
+        self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        self.assertIsNone(digest)
         self.assertEqual(
             errors,
             [
@@ -6059,18 +6374,20 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     relative: str,
                     label: str,
                     missing_error: str,
+                    unreadable_error: str,
                 ):
                     nonlocal swapped
-                    artifact, artifact_stat, validate_errors = original_validate(
+                    pin, validate_errors = original_validate(
                         slot_path,
                         relative,
                         label,
                         missing_error,
+                        unreadable_error,
                     )
-                    if artifact == runtime_log and not validate_errors and not swapped:
+                    if pin is not None and pin.path == runtime_log and not validate_errors and not swapped:
                         replace_with_symlink(self, runtime_log, target)
                         swapped = True
-                    return artifact, artifact_stat, validate_errors
+                    return pin, validate_errors
 
                 device_lab._validate_metadata_artifact_for_read = swapping_validate
                 errors: list[str] = []
@@ -7354,18 +7671,20 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     relative: str,
                     label: str,
                     missing_error: str,
+                    unreadable_error: str,
                 ):
                     nonlocal swapped
-                    artifact, artifact_stat, errors = original_validate(
+                    pin, errors = original_validate(
                         slot_path,
                         relative,
                         label,
                         missing_error,
+                        unreadable_error,
                     )
-                    if artifact == artifact_path and not errors and not swapped:
+                    if pin is not None and pin.path == artifact_path and not errors and not swapped:
                         replace_with_symlink(self, artifact_path, target)
                         swapped = True
-                    return artifact, artifact_stat, errors
+                    return pin, errors
 
                 device_lab._validate_metadata_artifact_for_read = swapping_validate
 
@@ -7401,26 +7720,38 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 root = Path(temp)
                 slot = create_slot(root, "slot-a")
                 artifact_path = slot / "evidence" / "kagemusha-wallet-release.apk"
+                replacement_payload = b"R" * artifact_path.stat().st_size
                 swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
 
                 def swapping_validate(
                     slot_path: Path,
                     relative: str,
                     label: str,
                     missing_error: str,
+                    unreadable_error: str,
                 ):
-                    nonlocal swapped
-                    artifact, artifact_stat, errors = original_validate(
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(
                         slot_path,
                         relative,
                         label,
                         missing_error,
+                        unreadable_error,
                     )
-                    if artifact == artifact_path and not errors and not swapped:
+                    pinned_artifact = pin
+                    if pin is not None and pin.path == artifact_path and not errors and not swapped:
                         artifact_path.unlink()
-                        write_text(artifact_path, "replacement release apk\n")
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
                         swapped = True
-                    return artifact, artifact_stat, errors
+                    return pin, errors
 
                 device_lab._validate_metadata_artifact_for_read = swapping_validate
 
@@ -7435,9 +7766,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             device_lab._validate_metadata_artifact_for_read = original_validate
 
         self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        with self.assertRaises(OSError):
+            os.fstat(pinned_artifact.descriptor)
         self.assertIsNone(payload)
         self.assertIsNone(digest)
-        self.assertEqual(replacement_bytes, b"replacement release apk\n")
+        self.assertEqual(replacement_bytes, replacement_payload)
         self.assertEqual(
             errors,
             [
@@ -10801,19 +11136,30 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp:
                 slot = create_slot(Path(temp), "slot-a")
                 artifact_path = slot / "logs" / "runtime.log"
+                replacement_payload = b"R" * artifact_path.stat().st_size
                 swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
 
-                def swapping_validate(slot_path: Path, relative: str):
-                    nonlocal swapped
-                    artifact, artifact_stat, errors = original_validate(
+                def swapping_validate(slot_path: Path, relative: str, **kwargs: str):
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(
                         slot_path,
                         relative,
+                        **kwargs,
                     )
-                    if artifact == artifact_path and not errors and not swapped:
+                    pinned_artifact = pin
+                    if pin is not None and pin.path == artifact_path and not errors and not swapped:
                         artifact_path.unlink()
-                        write_text(artifact_path, "replacement runtime log\n")
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
                         swapped = True
-                    return artifact, artifact_stat, errors
+                    return pin, errors
 
                 device_lab._validate_signed_evidence_artifact_for_digest = (
                     swapping_validate
@@ -10828,8 +11174,12 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             device_lab._validate_signed_evidence_artifact_for_digest = original_validate
 
         self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        with self.assertRaises(OSError):
+            os.fstat(pinned_artifact.descriptor)
         self.assertIsNone(digest)
-        self.assertEqual(replacement_bytes, b"replacement runtime log\n")
+        self.assertEqual(replacement_bytes, replacement_payload)
         self.assertEqual(
             errors,
             [
@@ -16526,19 +16876,29 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp:
                 slot = create_slot(Path(temp), "pixel8")
                 artifact_path = slot / "logs" / "runtime.log"
+                replacement_payload = b"R" * artifact_path.stat().st_size
                 swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
 
                 def swapping_validate(slot_path: Path, relative: str):
-                    nonlocal swapped
-                    artifact, artifact_stat, errors = original_validate(
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(
                         slot_path,
                         relative,
                     )
-                    if artifact == artifact_path and not errors and not swapped:
+                    pinned_artifact = pin
+                    if pin is not None and pin.path == artifact_path and not errors and not swapped:
                         artifact_path.unlink()
-                        write_text(artifact_path, "replacement runtime log\n")
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
                         swapped = True
-                    return artifact, artifact_stat, errors
+                    return pin, errors
 
                 evidence_signer._validate_slot_artifact_for_digest = swapping_validate
 
@@ -16551,8 +16911,12 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             evidence_signer._validate_slot_artifact_for_digest = original_validate
 
         self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        with self.assertRaises(OSError):
+            os.fstat(pinned_artifact.descriptor)
         self.assertIsNone(digest)
-        self.assertEqual(replacement_bytes, b"replacement runtime log\n")
+        self.assertEqual(replacement_bytes, replacement_payload)
         self.assertEqual(
             errors,
             ["slot artifact logs/runtime.log changed while being read"],
