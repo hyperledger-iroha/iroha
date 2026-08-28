@@ -768,6 +768,8 @@ on:
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/check_swift_offline_device_attestation_fixture.py"
       - "scripts/tests/check_swift_offline_device_attestation_fixture_test.py"
+      - "scripts/norito_bridge_apple_slice_handoff.py"
+      - "scripts/tests/norito_bridge_apple_slice_handoff_test.py"
       - "scripts/norito_bridge_source_seal.py"
       - "scripts/exec_with_file_lock.py"
       - "scripts/package_mobile_sdk_artifacts.sh"
@@ -792,6 +794,7 @@ on:
       - "rust-toolchain.toml"
       - "vendor/**"
       - "scripts/tests/check_android_device_lab_slot_test.py"
+      - "scripts/tests/android_apk_authority_fixtures.py"
       - "scripts/tests/capture_android_attestation_status_test.py"
       - "scripts/tests/android_attestation_certificate_profile_fixtures.py"
       - "scripts/tests/android_attestation_certificate_profile_test.py"
@@ -842,6 +845,7 @@ jobs:
       - run: ci/check_connect_norito_bridge_header.sh --self-test
       - run: python3 scripts/check_swift_offline_device_attestation_fixture.py
       - run: python3 -m pytest -q scripts/tests/check_swift_offline_device_attestation_fixture_test.py
+      - run: python3 -m unittest scripts.tests.norito_bridge_apple_slice_handoff_test
       - run: ci/check_kagemusha_production_readiness.sh candidate
       - run: ci/check_kagemusha_production_readiness.sh candidate --self-test
       - run: ci/check_authenticated_tool_controller.sh
@@ -937,8 +941,449 @@ jobs:
       - run: cargo test -p iroha_cli --bin iroha kagemusha_lifecycle -- --nocapture
       - run: "cargo test -p iroha --lib http_default::tests:: -- --nocapture"
 
+  swift_slice_ios_device:
+    name: Swift Apple slice (aarch64-apple-ios)
+    runs-on: macos-14
+    timeout-minutes: 360
+    outputs:
+      slice_sha256: ${{ steps.slice-handoff.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - name: Prepare isolated aarch64-apple-ios roots
+        shell: bash
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-ios-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-ios-build"
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-ios-cargo"
+          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+      - name: Bind exact aarch64-apple-ios Rust tools and Cargo envelope
+        shell: bash
+        run: |
+          rustup_source="$(command -v rustup)"
+          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
+          [[ "$rustup_source" == /* && -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
+          rustup_tools="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-ios-tools"
+          mkdir -p "$rustup_tools"
+          chmod 0700 "$rustup_tools"
+          rustup_path="$rustup_tools/rustup"
+          test ! -e "$rustup_path"
+          /bin/cp "$rustup_source" "$rustup_path"
+          chmod 0700 "$rustup_path"
+          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
+          "$rustup_path" target add aarch64-apple-ios
+          cargo fetch --locked
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-ios-cargo"
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          rustc_path="$("$rustup_path" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$rustup_path" which --toolchain 1.93.1 rustdoc)"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
+          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
+          echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
+      - name: Build authenticated aarch64-apple-ios slice
+        run: scripts/build_norito_xcframework.sh --ci-apple-slice aarch64-apple-ios
+      - name: Hash authenticated aarch64-apple-ios slice handoff
+        id: slice-handoff
+        shell: bash
+        run: |
+          archive="$NORITO_BRIDGE_OUT_DIR/NoritoBridge.apple-slice.tar"
+          [[ -f "$archive" && ! -L "$archive" && -s "$archive" ]]
+          slice_sha256="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import hashlib
+          import pathlib
+          import sys
+          with pathlib.Path(sys.argv[1]).open("rb") as handle:
+              print(hashlib.file_digest(handle, "sha256").hexdigest())
+          ' "$archive")"
+          [[ "$slice_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "sha256=$slice_sha256" >> "$GITHUB_OUTPUT"
+      - name: Upload authenticated aarch64-apple-ios slice handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kagemusha-apple-slice-aarch64-apple-ios-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-slice-aarch64-apple-ios-artifacts/NoritoBridge.apple-slice.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+
+  swift_slice_ios_sim_arm:
+    name: Swift Apple slice (aarch64-apple-ios-sim)
+    runs-on: macos-14
+    timeout-minutes: 360
+    outputs:
+      slice_sha256: ${{ steps.slice-handoff.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - name: Prepare isolated aarch64-apple-ios-sim roots
+        shell: bash
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-ios-sim-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-ios-sim-build"
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-ios-sim-cargo"
+          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+      - name: Bind exact aarch64-apple-ios-sim Rust tools and Cargo envelope
+        shell: bash
+        run: |
+          rustup_source="$(command -v rustup)"
+          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
+          [[ "$rustup_source" == /* && -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
+          rustup_tools="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-ios-sim-tools"
+          mkdir -p "$rustup_tools"
+          chmod 0700 "$rustup_tools"
+          rustup_path="$rustup_tools/rustup"
+          test ! -e "$rustup_path"
+          /bin/cp "$rustup_source" "$rustup_path"
+          chmod 0700 "$rustup_path"
+          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
+          "$rustup_path" target add aarch64-apple-ios-sim
+          cargo fetch --locked
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-ios-sim-cargo"
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          rustc_path="$("$rustup_path" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$rustup_path" which --toolchain 1.93.1 rustdoc)"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
+          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
+          echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
+      - name: Build authenticated aarch64-apple-ios-sim slice
+        run: scripts/build_norito_xcframework.sh --ci-apple-slice aarch64-apple-ios-sim
+      - name: Hash authenticated aarch64-apple-ios-sim slice handoff
+        id: slice-handoff
+        shell: bash
+        run: |
+          archive="$NORITO_BRIDGE_OUT_DIR/NoritoBridge.apple-slice.tar"
+          [[ -f "$archive" && ! -L "$archive" && -s "$archive" ]]
+          slice_sha256="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import hashlib
+          import pathlib
+          import sys
+          with pathlib.Path(sys.argv[1]).open("rb") as handle:
+              print(hashlib.file_digest(handle, "sha256").hexdigest())
+          ' "$archive")"
+          [[ "$slice_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "sha256=$slice_sha256" >> "$GITHUB_OUTPUT"
+      - name: Upload authenticated aarch64-apple-ios-sim slice handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kagemusha-apple-slice-aarch64-apple-ios-sim-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-slice-aarch64-apple-ios-sim-artifacts/NoritoBridge.apple-slice.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+
+  swift_slice_ios_sim_x64:
+    name: Swift Apple slice (x86_64-apple-ios)
+    runs-on: macos-14
+    timeout-minutes: 360
+    outputs:
+      slice_sha256: ${{ steps.slice-handoff.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - name: Prepare isolated x86_64-apple-ios roots
+        shell: bash
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slice-x86_64-apple-ios-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slice-x86_64-apple-ios-build"
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-slice-x86_64-apple-ios-cargo"
+          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+      - name: Bind exact x86_64-apple-ios Rust tools and Cargo envelope
+        shell: bash
+        run: |
+          rustup_source="$(command -v rustup)"
+          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
+          [[ "$rustup_source" == /* && -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
+          rustup_tools="$RUNNER_TEMP/iroha-kagemusha-apple-slice-x86_64-apple-ios-tools"
+          mkdir -p "$rustup_tools"
+          chmod 0700 "$rustup_tools"
+          rustup_path="$rustup_tools/rustup"
+          test ! -e "$rustup_path"
+          /bin/cp "$rustup_source" "$rustup_path"
+          chmod 0700 "$rustup_path"
+          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
+          "$rustup_path" target add x86_64-apple-ios
+          cargo fetch --locked
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-slice-x86_64-apple-ios-cargo"
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          rustc_path="$("$rustup_path" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$rustup_path" which --toolchain 1.93.1 rustdoc)"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
+          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
+          echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
+      - name: Build authenticated x86_64-apple-ios slice
+        run: scripts/build_norito_xcframework.sh --ci-apple-slice x86_64-apple-ios
+      - name: Hash authenticated x86_64-apple-ios slice handoff
+        id: slice-handoff
+        shell: bash
+        run: |
+          archive="$NORITO_BRIDGE_OUT_DIR/NoritoBridge.apple-slice.tar"
+          [[ -f "$archive" && ! -L "$archive" && -s "$archive" ]]
+          slice_sha256="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import hashlib
+          import pathlib
+          import sys
+          with pathlib.Path(sys.argv[1]).open("rb") as handle:
+              print(hashlib.file_digest(handle, "sha256").hexdigest())
+          ' "$archive")"
+          [[ "$slice_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "sha256=$slice_sha256" >> "$GITHUB_OUTPUT"
+      - name: Upload authenticated x86_64-apple-ios slice handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kagemusha-apple-slice-x86_64-apple-ios-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-slice-x86_64-apple-ios-artifacts/NoritoBridge.apple-slice.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+
+  swift_slice_macos_arm:
+    name: Swift Apple slice (aarch64-apple-darwin)
+    runs-on: macos-14
+    timeout-minutes: 360
+    outputs:
+      slice_sha256: ${{ steps.slice-handoff.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - name: Prepare isolated aarch64-apple-darwin roots
+        shell: bash
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-darwin-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-darwin-build"
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-darwin-cargo"
+          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+      - name: Bind exact aarch64-apple-darwin Rust tools and Cargo envelope
+        shell: bash
+        run: |
+          rustup_source="$(command -v rustup)"
+          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
+          [[ "$rustup_source" == /* && -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
+          rustup_tools="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-darwin-tools"
+          mkdir -p "$rustup_tools"
+          chmod 0700 "$rustup_tools"
+          rustup_path="$rustup_tools/rustup"
+          test ! -e "$rustup_path"
+          /bin/cp "$rustup_source" "$rustup_path"
+          chmod 0700 "$rustup_path"
+          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
+          "$rustup_path" target add aarch64-apple-darwin
+          cargo fetch --locked
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-slice-aarch64-apple-darwin-cargo"
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          rustc_path="$("$rustup_path" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$rustup_path" which --toolchain 1.93.1 rustdoc)"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
+          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
+          echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
+      - name: Build authenticated aarch64-apple-darwin slice
+        run: scripts/build_norito_xcframework.sh --ci-apple-slice aarch64-apple-darwin
+      - name: Hash authenticated aarch64-apple-darwin slice handoff
+        id: slice-handoff
+        shell: bash
+        run: |
+          archive="$NORITO_BRIDGE_OUT_DIR/NoritoBridge.apple-slice.tar"
+          [[ -f "$archive" && ! -L "$archive" && -s "$archive" ]]
+          slice_sha256="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import hashlib
+          import pathlib
+          import sys
+          with pathlib.Path(sys.argv[1]).open("rb") as handle:
+              print(hashlib.file_digest(handle, "sha256").hexdigest())
+          ' "$archive")"
+          [[ "$slice_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "sha256=$slice_sha256" >> "$GITHUB_OUTPUT"
+      - name: Upload authenticated aarch64-apple-darwin slice handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kagemusha-apple-slice-aarch64-apple-darwin-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-slice-aarch64-apple-darwin-artifacts/NoritoBridge.apple-slice.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+
+  swift_slice_macos_x64:
+    name: Swift Apple slice (x86_64-apple-darwin)
+    runs-on: macos-14
+    timeout-minutes: 360
+    outputs:
+      slice_sha256: ${{ steps.slice-handoff.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - name: Prepare isolated x86_64-apple-darwin roots
+        shell: bash
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slice-x86_64-apple-darwin-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slice-x86_64-apple-darwin-build"
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-slice-x86_64-apple-darwin-cargo"
+          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+      - name: Bind exact x86_64-apple-darwin Rust tools and Cargo envelope
+        shell: bash
+        run: |
+          rustup_source="$(command -v rustup)"
+          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
+          [[ "$rustup_source" == /* && -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
+          rustup_tools="$RUNNER_TEMP/iroha-kagemusha-apple-slice-x86_64-apple-darwin-tools"
+          mkdir -p "$rustup_tools"
+          chmod 0700 "$rustup_tools"
+          rustup_path="$rustup_tools/rustup"
+          test ! -e "$rustup_path"
+          /bin/cp "$rustup_source" "$rustup_path"
+          chmod 0700 "$rustup_path"
+          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
+          "$rustup_path" target add x86_64-apple-darwin
+          cargo fetch --locked
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-slice-x86_64-apple-darwin-cargo"
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          rustc_path="$("$rustup_path" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$rustup_path" which --toolchain 1.93.1 rustdoc)"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
+          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
+          echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
+      - name: Build authenticated x86_64-apple-darwin slice
+        run: scripts/build_norito_xcframework.sh --ci-apple-slice x86_64-apple-darwin
+      - name: Hash authenticated x86_64-apple-darwin slice handoff
+        id: slice-handoff
+        shell: bash
+        run: |
+          archive="$NORITO_BRIDGE_OUT_DIR/NoritoBridge.apple-slice.tar"
+          [[ -f "$archive" && ! -L "$archive" && -s "$archive" ]]
+          slice_sha256="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import hashlib
+          import pathlib
+          import sys
+          with pathlib.Path(sys.argv[1]).open("rb") as handle:
+              print(hashlib.file_digest(handle, "sha256").hexdigest())
+          ' "$archive")"
+          [[ "$slice_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "sha256=$slice_sha256" >> "$GITHUB_OUTPUT"
+      - name: Upload authenticated x86_64-apple-darwin slice handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kagemusha-apple-slice-x86_64-apple-darwin-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-slice-x86_64-apple-darwin-artifacts/NoritoBridge.apple-slice.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+
   swift:
     name: Swift native artifact build
+    needs:
+      - swift_slice_ios_device
+      - swift_slice_ios_sim_arm
+      - swift_slice_ios_sim_x64
+      - swift_slice_macos_arm
+      - swift_slice_macos_x64
     runs-on: macos-14
     timeout-minutes: 360
     outputs:
@@ -957,24 +1402,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          cache-on-failure: "true"
-          save-if: ${{ false }}
-      - name: Prepare external Apple build and artifact roots
+      - name: Prepare external Apple assembly and artifact roots
         shell: bash
         run: |
           artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-artifacts"
           build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-build"
           cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-cargo"
+          slice_dir="$RUNNER_TEMP/iroha-kagemusha-apple-slices"
           swift_scratch="$RUNNER_TEMP/iroha-kagemusha-apple-swift"
-          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target" "$swift_scratch"
+          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target" "$slice_dir" "$swift_scratch"
           echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
           echo "KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH=$swift_scratch" >> "$GITHUB_ENV"
-      - name: Install Apple Rust targets
+      - name: Bind exact Rust source-authentication tools and Cargo envelope
+        shell: bash
         run: |
           rustup_source="$(command -v rustup)"
           rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
@@ -989,15 +1432,11 @@ jobs:
           rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
           [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
           echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
-          "$rustup_path" target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
           cargo fetch --locked
-      - name: Bind the first-release Apple Cargo envelope
-        shell: bash
-        run: |
           cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-cargo"
-          cargo_target="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
-          rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustc)"
-          rustdoc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc)"
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          rustc_path="$("$rustup_path" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$rustup_path" which --toolchain 1.93.1 rustdoc)"
           echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
@@ -1005,8 +1444,42 @@ jobs:
           echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
           echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
           echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
-      - name: Build exact ABI-23 NoritoBridge XCFramework
-        run: scripts/build_norito_xcframework.sh --ci-handoff-only
+      - name: Download authenticated aarch64-apple-ios slice handoff
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: kagemusha-apple-slice-aarch64-apple-ios-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-slices/aarch64-apple-ios
+      - name: Download authenticated aarch64-apple-ios-sim slice handoff
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: kagemusha-apple-slice-aarch64-apple-ios-sim-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-slices/aarch64-apple-ios-sim
+      - name: Download authenticated x86_64-apple-ios slice handoff
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: kagemusha-apple-slice-x86_64-apple-ios-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-slices/x86_64-apple-ios
+      - name: Download authenticated aarch64-apple-darwin slice handoff
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: kagemusha-apple-slice-aarch64-apple-darwin-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-slices/aarch64-apple-darwin
+      - name: Download authenticated x86_64-apple-darwin slice handoff
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: kagemusha-apple-slice-x86_64-apple-darwin-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-kagemusha-apple-slices/x86_64-apple-darwin
+      - name: Assemble exact ABI-23 NoritoBridge XCFramework
+        shell: bash
+        run: |
+          scripts/build_norito_xcframework.sh \
+            --ci-handoff-only \
+            --ci-assemble-apple-slices "$RUNNER_TEMP/iroha-kagemusha-apple-slices" \
+            --ci-apple-slice-sha256 "aarch64-apple-ios=${{ needs.swift_slice_ios_device.outputs.slice_sha256 }}" \
+            --ci-apple-slice-sha256 "aarch64-apple-ios-sim=${{ needs.swift_slice_ios_sim_arm.outputs.slice_sha256 }}" \
+            --ci-apple-slice-sha256 "x86_64-apple-ios=${{ needs.swift_slice_ios_sim_x64.outputs.slice_sha256 }}" \
+            --ci-apple-slice-sha256 "aarch64-apple-darwin=${{ needs.swift_slice_macos_arm.outputs.slice_sha256 }}" \
+            --ci-apple-slice-sha256 "x86_64-apple-darwin=${{ needs.swift_slice_macos_x64.outputs.slice_sha256 }}"
       - name: Pack authenticated Apple artifact handoff
         id: apple-handoff
         shell: bash

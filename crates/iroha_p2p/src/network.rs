@@ -7,6 +7,8 @@
 use crate::boilerplate;
 #[cfg(feature = "quic")]
 use crate::preauth::DeadlineElapsed;
+#[cfg(test)]
+use crate::soranet_handshake_runtime::runtime_from_handshake_in_memory;
 use crate::{
     Broadcast, Error, NetworkMessage, OnlinePeers, P2pIdentityKeys, Post, Priority, RelayRole,
     UpdatePeers, UpdateTopology, UpdateTrustedPeers,
@@ -61,7 +63,7 @@ fn test_network_id(seed: &str) -> NetworkId {
     )))
 }
 #[cfg(test)]
-fn low_cost_test_soranet_handshake(revocation_store_path: String) -> ActualSoranetHandshake {
+fn low_cost_test_soranet_handshake() -> ActualSoranetHandshake {
     let mut handshake = ActualSoranetHandshake::default();
     handshake.pow.difficulty = 1;
     handshake.pow.puzzle.memory_kib =
@@ -69,24 +71,12 @@ fn low_cost_test_soranet_handshake(revocation_store_path: String) -> ActualSoran
             .expect("minimum puzzle memory is non-zero");
     handshake.pow.puzzle.time_cost = std::num::NonZeroU32::new(1).unwrap();
     handshake.pow.puzzle.lanes = std::num::NonZeroU32::new(1).unwrap();
-    handshake.pow.revocation_store_path = revocation_store_path.into();
     handshake
 }
 #[cfg(test)]
 fn test_soranet_handshake_runtime() -> Arc<SoranetHandshakeRuntime> {
-    let revocation_dir = tempfile::tempdir().expect("test SoraNet revocation directory");
-    let handshake = low_cost_test_soranet_handshake(
-        revocation_dir
-            .path()
-            .join("ticket_revocations.norito")
-            .to_string_lossy()
-            .into_owned(),
-    );
-    let mut runtime = runtime_from_handshake(handshake).expect("test SoraNet handshake runtime");
-    Arc::get_mut(&mut runtime)
-        .expect("fresh test runtime is uniquely owned")
-        .retain_test_revocation_dir(revocation_dir);
-    runtime
+    runtime_from_handshake_in_memory(low_cost_test_soranet_handshake())
+        .expect("test SoraNet handshake runtime")
 }
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -9587,12 +9577,12 @@ mod accept_stream_tests {
         let revocation_dir = tempfile::tempdir()
             .expect("test SoraNet revocation directory")
             .keep();
-        let soranet_handshake = low_cost_test_soranet_handshake(
-            revocation_dir
-                .join("ticket_revocations.norito")
-                .to_string_lossy()
-                .into_owned(),
-        );
+        let mut soranet_handshake = low_cost_test_soranet_handshake();
+        soranet_handshake.pow.revocation_store_path = revocation_dir
+            .join("ticket_revocations.norito")
+            .to_string_lossy()
+            .into_owned()
+            .into();
         NetCfg {
             address: iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             public_address: iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:0)),
@@ -18804,15 +18794,9 @@ mod tests {
             .soranet_handshake
             .snapshot()
             .expect("initial handshake policy");
-        let replay_state_path = network
-            .soranet_handshake
-            .replay_state_path()
-            .to_string_lossy()
-            .into_owned();
         let initial_capacity = initial.puzzle_work_capacities().0;
         let changed_capacity = if initial_capacity.get() == 1 { 2 } else { 1 };
         let mut rejected = ActualSoranetHandshake::default();
-        rejected.pow.revocation_store_path = replay_state_path.clone().into();
         rejected.pow.outbound_mint_capacity =
             std::num::NonZeroUsize::new(changed_capacity).expect("non-zero capacity");
         let (rejected_response, rejected_result) = oneshot::channel();
@@ -18837,7 +18821,6 @@ mod tests {
         ));
 
         let mut accepted = ActualSoranetHandshake::default();
-        accepted.pow.revocation_store_path = replay_state_path.into();
         accepted.pow.difficulty = 6;
         let (accepted_response, accepted_result) = oneshot::channel();
         network.handle_soranet_handshake_update(message::UpdateHandshake {

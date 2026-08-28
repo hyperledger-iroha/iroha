@@ -6,7 +6,9 @@
 //! the durable payload. The caller may publish the Queue startup gate only after this function
 //! returns its original combined V1 receipt.
 use super::v2_apply::{
-    LaneReservationSnapshotPlannerEvidence, recover_pending_autonomous_lifecycle_terminal_outcome,
+    LaneReservationSnapshotPlannerEvidence, recover_autonomous_lane_replica_with_queue_disposition,
+    recover_pending_autonomous_lifecycle_terminal_outcome,
+    retire_autonomous_lane_replica_with_queue_disposition,
 };
 use super::v2_core::{
     IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA, IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH,
@@ -1644,13 +1646,32 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
                                 .to_owned(),
                         );
                     }
-                    super::v2_apply::retire_autonomous_lane_slot_and_release_reservations(
-                        kura,
-                        queue,
-                        &retired_attempt.retirement,
-                        payload.network_id,
-                        payload.epoch,
-                    )
+                    let cursor_read = kura
+                        .read_autonomous_lifecycle_cursor(payload, binding, process_generation)
+                        .map_err(|error| {
+                            lifecycle_error("retired replica cursor reacquisition failed", error)
+                        })?;
+                    if initial_queue_quarantine {
+                        recover_autonomous_lane_replica_with_queue_disposition(
+                            kura,
+                            queue,
+                            &retired_attempt.retirement,
+                            cursor_read,
+                            &receipt,
+                            &snapshot,
+                            payload.network_id,
+                            payload.epoch,
+                        )
+                    } else {
+                        retire_autonomous_lane_replica_with_queue_disposition(
+                            kura,
+                            queue,
+                            &retired_attempt.retirement,
+                            cursor_read,
+                            payload.network_id,
+                            payload.epoch,
+                        )
+                    }
                     .map_err(|error| {
                         lifecycle_error("retired replica release completion failed", error)
                     })?;

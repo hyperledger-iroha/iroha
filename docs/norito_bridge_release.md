@@ -199,13 +199,19 @@ and both same-version specs are published in dependency order and a clean public
 
 ## CI considerations
 
-- The Kagemusha PR workflow alone may invoke the builder with
-  `--ci-handoff-only`. That restricted mode rejects archives and dirty sources,
-  performs the source-seal and exact XCFramework validators, and atomically
-  stages `NoritoBridge.ci-handoff` without publishing the canonical
+- The Kagemusha PR workflow alone may invoke the restricted CI producer modes.
+  Five isolated `--ci-apple-slice <target>` jobs each perform one fresh,
+  offline, single-job Cargo build and emit a digest-bound source/tool
+  attestation. The `swift` job supplies all five independent archive digests to
+  `--ci-handoff-only --ci-assemble-apple-slices <root>`; the builder rejects a
+  missing, duplicate, mixed-source, mixed-toolchain, or altered slice before
+  running the exact XCFramework validators. It then atomically stages
+  `NoritoBridge.ci-handoff` without publishing the canonical
   `NoritoBridge.xcframework` paths. Its digest-authenticated consumer restores
   those canonical paths in a fresh job and runs the full Apple artifact checker
-  before any Swift lifecycle test. Release builds must not use this mode.
+  before any Swift lifecycle test. Per-runner Python, Git, and rustup evidence is
+  retained but may differ because those orchestration tools remain outside the
+  hermetic Cargo invocation. Release builds must not use these modes.
 - `.github/workflows/mobile_sdk_artifacts.yml` runs the packaging and artifact
   checkers on `macos-14`, uploads the generated archives, and publishes release
   assets for `v*` tags.

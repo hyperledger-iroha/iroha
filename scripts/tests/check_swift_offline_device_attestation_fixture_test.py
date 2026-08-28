@@ -218,6 +218,11 @@ def test_workflow_watches_and_executes_the_fixture_contract() -> None:
 
     assert "scripts/check_swift_offline_device_attestation_fixture.py" in workflow
     assert "scripts/tests/check_swift_offline_device_attestation_fixture_test.py" in workflow
+    assert "scripts/tests/norito_bridge_apple_slice_handoff_test.py" in workflow
+    assert (
+        "python3 -m unittest scripts.tests."
+        "norito_bridge_apple_slice_handoff_test"
+    ) in workflow
     assert (
         "IrohaSwift/Tests/IrohaSwiftTests/Fixtures/"
         "offline_device_attestation_abi21.json"
@@ -227,7 +232,7 @@ def test_workflow_watches_and_executes_the_fixture_contract() -> None:
 
 
 def test_workflow_splits_native_build_from_authenticated_swift_tests() -> None:
-    """The cold Apple build hands off safely before GitHub's six-hour ceiling."""
+    """Five cold Apple slices authenticate into one ABI-23 Swift handoff."""
 
     workflow = (
         REPO_ROOT / ".github/workflows/pr_kagemusha_payload_bench.yml"
@@ -235,26 +240,127 @@ def test_workflow_splits_native_build_from_authenticated_swift_tests() -> None:
     builder = (REPO_ROOT / "scripts/build_norito_xcframework.sh").read_text(
         encoding="utf-8"
     )
-    native_match = re.search(
-        r"(?ms)^  swift:\n(?P<body>.*?)(?=^  swift_lifecycle:\n)",
-        workflow,
+
+    def job_body(job_id: str) -> str:
+        match = re.search(
+            rf"(?ms)^  {re.escape(job_id)}:\n"
+            r"(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            workflow,
+        )
+        assert match is not None, job_id
+        return match.group("body")
+
+    producer_targets = {
+        "swift_slice_ios_device": "aarch64-apple-ios",
+        "swift_slice_ios_sim_arm": "aarch64-apple-ios-sim",
+        "swift_slice_ios_sim_x64": "x86_64-apple-ios",
+        "swift_slice_macos_arm": "aarch64-apple-darwin",
+        "swift_slice_macos_x64": "x86_64-apple-darwin",
+    }
+    upload_action = (
+        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
     )
-    swift_match = re.search(
-        r"(?ms)^  swift_lifecycle:\n(?P<body>.*?)(?=^  kotlin-java:\n)",
-        workflow,
+    download_action = (
+        "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
     )
-    assert native_match is not None
-    assert swift_match is not None
-    native = native_match.group("body")
-    swift = swift_match.group("body")
-    artifact_name = (
+    final_artifact_name = (
         "kagemusha-apple-xcframework-${{ github.sha }}-"
         "${{ github.run_id }}"
     )
 
+    for job_id, target in producer_targets.items():
+        producer = job_body(job_id)
+        artifact_name = (
+            f"kagemusha-apple-slice-{target}-"
+            "${{ github.sha }}-${{ github.run_id }}"
+        )
+        archive_path = (
+            "${{ runner.temp }}/iroha-kagemusha-apple-slice-"
+            f"{target}-artifacts/NoritoBridge.apple-slice.tar"
+        )
+
+        assert f"name: Swift Apple slice ({target})" in producer
+        assert "runs-on: macos-14" in producer
+        assert "timeout-minutes: 360" in producer
+        assert "slice_sha256: ${{ steps.slice-handoff.outputs.sha256 }}" in producer
+        assert 'python-version: "3.12"' in producer
+        assert "toolchain: 1.93.1" in producer
+        assert f'"$rustup_path" target add {target}' in producer
+        assert producer.count('"$rustup_path" target add ') == 1
+        assert producer.index("cargo fetch --locked") < producer.index(
+            'echo "CARGO_NET_OFFLINE=true"'
+        )
+        for binding in (
+            'echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1"',
+            'echo "CARGO_BUILD_JOBS=1"',
+            'echo "CARGO_INCREMENTAL=0"',
+            'echo "CARGO_NET_OFFLINE=true"',
+            'echo "CARGO_TARGET_DIR=$cargo_target"',
+            'echo "RUSTC=$rustc_path"',
+            'echo "RUSTC_BOOTSTRAP=1"',
+            'echo "RUSTDOC=$rustdoc_path"',
+        ):
+            assert binding in producer
+        assert producer.count(f"iroha-kagemusha-apple-slice-{target}-") >= 4
+        assert (
+            "scripts/build_norito_xcframework.sh "
+            f"--ci-apple-slice {target}"
+        ) in producer
+        assert "id: slice-handoff" in producer
+        assert (
+            'archive="$NORITO_BRIDGE_OUT_DIR/NoritoBridge.apple-slice.tar"'
+            in producer
+        )
+        assert '"$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c' in producer
+        assert 'echo "sha256=$slice_sha256" >> "$GITHUB_OUTPUT"' in producer
+        assert producer.count(upload_action) == 1
+        assert download_action not in producer
+        assert f"name: {artifact_name}" in producer
+        assert f"path: {archive_path}" in producer
+        assert "if-no-files-found: error" in producer
+        assert "retention-days: 1" in producer
+        assert "compression-level: 0" in producer
+        assert "overwrite: true" in producer
+        assert "--ci-handoff-only" not in producer
+        assert final_artifact_name not in producer
+        assert "github.run_attempt" not in producer
+
+    native = job_body("swift")
+    lifecycle = job_body("swift_lifecycle")
     assert "name: Swift native artifact build" in native
     assert "timeout-minutes: 360" in native
-    assert "scripts/build_norito_xcframework.sh --ci-handoff-only" in native
+    assert re.findall(
+        r"(?m)^      - (swift_slice_[a-z0-9_]+)$", native
+    ) == list(producer_targets)
+    assert "Swatinem/rust-cache@" not in native
+    assert '"$rustup_path" target add ' not in native
+    assert native.count(download_action) == 5
+    assert "scripts/build_norito_xcframework.sh \\" in native
+    assert "--ci-handoff-only \\" in native
+    assert (
+        '--ci-assemble-apple-slices "$RUNNER_TEMP/'
+        'iroha-kagemusha-apple-slices"'
+        in native
+    )
+    assert native.count("--ci-apple-slice-sha256") == 5
+    for job_id, target in producer_targets.items():
+        artifact_name = (
+            f"kagemusha-apple-slice-{target}-"
+            "${{ github.sha }}-${{ github.run_id }}"
+        )
+        assert f"name: {artifact_name}" in native
+        assert (
+            "path: ${{ runner.temp }}/iroha-kagemusha-apple-slices/"
+            f"{target}"
+        ) in native
+        assert (
+            f'--ci-apple-slice-sha256 "{target}='
+            f"${{{{ needs.{job_id}.outputs.slice_sha256 }}}}" + '"'
+        ) in native
+        assert workflow.count(artifact_name) == 2
+    assert native.rindex(download_action) < native.index(
+        "Assemble exact ABI-23 NoritoBridge XCFramework"
+    )
     assert (
         'artifact_root="$MOBILE_SDK_APPLE_ARTIFACT_DIR/'
         'NoritoBridge.ci-handoff"'
@@ -274,9 +380,9 @@ def test_workflow_splits_native_build_from_authenticated_swift_tests() -> None:
     assert "id: apple-handoff" in native
     assert "COPYFILE_DISABLE=1 /usr/bin/tar -cf" in native
     assert "NoritoBridge.xcframework NoritoBridge.artifacts.json" in native
-    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in native
+    assert native.count(upload_action) == 1
+    assert f"name: {final_artifact_name}" in native
     assert "compression-level: 0" in native
-    assert "save-if: ${{ false }}" in native
     assert "overwrite: true" in native
     assert "github.run_attempt" not in native
     assert "check_mobile_sdk_artifacts.sh --apple-only" not in native
@@ -295,24 +401,28 @@ def test_workflow_splits_native_build_from_authenticated_swift_tests() -> None:
         'echo "[+] Atomically published XCFramework and canonical manifest:'
     )
 
-    assert "name: Swift lifecycle surface" in swift
-    assert "needs: swift" in swift
-    assert "timeout-minutes: 360" in swift
-    assert "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" in swift
-    assert 'tarfile.open(fileobj=handle, mode="r:")' in swift
-    assert 'filter="data"' in swift
-    assert '"${{ needs.swift.outputs.handoff_sha256 }}"' in swift
-    assert "digest_before != expected_digest" in swift
-    assert "digest_after != expected_digest" in swift
-    assert "member.sparse is not None" in swift
-    assert 'member.linkname != manifest_target' in swift
-    assert 'os.readlink(manifest) != manifest_target' in swift
-    assert swift.index('run 1.93.1 cargo fetch --locked') < swift.index(
+    assert workflow.count("id: apple-handoff") == 1
+    assert workflow.count("Pack authenticated Apple artifact handoff") == 1
+    assert workflow.count(final_artifact_name) == 2
+    assert workflow.count("--ci-handoff-only") == 1
+
+    assert "name: Swift lifecycle surface" in lifecycle
+    assert "needs: swift" in lifecycle
+    assert "timeout-minutes: 360" in lifecycle
+    assert download_action in lifecycle
+    assert 'tarfile.open(fileobj=handle, mode="r:")' in lifecycle
+    assert 'filter="data"' in lifecycle
+    assert '"${{ needs.swift.outputs.handoff_sha256 }}"' in lifecycle
+    assert "digest_before != expected_digest" in lifecycle
+    assert "digest_after != expected_digest" in lifecycle
+    assert "member.sparse is not None" in lifecycle
+    assert 'member.linkname != manifest_target' in lifecycle
+    assert 'os.readlink(manifest) != manifest_target' in lifecycle
+    assert lifecycle.index('run 1.93.1 cargo fetch --locked') < lifecycle.index(
         'CARGO_NET_OFFLINE=true'
     )
-    assert "check_mobile_sdk_artifacts.sh --apple-only" in swift
-    assert "check_kagemusha_recursive_spend_swift_sdk.sh" in swift
-    assert workflow.count(artifact_name) == 2
+    assert "check_mobile_sdk_artifacts.sh --apple-only" in lifecycle
+    assert "check_kagemusha_recursive_spend_swift_sdk.sh" in lifecycle
     assert '      - "ci/check_authenticated_tool_controller.sh"' in workflow
     for watched_source_seal_input in (
         '".cargo/**"',
@@ -322,19 +432,22 @@ def test_workflow_splits_native_build_from_authenticated_swift_tests() -> None:
         '"scripts/archive_norito_xcframework.py"',
         '"scripts/check_mobile_sdk_artifact_pin_commit.py"',
         '"scripts/exec_with_file_lock.py"',
+        '"scripts/norito_bridge_apple_slice_handoff.py"',
         '"scripts/package_mobile_sdk_artifacts.sh"',
         '"scripts/render_norito_bridge_podspec.py"',
         '"scripts/update_norito_bridge_swift_pins.py"',
         '"scripts/validate_norito_bridge_xcframework.py"',
     ):
         assert f"      - {watched_source_seal_input}" in workflow
-    assert swift.index("actions/download-artifact@") < swift.index(
+    assert lifecycle.index("actions/download-artifact@") < lifecycle.index(
         "Restore authenticated Apple artifact handoff"
     )
-    assert swift.index("Restore authenticated Apple artifact handoff") < swift.index(
+    assert lifecycle.index(
+        "Restore authenticated Apple artifact handoff"
+    ) < lifecycle.index("check_mobile_sdk_artifacts.sh --apple-only")
+    assert lifecycle.index(
         "check_mobile_sdk_artifacts.sh --apple-only"
-    )
-    assert swift.index("check_mobile_sdk_artifacts.sh --apple-only") < swift.index(
+    ) < lifecycle.index(
         "check_kagemusha_recursive_spend_swift_sdk.sh"
     )
 

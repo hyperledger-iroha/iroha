@@ -2265,6 +2265,8 @@ mod tests {
         assert_eq!(snapshot.pow.difficulty, 9);
         assert_eq!(snapshot.pow.ticket_ttl.as_secs(), 45);
         assert_eq!(snapshot.pow.puzzle.memory_kib.get(), 32 * 1024);
+        assert_eq!(snapshot.pow.puzzle.time_cost.get(), 1);
+        assert_eq!(snapshot.pow.puzzle.lanes.get(), 2);
         runtime.await.expect("runtime responder task");
     }
     #[tokio::test]

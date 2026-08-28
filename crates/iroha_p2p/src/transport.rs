@@ -1816,18 +1816,19 @@ mod tests {
     }
     #[test]
     fn connect_request_includes_basic_auth_when_present() {
+        use iroha_primitives::addr::SocketAddrHost;
+
+        let target = SocketAddr::Host(SocketAddrHost {
+            host: "dest".into(),
+            port: 443,
+        });
         let proxy = Proxy {
             kind: ProxyKind::HttpConnectTls,
             host: "example.com".into(),
             port: 8443,
             auth: Some(Arc::new(ProxyCredentials::new("user", "pass"))),
         };
-        let target = SocketAddr::Host(
-            "dest:443"
-                .parse()
-                .expect("canonical hostname socket address"),
-        );
-        let mut req = build_connect_request(&target, &proxy).expect("CONNECT request");
+        let mut req = build_connect_request(&target, &proxy).expect("valid CONNECT authority");
         assert!(
             std::str::from_utf8(req.as_slice())
                 .expect("ASCII request")
@@ -1841,12 +1842,61 @@ mod tests {
             port: 8080,
             auth: None,
         };
-        let req = build_connect_request(&target, &proxy_no_auth).expect("CONNECT request");
+        let req = build_connect_request(&target, &proxy_no_auth).expect("valid CONNECT authority");
         assert!(
             !std::str::from_utf8(req.as_slice())
                 .expect("ASCII request")
                 .contains("Proxy-Authorization")
         );
+    }
+    #[test]
+    fn connect_request_formats_canonical_typed_authorities() {
+        use iroha_primitives::addr::{SocketAddrHost, socket_addr};
+
+        let proxy = Proxy {
+            kind: ProxyKind::HttpConnect,
+            host: "proxy.example".into(),
+            port: 8080,
+            auth: None,
+        };
+        let targets = [
+            (
+                SocketAddr::Host(SocketAddrHost {
+                    host: "DEST.Example.".into(),
+                    port: 443,
+                }),
+                "CONNECT dest.example:443 HTTP/1.1\r\nHost: dest.example:443\r\n",
+            ),
+            (
+                socket_addr!([2001:db8::1]:8443),
+                "CONNECT [2001:db8::1]:8443 HTTP/1.1\r\nHost: [2001:db8::1]:8443\r\n",
+            ),
+        ];
+
+        for (target, expected_prefix) in targets {
+            let request = build_connect_request(&target, &proxy).expect("valid CONNECT authority");
+            let request = std::str::from_utf8(request.as_slice()).expect("ASCII request");
+            assert!(request.starts_with(expected_prefix), "request: {request:?}");
+        }
+    }
+    #[test]
+    fn connect_request_rejects_header_injection_in_host() {
+        use iroha_primitives::addr::SocketAddrHost;
+
+        let proxy = Proxy {
+            kind: ProxyKind::HttpConnect,
+            host: "proxy.example".into(),
+            port: 8080,
+            auth: None,
+        };
+        let target = SocketAddr::Host(SocketAddrHost {
+            host: "dest.example\r\nX-Injected: true".into(),
+            port: 443,
+        });
+
+        let error = build_connect_request(&target, &proxy)
+            .expect_err("invalid host must be rejected before request construction");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
     #[test]
     fn proxy_credentials_clear_and_debug_are_redacted() {

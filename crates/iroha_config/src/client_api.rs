@@ -2595,7 +2595,12 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePuzzleSummary {
                     summary.lanes = u32::try_from(w.parse_u64_inline()?)
                         .map_err(|_| NoritoError::Message("u32 overflow".into()))?;
                 }
-                _ => w.skip_value()?,
+                _ => {
+                    return Err(NoritoError::Message(format!(
+                        "unknown field `{}` in SoraNet handshake puzzle summary",
+                        w.last_key()
+                    )));
+                }
             }
             let _ = w.consume_comma_if_present()?;
         }
@@ -2668,7 +2673,6 @@ fn parse_soranet_puzzle_update(
     let mut memory_kib = None;
     let mut time_cost = None;
     let mut lanes = None;
-    let kh_enabled = norito::json::key_hash_const("enabled");
     let kh_memory = norito::json::key_hash_const("memory_kib");
     let kh_time = norito::json::key_hash_const("time_cost");
     let kh_lanes = norito::json::key_hash_const("lanes");
@@ -2676,11 +2680,6 @@ fn parse_soranet_puzzle_update(
         let kh = w.read_key_hash()?;
         w.expect_colon_resync()?;
         match kh {
-            x if x == kh_enabled && w.last_key() == "enabled" => {
-                return Err(NoritoError::Message(
-                    "retired SoraNet puzzle update field `enabled` is not accepted".into(),
-                ));
-            }
             x if x == kh_memory && w.last_key() == "memory_kib" => {
                 memory_kib = Some(
                     u32::try_from(w.parse_u64_inline()?)
@@ -2699,7 +2698,12 @@ fn parse_soranet_puzzle_update(
                         .map_err(|_| NoritoError::Message("u32 overflow".into()))?,
                 );
             }
-            _ => w.skip_value()?,
+            _ => {
+                return Err(NoritoError::Message(format!(
+                    "unknown field `{}` in SoraNet handshake puzzle update",
+                    w.last_key()
+                )));
+            }
         }
         let _ = w.consume_comma_if_present()?;
     }
@@ -2764,7 +2768,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
         let mut outbound_mint_capacity = None;
         let mut inbound_verify_capacity = None;
         let mut puzzle = None;
-        let kh_required = norito::json::key_hash_const("required");
         let kh_difficulty = norito::json::key_hash_const("difficulty");
         let kh_max_future_skew = norito::json::key_hash_const("max_future_skew_secs");
         let kh_min_ticket_ttl = norito::json::key_hash_const("min_ticket_ttl_secs");
@@ -2776,11 +2779,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
             match kh {
-                x if x == kh_required && w.last_key() == "required" => {
-                    return Err(NoritoError::Message(
-                        "retired SoraNet PoW summary field `required` is not accepted".into(),
-                    ));
-                }
                 x if x == kh_difficulty && w.last_key() == "difficulty" => {
                     difficulty = Some(
                         u8::try_from(w.parse_u64_inline()?)
@@ -2813,7 +2811,12 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
                 x if x == kh_puzzle && w.last_key() == "puzzle" => {
                     puzzle = Some(SoranetHandshakePuzzleSummary::parse(w, arena)?);
                 }
-                _ => w.skip_value()?,
+                _ => {
+                    return Err(NoritoError::Message(format!(
+                        "unknown field `{}` in SoraNet handshake PoW summary",
+                        w.last_key()
+                    )));
+                }
             }
             let _ = w.consume_comma_if_present()?;
         }
@@ -2847,7 +2850,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
         let mut outbound_mint_capacity = None;
         let mut inbound_verify_capacity = None;
         let mut puzzle = None;
-        let kh_required = norito::json::key_hash_const("required");
         let kh_difficulty = norito::json::key_hash_const("difficulty");
         let kh_max_future_skew = norito::json::key_hash_const("max_future_skew_secs");
         let kh_min_ticket_ttl = norito::json::key_hash_const("min_ticket_ttl_secs");
@@ -2859,11 +2861,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
             match kh {
-                x if x == kh_required && w.last_key() == "required" => {
-                    return Err(NoritoError::Message(
-                        "retired SoraNet PoW update field `required` is not accepted".into(),
-                    ));
-                }
                 x if x == kh_difficulty && w.last_key() == "difficulty" => {
                     difficulty = Some(
                         u8::try_from(w.parse_u64_inline()?)
@@ -2896,7 +2893,12 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
                 x if x == kh_puzzle && w.last_key() == "puzzle" => {
                     puzzle = Some(parse_soranet_puzzle_update(w)?);
                 }
-                _ => w.skip_value()?,
+                _ => {
+                    return Err(NoritoError::Message(format!(
+                        "unknown field `{}` in SoraNet handshake PoW update",
+                        w.last_key()
+                    )));
+                }
             }
             let _ = w.consume_comma_if_present()?;
         }
@@ -3293,31 +3295,65 @@ mod test {
         assert_eq!(network.require_sm_openssl_preview_match, Some(true));
     }
     #[test]
-    fn soranet_handshake_json_rejects_retired_admission_toggles() {
-        let summary = r#"{
-            "required": true,
-            "puzzle": {"memory_kib": 65536, "time_cost": 2, "lanes": 1}
-        }"#;
-        let error = norito::json::from_json::<SoranetHandshakePowSummary>(summary)
-            .expect_err("retired PoW summary toggle must fail closed");
-        assert!(
-            error.to_string().contains("summary field `required`"),
-            "unexpected error: {error}"
-        );
+    fn soranet_pow_update_rejects_retired_required_field() {
+        let error = norito::json::from_json::<SoranetHandshakePowUpdate>(r#"{"required":false}"#)
+            .expect_err("the retired PoW switch must be rejected");
 
-        let error = norito::json::from_json::<SoranetHandshakePowUpdate>(r#"{"required":true}"#)
-            .expect_err("retired PoW update toggle must fail closed");
         assert!(
-            error.to_string().contains("update field `required`"),
+            error
+                .to_string()
+                .contains("unknown field `required` in SoraNet handshake PoW update"),
             "unexpected error: {error}"
         );
+    }
+    #[test]
+    fn soranet_puzzle_update_rejects_retired_enabled_field() {
+        let error = norito::json::from_json::<SoranetHandshakePuzzleUpdate>(r#"{"enabled":false}"#)
+            .expect_err("the retired puzzle switch must be rejected");
 
-        let error = norito::json::from_json::<SoranetHandshakePuzzleUpdate>(r#"{"enabled":true}"#)
-            .expect_err("retired puzzle update toggle must fail closed");
         assert!(
-            error.to_string().contains("update field `enabled`"),
+            error
+                .to_string()
+                .contains("unknown field `enabled` in SoraNet handshake puzzle update"),
             "unexpected error: {error}"
         );
+    }
+    #[test]
+    fn soranet_pow_summary_rejects_retired_required_field() {
+        let error = norito::json::from_json::<SoranetHandshakePowSummary>(r#"{"required":true}"#)
+            .expect_err("the retired PoW summary shape must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `required` in SoraNet handshake PoW summary"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn soranet_puzzle_summary_rejects_retired_enabled_field() {
+        let error = norito::json::from_json::<SoranetHandshakePuzzleSummary>(
+            r#"{"memory_kib":65536,"time_cost":2,"lanes":1,"enabled":true}"#,
+        )
+        .expect_err("the puzzle summary must reject unknown fields");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `enabled` in SoraNet handshake puzzle summary"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn mandatory_soranet_pow_is_exposed_in_client_summary() {
+        let pow = base::SoranetPow::default();
+
+        let summary = SoranetHandshakePowSummary::from(&pow);
+
+        let puzzle = summary.puzzle;
+        assert_eq!(puzzle.memory_kib, pow.puzzle.memory_kib.get());
+        assert_eq!(puzzle.time_cost, pow.puzzle.time_cost.get());
+        assert_eq!(puzzle.lanes, pow.puzzle.lanes.get());
     }
     #[test]
     fn soranet_pow_summary_requires_puzzle_parameters() {

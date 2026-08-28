@@ -21,7 +21,6 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
-import zipfile
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_android_device_lab_slot.py"
@@ -33,9 +32,11 @@ SPEC.loader.exec_module(device_lab)  # type: ignore[misc]
 
 try:
     from scripts.tests import (
+        android_apk_authority_fixtures as _android_apk_fixtures,
         android_attestation_certificate_profile_fixtures as _android_x509_fixtures,
     )
 except ModuleNotFoundError:
+    import android_apk_authority_fixtures as _android_apk_fixtures
     import android_attestation_certificate_profile_fixtures as _android_x509_fixtures
 
 _android_x509_fixtures.bind_device_lab(device_lab)
@@ -545,267 +546,6 @@ def device_identity_for_family(family: str) -> tuple[str, str]:
     return identity
 
 
-_SIGNED_CANDIDATE_APK_FIXTURE: tuple[bytes, bytes, str] | None = None
-_SIGNED_WALLET_APK_FIXTURE: tuple[bytes, str] | None = None
-
-
-def signed_candidate_apk_fixture() -> tuple[bytes, bytes, str]:
-    global _SIGNED_CANDIDATE_APK_FIXTURE
-    if _SIGNED_CANDIDATE_APK_FIXTURE is not None:
-        return _SIGNED_CANDIDATE_APK_FIXTURE
-    sdk_roots = tuple(
-        dict.fromkeys(
-            Path(value).expanduser()
-            for value in (
-                os.environ.get("ANDROID_SDK_ROOT"),
-                os.environ.get("ANDROID_HOME"),
-                str(Path.home() / "Library" / "Android" / "sdk"),
-            )
-            if value
-        )
-    )
-    authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
-    if authority is None:
-        raise AssertionError("Android authority is not configured")
-    apksigner_command = [
-        os.fspath(authority["java"]["path"]),
-        "-jar",
-        os.fspath(authority["apksigner_jar"]["path"]),
-    ]
-    aapt2 = shutil.which("aapt2")
-    if aapt2 is None:
-        candidates = sorted(
-            candidate
-            for sdk_root in sdk_roots
-            for candidate in (sdk_root / "build-tools").glob("*/aapt2")
-            if candidate.is_file() and os.access(candidate, os.X_OK)
-        )
-        if candidates:
-            aapt2 = str(candidates[-1])
-    android_jars = sorted(
-        candidate
-        for sdk_root in sdk_roots
-        for candidate in (sdk_root / "platforms").glob("android-*/android.jar")
-        if candidate.is_file()
-    )
-    keytool = Path(authority["java"]["path"]).with_name("keytool")
-    if aapt2 is None or not android_jars or not keytool.is_file():
-        raise AssertionError(
-            "candidate APK validator tests require aapt2, android.jar, and keytool"
-        )
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
-        manifest = root / "AndroidManifest.xml"
-        manifest.write_text(
-            '<?xml version="1.0" encoding="utf-8"?>\n'
-            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
-            'package="org.hyperledger.iroha.candidate.fixture">\n'
-            '  <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35"/>\n'
-            '  <application android:hasCode="false"/>\n'
-            '</manifest>\n',
-            encoding="utf-8",
-        )
-        keystore = root / "candidate-lab-test.p12"
-        subprocess.run(
-            [
-                str(keytool),
-                "-genkeypair",
-                "-alias",
-                "candidate-lab",
-                "-keystore",
-                str(keystore),
-                "-storetype",
-                "PKCS12",
-                "-storepass",
-                "candidate-lab-test",
-                "-keypass",
-                "candidate-lab-test",
-                "-keyalg",
-                "RSA",
-                "-keysize",
-                "2048",
-                "-validity",
-                "3650",
-                "-dname",
-                "CN=Iroha Candidate Lab Test",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        signed_payloads: list[bytes] = []
-        signed_paths: list[Path] = []
-        for label in ("main", "androidTest"):
-            unsigned = root / f"{label}-unsigned.apk"
-            signed = root / f"{label}.apk"
-            subprocess.run(
-                [
-                    aapt2,
-                    "link",
-                    "--manifest",
-                    str(manifest),
-                    "-I",
-                    str(android_jars[-1]),
-                    "-o",
-                    str(unsigned),
-                ],
-                check=True,
-                capture_output=True,
-            )
-            with zipfile.ZipFile(unsigned, "a", compression=zipfile.ZIP_STORED) as archive:
-                archive.writestr("fixture.txt", f"candidate-lab-{label}\n")
-            subprocess.run(
-                [
-                    *apksigner_command,
-                    "sign",
-                    "--min-sdk-version",
-                    "28",
-                    "--ks",
-                    str(keystore),
-                    "--ks-pass",
-                    "pass:candidate-lab-test",
-                    "--key-pass",
-                    "pass:candidate-lab-test",
-                    "--out",
-                    str(signed),
-                    str(unsigned),
-                ],
-                check=True,
-                capture_output=True,
-            )
-            signed_payloads.append(signed.read_bytes())
-            signed_paths.append(signed)
-        certificate_sha256 = device_lab.extract_apk_signing_certificate_sha256(
-            signed_paths[0]
-        )
-        if (
-            device_lab.extract_apk_signing_certificate_sha256(signed_paths[1])
-            != certificate_sha256
-        ):
-            raise AssertionError("candidate APK fixture signers differ")
-        _SIGNED_CANDIDATE_APK_FIXTURE = (
-            signed_payloads[0],
-            signed_payloads[1],
-            certificate_sha256,
-        )
-    return _SIGNED_CANDIDATE_APK_FIXTURE
-
-
-def signed_wallet_apk_fixture() -> tuple[bytes, str]:
-    global _SIGNED_WALLET_APK_FIXTURE
-    if _SIGNED_WALLET_APK_FIXTURE is not None:
-        return _SIGNED_WALLET_APK_FIXTURE
-    authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
-    if authority is None:
-        raise AssertionError("Android authority is not configured")
-    java = authority["java"]["path"]
-    apksigner_jar = authority["apksigner_jar"]["path"]
-    keytool = Path(java).with_name("keytool")
-    sdk_roots = tuple(
-        Path(value).expanduser()
-        for value in (
-            os.environ.get("ANDROID_SDK_ROOT"),
-            os.environ.get("ANDROID_HOME"),
-            str(Path.home() / "Library" / "Android" / "sdk"),
-        )
-        if value
-    )
-    aapt_candidates = sorted(
-        candidate
-        for sdk_root in sdk_roots
-        for candidate in (sdk_root / "build-tools").glob("*/aapt2")
-        if candidate.is_file() and os.access(candidate, os.X_OK)
-    )
-    android_jars = sorted(
-        candidate
-        for sdk_root in sdk_roots
-        for candidate in (sdk_root / "platforms").glob("android-*/android.jar")
-        if candidate.is_file()
-    )
-    if not keytool.is_file() or not aapt_candidates or not android_jars:
-        raise AssertionError("wallet APK fixture requires keytool, aapt2, and android.jar")
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        unsigned = root / "wallet-unsigned.apk"
-        signed = root / "wallet-signed.apk"
-        manifest = root / "AndroidManifest.xml"
-        manifest.write_text(
-            '<?xml version="1.0" encoding="utf-8"?>\n'
-            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
-            'package="org.hyperledger.iroha.kagemushawallet">\n'
-            '  <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35"/>\n'
-            '  <application android:hasCode="false"/>\n'
-            '</manifest>\n',
-            encoding="utf-8",
-        )
-        subprocess.run(
-            [
-                str(aapt_candidates[-1]),
-                "link",
-                "--manifest",
-                str(manifest),
-                "-I",
-                str(android_jars[-1]),
-                "-o",
-                str(unsigned),
-            ],
-            check=True,
-            capture_output=True,
-        )
-        with zipfile.ZipFile(unsigned, "a", compression=zipfile.ZIP_STORED) as archive:
-            archive.writestr("fixture.txt", "production-wallet-fixture\n")
-        keystore = root / "wallet-test.p12"
-        subprocess.run(
-            [
-                str(keytool),
-                "-genkeypair",
-                "-alias",
-                "wallet",
-                "-keystore",
-                str(keystore),
-                "-storetype",
-                "PKCS12",
-                "-storepass",
-                "wallet-test",
-                "-keypass",
-                "wallet-test",
-                "-keyalg",
-                "RSA",
-                "-keysize",
-                "2048",
-                "-validity",
-                "3650",
-                "-dname",
-                "CN=Iroha Wallet Test",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            [
-                str(java),
-                "-jar",
-                str(apksigner_jar),
-                "sign",
-                "--min-sdk-version",
-                "28",
-                "--ks",
-                str(keystore),
-                "--ks-pass",
-                "pass:wallet-test",
-                "--key-pass",
-                "pass:wallet-test",
-                "--out",
-                str(signed),
-                str(unsigned),
-            ],
-            check=True,
-            capture_output=True,
-        )
-        certificate = device_lab.extract_apk_signing_certificate_sha256(signed)
-        _SIGNED_WALLET_APK_FIXTURE = (signed.read_bytes(), certificate)
-    return _SIGNED_WALLET_APK_FIXTURE
-
-
 def write_candidate_binding_v2(
     slot: Path,
     slot_id: str,
@@ -1022,7 +762,9 @@ def write_candidate_binding_v2(
     native_library_sha256 = hashlib.sha256(
         (slot / native_library_path).read_bytes()
     ).hexdigest()
-    main_apk, test_apk, lab_signing_certificate_sha256 = signed_candidate_apk_fixture()
+    main_apk, test_apk, lab_signing_certificate_sha256 = (
+        _android_apk_fixtures.signed_candidate_apk_fixture(device_lab)
+    )
     lab_apk_path = (
         "evidence/kagemusha-candidate-evidence-lab-DO-NOT-SHIP-"
         f"{candidate_record_sha256}-debug.apk"
@@ -1417,7 +1159,9 @@ def create_slot(
     device_fingerprint = f"{name}/fingerprint"
     os_build_id = f"{name}-build"
     app_package_name = "org.hyperledger.iroha.kagemushawallet"
-    wallet_apk_payload, app_signing_certificate_sha256 = signed_wallet_apk_fixture()
+    wallet_apk_payload, app_signing_certificate_sha256 = (
+        _android_apk_fixtures.signed_wallet_apk_fixture(device_lab)
+    )
     attestation_certificate_chain_path = "attestation/keymint-certificate-chain.pem"
     write_text(
         slot / attestation_certificate_chain_path,
@@ -2073,6 +1817,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         if java is None:
             raise unittest.SkipTest("a Java executable is required")
+        java, apksigner_jar = (
+            _android_apk_fixtures.stage_private_android_authority_tools(
+                authority,
+                java,
+                apksigner_jar,
+            )
+        )
         root_key = authority / "android-attestation-test-root.key"
         root_cert = authority / "android-attestation-test-root.pem"
         subprocess.run(
@@ -2205,8 +1956,27 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_kagemusha_production_evidence_requires_current_v4_bridge(self) -> None:
         self.assertEqual(device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION, 23)
 
+    def test_android_authority_tools_are_private_canonical_files(self) -> None:
+        authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
+        assert authority is not None
+        paths = (
+            Path(authority["java"]["path"]),
+            Path(authority["java"]["path"]).with_name("keytool"),
+            Path(authority["apksigner_jar"]["path"]),
+        )
+        for path in paths:
+            metadata = path.lstat()
+            self.assertEqual(path, path.resolve(strict=True))
+            self.assertFalse(path.is_symlink())
+            self.assertTrue(stat.S_ISREG(metadata.st_mode))
+            self.assertEqual(metadata.st_uid, os.geteuid())
+            self.assertEqual(metadata.st_nlink, 1)
+            self.assertEqual(metadata.st_mode & 0o022, 0)
+
     def test_apk_verifier_executes_the_complete_pinned_java_jar_authority(self) -> None:
-        main_apk, _, certificate_sha256 = signed_candidate_apk_fixture()
+        main_apk, _, certificate_sha256 = (
+            _android_apk_fixtures.signed_candidate_apk_fixture(device_lab)
+        )
         authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
         assert authority is not None
         with tempfile.TemporaryDirectory() as temporary:

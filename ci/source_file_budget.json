@@ -187,7 +187,7 @@
     "scripts/formal/sumeragi_v2_proof_ledger_production_trace_contracts.py": 5079,
     "scripts/iso_operator_evidence_verify.py": 6426,
     "scripts/iso_production_readiness.py": 10725,
-    "scripts/tests/check_android_device_lab_slot_test.py": 21632,
+    "scripts/tests/check_android_device_lab_slot_test.py": 21566,
     "scripts/tests/check_sorafs_production_readiness_test.py": 17714,
     "scripts/tests/check_sorafs_rollout_gate_contract_test.py": 28900,
     "scripts/tests/sorafs_evidence_validation_test.py": 9386,
