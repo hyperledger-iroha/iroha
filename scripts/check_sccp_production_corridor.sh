@@ -1864,9 +1864,11 @@ phase_contract_smoke() {
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check scripts/contract_tvm_smoke.mjs
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/tests/contract_tvm_receipts_test.mjs
   run_cmd bash -n scripts/sccp_evm_contract_smoke.sh
+  run_cmd bash -n scripts/sccp_ton_contract_build.sh
   run_cmd bash -n scripts/contract_tvm_runner.sh
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
   run_cmd bash scripts/sccp_evm_contract_smoke.sh
+  run_cmd bash scripts/sccp_ton_contract_build.sh
 }
 
 phase_tvm_contract_smoke() {

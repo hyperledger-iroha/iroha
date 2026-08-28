@@ -353,7 +353,7 @@ IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 python3 -m pytest python/iroha_torii_client/te
 (cd kotlin && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.TairaKagemushaReadOnlyPublicTest --console=plain)
 (cd java/iroha_android && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 ./gradlew :core:test --tests org.hyperledger.iroha.android.offline.TairaKagemushaReadOnlyPublicTests --console=plain)
 (cd IrohaSwift && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 swift test --filter TairaKagemushaReadOnlyPublicTests)
-IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 dotnet test csharp/tests/Hyperledger.Iroha.Sdk.IntegrationTests -- --method '*LiveTairaKagemushaCapabilityIsExactAndReadOnly'
+IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 dotnet test csharp/tests/Hyperledger.Iroha.Sdk.IntegrationTests -- --filter-method '*LiveTairaKagemushaCapabilityIsExactAndReadOnly'
 ```
 
 `ready=true` describes the universal peer-cash protocol surface; it does not
@@ -361,6 +361,9 @@ assert that a particular asset has a promoted proof release or operational
 command authority. Use the signed Kagemusha rollout evidence before attempting
 top-up or redemption. Override the probe origin only with the credential-free
 HTTPS origin in `IROHA_TAIRA_PUBLIC_ROOT`.
+The Taira rollout asset is Digital Shekel `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`
+(`ds#boi.is`, scale 2); XOR `6TEAJqbb8oEPmLncoNiMRbLEK6tw` (scale 9) remains
+the transaction-fee asset.
 
 The offline `taira inrou-stage` command assigns the canary an immutable
 `artifact-<digest>` service version derived from the complete canonical bundle
@@ -368,6 +371,13 @@ with only the version field cleared. Final guest publication references are
 therefore part of the revision identity. A staged directory and receipt bind
 the service manifest, container manifest, materialized bundle, and both SoraFS
 manifests; changing any input produces a different revision.
+`--sorafs-retention-epoch` is a required nonzero absolute Unix-second boundary;
+the receipt and both manifests bind it exactly, and a retry must reuse the same
+value to reproduce the original manifest digests. Every manifest carries that
+same value in both the pin policy and its sole metadata entry,
+`soracloud.retention_epoch=<epoch>`; extra metadata is rejected. A retry reuses
+an exact `Approved` record, waits for an exact `Pending` record, and registers
+only a `Missing` record.
 
 The signed `taira inrou-canary` mutation path checks authoritative SoraCloud
 state before publishing either staged SoraFS manifest. `deploy` requires the

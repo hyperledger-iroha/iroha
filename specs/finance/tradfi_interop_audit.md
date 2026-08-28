@@ -28,7 +28,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   submission for payment, securities, and collateral follow-up messages. The
   bridge builds signed transfer transactions from configured account aliases,
   currency bindings, and reference-data snapshots, and records non-ledger
-  lifecycle messages durably for audit.
+  lifecycle messages durably for audit. Both payment routes use `GrpHdr/MsgId`
+  as the primary lifecycle/replay key; `pacs.009` keeps the BAH `BizMsgIdr` as
+  an independent secondary identity rather than collapsing the two fields.
 - The JavaScript SDK contains builders for `pacs.*` and `camt.*` payloads and
   client helpers for Torii ISO submissions and polling. Its `pacs.009` builder
   binds any custom `messageDefinitionId` to both `MsgDefIdr` and the `Document`
@@ -237,8 +239,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
 - Lifecycle updates now require the same non-empty profile id, business service,
   and compatible message family as the referenced original. Missing or
   cross-profile evidence fails closed, in-flight originals are not mutated, and
-  settled or rejected originals are terminal. Direct status mutators enforce
-  the same terminal monotonicity.
+  rejected originals are terminal. Settled payments accept only an explicit
+  `pacs.004` return while retaining the original transaction hash and settlement
+  evidence; other stale transitions remain ignored. Direct status mutators
+  enforce the same terminal monotonicity.
 - The exact append-only `status_history` is bounded in V1 to 256 entries and
   256 KiB of canonical compact JSON. Live lifecycle updates build a bounded
   candidate and reject the whole transition before changing memory, indexes, or
@@ -387,8 +391,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   regressions covering known-original pending updates, unknown originals,
   wrong-family originals, and conflicting settlement references.
 - Added checked-in `pacs.004` and `camt.056` XML fixtures and Torii lifecycle
-  regressions proving payment returns reject known originals and cancellation
-  requests put known originals on hold without fabricating missing originals.
+  regressions proving payment returns reject only settled known originals,
+  unsettled returns are ignored, and cancellation requests put known originals
+  on hold without fabricating missing originals.
 - Added a checked-in `pacs.002` XML fixture and Torii lifecycle regression
   proving an accepted status report settles a known original payment. Additional
   adversarial coverage pins `GrpHdr/MsgId` as the durable status-report id so

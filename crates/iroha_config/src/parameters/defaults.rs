@@ -2526,6 +2526,15 @@ pub mod torii {
     pub const ATTACHMENTS_PER_TENANT_MAX_COUNT: u64 = 128;
     /// Default aggregate attachment bytes per tenant (0 = unlimited).
     pub const ATTACHMENTS_PER_TENANT_MAX_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
+    /// Default maximum number of ZK attachments retained by one node.
+    pub const ATTACHMENTS_GLOBAL_MAX_COUNT: u64 = 4_096;
+    /// Maximum supported node-global attachment count.
+    ///
+    /// Torii bounds each filesystem-backed quota scan to this many attachment
+    /// metadata records and root tenant-directory entries.
+    pub const ATTACHMENTS_GLOBAL_MAX_COUNT_MAX: u64 = 20_000;
+    /// Default aggregate ZK attachment bytes retained by one node.
+    pub const ATTACHMENTS_GLOBAL_MAX_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
     /// Default allowed MIME types for attachment payloads (post-sniff).
     #[must_use]
     pub fn attachments_allowed_mime_types() -> Vec<String> {
@@ -2779,6 +2788,8 @@ pub mod torii {
         pub const MAX_REQUEST_BYTES: usize = 1_048_576; // 1 MiB
         /// Maximum number of tools returned per `tools/list` response page.
         pub const MAX_TOOLS_PER_LIST: usize = 500;
+        /// Maximum number of MCP tool dispatches executing concurrently.
+        pub const MAX_INFLIGHT_DISPATCHES: usize = 32;
         /// Default MCP tool profile (`read_only`, `writer`, `operator`).
         pub const PROFILE: &str = "read_only";
         /// Expose operator-only routes in the MCP registry.
@@ -3478,7 +3489,7 @@ pub mod pipeline {
     pub const OVERLAY_CHUNK_INSTRUCTIONS: usize = 256;
     /// IVM pre-decode cache size (number of decoded streams cached).
     pub const CACHE_SIZE: usize = 128;
-    /// Hard cap on decoded instructions per cached entry (0 = unlimited; default tuned for safety).
+    /// Maximum decoded instructions retained per cached entry (0 = unlimited).
     pub const IVM_CACHE_MAX_DECODED_OPS: usize = 8_000_000;
     /// Approximate byte budget for all cached pre-decode entries combined.
     pub const IVM_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024; // 64 MiB

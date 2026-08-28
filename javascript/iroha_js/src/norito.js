@@ -1009,6 +1009,15 @@ function encodeFeePaymentIntentValue(intent, context) {
   );
 }
 
+/** @internal Encode one exact compact-length `FeePaymentIntent` archive. */
+export function noritoEncodeFeePaymentIntentArchive(intent) {
+  return withNoritoCompactLengths(() =>
+    Uint8Array.from(
+      encodeFeePaymentIntentValue(intent, "FeePaymentIntent"),
+    ),
+  );
+}
+
 const INLINE_PRIVATE_KEY_FIELDS = new Set([
   "private_key",
   "privateKey",

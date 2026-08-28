@@ -33,6 +33,7 @@ struct ToriiCanonicalTransactionDraft {
   static func decode(
     transactionPayloadB64: String,
     signingMessageB64: String,
+    expectedAdmissionIntent: TransactionAdmissionIntentV1,
     context: String
   ) throws -> Self {
     let transactionPayload = try canonicalBase64(
@@ -55,7 +56,11 @@ struct ToriiCanonicalTransactionDraft {
     return Self(
       transactionPayload: transactionPayload,
       signingMessage: signingMessage,
-      payload: try parsePayload(transactionPayload, context: context)
+      payload: try parsePayload(
+        transactionPayload,
+        expectedAdmissionIntent: expectedAdmissionIntent,
+        context: context
+      )
     )
   }
 
@@ -144,13 +149,19 @@ struct ToriiCanonicalTransactionDraft {
 
   static func transactionPayload(
     fromVersionedSignedTransaction bytes: Data,
+    expectedAdmissionIntent: TransactionAdmissionIntentV1,
     context: String
   ) throws -> Data {
-    try inspectVersionedSignedTransaction(bytes, context: context).transactionPayload
+    try inspectVersionedSignedTransaction(
+      bytes,
+      expectedAdmissionIntent: expectedAdmissionIntent,
+      context: context
+    ).transactionPayload
   }
 
   static func validateTransactionPayload(
     _ bytes: Data,
+    expectedAdmissionIntent: TransactionAdmissionIntentV1,
     context: String
   ) throws {
     guard !bytes.isEmpty, bytes.count <= maximumTransactionPayloadBytes else {
@@ -158,11 +169,16 @@ struct ToriiCanonicalTransactionDraft {
         "\(context) must be a bounded non-empty canonical V1 TransactionPayload."
       )
     }
-    _ = try parsePayload(bytes, context: context)
+    _ = try parsePayload(
+      bytes,
+      expectedAdmissionIntent: expectedAdmissionIntent,
+      context: context
+    )
   }
 
   static func inspectVersionedSignedTransaction(
     _ bytes: Data,
+    expectedAdmissionIntent: TransactionAdmissionIntentV1,
     context: String
   ) throws -> SignedTransactionV1 {
     guard !bytes.isEmpty,
@@ -190,7 +206,11 @@ struct ToriiCanonicalTransactionDraft {
       signatureWrapper,
       context: "\(context).signature"
     )
-    let payload = try parsePayload(transactionPayload, context: context)
+    let payload = try parsePayload(
+      transactionPayload,
+      expectedAdmissionIntent: expectedAdmissionIntent,
+      context: context
+    )
     let signerPublicKey = try decodeEd25519Authority(
       payload.authority,
       context: "\(context).authority"
@@ -291,7 +311,11 @@ struct ToriiCanonicalTransactionDraft {
     }
   }
 
-  private static func parsePayload(_ bytes: Data, context: String) throws -> Payload {
+  private static func parsePayload(
+    _ bytes: Data,
+    expectedAdmissionIntent: TransactionAdmissionIntentV1,
+    context: String
+  ) throws -> Payload {
     var transaction = ToriiVerifyingKeyCompactReader(bytes)
     let domain = try transaction.takeField("\(context).domain")
     let authority = try transaction.takeField("\(context).authority")
@@ -323,9 +347,14 @@ struct ToriiCanonicalTransactionDraft {
     } catch {
       throw ToriiClientError.invalidPayload("\(context) fee_payment is not canonical.")
     }
-    guard admissionIntent == TransactionAdmissionIntentV1.queuePlanSynced.norito else {
+    guard admissionIntent == expectedAdmissionIntent.norito else {
+      let expectedName =
+        switch expectedAdmissionIntent {
+        case .ordinary: "Ordinary"
+        case .queuePlanSynced: "QueuePlanSynced"
+        }
       throw ToriiClientError.invalidPayload(
-        "\(context) admission_intent must be QueuePlanSynced.")
+        "\(context) admission_intent must be \(expectedName).")
     }
     guard attachments == Data([0]) else {
       throw ToriiClientError.invalidPayload(

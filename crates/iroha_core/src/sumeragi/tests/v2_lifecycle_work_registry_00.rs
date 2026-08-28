@@ -542,8 +542,8 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             mut ready,
             store,
             coordinator,
-            successor,
-            retry_owner,
+            successor: _successor,
+            retry_owner: _retry_owner,
         } = owned;
         let context = ready.fixture.verified.context().clone();
         let committee = crate::sumeragi::v2_core::Committee::project_indices(
@@ -661,7 +661,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             lease,
             durable: _,
         } = ready;
-        let retry_key = match &fixture.effect {
+        let _retry_key = match &fixture.effect {
             AdapterEffect::ValidateBody { round, subject, .. } => (*round, *subject),
             _ => unreachable!("Ready fixture retains one Validate effect"),
         };
@@ -745,10 +745,8 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 )
                 .expect("restore the exact long-lived Validate retry marker");
             assert_eq!(
-                executor.validate_retry_lifecycle_ordinal_for_test((
-                    validate_round,
-                    validate_subject,
-                )),
+                executor
+                    .validate_retry_lifecycle_ordinal_for_test((validate_round, validate_subject,)),
                 Some(Some(lease.ordinal())),
                 "{row:?}: recovered retry authority must bind the Ready parent"
             );
@@ -996,10 +994,8 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             )
             .then_some(lease.ordinal());
             assert_eq!(
-                executor.validate_retry_lifecycle_ordinal_for_test((
-                    validate_round,
-                    validate_subject,
-                )),
+                executor
+                    .validate_retry_lifecycle_ordinal_for_test((validate_round, validate_subject,)),
                 Some(expected_retry_ordinal),
                 "{row:?}: only an unresolved Busy parent may retain its retry ordinal"
             );

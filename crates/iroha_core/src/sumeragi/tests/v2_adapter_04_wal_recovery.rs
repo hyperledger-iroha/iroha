@@ -1920,6 +1920,69 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
             .recovered_fetch_dispatch_projection_for_test(&executor, first_summary.0)
             .expect("published recovered Fetch parks its exact request owner externally");
         assert_eq!(first_dispatch_projection.2.observed_generation(), 0);
+        let actor_admissions = Arc::new(Mutex::new(0_usize));
+        let observed_admissions = Arc::clone(&actor_admissions);
+        services.set_exact_output_admission_hook(move |_post, _ticket| {
+            let mut admissions = observed_admissions
+                .lock()
+                .expect("count recovered Fetch actor admissions");
+            *admissions = admissions.saturating_add(1);
+            Ok(())
+        });
+        assert!(
+            !services
+                .retry_pending_exact_output()
+                .expect("admit the initial recovered Fetch occurrence"),
+            "actor admission releases the physical exact-output occurrence"
+        );
+        let initial_admissions = *actor_admissions
+            .lock()
+            .expect("read initial recovered Fetch actor admissions");
+        assert!(initial_admissions > 0);
+        let before_due = Instant::now();
+        let mut next_attempt = before_due
+            .checked_add(Duration::from_secs(1))
+            .expect("construct a future recovered Fetch retry deadline");
+        assert!(
+            !super::super::v2_runner::retry_recovered_decision_fetch_if_due(
+                before_due,
+                &mut next_attempt,
+                Duration::from_millis(25),
+                &executor,
+                &services,
+            )
+            .expect("a future recovered Fetch retry is a no-op")
+        );
+        assert_eq!(
+            *actor_admissions
+                .lock()
+                .expect("read pre-deadline actor admissions"),
+            initial_admissions
+        );
+        let due = next_attempt;
+        assert!(
+            super::super::v2_runner::retry_recovered_decision_fetch_if_due(
+                due,
+                &mut next_attempt,
+                Duration::from_millis(25),
+                &executor,
+                &services,
+            )
+            .expect("recreate the actor-admitted recovered Fetch occurrence")
+        );
+        assert!(next_attempt > due);
+        assert!(
+            *actor_admissions
+                .lock()
+                .expect("read retransmitted recovered Fetch actor admissions")
+                > initial_admissions,
+            "the retained executor owner must recreate a remotely lost occurrence"
+        );
+        assert_eq!(
+            reopened.recovered_fetch_dispatch_projection_for_test(&executor, first_summary.0,),
+            Some(first_dispatch_projection),
+            "retransmission must not replace the external wait or signed request owner"
+        );
         let foreign_source = super::super::v2_lifecycle_coordinator::WaitSource::External(
             super::super::v2_lifecycle_coordinator::LifecycleDigest::new([0xEE; 32]),
         );
@@ -1980,7 +2043,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
     assert!(
         error
             .to_string()
-            .contains("neither an exact live Fetch nor an exact advanced Store parent"),
+            .contains("neither an exact live Fetch nor an exact Store/Validate crash prefix"),
         "a live-Fetch mismatch must not be misclassified as a body-fsynced Store cut: {error}"
     );
     assert_eq!(

@@ -203,6 +203,12 @@ captures the key points so implementers can line them up with the codec spec.
   `TransportCapabilities` frame on control stream `0`. It advertises the HPKE
   suite bitmask, DATAGRAM support, maximum segment DATAGRAM size, feedback
   interval, and telemetry bucket granularity.
+- One absolute setup deadline covers QUIC establishment, control-stream
+  creation/prefaces, and the complete capability exchange through the
+  publisher's validated `CapabilityAck`. A connection-owned watchdog enforces
+  the same deadline while callers are between API calls. Control archives retain
+  the 512 KiB wire cap and are decoded under a wire-derived Norito allocation
+  budget, including when compression is used.
 - Capability resolution picks the intersection of suite bitmasks, the logical
   AND of DATAGRAM support, the minimum DATAGRAM size, and the maximum feedback
   interval. The resolved tuple feeds the manifest’s
@@ -233,12 +239,24 @@ captures the key points so implementers can line them up with the codec spec.
 ### MTU negotiation and fallbacks
 
 - `StreamingConnection::max_datagram_size` and `StreamingConnection::datagram_enabled`
-  clamp DATAGRAM payloads to the negotiated minimum and expose a runtime guard so
-  hosts can pivot to the fallback path when peers disable DATAGRAM delivery.【F:crates/iroha_p2p/src/streaming/quic.rs:375】
+  clamp DATAGRAM payloads to the negotiated peer minimum and the local configured
+  maximum, and expose a runtime guard so hosts can pivot to the fallback path
+  when peers disable DATAGRAM delivery. The locally constrained resolution is
+  the value acknowledged and returned to the caller.
+  The same limit is enforced again on receive; disabled or oversized remote
+  delivery closes the session.
 - The capability handshake now enforces consistent `CapabilityReport`/`CapabilityAck`
-  stream/version/MTU/DPLPMTUD values and rejects zero-length DATAGRAM requests
-  when the transport stays in DATAGRAM mode; integration tests cover the
-  negotiated limit as well as the DATAGRAM-off path.【F:crates/iroha_p2p/src/streaming/quic.rs:982】
+  stream/version/MTU/DPLPMTUD values. Zero-length DATAGRAM payloads are forbidden
+  in every mode. Negotiated policy installation and admission share one inbox
+  lock, so frames cannot cross the policy transition under a stale limit. A
+  continuously drained, count-and-byte-bounded application inbox bounds frames
+  once the pump receives them. Empty frames are rejected immediately; after an
+  invalid frame closes the session, the pump continues draining buffered Quinn
+  entries until transport termination. Quinn's dependency-owned queue remains
+  byte-accounted rather than entry-accounted before that pump runs, so a formal
+  upstream per-entry bound remains release work. Integration tests cover the
+  negotiated and locally configured limits, DATAGRAM-off path, and empty-frame
+  connection closure.
 - Restricted environments (enterprise firewalls and other restricted networks) should enable the
   deterministic fallback by muxing chunk payloads over per-segment unidirectional
   streams, with mandatory authenticated TLS-over-TCP as the transport fallback

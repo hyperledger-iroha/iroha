@@ -12,13 +12,150 @@ use crate::{
 };
 use indexmap::IndexMap;
 use iroha_data_model::{
-    account::address::ChainDiscriminantGuard, smart_contract::manifest::ContractManifest,
+    account::address::{ChainDiscriminantGuard, chain_discriminant},
+    smart_contract::manifest::ContractManifest,
 };
 use ivm_abi::metadata::EmbeddedContractInterfaceV1;
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
+    sync::{Condvar, Mutex, OnceLock},
 };
+
+// Parsing, resolution, semantic analysis, and lowering all consume the same
+// attacker-controlled structural depth budget. Keep the complete canonical
+// pipeline on a stack twice the 32 MiB debug-build boundary corpus. Two worker
+// permits cap compiler-stack reservation at 128 MiB; standalone parser workers
+// have their own 64 MiB global ceiling.
+const COMPILER_STACK_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_COMPILER_WORKERS: usize = 2;
+
+thread_local! {
+    static COMPILER_WORKER_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    #[cfg(test)]
+    static COMPILER_WORKER_SPAWNS: Cell<usize> = const { Cell::new(0) };
+}
+
+struct CompilerWorkerGate {
+    active: Mutex<usize>,
+    ready: Condvar,
+}
+
+impl CompilerWorkerGate {
+    fn acquire(&'static self) -> CompilerWorkerPermit {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        while *active >= MAX_COMPILER_WORKERS {
+            active = self
+                .ready
+                .wait(active)
+                .unwrap_or_else(|poison| poison.into_inner());
+        }
+        *active = active.saturating_add(1);
+        CompilerWorkerPermit { gate: self }
+    }
+}
+
+struct CompilerWorkerPermit {
+    gate: &'static CompilerWorkerGate,
+}
+
+impl Drop for CompilerWorkerPermit {
+    fn drop(&mut self) {
+        let mut active = self
+            .gate
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *active = active.saturating_sub(1);
+        self.gate.ready.notify_one();
+    }
+}
+
+struct CompilerWorkerMarker {
+    previous: bool,
+}
+
+impl CompilerWorkerMarker {
+    fn enter() -> Self {
+        let previous = COMPILER_WORKER_ACTIVE.with(|active| active.replace(true));
+        Self { previous }
+    }
+}
+
+impl Drop for CompilerWorkerMarker {
+    fn drop(&mut self) {
+        COMPILER_WORKER_ACTIVE.with(|active| active.set(self.previous));
+    }
+}
+
+static COMPILER_WORKER_GATE: OnceLock<CompilerWorkerGate> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CompilerWorkerUnavailable;
+
+pub(crate) fn compiler_worker_active() -> bool {
+    COMPILER_WORKER_ACTIVE.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_compiler_worker_spawn_count() {
+    COMPILER_WORKER_SPAWNS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn compiler_worker_spawn_count() -> usize {
+    COMPILER_WORKER_SPAWNS.with(Cell::get)
+}
+
+pub(crate) fn run_with_compiler_stack<T, F>(operation: F) -> Result<T, CompilerWorkerUnavailable>
+where
+    T: Send,
+    F: FnOnce() -> T + Send,
+{
+    if compiler_worker_active() {
+        return Ok(operation());
+    }
+    #[cfg(test)]
+    COMPILER_WORKER_SPAWNS.with(|count| count.set(count.get().saturating_add(1)));
+    let _permit = COMPILER_WORKER_GATE
+        .get_or_init(|| CompilerWorkerGate {
+            active: Mutex::new(0),
+            ready: Condvar::new(),
+        })
+        .acquire();
+    let inherited_chain_discriminant = chain_discriminant();
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .name("kotodama-compiler".to_owned())
+            .stack_size(COMPILER_STACK_BYTES)
+            .spawn_scoped(scope, || {
+                let _marker = CompilerWorkerMarker::enter();
+                let _chain_discriminant =
+                    ChainDiscriminantGuard::enter(inherited_chain_discriminant);
+                operation()
+            })
+            .map_err(|_| CompilerWorkerUnavailable)?;
+        match worker.join() {
+            Ok(result) => Ok(result),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })
+}
+
+pub(crate) fn compiler_worker_unavailable_diagnostic(
+    source_name: Option<&str>,
+) -> DiagnosticBundle {
+    DiagnosticBundle::single(Diagnostic::error(
+        "K0003",
+        DiagnosticPhase::Parse,
+        "compiler could not allocate the bounded stack required to validate source nesting",
+        source_start_span(source_name),
+    ))
+}
 /// One compilation request.
 #[derive(Clone, Copy, Debug)]
 pub struct CompileRequest<'source> {
@@ -85,7 +222,8 @@ struct IterativeResolvedGuard {
 }
 impl Clone for IterativeResolvedGuard {
     fn clone(&self) -> Self {
-        Self::new(self.get().clone())
+        run_with_compiler_stack(|| Self::new(self.get().clone()))
+            .expect("compiler must allocate the bounded stack required to clone resolved HIR")
     }
 }
 impl IterativeResolvedGuard {
@@ -111,6 +249,43 @@ impl Drop for IterativeResolvedGuard {
         }
     }
 }
+struct IterativeSpannedGuard {
+    program: Option<crate::spanned_ast::SpannedProgram>,
+}
+impl IterativeSpannedGuard {
+    fn new(program: crate::spanned_ast::SpannedProgram) -> Self {
+        Self {
+            program: Some(program),
+        }
+    }
+    fn take(mut self) -> crate::spanned_ast::SpannedProgram {
+        self.program
+            .take()
+            .expect("spanned guard is populated exactly once")
+    }
+}
+impl Clone for IterativeSpannedGuard {
+    fn clone(&self) -> Self {
+        run_with_compiler_stack(|| {
+            Self::new(
+                self.program
+                    .as_ref()
+                    .expect("spanned guard is populated")
+                    .clone(),
+            )
+        })
+        .expect("compiler must allocate the bounded stack required to clone parsed HIR")
+    }
+}
+impl Drop for IterativeSpannedGuard {
+    fn drop(&mut self) {
+        if let Some(program) = self.program.take() {
+            let crate::spanned_ast::SpannedProgram { program, facts } = program;
+            drop(facts);
+            crate::ast::drop_program_iterative(program);
+        }
+    }
+}
 /// Canonically parsed source retained between compiler phases.
 ///
 /// The fields stay crate-private so instrumentation can time phase boundaries
@@ -118,7 +293,7 @@ impl Drop for IterativeResolvedGuard {
 #[derive(Clone)]
 pub(crate) struct ParsedCompilationUnit {
     source: SourceFile,
-    program: crate::spanned_ast::SpannedProgram,
+    program: IterativeSpannedGuard,
     source_name: Option<String>,
 }
 /// Canonically resolved HIR retained between compiler phases.
@@ -181,12 +356,28 @@ impl CompilerSession {
         graph: &crate::linker::ModuleBuildGraph,
         request: crate::linker::SourcePackageGraphRequest,
     ) -> Result<crate::linker::ValidatedSourcePackageGraph, crate::linker::SourceGraphError> {
+        run_with_compiler_stack(move || self.validate_package_graph_inner(graph, request)).map_err(
+            |_| crate::linker::SourceGraphError::Parse {
+                source: "<project>".to_owned(),
+                diagnostics: compiler_worker_unavailable_diagnostic(Some("<project>")),
+            },
+        )?
+    }
+    fn validate_package_graph_inner(
+        &self,
+        graph: &crate::linker::ModuleBuildGraph,
+        request: crate::linker::SourcePackageGraphRequest,
+    ) -> Result<crate::linker::ValidatedSourcePackageGraph, crate::linker::SourceGraphError> {
         let _chain_discriminant = self.enter_chain_discriminant();
         graph.validate_package(request, self.linker_options())
     }
     /// Parse and type/effect-check one seiyaku or reusable module without
     /// publishing deployable output.
     pub fn check(&self, request: CompileRequest<'_>) -> Result<(), DiagnosticBundle> {
+        run_with_compiler_stack(move || self.check_inner(request))
+            .map_err(|_| compiler_worker_unavailable_diagnostic(request.source_name))?
+    }
+    fn check_inner(&self, request: CompileRequest<'_>) -> Result<(), DiagnosticBundle> {
         let _chain_discriminant = self.enter_chain_discriminant();
         let program = self.checked_program(request)?;
         crate::ast::drop_program_iterative(program);
@@ -197,6 +388,13 @@ impl CompilerSession {
     /// Parsing and semantic analysis occur exactly once. Frontends use this method to replace the
     /// retired standalone linter without maintaining a second parser path.
     pub fn check_with_lints(
+        &self,
+        request: CompileRequest<'_>,
+    ) -> Result<Vec<crate::lint::LintWarning>, DiagnosticBundle> {
+        run_with_compiler_stack(move || self.check_with_lints_inner(request))
+            .map_err(|_| compiler_worker_unavailable_diagnostic(request.source_name))?
+    }
+    fn check_with_lints_inner(
         &self,
         request: CompileRequest<'_>,
     ) -> Result<Vec<crate::lint::LintWarning>, DiagnosticBundle> {
@@ -227,7 +425,7 @@ impl CompilerSession {
         )?;
         Ok(ParsedCompilationUnit {
             source,
-            program,
+            program: IterativeSpannedGuard::new(program),
             source_name: request.source_name.map(ToOwned::to_owned),
         })
     }
@@ -241,7 +439,7 @@ impl CompilerSession {
             program,
             source_name,
         } = parsed;
-        let program = crate::resolved::resolve(program, &source)?;
+        let program = crate::resolved::resolve(program.take(), &source)?;
         Ok(ResolvedCompilationUnit {
             source,
             program: IterativeResolvedGuard::new(program),
@@ -310,6 +508,10 @@ impl CompilerSession {
     }
     /// Compile one named source unit into a deployable artifact and sidecar report.
     pub fn build(&self, request: CompileRequest<'_>) -> Result<CompileOutput, DiagnosticBundle> {
+        run_with_compiler_stack(move || self.build_inner(request))
+            .map_err(|_| compiler_worker_unavailable_diagnostic(request.source_name))?
+    }
+    fn build_inner(&self, request: CompileRequest<'_>) -> Result<CompileOutput, DiagnosticBundle> {
         let _chain_discriminant = self.enter_chain_discriminant();
         let parsed = self.parse_compilation_unit(request)?;
         let resolved = self.resolve_compilation_unit(parsed)?;
@@ -322,6 +524,14 @@ impl CompilerSession {
     /// Standalone modules receive only the target's typed function/state
     /// interface; no AST items are flattened, reordered, or rewritten.
     pub fn build_test_sources(
+        &self,
+        target: &TestSourceUnit,
+        test_modules: &[TestSourceUnit],
+    ) -> Result<TestCompileOutput, DiagnosticBundle> {
+        run_with_compiler_stack(move || self.build_test_sources_inner(target, test_modules))
+            .map_err(|_| compiler_worker_unavailable_diagnostic(Some(&target.source_name)))?
+    }
+    fn build_test_sources_inner(
         &self,
         target: &TestSourceUnit,
         test_modules: &[TestSourceUnit],
@@ -526,6 +736,14 @@ impl CompilerSession {
     /// This is the only post-link code-generation entry point. It deliberately accepts no AST, so
     /// package managers cannot reintroduce source rewriting after module type/effect analysis.
     pub(crate) fn build_typed_program(
+        &self,
+        program: TypedProgram,
+        source_name: Option<&str>,
+    ) -> Result<CompileOutput, DiagnosticBundle> {
+        run_with_compiler_stack(move || self.build_typed_program_inner(program, source_name))
+            .map_err(|_| compiler_worker_unavailable_diagnostic(source_name))?
+    }
+    fn build_typed_program_inner(
         &self,
         program: TypedProgram,
         source_name: Option<&str>,
@@ -985,10 +1203,55 @@ impl Default for CompilerSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     fn source_fixture(source: &'static str) -> &'static str {
         source
             .strip_suffix('\n')
             .expect("source fixture must end with one storage newline")
+    }
+
+    fn list_expression(depth: usize, leaf: &str) -> String {
+        format!("{}{leaf}{}", "[".repeat(depth), "]".repeat(depth))
+    }
+
+    fn boundary_contract(leaf: &str) -> String {
+        let expression = list_expression(crate::source::MAX_NESTING_DEPTH - 2, leaf);
+        format!("seiyaku StackMargin {{ hajimari() {{ let value = {expression}; }} }}")
+    }
+
+    fn nested_call_expression(depth: usize) -> String {
+        format!("{}0{}", "wrap(".repeat(depth), ")".repeat(depth))
+    }
+
+    fn mixed_scalar_expression(depth: usize) -> String {
+        let mut expression = String::from("0");
+        for index in 0..depth {
+            expression = match index % 3 {
+                0 => format!("({expression})"),
+                1 => format!("wrap({expression})"),
+                2 => format!("-{expression}"),
+                _ => unreachable!("modulo constrains the wrapper kind"),
+            };
+        }
+        expression
+    }
+
+    fn nested_if_expression(depth: usize) -> String {
+        let mut expression = String::from("0");
+        for _ in 0..depth {
+            expression = format!("if true {{ {expression} }} else {{ 0 }}");
+        }
+        expression
+    }
+
+    fn nested_match_expression(depth: usize) -> String {
+        let mut expression = String::from("0");
+        for _ in 0..depth {
+            expression = format!(
+                "match candidate {{ Option::some(_) => {expression}, Option::none => 0, }}"
+            );
+        }
+        expression
     }
     #[test]
     fn session_returns_structured_success_and_failure() {
@@ -1015,6 +1278,24 @@ mod tests {
             })
             .expect_err("invalid source must return diagnostics");
         assert_eq!(error.diagnostics.len(), 1);
+    }
+    #[test]
+    fn compiler_worker_is_reentrant_and_inherits_chain_discriminant() {
+        let caller = std::thread::current().id();
+        let inherited = chain_discriminant().wrapping_add(1);
+        let _chain_discriminant = ChainDiscriminantGuard::enter(inherited);
+        let (outer, inner, observed) = run_with_compiler_stack(|| {
+            assert!(compiler_worker_active());
+            let outer = std::thread::current().id();
+            let (inner, observed) =
+                run_with_compiler_stack(|| (std::thread::current().id(), chain_discriminant()))
+                    .expect("nested compiler work must run inline");
+            (outer, inner, observed)
+        })
+        .expect("spawn compiler worker");
+        assert_ne!(outer, caller);
+        assert_eq!(inner, outer);
+        assert_eq!(observed, inherited);
     }
     #[test]
     fn session_chain_discriminant_accepts_exact_taira_account_and_rejects_mismatch() {
@@ -1138,6 +1419,155 @@ mod tests {
                 source_name: Some("deep-invalid.ko"),
             })
             .expect_err("semantic-error cleanup at the nesting boundary must be stack-safe");
+    }
+    #[test]
+    fn whole_pipeline_fits_half_the_reserved_compiler_stack() {
+        std::thread::Builder::new()
+            .name("kotodama-direct-compiler-stack-margin".to_owned())
+            .stack_size(COMPILER_STACK_BYTES / 2)
+            .spawn(|| {
+                let session = CompilerSession::default();
+                let valid = boundary_contract("0");
+                session
+                    .check_inner(CompileRequest {
+                        source: &valid,
+                        source_name: Some("direct-margin-check.ko"),
+                    })
+                    .expect("boundary-depth check must fit half the compiler stack");
+                let output = session
+                    .build_inner(CompileRequest {
+                        source: &valid,
+                        source_name: Some("direct-margin-build.ko"),
+                    })
+                    .expect("boundary-depth code generation must fit half the compiler stack");
+                assert!(!output.artifact.is_empty());
+
+                let depth = crate::source::MAX_NESTING_DEPTH - 2;
+                for (label, expression) in [
+                    ("calls", nested_call_expression(depth)),
+                    ("mixed", mixed_scalar_expression(depth)),
+                    ("if", nested_if_expression(depth)),
+                    // The arm payload parentheses occupy the one delimiter
+                    // level that a scalar wrapper would otherwise use.
+                    ("match", nested_match_expression(depth - 1)),
+                ] {
+                    let setup = if label == "match" {
+                        "let candidate = Option::some(0);"
+                    } else {
+                        ""
+                    };
+                    let source = format!(
+                        "seiyaku StackMargin {{ fn wrap(int value) -> int {{ return value; }} hajimari() {{ {setup} let value = {expression}; }} }}"
+                    );
+                    let output = session
+                        .build_inner(CompileRequest {
+                            source: &source,
+                            source_name: Some("direct-margin-shape.ko"),
+                        })
+                        .unwrap_or_else(|diagnostics| {
+                            panic!("{label} boundary pipeline failed: {diagnostics:?}")
+                        });
+                    assert!(!output.artifact.is_empty(), "{label}");
+                }
+
+                let deep_type = format!(
+                    "{}int{}",
+                    "Option<".repeat(depth),
+                    ">".repeat(depth)
+                );
+                let typed_source =
+                    format!("module StackMargin {{ fn value({deep_type} input) {{}} }}");
+                session
+                    .check_inner(CompileRequest {
+                        source: &typed_source,
+                        source_name: Some("direct-margin-type.ko"),
+                    })
+                    .expect("boundary-depth type checking must fit half the compiler stack");
+
+                let unresolved = boundary_contract("missing");
+                let resolve_error = session
+                    .check_inner(CompileRequest {
+                        source: &unresolved,
+                        source_name: Some("direct-margin-resolve-error.ko"),
+                    })
+                    .expect_err("boundary-depth unresolved leaf must fail normally");
+                assert!(
+                    resolve_error
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.code == "K2002")
+                );
+
+                let invalid_expression =
+                    list_expression(crate::source::MAX_NESTING_DEPTH - 3, "true + 1");
+                let invalid = format!(
+                    "seiyaku StackMargin {{ hajimari() {{ let value = {invalid_expression}; }} }}"
+                );
+                let semantic_error = session
+                    .check_inner(CompileRequest {
+                        source: &invalid,
+                        source_name: Some("direct-margin-semantic-error.ko"),
+                    })
+                    .expect_err("boundary-depth invalid leaf must fail normally");
+                assert!(
+                    semantic_error.diagnostics.iter().any(|diagnostic| {
+                        matches!(diagnostic.phase, DiagnosticPhase::Semantic)
+                    })
+                );
+            })
+            .expect("spawn direct compiler margin worker")
+            .join()
+            .expect("whole compiler pipeline must fit the verified 32 MiB stack margin");
+    }
+    #[test]
+    fn public_compiler_pipeline_handoffs_from_a_small_caller() {
+        let source = boundary_contract("0");
+        std::thread::Builder::new()
+            .name("kotodama-small-compiler-caller".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                let session = CompilerSession::default();
+                session
+                    .check(CompileRequest {
+                        source: &source,
+                        source_name: Some("small-caller-check.ko"),
+                    })
+                    .expect("boundary-depth check must leave the caller stack");
+                session
+                    .check_with_lints(CompileRequest {
+                        source: &source,
+                        source_name: Some("small-caller-lint.ko"),
+                    })
+                    .expect("boundary-depth linting must leave the caller stack");
+                let output = session
+                    .build(CompileRequest {
+                        source: &source,
+                        source_name: Some("small-caller-build.ko"),
+                    })
+                    .expect("boundary-depth build must leave the caller stack");
+                assert!(!output.artifact.is_empty());
+
+                let excessive_expression =
+                    list_expression(crate::source::MAX_NESTING_DEPTH - 1, "0");
+                let excessive = format!(
+                    "seiyaku StackMargin {{ hajimari() {{ let value = {excessive_expression}; }} }}"
+                );
+                let diagnostics = session
+                    .check(CompileRequest {
+                        source: &excessive,
+                        source_name: Some("small-caller-excessive.ko"),
+                    })
+                    .expect_err("one level above the boundary must fail closed");
+                assert!(
+                    diagnostics
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.code == "K0003")
+                );
+            })
+            .expect("spawn small compiler caller")
+            .join()
+            .expect("bounded compiler worker must contain every recursive phase");
     }
     #[test]
     fn session_rejects_oversized_input_before_constructing_a_source_database() {

@@ -88,6 +88,8 @@ const SM2_PUBLIC_KEY = hexToBytes(
 const MULTISIG_CANONICAL_HEX =
   "0x0a010100030003010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b";
 const MULTISIG_CANONICAL_BYTES = hexToBytes(MULTISIG_CANONICAL_HEX);
+const WRONG_CLASS_SINGLE_I105 =
+  "sora3uｵﾔDﾗﾎmXヱ5uxbｻAｸiRB1vﾚｾｿvSHﾅﾕgﾚｼUFPPﾜinｳﾆﾓRSJS4M";
 
 function singleKeyCanonicalBytes(tag, curve, publicKey, declaredLength = publicKey.length) {
   const lengthBytes =
@@ -240,6 +242,96 @@ test("ML-DSA single-key controllers use the canonical extended wire form", () =>
     } finally {
       addressModule.configureCurveSupport();
     }
+  }
+});
+
+test("canonical decoding rejects reserved headers and controller class mismatches", () => {
+  for (const [label, addressModule] of [
+    ["src", sourceAddressModule],
+    ["dist", distAddressModule],
+  ]) {
+    const compactSingle = Buffer.from(
+      addressModule.AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY }).canonicalBytes(),
+    );
+    for (let version = 1; version <= 0b111; version += 1) {
+      const reserved = Buffer.from(compactSingle);
+      reserved[0] = (version << 5) | 0x02;
+      assert.throws(
+        () => addressModule.AccountAddress.fromCanonicalBytes(reserved),
+        (error) =>
+          error instanceof addressModule.AccountAddressError &&
+          error.code === addressModule.AccountAddressErrorCode.INVALID_HEADER_VERSION,
+        `${label} rejects reserved address version ${version}`,
+      );
+    }
+    for (const normVersion of [0, 2, 3]) {
+      const reserved = Buffer.from(compactSingle);
+      reserved[0] = normVersion << 1;
+      assert.throws(
+        () => addressModule.AccountAddress.fromCanonicalBytes(reserved),
+        (error) =>
+          error instanceof addressModule.AccountAddressError &&
+          error.code === addressModule.AccountAddressErrorCode.INVALID_NORM_VERSION,
+        `${label} rejects reserved normalization version ${normVersion}`,
+      );
+    }
+
+    const compactWrongClass = Buffer.from(compactSingle);
+    compactWrongClass[0] = 0x0a;
+    const multisigWrongClass = Buffer.from(MULTISIG_CANONICAL_BYTES);
+    multisigWrongClass[0] = 0x02;
+    for (const [name, canonical] of [
+      ["compact single", compactWrongClass],
+      ["multisig", multisigWrongClass],
+    ]) {
+      assert.throws(
+        () => addressModule.AccountAddress.fromCanonicalBytes(canonical),
+        (error) =>
+          error instanceof addressModule.AccountAddressError &&
+          error.code === addressModule.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+        `${label} rejects ${name} header/controller mismatch`,
+      );
+    }
+
+    addressModule.configureCurveSupport({ allowMlDsa: true });
+    try {
+      const extendedWrongClass = Buffer.from(
+        addressModule.AccountAddress.fromAccount({
+          publicKey: ML_DSA_PUBLIC_KEY,
+          algorithm: "ml-dsa",
+        }).canonicalBytes(),
+      );
+      extendedWrongClass[0] = 0x0a;
+      assert.throws(
+        () => addressModule.AccountAddress.fromCanonicalBytes(extendedWrongClass),
+        (error) =>
+          error instanceof addressModule.AccountAddressError &&
+          error.code === addressModule.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+        `${label} rejects extended ML-DSA header/controller mismatch`,
+      );
+    } finally {
+      addressModule.configureCurveSupport();
+    }
+
+    assert.throws(
+      () => addressModule.AccountAddress.fromI105(WRONG_CLASS_SINGLE_I105, 753),
+      (error) =>
+        error instanceof addressModule.AccountAddressError &&
+        error.code === addressModule.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      `${label} rejects checksum-valid wrong-class I105`,
+    );
+
+    const constructor = new addressModule.AccountAddress(
+      { version: 1, classId: 0, normVersion: 1, extFlag: false },
+      { tag: 0, curve: 1, publicKey: DEFAULT_PUBLIC_KEY },
+    );
+    assert.throws(
+      () => constructor.canonicalBytes(),
+      (error) =>
+        error instanceof addressModule.AccountAddressError &&
+        error.code === addressModule.AccountAddressErrorCode.INVALID_HEADER_VERSION,
+      `${label} public constructor cannot emit a reserved header`,
+    );
   }
 });
 

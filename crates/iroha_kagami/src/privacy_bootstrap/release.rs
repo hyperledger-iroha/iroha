@@ -38,6 +38,9 @@ const MAX_BROKER_EXPORT_BYTES_V1: u64 = 4 * 1024 * 1024;
 const CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const CHAIN_DISCRIMINANT_V1: u64 = 369;
 const GENESIS_AUTHORITY_V1: &str = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A";
+const GENESIS_ALIAS_BOOTSTRAP_AUTHORITY_V1: &str =
+    "testuﾛ1NヰﾋhM25ｳﾙﾁUｺﾂxｼqPﾙPﾅPdNｼﾖ2oﾉﾀdJﾘZﾖ3pTｳ1MLRWYG";
+const GENESIS_ALIAS_BOOTSTRAP_ROLE_ID_V1: &str = "nevo_taira_alias_bootstrap";
 const NEVO_PUBLIC_INPUT_SCHEMA_V1: &str = "iroha.taira.nevo-reset-public-inputs.v2";
 const NEVO_FEE_ASSET_DEFINITION_ID_V1: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const NEVO_FEE_SPONSOR_PROGRAM_NAME_V1: &str = "cbsi_web";
@@ -300,7 +303,7 @@ fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<
     expect_string_v1(
         root,
         "schema",
-        "iroha.taira.nevo-reset-review.v2",
+        "iroha.taira.nevo-reset-review.v3",
         "Taira NEVO review",
     )?;
     expect_string_v1(root, "chain", CHAIN_ID_V1, "Taira NEVO review")?;
@@ -425,7 +428,7 @@ fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<
     let expected_program_id = format!("{GENESIS_AUTHORITY_V1}/{NEVO_FEE_SPONSOR_PROGRAM_NAME_V1}");
     let expected_overlay = norito::json!({
         "transaction_count": (1_u64),
-        "instruction_count": (27_u64),
+        "instruction_count": (29_u64),
         "dataspace_roots": [
             {"alias": "dpn", "id": (10_u64)},
             {"alias": "is2", "id": (8_477_022_798_449_861_195_u64)},
@@ -442,6 +445,57 @@ fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<
             {"alias": "inori@universal", "target_account_id": (dpn_inori), "role": "primary"},
             {"alias": "source_guard@universal", "target_account_id": (dpn_epr_guard), "role": "primary"},
         ],
+        "genesis_alias_bootstrap": {
+            "authority_account_id": GENESIS_ALIAS_BOOTSTRAP_AUTHORITY_V1,
+            "authority_source": "base_config.genesis.public_key",
+            "role_id": GENESIS_ALIAS_BOOTSTRAP_ROLE_ID_V1,
+            "permissions": [
+                {
+                    "name": "CanManageAccountAlias",
+                    "payload": {"scope": {"scope": "alias", "value": {
+                        "canonical_name": {
+                            "label": "admin", "domain": null, "dataspace": "universal",
+                        },
+                        "dataspace_id": 0_u64,
+                    }}},
+                },
+                {
+                    "name": "CanManageAccountAlias",
+                    "payload": {"scope": {"scope": "alias", "value": {
+                        "canonical_name": {
+                            "label": "inori", "domain": null, "dataspace": "universal",
+                        },
+                        "dataspace_id": 0_u64,
+                    }}},
+                },
+                {
+                    "name": "CanManageAccountAlias",
+                    "payload": {"scope": {"scope": "alias", "value": {
+                        "canonical_name": {
+                            "label": "source_guard", "domain": null, "dataspace": "universal",
+                        },
+                        "dataspace_id": 0_u64,
+                    }}},
+                },
+                {
+                    "name": "CanManageAccountAlias",
+                    "payload": {"scope": {"scope": "dataspace", "value": 10_u64}},
+                },
+                {
+                    "name": "CanManageAccountAlias",
+                    "payload": {"scope": {
+                        "scope": "dataspace",
+                        "value": 8_477_022_798_449_861_195_u64,
+                    }},
+                },
+                {
+                    "name": "CanManageAccountAlias",
+                    "payload": {"scope": {"scope": "domain", "value": "nevo.dpn"}},
+                },
+            ],
+            "registered_before_alias_intents": true,
+            "unregistered_after_alias_intents": true,
+        },
         "contract_deployment_permission_grant": {
             "account_id": (api_signer),
             "permission": "CanRegisterSmartContractCode",
@@ -554,18 +608,42 @@ fn expected_nevo_genesis_v1(
     dpn_inori: &str,
     dpn_epr_guard: &str,
 ) -> color_eyre::Result<JsonValue> {
-    let mut expected: JsonValue = norito::json::from_slice(GOLDEN_NEVO_UNSIGNED_V2)
+    let mut expected: JsonValue = norito::json::from_slice(CANONICAL_GENESIS_TEMPLATE_V1)
+        .wrap_err("failed to decode the canonical Taira genesis template")?;
+    let golden: JsonValue = norito::json::from_slice(GOLDEN_NEVO_UNSIGNED_V2)
         .wrap_err("failed to decode the source-pinned Python NEVO v2 golden")?;
+    let golden_transactions = golden
+        .as_object()
+        .and_then(|root| root.get("transactions"))
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("source-pinned Python NEVO v2 golden omitted transactions"))?;
+    let expected_transactions = expected
+        .as_object_mut()
+        .and_then(|root| root.get_mut("transactions"))
+        .and_then(JsonValue::as_array_mut)
+        .ok_or_else(|| eyre!("canonical Taira genesis template omitted transactions"))?;
+    if golden_transactions.len() != expected_transactions.len() + 1
+        || golden_transactions[..expected_transactions.len()] != expected_transactions[..]
+    {
+        bail!(
+            "source-pinned Python NEVO v2 golden must equal the canonical Taira genesis plus exactly one overlay transaction"
+        );
+    }
+    let mut overlay = golden_transactions
+        .last()
+        .expect("the exact transaction-count check proves an overlay exists")
+        .clone();
     for (source, target, label) in [
         (GOLDEN_NEVO_ONBOARDING_V2, onboarding, "onboarding"),
         (GOLDEN_NEVO_API_SIGNER_V2, api_signer, "API signer"),
         (GOLDEN_NEVO_INORI_V2, dpn_inori, "Inori"),
         (GOLDEN_NEVO_EPR_GUARD_V2, dpn_epr_guard, "EPR guard"),
     ] {
-        if replace_nevo_golden_identity_v2(&mut expected, source, target) == 0 {
-            bail!("compiled Python NEVO v2 golden omitted the {label} identity");
+        if replace_nevo_golden_identity_v2(&mut overlay, source, target) == 0 {
+            bail!("compiled Python NEVO v2 overlay omitted the {label} identity");
         }
     }
+    expected_transactions.push(overlay);
     Ok(expected)
 }
 
@@ -1765,12 +1843,21 @@ mod tests {
     };
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
+        account::address::AccountAddress,
+        alias_setup::ResolvedAccountAliasV1,
         block::BlockHeader,
+        domain::DomainId,
+        isi::{RegisterBox, UnregisterBox},
+        nexus::DataSpaceId,
+        permission::Permission,
         privacy::{
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
             PrivacyIssuerIdV1, PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyProposedLifecycleV1,
             PrivacyProtocolLifecycleV1,
         },
+    };
+    use iroha_executor_data_model::permission::account::{
+        AccountAliasPermissionScope, CanManageAccountAlias,
     };
     use std::fs;
     const PLAN_TEMPLATE_V1: &[u8] =
@@ -2197,6 +2284,21 @@ mod tests {
         }
     }
     #[test]
+    fn nevo_golden_extends_the_current_taira_genesis_by_exactly_one_transaction() {
+        let base: JsonValue = norito::json::from_slice(CANONICAL_GENESIS_TEMPLATE_V1)
+            .expect("decode canonical Taira genesis");
+        let mut golden: JsonValue = norito::json::from_slice(GOLDEN_NEVO_UNSIGNED_V2)
+            .expect("decode source-pinned NEVO genesis");
+        golden
+            .as_object_mut()
+            .and_then(|root| root.get_mut("transactions"))
+            .and_then(JsonValue::as_array_mut)
+            .expect("NEVO genesis transactions")
+            .pop()
+            .expect("exactly one NEVO overlay transaction");
+        assert_eq!(golden, base);
+    }
+    #[test]
     fn validate_only_nevo_review_rejects_digest_unbound_identity_mutation() {
         let directory = tempfile::tempdir().expect("create NEVO validation directory");
         let unsigned_genesis_path = directory.path().join("unsigned-genesis.json");
@@ -2340,6 +2442,88 @@ mod tests {
                 "public-input digest and token-hash splices must fail native admission"
             );
         }
+    }
+    #[test]
+    fn reviewed_nevo_genesis_carries_exact_ephemeral_alias_authority() {
+        let (genesis, _) = nevo_fixture_v1();
+        let raw: RawGenesisTransaction =
+            norito::json::from_slice(&genesis).expect("decode reviewed NEVO genesis");
+        let overlay = raw.transactions().last().expect("NEVO overlay transaction");
+        let instructions = overlay.instructions();
+        assert_eq!(instructions.len(), 29);
+
+        let RegisterBox::Role(register) = instructions[8]
+            .as_any()
+            .downcast_ref::<RegisterBox>()
+            .expect("ephemeral role registration")
+        else {
+            panic!("instruction 8 must register the ephemeral alias role");
+        };
+        assert_eq!(
+            register.object().inner().id.to_string(),
+            GENESIS_ALIAS_BOOTSTRAP_ROLE_ID_V1
+        );
+        assert_eq!(
+            register.object().grant_to(),
+            &AccountAddress::parse_encoded(GENESIS_ALIAS_BOOTSTRAP_AUTHORITY_V1, None)
+                .expect("canonical genesis authority")
+                .to_account_id()
+                .expect("single-controller genesis authority")
+        );
+        let exact_alias = |literal: &str| {
+            AccountAliasPermissionScope::Alias(ResolvedAccountAliasV1::new(
+                literal.parse().expect("canonical NEVO account alias"),
+                DataSpaceId::UNIVERSAL,
+            ))
+        };
+        let expected = [
+            AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10)),
+            AccountAliasPermissionScope::Dataspace(DataSpaceId::new(8_477_022_798_449_861_195)),
+            AccountAliasPermissionScope::Domain(
+                DomainId::try_new("nevo", "dpn").expect("canonical NEVO domain"),
+            ),
+            exact_alias("admin@universal"),
+            exact_alias("inori@universal"),
+            exact_alias("source_guard@universal"),
+        ]
+        .into_iter()
+        .map(|scope| Permission::from(CanManageAccountAlias { scope }))
+        .collect::<BTreeSet<_>>();
+        assert_eq!(
+            register
+                .object()
+                .inner()
+                .permissions()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            expected
+        );
+
+        let UnregisterBox::Role(unregister) = instructions[15]
+            .as_any()
+            .downcast_ref::<UnregisterBox>()
+            .expect("ephemeral role cleanup")
+        else {
+            panic!("instruction 15 must unregister the ephemeral alias role");
+        };
+        assert_eq!(
+            unregister.object().to_string(),
+            GENESIS_ALIAS_BOOTSTRAP_ROLE_ID_V1
+        );
+        let genesis_json: JsonValue =
+            norito::json::from_slice(&genesis).expect("decode reviewed NEVO JSON");
+        assert!(
+            genesis_json
+                .get("transactions")
+                .and_then(JsonValue::as_array)
+                .and_then(|transactions| transactions.last())
+                .and_then(|transaction| transaction.get("instructions"))
+                .and_then(JsonValue::as_array)
+                .expect("reviewed overlay instructions")
+                .iter()
+                .all(JsonValue::is_object),
+            "reviewed genesis must not hide role lifecycle instructions in encoded strings"
+        );
     }
     #[test]
     fn coordinated_governance_authority_substitution_is_rejected_natively() {

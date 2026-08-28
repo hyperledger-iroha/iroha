@@ -21,6 +21,7 @@ fn vm_execution_circuit_pass() {
     let prog = assemble_zk(&code, 10);
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&prog).unwrap();
+    vm.set_zk_trace_enabled(true);
     vm.run().unwrap();
     let trace = vm.register_trace();
     let circuit = VMExecutionCircuit::new(&prog, &trace, vm.constraints());
@@ -46,6 +47,7 @@ fn vm_execution_circuit_fail() {
     let prog = assemble_zk(&code, 10);
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&prog).unwrap();
+    vm.set_zk_trace_enabled(true);
     vm.run().unwrap();
     let mut trace = vm.register_trace();
     trace[2].gpr[2] = trace[2].gpr[2].wrapping_add(1); // corrupt

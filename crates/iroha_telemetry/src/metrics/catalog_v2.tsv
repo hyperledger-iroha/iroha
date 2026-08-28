@@ -488,7 +488,7 @@ torii_attachment_reject_total	torii_attachment_reject_total	Torii attachment rej
 torii_attachment_sanitize_ms	torii_attachment_sanitize_ms	Torii attachment sanitization latency in milliseconds	registered
 torii_zk_prover_attachment_bytes	torii_zk_prover_attachment_bytes	Background prover attachment size (bytes) grouped by status and content type	registered
 torii_zk_prover_latency_ms	torii_zk_prover_latency_ms	Background prover processing latency (milliseconds) grouped by status	registered
-torii_zk_prover_gc_total	torii_zk_prover_gc_total	Background prover reports deleted by TTL	registered
+torii_zk_prover_gc_total	torii_zk_prover_gc_total	Background prover report records removed by retention GC	registered
 torii_zk_prover_inflight	torii_zk_prover_inflight	Background prover attachments currently being processed	registered
 torii_zk_prover_pending	torii_zk_prover_pending	Background prover attachments pending processing	registered
 torii_zk_ivm_prove_inflight	torii_zk_ivm_prove_inflight	Torii IVM prove helper jobs currently proving	registered

@@ -584,6 +584,70 @@ fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
     ])
     .expect("serialize dynamic counter arguments")
 }
+fn dynamic_counter_call_intent(
+    artifact: &[u8],
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    entrypoint: &str,
+    payload: &norito::json::Value,
+) -> iroha::client::ContractCallDraftIntent {
+    use iroha_data_model::transaction::executable::{ContractArgumentRecord, ContractInvocation};
+
+    let verified =
+        ivm::verify_contract_artifact(artifact).expect("verify dynamic counter artifact");
+    let schema = verified
+        .contract_interface
+        .entrypoints
+        .iter()
+        .find(|descriptor| descriptor.name == entrypoint)
+        .and_then(|descriptor| descriptor.argument_schema.as_ref())
+        .unwrap_or_else(|| panic!("missing argument schema for `{entrypoint}`"));
+    let argument_bytes = ivm::encode_argument_record_from_json(
+        schema,
+        &iroha_primitives::json::Json::from(payload.clone()),
+    )
+    .expect("encode dynamic counter argument record");
+    let arguments = ContractArgumentRecord::try_new(argument_bytes)
+        .expect("bound dynamic counter argument record");
+
+    let mut metadata = Metadata::default();
+    for (key, value) in [
+        (
+            "contract_address",
+            iroha_primitives::json::Json::new(contract_address.to_string()),
+        ),
+        (
+            "contract_code_hash",
+            iroha_primitives::json::Json::new(verified.code_hash.to_string()),
+        ),
+        (
+            "contract_alias",
+            iroha_primitives::json::Json::new(contract_alias.to_string()),
+        ),
+        (
+            "contract_entrypoint",
+            iroha_primitives::json::Json::new(entrypoint.to_owned()),
+        ),
+        (
+            "contract_payload",
+            iroha_primitives::json::Json::from(payload.clone()),
+        ),
+    ] {
+        metadata.insert(
+            Name::from_str(key).expect("static contract metadata key"),
+            value,
+        );
+    }
+    iroha::client::ContractCallDraftIntent {
+        invocation: ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: verified.code_hash,
+            entrypoint: entrypoint.to_owned(),
+            arguments: Some(arguments),
+        },
+        metadata,
+    }
+}
 async fn wait_for_approved_txs(
     client: &iroha::client::Client,
     baseline: u64,
@@ -1109,11 +1173,24 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         "deploy dynamic-access counter",
     )
     .await?;
+    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        "dynamic_access_counter",
+        None,
+        "universal",
+    )
+    .expect("dynamic counter alias");
     network.ensure_blocks(deploy_height).await?;
     let alice_submission = tokio::task::spawn_blocking({
         let client = alice_client.clone();
         let contract_address = contract_address.clone();
         let payload = dynamic_counter_args(7, 3);
+        let intent = dynamic_counter_call_intent(
+            &artifact,
+            &contract_address,
+            &contract_alias,
+            "bump_direct",
+            &payload,
+        );
         move || {
             client.post_contract_call_json(
                 &iroha_test_samples::ALICE_ID.clone(),
@@ -1123,7 +1200,10 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
                 "bump_direct",
                 Some(&payload),
                 None,
+                None,
+                None,
                 &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100_000)),
+                &intent,
             )
         }
     });
@@ -1131,6 +1211,13 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         let client = bob_client.clone();
         let contract_address = contract_address.clone();
         let payload = dynamic_counter_args(7, 5);
+        let intent = dynamic_counter_call_intent(
+            &artifact,
+            &contract_address,
+            &contract_alias,
+            "bump_via_helper",
+            &payload,
+        );
         move || {
             client.post_contract_call_json(
                 &iroha_test_samples::BOB_ID.clone(),
@@ -1140,7 +1227,10 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
                 "bump_via_helper",
                 Some(&payload),
                 None,
+                None,
+                None,
                 &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100_000)),
+                &intent,
             )
         }
     });

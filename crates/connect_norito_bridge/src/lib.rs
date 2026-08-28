@@ -66,8 +66,11 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::{
     connect as proto, connect_sdk,
     validation_fee_api::{
+        VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
+        VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1, VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
         VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
         ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
+        ValidationFeeHijiriQuoteRequestV1, ValidationFeeHijiriQuoteResponseV1,
     },
 };
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
@@ -289,6 +292,7 @@ const ERR_DETACHED_TRANSACTION_SIGNATURE: c_int = -502;
 const ERR_CANONICAL_JSON: c_int = -503;
 const ERR_VALIDATION_FEE_POLICY_PROOF: c_int = -504;
 const ERR_PARLIAMENT_TIMED_OVN: c_int = -505;
+const ERR_VALIDATION_FEE_HIJIRI_QUOTE: c_int = -506;
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 enum BridgeError {
@@ -338,6 +342,7 @@ enum BridgeError {
     CanonicalJson,
     ValidationFeePolicyProof,
     ParliamentTimedOvn,
+    ValidationFeeHijiriQuote,
 }
 impl BridgeError {
     const fn code(self) -> c_int {
@@ -392,6 +397,7 @@ impl BridgeError {
             BridgeError::CanonicalJson => ERR_CANONICAL_JSON,
             BridgeError::ValidationFeePolicyProof => ERR_VALIDATION_FEE_POLICY_PROOF,
             BridgeError::ParliamentTimedOvn => ERR_PARLIAMENT_TIMED_OVN,
+            BridgeError::ValidationFeeHijiriQuote => ERR_VALIDATION_FEE_HIJIRI_QUOTE,
         }
     }
 }
@@ -3319,6 +3325,73 @@ fn validation_fee_current_policy_proof_verify_v1(
     }
     Ok(json)
 }
+fn validation_fee_hijiri_quote_request_v1(
+    account_id_literal: &str,
+    qualifying_transfer_count: u32,
+) -> BridgeResult<Vec<u8>> {
+    if account_id_literal.is_empty()
+        || account_id_literal.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
+    {
+        return Err(BridgeError::ValidationFeeHijiriQuote);
+    }
+    let address = AccountAddress::parse_encoded(account_id_literal, None)
+        .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    let account_id = address
+        .to_account_id()
+        .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    let request = ValidationFeeHijiriQuoteRequestV1 {
+        version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+        account_id,
+        qualifying_transfer_count,
+    };
+    request
+        .validate()
+        .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    let archive = norito::to_bytes(&request).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    if archive.is_empty() || archive.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1 {
+        return Err(BridgeError::ValidationFeeHijiriQuote);
+    }
+    Ok(archive)
+}
+fn validation_fee_hijiri_quote_response_verify_v1(
+    response_archive: &[u8],
+    request_archive: &[u8],
+) -> BridgeResult<Vec<u8>> {
+    if response_archive.is_empty()
+        || response_archive.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
+        || request_archive.is_empty()
+        || request_archive.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
+    {
+        return Err(BridgeError::ValidationFeeHijiriQuote);
+    }
+    let request: ValidationFeeHijiriQuoteRequestV1 =
+        decode_from_bytes(request_archive).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    let canonical_request =
+        norito::to_bytes(&request).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    if canonical_request != request_archive {
+        return Err(BridgeError::ValidationFeeHijiriQuote);
+    }
+    request
+        .validate()
+        .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    let response: ValidationFeeHijiriQuoteResponseV1 =
+        decode_from_bytes(response_archive).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    let canonical_response =
+        norito::to_bytes(&response).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    if canonical_response != response_archive {
+        return Err(BridgeError::ValidationFeeHijiriQuote);
+    }
+    response
+        .validate_for_request(&request)
+        .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    let projection =
+        norito::json::to_vec(&response).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+    if projection.is_empty() || projection.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
+    {
+        return Err(BridgeError::ValidationFeeHijiriQuote);
+    }
+    Ok(projection)
+}
 /// Encode the exact Norito request body for one bounded current-policy proof page.
 ///
 /// The checkpoint context is validated here for API symmetry with the proof
@@ -3421,6 +3494,83 @@ pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_veri
         }
     })();
     bridge_result_to_code(result)
+}
+/// Encode one exact bounded native-Norito Hijiri validation-fee quote request.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_validation_fee_hijiri_quote_request_v1(
+    account_id_ptr: *const c_uchar,
+    account_id_len: c_ulong,
+    qualifying_transfer_count: u32,
+    out_request_ptr: *mut *mut c_uchar,
+    out_request_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_request_ptr, out_request_len);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
+        let account_id_len =
+            usize::try_from(account_id_len).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+        if account_id_ptr.is_null()
+            || account_id_len == 0
+            || account_id_len > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
+        {
+            return Err(BridgeError::ValidationFeeHijiriQuote);
+        }
+        let account_id_bytes = unsafe { slice::from_raw_parts(account_id_ptr, account_id_len) };
+        let account_id = std::str::from_utf8(account_id_bytes)
+            .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+        let request =
+            validation_fee_hijiri_quote_request_v1(account_id, qualifying_transfer_count)?;
+        unsafe { write_bytes_bridge(out_request_ptr, out_request_len, &request) }
+    }));
+    result.map_or_else(
+        |_| BridgeError::ValidationFeeHijiriQuote.code(),
+        bridge_result_to_code,
+    )
+}
+/// Validate one canonical native-Norito Hijiri quote against the exact request.
+///
+/// The returned projection is canonical typed Norito JSON and must be released
+/// with [`connect_norito_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_validation_fee_hijiri_quote_response_verify_v1(
+    response_norito_ptr: *const c_uchar,
+    response_norito_len: c_ulong,
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_projection_json_ptr: *mut *mut c_uchar,
+    out_projection_json_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_projection_json_ptr, out_projection_json_len);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        clear_bridge_output_or_null(out_projection_json_ptr, out_projection_json_len)?;
+        let response_len = usize::try_from(response_norito_len)
+            .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+        let request_len = usize::try_from(request_norito_len)
+            .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
+        if response_norito_ptr.is_null()
+            || response_len == 0
+            || response_len > VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
+            || request_norito_ptr.is_null()
+            || request_len == 0
+            || request_len > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
+        {
+            return Err(BridgeError::ValidationFeeHijiriQuote);
+        }
+        let response = unsafe { slice::from_raw_parts(response_norito_ptr, response_len) };
+        let request = unsafe { slice::from_raw_parts(request_norito_ptr, request_len) };
+        let projection = validation_fee_hijiri_quote_response_verify_v1(response, request)?;
+        unsafe {
+            write_bytes_bridge(
+                out_projection_json_ptr,
+                out_projection_json_len,
+                &projection,
+            )
+        }
+    }));
+    result.map_or_else(
+        |_| BridgeError::ValidationFeeHijiriQuote.code(),
+        bridge_result_to_code,
+    )
 }
 fn signed_transaction_bridge_debug_json(tx: &SignedTransaction) -> JsonValue {
     use iroha_data_model::prelude::TransferBox;

@@ -102,17 +102,27 @@ public sealed partial class ToriiClient
         return request;
     }
 
-    /// <summary>Fetch one state-derived Groth16 request as canonical Norito bytes.</summary>
-    public Task<byte[]> GetSccpProofRequestNoritoAsync(
+    /// <summary>Fetch one concrete BN254 or TON BLS12-381 Groth16 request as canonical Norito bytes.</summary>
+    public async Task<byte[]> GetSccpProofRequestNoritoAsync(
         string messageIdHex,
         CancellationToken cancellationToken = default)
     {
         var id = ExactSccpMessageId(messageIdHex);
-        return GetExactSccpNoritoAsync(
+        var bytes = await GetExactSccpNoritoAsync(
             $"/v1/sccp/proof-requests/{id}",
             "SCCP proof request",
-            SccpSubmitValidation.MaximumDestinationArtifactBytes,
+            SccpSubmitValidation.MaximumGroth16ArtifactBytes,
             cancellationToken);
+        try
+        {
+            return SccpSubmitValidation.CanonicalProofRequestNorito(bytes, "SCCP proof request");
+        }
+        catch (ArgumentException error)
+        {
+            throw new InvalidDataException(
+                "SCCP proof request response is not one of the two canonical concrete Norito types.",
+                error);
+        }
     }
 
     /// <summary>Fetch newest-first committed outbound SCCP messages.</summary>

@@ -6894,7 +6894,7 @@ fn persist_spool_artifacts_reject_body_tuple_mismatches() {
         "schedule PDP manifest digest mismatch",
     );
     let intent = signed_pin_intent(
-        request,
+        &request,
         manifest.storage_ticket,
         ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
         None,

@@ -78,8 +78,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             source.index('bash "${APPLE_ARTIFACT_CHECKER}" --apple-only'),
             source.index('"${SWIFT_BIN}" test'),
         )
-        blocker = "external-lock requalification"
-        self.assertIn(blocker, source)
+        self.assertNotIn("external-lock requalification", source)
         for invocation in (
             'DEVELOPER_DIR="$(xcode-select -p)"',
             "xcodebuild -version",
@@ -87,9 +86,21 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"${SWIFTC_BIN}" --version',
             '"${SWIFT_BIN}" test',
         ):
-            self.assertLess(source.index(blocker), source.index(invocation))
+            self.assertIn(invocation, source)
 
-    def test_swift_requalification_blocker_stops_direct_execution(self) -> None:
+    def test_swift_builder_binds_the_frozen_external_release_lock(self) -> None:
+        source = read("scripts/build_norito_xcframework.sh")
+        for marker in (
+            'CARGO_LOCKFILE="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-$ROOT_DIR/Cargo.lock}"',
+            '[[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]',
+            '"$CARGO_LOCKFILE" == "$ROOT_DIR/Cargo.lock"',
+            '"cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"',
+            'Privacy release builds require the distinct authenticated cd9e Cargo.lock',
+            '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
+        ):
+            self.assertIn(marker, source)
+
+    def test_swift_authenticated_external_lock_allows_execution(self) -> None:
         source = read("ci/check_privacy_swift_sdk.sh")
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()
@@ -105,13 +116,14 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             fake_python = tools / "python"
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                f'[[ "${{!#}}" == "{tracked}" ]] && echo "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" || echo "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"\n',
+                f'[[ "${{!#}}" == "{tracked}" ]] && echo "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" || echo "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"\n',
                 encoding="utf-8",
             )
             (tools / "uname").write_text("#!/usr/bin/env bash\necho Darwin\n", encoding="utf-8")
             tool_stub = (
                 '#!/usr/bin/env bash\necho "${0##*/}" >>"$PRIVACY_TEST_LOG"\n'
                 '[[ "${0##*/}" == xcode-select ]] && echo /Applications/Xcode.app/Contents/Developer\n'
+                'exit 0\n'
             )
             for name in ("xcode-select", "xcodebuild", "swiftc", "swift"):
                 (tools / name).write_text(tool_stub, encoding="utf-8")
@@ -139,17 +151,29 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             result = subprocess.run(
                 ["bash", str(gate)], env=environment, text=True, capture_output=True
             )
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("external-lock requalification", result.stderr)
-            self.assertFalse(log.exists(), "blocker allowed artifact/Xcode execution")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text(encoding="utf-8")
+            self.assertIn("xcode-select", calls)
+            self.assertIn("artifact-checker", calls)
+            self.assertIn("swiftc", calls)
+            self.assertIn("swift", calls)
 
-            marker = source.index("external-lock requalification")
-            exit_at = source.index("exit 1", marker)
-            gate.write_text(source[:exit_at] + ": # negative control" + source[exit_at + 6 :], encoding="utf-8")
+            release.write_text("wrong release\n", encoding="utf-8")
+            fake_python.write_text(
+                "#!/usr/bin/env bash\n"
+                f'[[ "${{!#}}" == "{tracked}" ]] && echo "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" || echo "'
+                + ("0" * 64)
+                + '"\n',
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o700)
+            log.unlink()
             result = subprocess.run(
                 ["bash", str(gate)], env=environment, text=True, capture_output=True
             )
-            self.assertIn("xcode-select", log.read_text(encoding="utf-8"))
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("external Cargo.lock is not the frozen release lock", result.stderr)
+            self.assertFalse(log.exists(), "invalid lock allowed artifact/Xcode execution")
 
     def test_package_manifest_requires_the_external_artifact(self) -> None:
         source = read("IrohaSwift/Package.swift")
@@ -438,7 +462,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"1.93.1-aarch64-apple-darwin"',
             "aarch64-apple-ios-sim",
             "x86_64-apple-darwin",
-            "cargo fetch --locked",
+            'RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
             "MOBILE_SDK_APPLE_ARTIFACT_DIR",
             "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1",
             "MOBILE_SDK_SWIFT_SCRATCH_DIR",

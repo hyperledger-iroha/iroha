@@ -595,7 +595,7 @@ fn remote_addr_probe_payload(
 fn install_remote_addr_probe_router(app: &mut SharedAppState) {
     let allow = vec![crate::limits::parse_cidr("127.0.0.0/8").expect("loopback cidr")];
     let router: axum::Router = axum::Router::new().route(
-        "/v1/remote-probe",
+        iroha_torii_shared::uri::HEALTH,
         axum::routing::get_service(tower::service_fn(move |req: Request<Body>| {
             let allow = allow.clone();
             async move {
@@ -660,7 +660,7 @@ fn install_api_token_probe_router(app: &mut SharedAppState, configured_tokens: &
     );
     let router = axum::Router::new()
         .route(
-            "/v1/api-token-probe",
+            iroha_torii_shared::uri::HEALTH,
             axum::routing::get(|| async { StatusCode::NO_CONTENT }),
         )
         .layer(axum::middleware::from_fn_with_state(
@@ -673,6 +673,101 @@ fn install_api_token_probe_router(app: &mut SharedAppState, configured_tokens: &
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *guard = Some(router);
 }
+#[tokio::test]
+async fn tool_dispatch_fails_fast_when_inflight_capacity_is_exhausted() {
+    let mut app = mk_app_state_for_tests();
+    let semaphore = {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(1).expect("nonzero");
+        state.mcp_tools = std::sync::Arc::new(vec![iroha_health_tool()]);
+        state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        std::sync::Arc::clone(&state.mcp_dispatch_inflight)
+    };
+    let _held = semaphore
+        .try_acquire_owned()
+        .expect("test holds the only dispatch permit");
+    let response = handle_named_tool_call(
+        Some(Value::from(1_u64)),
+        app,
+        &HeaderMap::new(),
+        "iroha.health",
+        &Map::new(),
+    )
+    .await;
+    assert_eq!(
+        response
+            .get("error")
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_i64),
+        Some(MCP_DISPATCH_CAPACITY_EXHAUSTED)
+    );
+    assert_eq!(
+        response
+            .get("error")
+            .and_then(|error| error.get("data"))
+            .and_then(|data| data.get("error_code"))
+            .and_then(Value::as_str),
+        Some("dispatch_capacity_exhausted")
+    );
+}
+#[tokio::test]
+async fn long_poll_quota_preserves_capacity_for_bounded_tools() {
+    assert_eq!(long_poll_dispatch_capacity(32), 8);
+    assert_eq!(long_poll_dispatch_capacity(1), 0);
+    let mut app = mk_app_state_for_tests();
+    let long_poll = {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(2).expect("nonzero");
+        state.mcp.profile = ToriiMcpProfile::Writer;
+        state.mcp_tools = std::sync::Arc::new(vec![
+            iroha_health_tool(),
+            iroha_transactions_wait_tool(),
+            iroha_transactions_submit_and_wait_tool(),
+            iroha_contracts_call_and_wait_tool(),
+        ]);
+        state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+        state.mcp_long_poll_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        std::sync::Arc::clone(&state.mcp_long_poll_inflight)
+    };
+    let _held = long_poll
+        .try_acquire_owned()
+        .expect("test holds the only long-poll permit");
+    for (id, name) in [
+        (1_u64, "iroha.transactions.wait"),
+        (2, "iroha.transactions.submit_and_wait"),
+        (3, "iroha.contracts.call_and_wait"),
+    ] {
+        let wait_response = handle_named_tool_call(
+            Some(Value::from(id)),
+            std::sync::Arc::clone(&app),
+            &HeaderMap::new(),
+            name,
+            &Map::new(),
+        )
+        .await;
+        assert_eq!(
+            wait_response
+                .get("error")
+                .and_then(|error| error.get("data"))
+                .and_then(|data| data.get("error_code"))
+                .and_then(Value::as_str),
+            Some("long_poll_capacity_exhausted"),
+            "long-poll tool {name} escaped its reserved quota"
+        );
+    }
+    let health_response = handle_named_tool_call(
+        Some(Value::from(4_u64)),
+        app,
+        &HeaderMap::new(),
+        "iroha.health",
+        &Map::new(),
+    )
+    .await;
+    assert!(
+        health_response.get("result").is_some(),
+        "bounded health tool remains dispatchable: {health_response:?}"
+    );
+}
 #[test]
 fn capabilities_payload_includes_toolset_version() {
     let tool = sample_tool("iroha.health", Method::GET, ToolEffect::Read);
@@ -680,7 +775,9 @@ fn capabilities_payload_includes_toolset_version() {
     let payload = capabilities_payload(&refs);
     let toolset_version = payload
         .get("capabilities")
-        .and_then(|caps| caps.get("tools"))
+        .and_then(|caps| caps.get("experimental"))
+        .and_then(|experimental| experimental.get("iroha"))
+        .and_then(|iroha| iroha.get("tools"))
         .and_then(|tools| tools.get("toolsetVersion"))
         .and_then(Value::as_str)
         .expect("toolsetVersion");
@@ -690,7 +787,37 @@ fn capabilities_payload_includes_toolset_version() {
     );
 }
 #[test]
-fn sanitize_tool_input_schema_flattens_top_level_combinators() {
+fn origin_and_protocol_headers_reject_ambiguous_values() {
+    let allowed = [HeaderValue::from_static("https://trusted.example")];
+    let mut headers = HeaderMap::new();
+    assert!(origin_is_allowed(&headers, &allowed));
+    headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("https://trusted.example"),
+    );
+    assert!(origin_is_allowed(&headers, &allowed));
+    headers.append(
+        header::ORIGIN,
+        HeaderValue::from_static("https://trusted.example"),
+    );
+    assert!(!origin_is_allowed(&headers, &allowed));
+
+    let mut headers = HeaderMap::new();
+    assert!(protocol_version_is_supported(&headers, true));
+    assert!(!protocol_version_is_supported(&headers, false));
+    headers.insert(
+        HEADER_MCP_PROTOCOL_VERSION,
+        HeaderValue::from_static(MCP_PROTOCOL_VERSION),
+    );
+    assert!(protocol_version_is_supported(&headers, false));
+    headers.append(
+        HEADER_MCP_PROTOCOL_VERSION,
+        HeaderValue::from_static(MCP_PROTOCOL_VERSION),
+    );
+    assert!(!protocol_version_is_supported(&headers, false));
+}
+#[test]
+fn sanitize_tool_input_schema_preserves_top_level_combinators() {
     let schema = norito::json!({
         "type": "object",
         "additionalProperties": false,
@@ -724,17 +851,17 @@ fn sanitize_tool_input_schema_flattens_top_level_combinators() {
         sanitized_obj.get("type").and_then(Value::as_str),
         Some("object")
     );
-    assert!(!sanitized_obj.contains_key("anyOf"));
-    assert!(!sanitized_obj.contains_key("oneOf"));
-    assert!(!sanitized_obj.contains_key("allOf"));
-    assert!(!sanitized_obj.contains_key("enum"));
-    assert!(!sanitized_obj.contains_key("not"));
+    assert_eq!(
+        sanitized_obj
+            .get("anyOf")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(2)
+    );
     let properties = sanitized_obj
         .get("properties")
         .and_then(Value::as_object)
         .expect("properties object");
-    assert!(properties.contains_key("alpha"));
-    assert!(properties.contains_key("beta"));
     assert!(properties.contains_key("path"));
     let path_schema = properties
         .get("path")
@@ -746,6 +873,252 @@ fn sanitize_tool_input_schema_flattens_top_level_combinators() {
             .and_then(Value::as_bool),
         Some(false)
     );
+}
+#[test]
+fn tool_argument_schema_validation_enforces_security_relevant_keywords() {
+    let mut tool = sample_tool("iroha.schema-test", Method::POST, ToolEffect::Write);
+    tool.input_schema = norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "count"],
+        "properties": {
+            "label": { "type": "string", "pattern": "^[a-z]+$", "minLength": 2 },
+            "count": { "type": "integer", "minimum": 1, "maximum": 3 },
+            "alpha": { "type": "string" },
+            "beta": { "type": "string" }
+        },
+        "oneOf": [
+            { "required": ["alpha"] },
+            { "required": ["beta"] }
+        ]
+    });
+    let valid = norito::json!({ "label": "ok", "count": 2, "alpha": "yes" });
+    assert!(validate_tool_arguments(&tool, valid.as_object().expect("object")).is_ok());
+    for invalid in [
+        norito::json!({ "label": "UP", "count": 2, "alpha": "yes" }),
+        norito::json!({ "label": "ok", "count": 4, "alpha": "yes" }),
+        norito::json!({ "label": "ok", "count": 2, "alpha": "yes", "beta": "yes" }),
+        norito::json!({ "label": "ok", "count": 2, "alpha": "yes", "hidden": true }),
+    ] {
+        assert!(
+            validate_tool_arguments(&tool, invalid.as_object().expect("object")).is_err(),
+            "invalid arguments passed: {invalid:?}"
+        );
+    }
+}
+#[test]
+fn conditional_schema_validation_selects_nested_or_flat_branch() {
+    let mut tool = sample_tool("iroha.schema-test", Method::POST, ToolEffect::Write);
+    tool.input_schema = norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["headers"],
+        "properties": {
+            "body": {
+                "type": "object",
+                "properties": { "value": { "type": "string" } }
+            },
+            "value": { "type": "string" },
+            "headers": {
+                "type": "object",
+                "additionalProperties": false
+            }
+        },
+        "if": { "required": ["body"] },
+        "then": {
+            "properties": {
+                "body": { "required": ["value"] }
+            }
+        },
+        "else": { "required": ["value"] }
+    });
+    for valid in [
+        norito::json!({ "body": { "value": "nested" }, "headers": {} }),
+        norito::json!({ "value": "flat", "headers": {} }),
+    ] {
+        validate_tool_arguments(&tool, valid.as_object().expect("object"))
+            .unwrap_or_else(|error| panic!("valid conditional branch failed: {error}"));
+    }
+    for invalid in [
+        norito::json!({ "body": {}, "headers": {} }),
+        norito::json!({ "headers": {} }),
+    ] {
+        assert!(
+            validate_tool_arguments(&tool, invalid.as_object().expect("object")).is_err(),
+            "invalid conditional branch passed: {invalid:?}"
+        );
+    }
+}
+#[test]
+fn nonzero_hex_pattern_is_enforced_without_regex_lookaround() {
+    let mut tool = sample_tool("iroha.schema-test", Method::POST, ToolEffect::Write);
+    tool.input_schema = norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["signature"],
+        "properties": {
+            "signature": { "type": "string", "pattern": NONZERO_UPPER_HEX_PATTERN }
+        }
+    });
+    for invalid in ["0000", "0A0", "0a0b", "GG"] {
+        let arguments = norito::json!({ "signature": invalid });
+        assert!(
+            validate_tool_arguments(&tool, arguments.as_object().expect("object")).is_err(),
+            "invalid signature passed: {invalid}"
+        );
+    }
+    let valid = norito::json!({ "signature": "000A" });
+    assert!(validate_tool_arguments(&tool, valid.as_object().expect("object")).is_ok());
+}
+#[test]
+fn unsupported_schema_pattern_fails_registry_validation() {
+    let mut tool = sample_tool("iroha.schema-test", Method::POST, ToolEffect::Write);
+    tool.input_schema = norito::json!({
+        "type": "object",
+        "properties": {
+            "value": { "type": "string", "pattern": "(?=unsupported)" }
+        }
+    });
+    assert!(
+        validate_tool_registry(&[tool], &[])
+            .expect_err("unsupported schema regex must fail closed")
+            .contains("unsupported regex")
+    );
+}
+#[test]
+fn unresolved_input_schema_ref_fails_registry_validation() {
+    let mut tool = sample_tool("iroha.schema-test", Method::POST, ToolEffect::Write);
+    tool.input_schema = norito::json!({
+        "type": "object",
+        "properties": {
+            "body": { "$ref": "#/components/schemas/Missing" }
+        }
+    });
+    let error = validate_tool_registry(&[tool], &[])
+        .expect_err("an advertised schema must not retain OpenAPI references");
+    assert!(error.contains("unresolved OpenAPI reference"));
+}
+#[test]
+fn patterned_array_validation_compiles_each_schema_regex_once() {
+    let pattern = "^mcp-regex-cache-regression-[a-z]+$";
+    ADVERTISED_REGEX_CACHE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(pattern);
+    ADVERTISED_REGEX_COMPILE_COUNTS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(pattern);
+    let schema = norito::json!({
+        "type": "array",
+        "items": { "type": "string", "pattern": pattern }
+    });
+    let values = Value::Array(
+        (0..2_048)
+            .map(|_| Value::String("mcp-regex-cache-regression-safe".to_owned()))
+            .collect(),
+    );
+    validate_json_schema_value(&schema, &values, "arguments.namespaces")
+        .expect("homogeneous patterned array validates");
+    assert_eq!(
+        ADVERTISED_REGEX_COMPILE_COUNTS
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(pattern),
+        Some(&1),
+        "one schema pattern must be compiled once regardless of item count"
+    );
+}
+#[test]
+fn generic_request_body_rejects_dual_representations() {
+    let arguments = norito::json!({
+        "body": { "reviewed": true },
+        "body_base64": "ZXhlY3V0ZWQ="
+    });
+    let error = build_request_body(arguments.as_object().expect("object"))
+        .expect_err("dual body representations must not pick a hidden winner");
+    assert!(error.contains("mutually exclusive"));
+}
+#[test]
+fn initialize_requires_the_standard_client_shape() {
+    let valid = norito::json!({
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": { "name": "test-client", "version": "1" }
+    });
+    assert!(validate_initialize_params(valid.as_object().expect("object")).is_ok());
+    for invalid in [
+        norito::json!({}),
+        norito::json!({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": [],
+            "clientInfo": { "name": "test-client", "version": "1" }
+        }),
+        norito::json!({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": { "name": "", "version": "1" }
+        }),
+    ] {
+        assert!(validate_initialize_params(invalid.as_object().expect("object")).is_err());
+    }
+}
+#[test]
+fn jsonrpc_response_recognizes_success_and_error_envelopes() {
+    for valid in [
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1.5,
+            "result": null
+        }),
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": "sampling-request",
+            "error": {
+                "code": (-32603),
+                "message": "sampling failed"
+            }
+        }),
+    ] {
+        assert!(is_jsonrpc_response(&valid), "valid response: {valid:?}");
+    }
+    for invalid in [
+        norito::json!({ "jsonrpc": "2.0", "id": null, "result": {} }),
+        norito::json!({ "jsonrpc": "2.0", "id": true, "result": {} }),
+        norito::json!({ "jsonrpc": "2.0", "result": {} }),
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {},
+            "error": { "code": (-32603), "message": "failed" }
+        }),
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": (-32603) }
+        }),
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": 1.5, "message": "fractional error code" }
+        }),
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": "-32603", "message": "string error code" }
+        }),
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "ping",
+            "result": {}
+        }),
+    ] {
+        assert!(
+            !is_jsonrpc_response(&invalid),
+            "invalid response: {invalid:?}"
+        );
+    }
 }
 #[test]
 fn sanitize_tool_input_schema_keeps_only_raw_body_open() {
@@ -866,6 +1239,53 @@ fn sanitize_tool_input_schema_preserves_closed_typed_bodies() {
         headers.get("additionalProperties").and_then(Value::as_bool),
         Some(false)
     );
+}
+#[test]
+fn whole_catalog_publishes_self_contained_input_schemas() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
+    assert!(!tools.is_empty(), "the MCP catalog must not be empty");
+    for tool in tools {
+        let descriptor = tool.descriptor();
+        let input_schema = descriptor
+            .get("inputSchema")
+            .expect("tool descriptor inputSchema");
+        reject_unresolved_schema_refs(
+            input_schema,
+            &format!("tool `{}` advertised inputSchema", tool.name),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+#[test]
+fn raw_body_tool_accepts_advertised_flat_shortcuts() {
+    let tool = simple_manual_raw_body_post_tool(
+        "iroha.test.raw",
+        "test raw body",
+        "/v1/test/raw",
+        "test payload",
+    );
+    let advertised = sanitize_tool_input_schema(&tool.input_schema);
+    assert_eq!(
+        advertised
+            .get("additionalProperties")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert!(advertised.get(MCP_FLAT_BODY_SCHEMA_EXTENSION).is_none());
+    let arguments = norito::json!({
+        "manifest": { "payload_hash": "ABC" },
+        "chunk": [1, 2, 3]
+    });
+    let arguments = arguments.as_object().expect("object");
+    validate_tool_arguments(&tool, arguments).expect("flat fields match advertised schema");
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])
+        .expect("flat fields build a request body");
+    let encoded = encode_mcp_json_body(&body, "test flat body").expect("encode flat body");
+    let decoded: Value = json::from_slice(&encoded).expect("decode flat body");
+    assert_eq!(decoded, Value::Object(arguments.clone()));
 }
 #[test]
 fn descriptor_publishes_canonical_connect_sid_schema() {
@@ -1000,24 +1420,20 @@ fn openapi_tool_effects_drive_policy() {
     assert!(!is_tool_allowed_by_policy(&read_only_cfg, protected_update));
 }
 #[test]
-fn get_tools_follow_exact_catalog_operator_effects() {
+fn get_tools_follow_exact_catalog_operator_authorization() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
     for tool in tools.iter().filter(|tool| tool.method == Method::GET) {
-        let expected = if catalog_descriptor_for_method_path(
+        let catalog_requires_operator = catalog_descriptor_for_method_path(
             CATALOG_PROJECTION_GROUPS,
             &tool.method,
             tool.path_template.as_str(),
         )
-        .is_some_and(|route| route.surface() == ApiSurface::Operator)
-        {
-            ToolEffect::Operator
-        } else {
-            ToolEffect::Read
-        };
-        assert_eq!(tool.effect, expected, "{}", tool.name);
+        .is_some_and(catalog_route_requires_operator);
+        let expected = catalog_requires_operator || tool.effect == ToolEffect::Operator;
+        assert_eq!(tool_requires_operator(tool), expected, "{}", tool.name);
     }
     for route in CATALOG_PROJECTION_GROUPS
         .iter()
@@ -1026,14 +1442,14 @@ fn get_tools_follow_exact_catalog_operator_effects() {
         })
         .into_iter()
         .filter(|route| {
-            route.method() == CatalogHttpMethod::Get && route.surface() == ApiSurface::Operator
+            route.method() == CatalogHttpMethod::Get && catalog_route_requires_operator(route)
         })
     {
         assert!(
             tools.iter().any(|tool| {
                 tool.method == Method::GET
                     && tool.path_template == route.path()
-                    && tool.effect == ToolEffect::Operator
+                    && tool_requires_operator(tool)
             }),
             "compiled operator GET is missing an operator-only MCP tool: {}",
             route.path()
@@ -1052,11 +1468,10 @@ fn telemetry_operator_get_tools_are_operator_only_when_feature_enabled() {
     let mut tools = vec![iroha_sumeragi_pacemaker_tool()];
     retain_catalog_mcp_tools(&mut tools, TELEMETRY_GROUPS);
     assert_eq!(tools.len(), 1, "telemetry feature keeps the exact route");
-    apply_catalog_operator_effects_to_manual_tools(&mut tools, TELEMETRY_GROUPS);
     apply_catalog_auth_schemas_to_tools(&mut tools, TELEMETRY_GROUPS);
     validate_tool_registry(&tools, TELEMETRY_GROUPS).expect("valid operator registry");
     for tool in &tools {
-        assert_eq!(tool.effect, ToolEffect::Operator, "{}", tool.name);
+        assert!(tool_requires_operator(tool), "{}", tool.name);
         let mut restricted = cfg.clone();
         restricted.profile = ToriiMcpProfile::ReadOnly;
         assert!(
@@ -1086,7 +1501,39 @@ fn mcp_policy_keeps_operator_tools_operator_only() {
     cfg.profile = ToriiMcpProfile::Writer;
     assert!(!is_tool_allowed_by_policy(&cfg, &protected_update));
     cfg.profile = ToriiMcpProfile::Operator;
+    assert!(!is_tool_allowed_by_policy(&cfg, &protected_update));
+    cfg.expose_operator_routes = true;
     assert!(is_tool_allowed_by_policy(&cfg, &protected_update));
+}
+#[test]
+fn signer_backed_prepare_tools_are_mutating_or_absent() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
+    let effect = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .map(|tool| tool.effect)
+            .unwrap_or_else(|| panic!("missing tool {name}"))
+    };
+    assert_eq!(effect("iroha.accounts.onboard.prepare"), ToolEffect::Write);
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.name != "iroha.accounts.faucet.prepare")
+    );
+
+    cfg.profile = ToriiMcpProfile::ReadOnly;
+    cfg.expose_operator_routes = false;
+    let restricted = build_tool_specs(&cfg);
+    assert!(
+        restricted
+            .iter()
+            .all(|tool| !is_tool_allowed_by_policy(&cfg, tool)
+                || !matches!(tool.name.as_str(), "iroha.accounts.onboard.prepare"))
+    );
 }
 #[test]
 fn operator_sumeragi_snapshot_tools_are_absent_from_mcp() {
@@ -1256,6 +1703,67 @@ fn apply_body_projection_keeps_requested_fields() {
     assert!(body.contains_key("id"));
     assert!(body.contains_key("name"));
     assert!(!body.contains_key("extra"));
+}
+#[test]
+fn generated_projection_schema_bounds_selector_work() {
+    let schema = build_input_schema(&norito::json!({}), "/v1/test", &[], None);
+    let project_schema = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("project"))
+        .expect("generated project schema");
+    assert_eq!(
+        project_schema.get("maxItems").and_then(Value::as_u64),
+        Some(MAX_MCP_PROJECTION_KEYS as u64)
+    );
+    assert_eq!(
+        project_schema.get("uniqueItems").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        project_schema
+            .get("items")
+            .and_then(|items| items.get("maxLength"))
+            .and_then(Value::as_u64),
+        Some(MAX_MCP_PROJECTION_KEY_CHARS as u64)
+    );
+
+    let mut tool = sample_tool("iroha.projection-test", Method::GET, ToolEffect::Read);
+    tool.input_schema = schema;
+    let validate_projection = |projection| {
+        let mut arguments = Map::new();
+        arguments.insert("project".to_owned(), projection);
+        validate_tool_arguments(&tool, &arguments)
+    };
+    assert!(validate_projection(norito::json!(["id", "name"])).is_ok());
+    assert!(validate_projection(norito::json!(["id", "id"])).is_err());
+    let too_many = Value::Array(
+        (0..=MAX_MCP_PROJECTION_KEYS)
+            .map(|index| Value::String(format!("field_{index}")))
+            .collect(),
+    );
+    assert!(validate_projection(too_many).is_err());
+    let too_long = Value::Array(vec![Value::String(
+        "x".repeat(MAX_MCP_PROJECTION_KEY_CHARS + 1),
+    )]);
+    assert!(validate_projection(too_long).is_err());
+}
+#[test]
+fn projection_keys_are_normalized_once_into_an_ordered_set() {
+    let projection = norito::json!([" name ", "id", "name", "", 7]);
+    let keys = parse_projection_keys(&projection).expect("projection array");
+    assert_eq!(keys, BTreeSet::from(["id".to_owned(), "name".to_owned()]));
+
+    let mut body = norito::json!([
+        { "id": 1, "name": "alice", "extra": true },
+        { "id": 2, "name": "bob", "extra": false }
+    ]);
+    project_value_keys(&mut body, &keys);
+    let rows = body.as_array().expect("projected rows");
+    assert!(rows.iter().all(|row| {
+        row.as_object()
+            .is_some_and(|row| row.len() == 2 && row.contains_key("id") && row.contains_key("name"))
+    }));
 }
 #[test]
 fn mcp_result_keeps_adversarial_route_content_in_structured_data() {
@@ -1864,6 +2372,8 @@ async fn tools_list_list_changed_tracks_toolset_version() {
     assert_eq!(
         same_response
             .get("result")
+            .and_then(|value| value.get("_meta"))
+            .and_then(|value| value.get("iroha"))
             .and_then(|value| value.get("listChanged"))
             .and_then(Value::as_bool),
         Some(false)
@@ -1874,9 +2384,28 @@ async fn tools_list_list_changed_tracks_toolset_version() {
     assert_eq!(
         different_response
             .get("result")
+            .and_then(|value| value.get("_meta"))
+            .and_then(|value| value.get("iroha"))
             .and_then(|value| value.get("listChanged"))
             .and_then(Value::as_bool),
         Some(true)
+    );
+    assert!(
+        same_response
+            .get("result")
+            .is_some_and(|result| result.get("nextCursor").is_none()),
+        "the terminal page must omit the optional nextCursor"
+    );
+
+    let invalid = norito::json!({ "cursor": "not-a-cursor" });
+    let invalid_response = handle_tools_list(None, &app, invalid.as_object().expect("map"));
+    assert_eq!(
+        invalid_response
+            .get("error")
+            .and_then(|error| error.get("data"))
+            .and_then(|data| data.get("error_code"))
+            .and_then(Value::as_str),
+        Some("invalid_cursor")
     );
 }
 #[test]
@@ -1951,10 +2480,7 @@ fn catalog_projection_decision_is_fail_closed_and_feature_aware() {
         Some(true)
     );
     assert!(tool_requires_catalog_mcp_projection("torii.generated"));
-    assert!(tool_requires_catalog_mcp_projection("iroha.time.now"));
-    assert!(tool_requires_catalog_mcp_projection(
-        "iroha.ledger.state_proof"
-    ));
+    assert!(!tool_requires_catalog_mcp_projection("iroha.health"));
     assert!(!tool_requires_catalog_mcp_projection("iroha.accounts.get"));
     let mut tools = vec![
         sample_tool_at(
@@ -2485,6 +3011,17 @@ fn tool_registry_validation_rejects_duplicates_aliases_and_implicit_routes() {
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::MCP),
+        RouteDescriptor::new(
+            "test.handshake",
+            CatalogHttpMethod::Post,
+            "/v1/tests/handshake",
+            ApiSurface::Public,
+            Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::Public,
+        )
+        .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+        .with_projections(RouteProjections::MCP),
     ];
     const GROUPS: &[CatalogProjectionGroup] = &[CatalogProjectionGroup {
         routes: ROUTES,
@@ -2546,15 +3083,41 @@ fn tool_registry_validation_rejects_duplicates_aliases_and_implicit_routes() {
             .contains("outside the explicit")
     );
     for name in ["torii.post_v1_tests_operator", "iroha.tests.operator"] {
-        let misclassified_operator =
+        let mut operator_route_with_write_effect =
             sample_tool_at(name, Method::POST, "/v1/tests/operator", ToolEffect::Write);
+        operator_route_with_write_effect.input_schema = norito::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        });
+        let mut tools = vec![operator_route_with_write_effect];
+        apply_catalog_auth_schemas_to_tools(&mut tools, GROUPS);
+        let operator_route_with_write_effect = tools.pop().expect("operator tool");
         assert!(
-            validate_tool_registry(&[misclassified_operator], GROUPS)
-                .expect_err("operator routes must not inherit writer visibility")
-                .contains("must have operator effect"),
-            "operator-effect guard must apply to {name}"
+            validate_tool_registry(&[operator_route_with_write_effect.clone()], GROUPS).is_ok(),
+            "a route's operator admission must not overwrite its semantic effect: {name}"
+        );
+        assert!(
+            catalog_descriptor_for_method_path(
+                GROUPS,
+                &operator_route_with_write_effect.method,
+                operator_route_with_write_effect.path_template.as_str(),
+            )
+            .is_some_and(catalog_route_requires_operator),
+            "catalog admission must still keep the route out of writer visibility: {name}"
         );
     }
+    let unreviewed_handshake = sample_tool_at(
+        "iroha.tests.handshake",
+        Method::POST,
+        "/v1/tests/handshake",
+        ToolEffect::Write,
+    );
+    assert!(
+        validate_tool_registry(&[unreviewed_handshake], GROUPS)
+            .expect_err("protocol handshakes need an exact audited wrapper")
+            .contains("lacks an exact audited MCP wrapper")
+    );
 }
 #[test]
 fn tool_registry_honors_universal_offline_mcp_projection() {

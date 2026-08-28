@@ -286,7 +286,7 @@ use urlencoding::decode;
 const HEADER_SORA_REQ_BLINDED_CID: &str = "sora-req-blinded-cid";
 const HEADER_SORA_REQ_SALT_EPOCH: &str = "sora-req-salt-epoch";
 const HEADER_SORA_REQ_NONCE: &str = "sora-req-nonce";
-const HEADER_SORA_CONTENT_CID: &str = "sora-content-cid";
+pub(crate) const HEADER_SORA_CONTENT_CID: &str = "sora-content-cid";
 const BLINDED_PATH_PLACEHOLDER: &str = "~blinded";
 const HEADER_DAG_SCOPE: &str = "dag-scope";
 const HEADER_SORA_CHUNKER: &str = "x-sorafs-chunker";
@@ -25029,6 +25029,96 @@ fn attach_cid_gateway_headers(response: &mut Response, stored: &StoredManifest) 
         HeaderValue::from_static("public, max-age=31536000, immutable"),
     );
 }
+
+fn authoritative_inrou_public_discovery_etag(document_bytes: &[u8]) -> Option<HeaderValue> {
+    HeaderValue::from_str(&format!("\"{}\"", Hash::new(document_bytes))).ok()
+}
+
+async fn authoritative_inrou_public_discovery_response(
+    state: &SharedAppState,
+    content_cid: &str,
+) -> Option<Response> {
+    let core_state = Arc::clone(&state.state);
+    let content_cid = content_cid.to_owned();
+    let worker_content_cid = content_cid.clone();
+    let document_bytes = match sorafs_heavy_blocking_task(
+        state,
+        "authoritative Inrou public discovery read",
+        move || {
+            let state_view = core_state.view();
+            crate::soracloud::authoritative_public_discovery_document_for_content_cid(
+                state_view.world(),
+                &worker_content_cid,
+            )
+            .map_err(IntoResponse::into_response)
+        },
+    )
+    .await
+    {
+        Ok(Some(document_bytes)) => document_bytes,
+        Ok(None) => return None,
+        Err(response) => return Some(response),
+    };
+    let document_length = document_bytes.len();
+    let Some(document_etag) = authoritative_inrou_public_discovery_etag(&document_bytes) else {
+        return Some(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "authoritative Inrou public discovery hash is not a valid strong ETag",
+        ));
+    };
+    let mut response = Response::new(Body::from(document_bytes));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&document_length.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    response.headers_mut().insert(ETAG, document_etag);
+    response.headers_mut().insert(
+        HeaderName::from_static(HEADER_SORA_CONTENT_CID),
+        HeaderValue::from_str(content_cid.as_str())
+            .unwrap_or_else(|_| HeaderValue::from_static("invalid")),
+    );
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    Some(response)
+}
+async fn authoritative_inrou_public_discovery_cid_host_response(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    raw_path: &str,
+) -> Option<Response> {
+    if raw_path != crate::soracloud::PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT {
+        return None;
+    }
+    let host = match normalized_site_request_host(headers) {
+        Ok(host) => host,
+        Err(response) => return Some(response),
+    };
+    let content_cid = match extract_cid_from_untrusted_host(
+        &host,
+        &state.sorafs_gateway_config.untrusted_hosting,
+    ) {
+        Ok(Some(content_cid)) => content_cid,
+        Ok(None) => return None,
+        Err(response) => return Some(response),
+    };
+    match authoritative_inrou_public_discovery_response(state, &content_cid).await {
+        Some(response) => Some(response),
+        None if state.sorafs_node.is_enabled() => None,
+        None => Some(storage_disabled_response()),
+    }
+}
 fn should_use_spa_fallback_enabled(raw_path: &str, enabled: bool) -> bool {
     if !enabled {
         return false;
@@ -25457,6 +25547,11 @@ pub(crate) async fn handle_get_sorafs_site_path(
     headers: HeaderMap,
     Path(raw_path): Path<String>,
 ) -> Response {
+    if let Some(response) =
+        authoritative_inrou_public_discovery_cid_host_response(&state, &headers, &raw_path).await
+    {
+        return response;
+    }
     let resolved = match resolve_site_host(&state, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
@@ -25537,6 +25632,14 @@ pub(crate) async fn handle_get_sorafs_cid_path(
 ) -> Response {
     if decode_canonical_content_cid(&cid).is_none() {
         return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
+    }
+    if raw_path == crate::soracloud::PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT {
+        if let Some(response) = authoritative_inrou_public_discovery_response(&state, &cid).await {
+            return response;
+        }
+        if !state.sorafs_node.is_enabled() {
+            return storage_disabled_response();
+        }
     }
     if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
         return response;
@@ -39662,6 +39765,186 @@ mod advert_tests {
     #[tokio::test]
     async fn authoritative_root_ignores_public_services_without_static_site_binding_config() {
         assert_authoritative_site_binding(AuthoritativeSiteBindingCase::UnboundService).await;
+    }
+
+    #[test]
+    fn authoritative_inrou_public_discovery_etag_is_strong_and_document_hash_bound() {
+        let document_bytes = br#"{"schema_version":1,"service_name":"taira_inrou_canary"}"#;
+        let expected = format!("\"{}\"", Hash::new(document_bytes));
+        let etag = authoritative_inrou_public_discovery_etag(document_bytes)
+            .expect("canonical Iroha hash is a valid strong ETag");
+
+        assert_eq!(etag.to_str().expect("ETag is ASCII"), expected);
+        assert_ne!(
+            authoritative_inrou_public_discovery_etag(
+                br#"{"schema_version":1,"service_name":"substituted"}"#
+            ),
+            Some(etag),
+            "different canonical document bytes must produce a different ETag"
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_enabled_public_discovery_routes_fail_closed_on_invalid_authoritative_registry()
+    {
+        const PUBLIC_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
+
+        let mut world = World::new();
+        let bundle = fixture_public_service_bundle("2026.08.0", "taira.sora.org");
+        let service_name = bundle.service.service_name.clone();
+        let substituted_registry = norito::json!({
+            "schema_version": 1,
+        });
+        let service_configs = BTreeMap::from([(
+            PUBLIC_DISCOVERY_CONFIG_NAME.to_owned(),
+            SoraServiceConfigEntryV1 {
+                schema_version: SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+                config_name: PUBLIC_DISCOVERY_CONFIG_NAME.to_owned(),
+                value_hash: Hash::new(b"substituted public discovery registry"),
+                value_json: Json::from(substituted_registry),
+                last_update_sequence: 1,
+            },
+        )]);
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name.clone(),
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name,
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 1,
+                    secret_generation: 0,
+                    service_configs,
+                    service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
+                },
+            );
+        let app = mk_app_state_for_tests_with_world(world);
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _storage_dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let state = Arc::new(inner);
+        assert!(state.sorafs_node.is_enabled());
+
+        let content_cid =
+            encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid([0xA8; 32]));
+        let path_response = api_test_route!(get_cid_path;
+            State(Arc::clone(&state));
+            HeaderMap::new();
+            format!("/sorafs/cid/{content_cid}/index.json")
+                .parse::<Uri>()
+                .expect("public discovery path URI");
+            Path((content_cid.clone(), "index.json".to_owned()))
+        );
+        let path_error =
+            api_test_response_json_with_status(path_response, StatusCode::INTERNAL_SERVER_ERROR)
+                .await;
+        assert_json_fields!(path_error; json_str ["code"] => Some("internal"));
+        assert!(
+            path_error
+                .json_str(&["message"])
+                .is_some_and(|message| message.contains("hash does not bind its JSON value"))
+        );
+
+        let mut cid_host_headers = HeaderMap::new();
+        cid_host_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&format!("{content_cid}.sorafs.taira.sora.org"))
+                .expect("public discovery CID host"),
+        );
+        let cid_host_response = api_test_route!(get_site_path;
+            State(state);
+            cid_host_headers;
+            Path("index.json".to_owned())
+        );
+        let cid_host_error = api_test_response_json_with_status(
+            cid_host_response,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
+        .await;
+        assert_json_fields!(cid_host_error; json_str ["code"] => Some("internal"));
+        assert!(
+            cid_host_error
+                .json_str(&["message"])
+                .is_some_and(|message| message.contains("hash does not bind its JSON value"))
+        );
+    }
+    #[tokio::test]
+    async fn storage_enabled_unbound_index_json_uses_generic_sorafs() {
+        let (node, _storage_dir) = sorafs_node_with_temp_storage();
+        let document_bytes = br#"{"generic":true}"#;
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.json".to_owned()],
+                data: document_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("generic JSON artifact plan");
+        let manifest = manifest_for_plan(0xA9, &payload, &plan);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        let mut reader = payload.as_slice();
+        node.ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest generic JSON artifact");
+
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let state = Arc::new(inner);
+
+        let path_response = api_test_route!(get_cid_path;
+            State(Arc::clone(&state));
+            HeaderMap::new();
+            format!("/sorafs/cid/{content_cid}/index.json")
+                .parse::<Uri>()
+                .expect("generic CID path URI");
+            Path((content_cid.clone(), "index.json".to_owned()))
+        );
+        assert_eq!(path_response.status(), StatusCode::OK);
+        assert_eq!(
+            api_test_response_body(path_response).await,
+            &document_bytes[..]
+        );
+
+        let mut cid_host_headers = HeaderMap::new();
+        cid_host_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&format!("{content_cid}.sorafs.taira.sora.org"))
+                .expect("generic CID host"),
+        );
+        let cid_host_response = api_test_route!(get_site_path;
+            State(state);
+            cid_host_headers;
+            Path("index.json".to_owned())
+        );
+        assert_eq!(cid_host_response.status(), StatusCode::OK);
+        assert_eq!(
+            api_test_response_body(cid_host_response).await,
+            &document_bytes[..]
+        );
     }
     #[tokio::test]
     async fn cid_host_serves_manifest_and_spa_fallback() {

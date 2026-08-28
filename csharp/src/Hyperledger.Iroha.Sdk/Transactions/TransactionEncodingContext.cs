@@ -97,8 +97,10 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeJson(JsonNode? value)
     {
-        return EncodeString(WriteJsonNode(value));
+        return EncodeString(CanonicalJson(value));
     }
+
+    internal static string CanonicalJson(JsonNode? value) => WriteJsonNode(value);
 
     public byte[] EncodeUInt32(uint value)
     {

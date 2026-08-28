@@ -7,6 +7,8 @@ import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.Signer
+import org.hyperledger.iroha.sdk.crypto.SignatureAdmission
+import org.hyperledger.iroha.sdk.crypto.SigningException
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -61,6 +63,41 @@ class TransactionBuilderTest {
         assertEquals(payload, decoded)
     }
 
+    @Test
+    fun `public builder rejects malformed fixed-shape signer output`() {
+        val codec = NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val builder = TransactionBuilder(codec)
+        val payload = payload(metadata = emptyMap())
+        val invalidMlDsaSignatures = listOf(
+            "1 byte" to nonzeroBytes(1),
+            "64 bytes" to nonzeroBytes(64),
+            "3308 bytes" to nonzeroBytes(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH - 1),
+            "3310 bytes" to nonzeroBytes(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH + 1),
+            "all-zero" to ByteArray(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH),
+        )
+        for ((name, signature) in invalidMlDsaSignatures) {
+            assertFailsWith<SigningException>(name) {
+                builder.encodeAndSign(payload, CapturingSigner(signature, "ML-DSA-65"))
+            }
+        }
+
+        for ((name, signature) in listOf(
+            "short Ed25519" to nonzeroBytes(SignatureAdmission.ED25519_SIGNATURE_LENGTH - 1),
+            "all-zero Ed25519" to ByteArray(SignatureAdmission.ED25519_SIGNATURE_LENGTH),
+        )) {
+            assertFailsWith<SigningException>(name) {
+                builder.encodeAndSign(payload, CapturingSigner(signature, "Ed25519"))
+            }
+        }
+
+        val validMlDsaSignature = nonzeroBytes(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH)
+        val signed = builder.encodeAndSign(
+            payload,
+            CapturingSigner(validMlDsaSignature, "ML-DSA-65"),
+        )
+        assertContentEquals(validMlDsaSignature, signed.signature())
+    }
+
     private fun payload(
         metadata: Map<String, JsonValue>,
         admissionIntent: TransactionAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
@@ -76,17 +113,25 @@ class TransactionBuilderTest {
         metadata = metadata,
     )
 
-    private class CapturingSigner : Signer {
+    private class CapturingSigner(
+        private val signature: ByteArray = nonzeroBytes(SignatureAdmission.ED25519_SIGNATURE_LENGTH),
+        private val algorithmName: String = "Ed25519",
+    ) : Signer {
         var lastMessage: ByteArray = byteArrayOf()
             private set
 
         override fun sign(message: ByteArray): ByteArray {
             lastMessage = message.copyOf()
-            return byteArrayOf(0x51)
+            return signature.copyOf()
         }
 
         override fun publicKey(): ByteArray = byteArrayOf(0x52)
 
-        override fun algorithm(): String = "Ed25519"
+        override fun algorithm(): String = algorithmName
+    }
+
+    companion object {
+        private fun nonzeroBytes(length: Int): ByteArray =
+            ByteArray(length) { ((it % 251) + 1).toByte() }
     }
 }

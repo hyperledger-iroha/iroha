@@ -14,8 +14,9 @@ the daemon remains authoritative for the complete identity, immutable runtime
 closure, namespace, cgroup, QMP, and firewall preflight.
 The required ``--inrou-canary-dir`` stages operator-supplied guest assets with
 the current CLI, preseeds the exact SoraFS commitments into all four disjoint
-stores, executes the onboarding, faucet, final-canary, bundle, guest, and
-service transactions as one ordered chain of durable prepared envelopes, and
+stores, executes the onboarding, faucet, final-canary, bundle, guest,
+discovery, and service transactions as one ordered chain of durable prepared
+envelopes, and
 verifies the canonical four-replica public route. Successful
 ``up`` and ``check`` results require the resulting exact V1 guest-workload
 qualification record. ``check`` additionally revalidates the retained input,
@@ -73,7 +74,7 @@ except ModuleNotFoundError:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-_I105_ACCOUNT_DECODER: Callable[[str], bytes] | None = None
+_I105_ACCOUNT_DECODER: Callable[..., bytes] | None = None
 DEFAULT_DIR = Path("/var/lib/iroha-taira-devnet")
 DEFAULT_API_PORT = 29_080
 DEFAULT_P2P_PORT = 33_337
@@ -138,6 +139,9 @@ INROU_CANARY_INPUT_SNAPSHOT_DIRECTORY = Path("taira-inrou-input")
 INROU_GUEST_QUALIFICATION_FILE = "inrou_guest_qualification.json"
 INROU_GUEST_QUALIFICATION_SCHEMA_VERSION_V1 = 1
 MAX_INROU_GUEST_QUALIFICATION_BYTES = 64 * 1024
+MAX_INROU_OPERATOR_PRESEED_RECEIPT_BYTES = 64 * 1024
+MAX_INROU_OPERATOR_PRESEED_STDERR_BYTES = 64 * 1024
+INROU_OPERATOR_PRESEED_POLL_SECONDS = 0.01
 MAX_INROU_CANARY_MANIFEST_BYTES = 1024 * 1024
 MAX_INROU_CANARY_BUNDLE_BYTES = 512 * 1024 * 1024
 MAX_INROU_CANARY_GUEST_BYTES = TAIRA_INROU_GUEST_IMAGE_MAX_BYTES
@@ -147,8 +151,11 @@ INROU_STAGE_CONTAINER_FILE = "container.json"
 INROU_STAGE_SERVICE_FILE = "service.json"
 INROU_STAGE_BUNDLE_PAYLOAD = Path("payloads") / "bundle.bin"
 INROU_STAGE_GUEST_PAYLOAD = Path("payloads") / "guest"
+INROU_STAGE_DISCOVERY_PAYLOAD = Path("payloads") / "discovery"
+INROU_STAGE_DISCOVERY_DOCUMENT = INROU_STAGE_DISCOVERY_PAYLOAD / "index.json"
 INROU_STAGE_BUNDLE_MANIFEST = Path("manifests") / "bundle.to"
 INROU_STAGE_GUEST_MANIFEST = Path("manifests") / "aarch64.to"
+INROU_STAGE_DISCOVERY_MANIFEST = Path("manifests") / "discovery.to"
 MAX_INROU_STAGE_RECEIPT_BYTES = 64 * 1024
 PREPARED_CANARY_DIRECTORY = Path("runtime") / "taira-prepared-canary-v1"
 LOCALNET_ONBOARDING_TOKEN_FILE = Path("runtime") / "onboarding.token"
@@ -166,6 +173,7 @@ PREPARED_WRITE_CHILDREN = (
 PREPARED_INROU_CHILDREN = (
     ("inrou_bundle_pin", "bundle-pin", "bundle_pin"),
     ("inrou_guest_pin", "guest-pin", "guest_pin"),
+    ("inrou_discovery_pin", "discovery-pin", "discovery_pin"),
     ("inrou_canary", "service-mutation", "service_mutation"),
 )
 GENERATED_TAIRA_EGRESS_RATE_PER_MINUTE = 60
@@ -173,8 +181,9 @@ GENERATED_TAIRA_EGRESS_MAX_BYTES_PER_MINUTE = 1024 * 1024
 LINUX_KVM_GET_API_VERSION = 0xAE00
 LINUX_KVM_API_VERSION = 12
 INROU_CANARY_SERVICE_VERSION_PREFIX_V1 = "artifact-"
-INROU_CANARY_ROUTE_HOST_V1 = "taira-inrou-canary.sora"
-INROU_CANARY_HEALTH_PATH_V1 = "/api/v1/health"
+INROU_CANARY_ROUTE_HOST_V1 = "taira.sora.org"
+INROU_CANARY_ROUTE_PREFIX_V1 = "/api/v1/inrou-canary"
+INROU_CANARY_HEALTH_PATH_V1 = f"{INROU_CANARY_ROUTE_PREFIX_V1}/health"
 INROU_CANARY_REPORT_KEYS_V1 = frozenset(
     {
         "command",
@@ -195,9 +204,18 @@ INROU_CANARY_REPORT_KEYS_V1 = frozenset(
         "bundle_manifest_digest_hex",
         "guest_content_cid",
         "guest_manifest_digest_hex",
+        "discovery_payload_dir",
+        "discovery_document_hash",
+        "discovery_content_cid",
+        "discovery_manifest_digest_hex",
+        "public_discovery_url",
+        "public_discovery_cid_host_url",
+        "deployment_bundle_hash",
         "container_manifest_hash",
         "service_manifest_hash",
+        "observed_at_unix_ms",
         "replica_identities",
+        "local_placement",
         "authorization_sha256",
         "authorization_nonce",
         "mutation_kind",
@@ -217,7 +235,17 @@ INROU_CANARY_REPORT_KEYS_V1 = frozenset(
 )
 INROU_CANARY_CHECK_KEYS_V1 = frozenset({"name", "http_status", "ok", "detail"})
 INROU_CANARY_REPLICA_KEYS_V1 = frozenset(
-    {"replica_slot", "identity", "response_sha256"}
+    {
+        "replica_slot",
+        "identity",
+        "response_sha256",
+        "app_data_marker_sha256",
+        "boot_sequence",
+        "guest_boot_id_sha256",
+    }
+)
+INROU_LOCAL_PLACEMENT_KEYS_V1 = frozenset(
+    {"peer_id", "validator_account_id", "replica_slot", "placement_incarnation"}
 )
 PREPARED_REPORT_BASE_KEYS_V1 = frozenset(
     {"command", "status", "public_root", "checks", "warnings", "failures"}
@@ -259,10 +287,18 @@ INROU_CHECK_REPORT_KEYS_V1 = frozenset(
         "bundle_manifest_digest_hex",
         "guest_content_cid",
         "guest_manifest_digest_hex",
+        "discovery_payload_dir",
+        "discovery_document_hash",
+        "discovery_content_cid",
+        "discovery_manifest_digest_hex",
+        "public_discovery_url",
+        "public_discovery_cid_host_url",
+        "deployment_bundle_hash",
         "container_manifest_hash",
         "service_manifest_hash",
         "observed_at_unix_ms",
         "replica_identities",
+        "local_placement",
     }
 )
 COMPILED_TOOL_EVIDENCE_KEYS_V1 = frozenset({"path", "sha256", "bytes"})
@@ -286,16 +322,61 @@ INROU_GUEST_QUALIFICATION_KEYS_V1 = frozenset(
         "schema_version",
         "inrou_guest_workload_qualification",
         "inrou_canary_input_content_sha256",
+        "inrou_operator_preseed",
         "inrou_canary",
+        "inrou_restart",
         "source_observation",
         "target_triple",
         "toolchain",
     }
 )
+INROU_OPERATOR_PRESEED_RECEIPT_KEYS_V1 = frozenset(
+    {
+        "schema_version",
+        "status",
+        "mode",
+        "max_capacity_bytes",
+        "targets",
+        "artifacts",
+    }
+)
+INROU_OPERATOR_PRESEED_TARGET_KEYS_V1 = frozenset(
+    {"validator_account_id", "peer_id", "store_root"}
+)
+INROU_OPERATOR_PRESEED_ARTIFACT_KEYS_V1 = frozenset(
+    {
+        "manifest_digest_blake3",
+        "payload_digest_blake3",
+        "content_length",
+        "store_count",
+    }
+)
+INROU_RESTART_PROOF_KEYS_V1 = frozenset(
+    {
+        "schema_version",
+        "peer_index",
+        "local_placement",
+        "pids_before",
+        "pids_after",
+        "height_before",
+        "height_after",
+        "start_script_sha256",
+        "stop_script_sha256",
+        "build_identity",
+        "inrou_check_started_at_unix_ms",
+        "inrou_check_finished_at_unix_ms",
+        "inrou_check",
+    }
+)
+INROU_RESTART_BUILD_IDENTITY_KEYS_V1 = frozenset(
+    {"git_commit_sha", "target_triple"}
+)
 INROU_STAGE_RECEIPT_KEYS_V1 = frozenset(
     {
         "schema_version",
+        "sorafs_retention_epoch",
         "mutation_mode",
+        "placement_targets",
         "service_name",
         "service_version",
         "container_file",
@@ -310,6 +391,13 @@ INROU_STAGE_RECEIPT_KEYS_V1 = frozenset(
         "guest_manifest_file",
         "guest_content_cid",
         "guest_manifest_digest_hex",
+        "discovery_payload_dir",
+        "discovery_manifest_file",
+        "discovery_document_hash",
+        "discovery_content_cid",
+        "discovery_manifest_digest_hex",
+        "public_discovery_url",
+        "public_discovery_cid_host_url",
         "container_manifest_hash",
         "service_manifest_hash",
     }
@@ -395,7 +483,16 @@ INROU_CANARY_CLI_SURFACES: tuple[
     (
         "iroha",
         ("taira", "inrou-stage"),
-        ("--mode", "--container", "--service", "--bundle-file", "--stage-dir", "--json"),
+        (
+            "--mode",
+            "--container",
+            "--service",
+            "--bundle-file",
+            "--sorafs-retention-epoch",
+            "--placement-target",
+            "--stage-dir",
+            "--json",
+        ),
     ),
     (
         "iroha",
@@ -450,7 +547,15 @@ INROU_CANARY_CLI_SURFACES: tuple[
     (
         "sorafs-node",
         (),
-        ("--data-dir", "--max-capacity-bytes", "--manifest", "--payload", "--payload-dir"),
+        (
+            "preseed-session",
+            "--target",
+            "--max-capacity-bytes",
+            "--verify-only",
+            "--manifest",
+            "--payload",
+            "--payload-dir",
+        ),
     ),
 )
 
@@ -489,7 +594,11 @@ def parallel_map(
         return [future.result() for future in futures]
 
 
-def _decode_canonical_i105_account_id(value: str) -> bytes:
+def _decode_canonical_i105_account_id(
+    value: str,
+    *,
+    expected_discriminant: int | None = None,
+) -> bytes:
     """Decode through the repository's dependency-free canonical AccountId codec."""
 
     global _I105_ACCOUNT_DECODER
@@ -506,7 +615,10 @@ def _decode_canonical_i105_account_id(value: str) -> bytes:
         if not callable(decoder):
             fail("canonical I105 AccountId codec omits its decoder")
         _I105_ACCOUNT_DECODER = decoder
-    return _I105_ACCOUNT_DECODER(value)
+    return _I105_ACCOUNT_DECODER(
+        value,
+        expected_discriminant=expected_discriminant,
+    )
 
 
 def _fee_quote_account_ids_have_same_identity(left: Any, right: Any) -> bool:
@@ -1006,20 +1118,6 @@ def require_runtime_signer_files(target: Path) -> None:
         identities.add(identity)
 
 
-def require_stoppable_network(root: Path) -> Path:
-    """Require the generated stop surface without depending on intact configs."""
-
-    target = network_dir(root)
-    if target.is_symlink():
-        fail(f"refusing symlinked network directory: {target}")
-    if not target.is_dir():
-        fail(f"no generated Taira network exists at {target}; run `up` first")
-    stop = target / "stop.sh"
-    if stop.is_symlink() or not stop.is_file():
-        fail(f"generated Taira network is incomplete: missing {stop.name}")
-    return target
-
-
 def _stable_file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
     """Return the pathname and descriptor fields that must stay fixed while reading."""
 
@@ -1117,6 +1215,22 @@ def quoted_assignment(path: Path, key: str) -> str:
     return values[0]
 
 
+def top_level_quoted_assignment(path: Path, key: str) -> str:
+    """Read one canonical quoted assignment before the first TOML table."""
+
+    text = read_bounded_text(path, limit=MAX_BUNDLE_TEXT_BYTES, label="generated config")
+    pattern = re.compile(rf'^\s*{re.escape(key)}\s*=\s*"([^"\\]*)"\s*$')
+    values: list[str] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("["):
+            break
+        if match := pattern.fullmatch(line):
+            values.append(match.group(1))
+    if len(values) != 1:
+        fail(f"generated config must contain one canonical top-level {key} assignment: {path}")
+    return values[0]
+
+
 def integer_assignment(path: Path, key: str) -> int:
     """Read one unique canonical non-negative integer assignment from TOML."""
 
@@ -1194,6 +1308,30 @@ def process_table(run: Runner) -> dict[int, str]:
     return processes
 
 
+def generated_script_sha256(path: Path) -> str:
+    """Hash one stable owner-held generated lifecycle script."""
+
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        fail(f"generated lifecycle script is missing: {path}: {error}")
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+        or metadata.st_mode & 0o111 == 0
+    ):
+        fail(f"generated lifecycle script lacks direct executable custody: {path}")
+    payload = read_stable_bytes(
+        path,
+        limit=MAX_BUNDLE_TEXT_BYTES,
+        label="generated lifecycle script",
+        owner=os.geteuid(),
+        require_nonempty=True,
+    )
+    return hashlib.sha256(payload).hexdigest()
+
+
 def read_peer_pid(path: Path) -> int:
     """Read one small, regular, positive peer PID file."""
 
@@ -1223,7 +1361,7 @@ def command_uses_config(command: str, config: Path) -> bool:
     return configs == [str(config)]
 
 
-def require_running_cohort(target: Path, run: Runner) -> None:
+def require_running_cohort(target: Path, run: Runner) -> tuple[int, ...]:
     """Require exactly the four PID-bound processes generated for this bundle."""
 
     pids: list[int] = []
@@ -1247,6 +1385,92 @@ def require_running_cohort(target: Path, run: Runner) -> None:
             fail(
                 f"peer{index} PID {pid} is not the sole running process for its generated config"
             )
+    return tuple(pids)
+
+
+def require_partial_restart_cohort(
+    target: Path,
+    restarted_peer_index: int,
+    expected_pids: Sequence[int],
+    run: Runner,
+) -> None:
+    """Require only the selected restart peer to be absent from its exact cohort."""
+
+    if restarted_peer_index not in range(PEER_COUNT):
+        fail("selected restart peer index is outside the exact four-peer cohort")
+    if (
+        len(expected_pids) != PEER_COUNT
+        or any(type(pid) is not int or pid <= 1 for pid in expected_pids)
+        or len(set(expected_pids)) != PEER_COUNT
+    ):
+        fail("selected restart cleanup has malformed original peer PIDs")
+    selected_pid = target / f"peer{restarted_peer_index}.pid"
+    if selected_pid.exists() or selected_pid.is_symlink():
+        fail(f"selected restart peer still has a PID file: {selected_pid}")
+
+    processes = process_table(run)
+    for index in range(PEER_COUNT):
+        config = target / f"peer{index}.toml"
+        matches = [
+            process_pid
+            for process_pid, command in processes.items()
+            if command_uses_config(command, config)
+        ]
+        if index == restarted_peer_index:
+            if matches:
+                fail(f"selected restart peer{index} process is still running: {matches}")
+            continue
+        pid = read_peer_pid(target / f"peer{index}.pid")
+        if pid != expected_pids[index] or matches != [pid]:
+            fail(f"non-selected peer{index} changed while peer{restarted_peer_index} stopped")
+
+
+def stop_peer_for_restart(
+    target: Path,
+    peer_index: int,
+    expected_pids: Sequence[int],
+    run: Runner,
+) -> None:
+    """Stop exactly one owned peer with the generated selector and prove absence."""
+
+    if require_running_cohort(target, run) != tuple(expected_pids):
+        fail("Taira cohort PIDs changed before the selected Inrou host restart")
+    stop = target / "stop.sh"
+    generated_script_sha256(stop)
+    run(
+        ["/bin/bash", str(stop), "--peer-index", str(peer_index)],
+        cwd=target,
+        timeout=30,
+    )
+    require_partial_restart_cohort(target, peer_index, expected_pids, run)
+
+
+def start_peer_after_restart(
+    target: Path,
+    peer_index: int,
+    expected_pids: Sequence[int],
+    env: dict[str, str],
+    run: Runner,
+) -> tuple[int, ...]:
+    """Relaunch exactly one absent peer and prove only its owned PID changed."""
+
+    require_partial_restart_cohort(target, peer_index, expected_pids, run)
+    start = target / "start.sh"
+    generated_script_sha256(start)
+    run(
+        ["/bin/bash", str(start), "--peer-index", str(peer_index)],
+        cwd=target,
+        env=env,
+        timeout=60,
+        capture_output=False,
+    )
+    current = require_running_cohort(target, run)
+    if current[peer_index] == expected_pids[peer_index]:
+        fail("selected Inrou host restart reused its pre-restart PID")
+    for index in range(PEER_COUNT):
+        if index != peer_index and current[index] != expected_pids[index]:
+            fail(f"non-selected peer{index} PID changed during selected host restart")
+    return current
 
 
 def require_stopped_cohort(target: Path, run: Runner) -> None:
@@ -1268,7 +1492,14 @@ def require_stopped_cohort(target: Path, run: Runner) -> None:
         fail(f"Taira teardown left managed peer processes running: {residual}")
 
 
-def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> bool:
+def stop_network(
+    root: Path,
+    run: Runner,
+    *,
+    tolerate_failure: bool = False,
+    expected_partial_peer_index: int | None = None,
+    expected_partial_pids: Sequence[int] | None = None,
+) -> bool:
     """Stop only peers owned by the generated Kagami bundle."""
 
     try:
@@ -1286,15 +1517,33 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
         if not present_pid_paths:
             require_stopped_cohort(target, run)
             return True
-        if len(present_pid_paths) != PEER_COUNT:
-            fail(
-                "Taira teardown left peer PID files: "
-                + ", ".join(path.name for path in present_pid_paths)
+        if len(present_pid_paths) == PEER_COUNT:
+            # The generated stop script has process-control authority. Do not run
+            # it until all four PID files, daemon argvs, and exact config paths
+            # prove that the live cohort is ours.
+            require_running_cohort(target, run)
+        else:
+            if expected_partial_peer_index is None or expected_partial_pids is None:
+                fail(
+                    "Taira teardown left peer PID files: "
+                    + ", ".join(path.name for path in present_pid_paths)
+                )
+            expected_present = {
+                target / f"peer{index}.pid"
+                for index in range(PEER_COUNT)
+                if index != expected_partial_peer_index
+            }
+            if set(present_pid_paths) != expected_present:
+                fail(
+                    "selected restart cleanup found an unexpected partial PID cohort: "
+                    + ", ".join(path.name for path in present_pid_paths)
+                )
+            require_partial_restart_cohort(
+                target,
+                expected_partial_peer_index,
+                expected_partial_pids,
+                run,
             )
-        # The generated stop script has process-control authority. Do not run
-        # it until all four PID files, daemon argvs, and exact config paths
-        # prove that the live cohort is ours.
-        require_running_cohort(target, run)
         stop = target / "stop.sh"
         if stop.is_symlink() or not stop.is_file():
             fail(f"generated Taira network is incomplete: missing safe {stop.name}")
@@ -2060,6 +2309,8 @@ def http_request(url: str, payload: object | None = None) -> tuple[int, object |
     headers = {"Accept": "text/plain" if plain_text_probe else "application/json"}
     if body is not None:
         headers["Content-Type"] = "application/json"
+        if url.rstrip("/").endswith("/v1/mcp"):
+            headers["MCP-Protocol-Version"] = MCP_PROTOCOL_VERSION_V1
     request = urllib.request.Request(url, data=body, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=3) as response:
@@ -2167,16 +2418,19 @@ def require_cli_build_identity(
         fail("current Iroha CLI build identity does not match source HEAD")
 
 
-def check_sumeragi_status(root: str, request: Request) -> None:
-    """Require the exact unauthenticated consensus-status contract."""
+def check_sumeragi_status(root: str, request: Request) -> bool:
+    """Require the exact unauthenticated consensus-status contract when reachable."""
 
     url = root + "v1/sumeragi/status"
     status, _payload = request(url, None)
+    if status == 0:
+        return False
     if status != 401:
         fail(
             "Sumeragi status must enforce the current unauthenticated HTTP 401 "
             f"contract at {root} (HTTP {status})"
         )
+    return True
 
 
 def wait_for_cluster(
@@ -2195,7 +2449,12 @@ def wait_for_cluster(
         # published fail-stop or watchdog blocker terminal immediately.  Keep
         # them outside the retryable readiness block so a serious consensus
         # diagnosis is not hidden behind a generic convergence timeout.
-        parallel_map(roots, lambda root: check_sumeragi_status(root, request))
+        if not all(
+            parallel_map(roots, lambda root: check_sumeragi_status(root, request))
+        ):
+            last = "one or more Sumeragi status routes are not reachable yet"
+            time.sleep(0.5)
+            continue
 
         def ready_height(root: str) -> int:
             for endpoint in ("health", "readyz"):
@@ -2219,17 +2478,6 @@ def check_mcp(root: str, request: Request) -> None:
     """Verify the enabled MCP endpoint can initialize and list current tools."""
 
     url = root + "v1/mcp"
-    status, capabilities = request(url, None)
-    protocol_version = (
-        capabilities.get("protocolVersion") if isinstance(capabilities, dict) else None
-    )
-    if (
-        status != 200
-        or not isinstance(capabilities, dict)
-        or capabilities.get("enabled") is not True
-        or protocol_version != MCP_PROTOCOL_VERSION_V1
-    ):
-        fail(f"MCP capabilities are not enabled/current at {url} (HTTP {status})")
     initialize = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -2675,6 +2923,77 @@ def section_assignment(path: Path, section: str, key: str) -> str:
     if len(values) != 1:
         fail(f"generated config must contain one {section}.{key} assignment: {path}")
     return values[0]
+
+
+def require_canonical_inrou_placement_targets(
+    value: object,
+    context: str,
+) -> tuple[dict[str, str], ...]:
+    """Require four exact validator/peer placement identities."""
+
+    if not isinstance(value, list) or len(value) != PEER_COUNT:
+        fail(f"{context} must contain exactly four placement targets")
+    targets: list[dict[str, str]] = []
+    validator_controllers: set[bytes] = set()
+    peer_ids: set[str] = set()
+    for index, target in enumerate(value):
+        if (
+            not isinstance(target, dict)
+            or set(target) != {"validator_account_id", "peer_id"}
+        ):
+            fail(f"{context}[{index}] violates the exact V1 target schema")
+        validator_account_id = target.get("validator_account_id")
+        peer_id = target.get("peer_id")
+        try:
+            controller = _decode_canonical_i105_account_id(
+                validator_account_id,
+                expected_discriminant=DEFAULT_CHAIN_DISCRIMINANT,
+            )
+        except (TypeError, ValueError):
+            fail(f"{context}[{index}] has a malformed canonical validator account")
+        if (
+            not isinstance(peer_id, str)
+            or not peer_id
+            or peer_id.strip() != peer_id
+            or any(character.isspace() for character in peer_id)
+            or "," in peer_id
+        ):
+            fail(f"{context}[{index}] has a malformed peer ID")
+        if controller in validator_controllers:
+            fail(f"{context} repeats a validator account")
+        if peer_id in peer_ids:
+            fail(f"{context} repeats a peer ID")
+        validator_controllers.add(controller)
+        peer_ids.add(peer_id)
+        targets.append(
+            {
+                "validator_account_id": validator_account_id,
+                "peer_id": peer_id,
+            }
+        )
+    return tuple(targets)
+
+
+def taira_inrou_placement_targets(target: Path) -> tuple[dict[str, str], ...]:
+    """Derive the four staged placement identities from generated peer configs."""
+
+    values = []
+    for peer_index in range(PEER_COUNT):
+        config = target / f"peer{peer_index}.toml"
+        values.append(
+            {
+                "validator_account_id": section_assignment(
+                    config,
+                    "soracloud_runtime.submission.signer",
+                    "authority",
+                ),
+                "peer_id": top_level_quoted_assignment(config, "public_key"),
+            }
+        )
+    return require_canonical_inrou_placement_targets(
+        values,
+        "generated Taira Inrou placement inventory",
+    )
 
 
 @dataclass(frozen=True)
@@ -3341,6 +3660,7 @@ def inject_trusted_inrou_guest_artifact(
 ) -> TrustedInrouGuestArtifact:
     """Atomically bind every peer config to the exact staged guest artifact."""
 
+    require_inrou_stage_placement_targets(target, stage_dir)
     trusted_guest = require_inrou_stage_guest_artifact(stage_dir)
     _require_canonical_taira_profiles(target, None)
     replacements = []
@@ -3416,7 +3736,8 @@ def require_inrou_stage(stage_dir: Path) -> None:
     manifests = stage_dir / "manifests"
     payloads = stage_dir / "payloads"
     guest = stage_dir / INROU_STAGE_GUEST_PAYLOAD
-    for directory in (manifests, payloads, guest):
+    discovery = stage_dir / INROU_STAGE_DISCOVERY_PAYLOAD
+    for directory in (manifests, payloads, guest, discovery):
         _require_owner_only_entry(
             directory,
             directory=True,
@@ -3438,13 +3759,23 @@ def require_inrou_stage(stage_dir: Path) -> None:
         {
             INROU_STAGE_BUNDLE_MANIFEST.name,
             INROU_STAGE_GUEST_MANIFEST.name,
+            INROU_STAGE_DISCOVERY_MANIFEST.name,
         },
         label="native Taira Inrou manifest stage",
     )
     _require_exact_directory_entries(
         payloads,
-        {INROU_STAGE_BUNDLE_PAYLOAD.name, INROU_STAGE_GUEST_PAYLOAD.name},
+        {
+            INROU_STAGE_BUNDLE_PAYLOAD.name,
+            INROU_STAGE_GUEST_PAYLOAD.name,
+            INROU_STAGE_DISCOVERY_PAYLOAD.name,
+        },
         label="native Taira Inrou payload stage",
+    )
+    _require_exact_directory_entries(
+        discovery,
+        {INROU_STAGE_DISCOVERY_DOCUMENT.name},
+        label="native Taira Inrou discovery payload stage",
     )
     required_files = (
         stage_dir / INROU_STAGE_RECEIPT_FILE,
@@ -3453,6 +3784,8 @@ def require_inrou_stage(stage_dir: Path) -> None:
         stage_dir / INROU_STAGE_BUNDLE_PAYLOAD,
         stage_dir / INROU_STAGE_BUNDLE_MANIFEST,
         stage_dir / INROU_STAGE_GUEST_MANIFEST,
+        stage_dir / INROU_STAGE_DISCOVERY_DOCUMENT,
+        stage_dir / INROU_STAGE_DISCOVERY_MANIFEST,
     )
     for path in required_files:
         metadata = _require_owner_only_entry(
@@ -3527,28 +3860,53 @@ def _read_inrou_stage_receipt(stage_dir: Path) -> dict[str, Any]:
         "guest_isa": "aarch64",
         "guest_payload_dir": str(INROU_STAGE_GUEST_PAYLOAD),
         "guest_manifest_file": str(INROU_STAGE_GUEST_MANIFEST),
+        "discovery_payload_dir": str(INROU_STAGE_DISCOVERY_PAYLOAD),
+        "discovery_manifest_file": str(INROU_STAGE_DISCOVERY_MANIFEST),
     }
     if any(receipt.get(field) != value for field, value in expected.items()):
         fail("native Taira Inrou stage receipt is not the exact V1 deploy layout")
+    retention_epoch = receipt.get("sorafs_retention_epoch")
+    if type(retention_epoch) is not int or not 1 <= retention_epoch < 1 << 64:
+        fail("native Taira Inrou stage receipt has a malformed SoraFS retention epoch")
+    require_canonical_inrou_placement_targets(
+        receipt.get("placement_targets"),
+        "native Taira Inrou stage receipt placement_targets",
+    )
     service_version = receipt.get("service_version")
     if not is_canonical_inrou_service_version(service_version):
         fail("native Taira Inrou stage receipt has a malformed artifact-derived service_version")
     for field in (
         "bundle_hash",
+        "discovery_document_hash",
         "container_manifest_hash",
         "service_manifest_hash",
     ):
         value = receipt.get(field)
         if not is_canonical_iroha_hash_hex(value):
             fail(f"native Taira Inrou stage receipt has malformed {field}")
-    for field in ("bundle_manifest_digest_hex", "guest_manifest_digest_hex"):
+    for field in (
+        "bundle_manifest_digest_hex",
+        "guest_manifest_digest_hex",
+        "discovery_manifest_digest_hex",
+    ):
         value = receipt.get(field)
         if not isinstance(value, str) or LOWER_32_BYTE_HEX_RE.fullmatch(value) is None:
             fail(f"native Taira Inrou stage receipt has malformed {field}")
-    for field in ("bundle_content_cid", "guest_content_cid"):
+    for field in (
+        "bundle_content_cid",
+        "guest_content_cid",
+        "discovery_content_cid",
+    ):
         value = receipt.get(field)
         if not isinstance(value, str) or SORAFS_CONTENT_CID_V1_RE.fullmatch(value) is None:
             fail(f"native Taira Inrou stage receipt has malformed {field}")
+    discovery_cid = receipt["discovery_content_cid"]
+    if receipt.get("public_discovery_url") != (
+        f"https://taira.sora.org/sorafs/cid/{discovery_cid}/index.json"
+    ) or receipt.get("public_discovery_cid_host_url") != (
+        f"https://{discovery_cid}.sorafs.taira.sora.org/index.json"
+    ):
+        fail("native Taira Inrou stage receipt has noncanonical discovery URLs")
     return receipt
 
 
@@ -3563,6 +3921,25 @@ def require_inrou_stage_guest_artifact(stage_dir: Path) -> TrustedInrouGuestArti
             content_cid=receipt["guest_content_cid"],
         )
     )
+
+
+def require_inrou_stage_placement_targets(target: Path, stage_dir: Path) -> None:
+    """Bind a retained stage to the same four generated validator clients."""
+
+    expected = {
+        (item["validator_account_id"], item["peer_id"])
+        for item in taira_inrou_placement_targets(target)
+    }
+    receipt = _read_inrou_stage_receipt(stage_dir)
+    actual = {
+        (item["validator_account_id"], item["peer_id"])
+        for item in require_canonical_inrou_placement_targets(
+            receipt.get("placement_targets"),
+            "native Taira Inrou stage receipt placement_targets",
+        )
+    }
+    if actual != expected:
+        fail("native Taira Inrou stage placement targets differ from generated validators")
 
 
 def _require_unchanged_inrou_canary_workspace(
@@ -3712,6 +4089,19 @@ def prepare_inrou_stage(
     stage_dir = target / INROU_STAGE_DIRECTORY
     if stage_dir.exists() or stage_dir.is_symlink():
         fail(f"refusing to reuse an existing Taira Inrou stage: {stage_dir}")
+    retention_epoch = time.time_ns() // 1_000_000_000 + max(
+        30 * 24 * 60 * 60,
+        max(1, int(timeout_seconds)) * 16,
+    )
+    placement_targets = taira_inrou_placement_targets(target)
+    placement_arguments = [
+        argument
+        for placement in placement_targets
+        for argument in (
+            "--placement-target",
+            f"{placement['validator_account_id']},{placement['peer_id']}",
+        )
+    ]
     run(
         [
             str(iroha),
@@ -3727,6 +4117,9 @@ def prepare_inrou_stage(
             str(service),
             "--bundle-file",
             str(bundle),
+            "--sorafs-retention-epoch",
+            str(retention_epoch),
+            *placement_arguments,
             "--stage-dir",
             str(stage_dir),
             "--json",
@@ -3739,7 +4132,403 @@ def prepare_inrou_stage(
         phase="while the compiled stager consumed its snapshot",
     )
     require_inrou_stage(stage_dir)
+    require_inrou_stage_placement_targets(target, stage_dir)
     return stage_dir
+
+
+def _drain_inrou_operator_preseed_pipe(
+    stream: Any,
+    output: bytearray,
+    *,
+    limit: int,
+    label: str,
+) -> bool:
+    """Drain one nonblocking child pipe and report whether it reached EOF."""
+
+    while True:
+        try:
+            chunk = os.read(stream.fileno(), 16 * 1024)
+        except BlockingIOError:
+            return False
+        except OSError as error:
+            fail(f"failed to read Inrou operator-preseed {label}: {error}")
+        if not chunk:
+            return True
+        output.extend(chunk)
+        if len(output) > limit:
+            fail(f"Inrou operator-preseed {label} exceeds its exact safety bound")
+
+
+def _terminate_inrou_operator_preseed_process(process: Any) -> None:
+    """Boundedly terminate only the task-owned preseed helper process."""
+
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=1)
+    except OSError:
+        return
+
+
+def run_locked_inrou_operator_preseed_session(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    timeout_seconds: float,
+    verify_ready_receipt: Callable[[bytes], dict[str, Any]],
+) -> dict[str, Any]:
+    """Accept one bounded ready barrier while every requested store lock is live."""
+
+    if timeout_seconds <= 0:
+        fail("Inrou operator-preseed timeout must be positive")
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        process = subprocess.Popen(
+            list(command),
+            cwd=cwd,
+            env={"LC_ALL": "C"},
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        fail(f"cannot execute Inrou operator-preseed helper: {error}")
+    if process.stdin is None or process.stdout is None or process.stderr is None:
+        _terminate_inrou_operator_preseed_process(process)
+        fail("Inrou operator-preseed helper did not expose its three required pipes")
+    stdout = process.stdout
+    stderr = process.stderr
+    try:
+        os.set_blocking(stdout.fileno(), False)
+        os.set_blocking(stderr.fileno(), False)
+    except OSError as error:
+        _terminate_inrou_operator_preseed_process(process)
+        process.stdin.close()
+        stdout.close()
+        stderr.close()
+        fail(f"cannot make Inrou operator-preseed pipes nonblocking: {error}")
+    stdout_bytes = bytearray()
+    stderr_bytes = bytearray()
+    stdout_eof = False
+    stderr_eof = False
+    released = False
+    try:
+        while True:
+            if time.monotonic() >= deadline:
+                fail("Inrou operator-preseed helper exceeded its ready-barrier deadline")
+            stdout_eof = (
+                _drain_inrou_operator_preseed_pipe(
+                    stdout,
+                    stdout_bytes,
+                    limit=MAX_INROU_OPERATOR_PRESEED_RECEIPT_BYTES,
+                    label="stdout",
+                )
+                or stdout_eof
+            )
+            stderr_eof = (
+                _drain_inrou_operator_preseed_pipe(
+                    stderr,
+                    stderr_bytes,
+                    limit=MAX_INROU_OPERATOR_PRESEED_STDERR_BYTES,
+                    label="stderr",
+                )
+                or stderr_eof
+            )
+            status = process.poll()
+            newline = stdout_bytes.find(b"\n")
+            if newline >= 0:
+                if (
+                    newline + 1 != len(stdout_bytes)
+                    or b"\r" in stdout_bytes[:newline]
+                    or status is not None
+                ):
+                    fail(
+                        "Inrou operator-preseed helper did not retain one live canonical "
+                        "ready barrier"
+                    )
+                break
+            if stdout_eof or status is not None:
+                detail = bytes(stderr_bytes).decode("utf-8", errors="replace").strip()
+                fail(
+                    "Inrou operator-preseed helper exited before its ready barrier"
+                    + (f": {detail}" if detail else "")
+                )
+            time.sleep(
+                min(
+                    INROU_OPERATOR_PRESEED_POLL_SECONDS,
+                    max(0.0, deadline - time.monotonic()),
+                )
+            )
+
+        ready_length = len(stdout_bytes)
+        receipt = verify_ready_receipt(bytes(stdout_bytes))
+        if time.monotonic() >= deadline:
+            fail("Inrou operator-preseed receipt validation exceeded its deadline")
+        stdout_eof = (
+            _drain_inrou_operator_preseed_pipe(
+                stdout,
+                stdout_bytes,
+                limit=MAX_INROU_OPERATOR_PRESEED_RECEIPT_BYTES,
+                label="stdout",
+            )
+            or stdout_eof
+        )
+        stderr_eof = (
+            _drain_inrou_operator_preseed_pipe(
+                stderr,
+                stderr_bytes,
+                limit=MAX_INROU_OPERATOR_PRESEED_STDERR_BYTES,
+                label="stderr",
+            )
+            or stderr_eof
+        )
+        if len(stdout_bytes) != ready_length:
+            fail("Inrou operator-preseed helper emitted trailing stdout during validation")
+        if process.poll() is not None:
+            fail("Inrou operator-preseed helper exited while its receipt was validated")
+
+        # The helper owns all four store locks until this exact EOF. Only the
+        # fully validated canonical receipt authorizes releasing the barrier.
+        process.stdin.close()
+        released = True
+        while True:
+            if time.monotonic() >= deadline:
+                fail("Inrou operator-preseed helper exceeded its release deadline")
+            stdout_eof = (
+                _drain_inrou_operator_preseed_pipe(
+                    stdout,
+                    stdout_bytes,
+                    limit=MAX_INROU_OPERATOR_PRESEED_RECEIPT_BYTES,
+                    label="stdout",
+                )
+                or stdout_eof
+            )
+            stderr_eof = (
+                _drain_inrou_operator_preseed_pipe(
+                    stderr,
+                    stderr_bytes,
+                    limit=MAX_INROU_OPERATOR_PRESEED_STDERR_BYTES,
+                    label="stderr",
+                )
+                or stderr_eof
+            )
+            status = process.poll()
+            if status is not None and stdout_eof and stderr_eof:
+                break
+            time.sleep(
+                min(
+                    INROU_OPERATOR_PRESEED_POLL_SECONDS,
+                    max(0.0, deadline - time.monotonic()),
+                )
+            )
+        if status != 0:
+            detail = bytes(stderr_bytes).decode("utf-8", errors="replace").strip()
+            fail(
+                f"Inrou operator-preseed helper failed after readiness with status {status}"
+                + (f": {detail}" if detail else "")
+            )
+        if len(stdout_bytes) != ready_length:
+            fail("Inrou operator-preseed helper emitted trailing stdout after readiness")
+        return receipt
+    except BaseException:
+        _terminate_inrou_operator_preseed_process(process)
+        raise
+    finally:
+        if not released and not process.stdin.closed:
+            process.stdin.close()
+        stdout.close()
+        stderr.close()
+
+
+def _inrou_stage_payload_content_lengths(stage_dir: Path) -> dict[str, int]:
+    """Measure the three already-custodied stage payloads without following links."""
+
+    bundle = _require_owner_only_entry(
+        stage_dir / INROU_STAGE_BUNDLE_PAYLOAD,
+        directory=False,
+        label="native Taira Inrou bundle payload",
+    ).st_size
+    guest = 0
+    pending = [stage_dir / INROU_STAGE_GUEST_PAYLOAD]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = list(directory.iterdir())
+        except OSError as error:
+            fail(f"cannot inspect native Taira Inrou guest payload {directory}: {error}")
+        for entry in entries:
+            try:
+                metadata = entry.lstat()
+            except OSError as error:
+                fail(f"cannot inspect native Taira Inrou guest payload {entry}: {error}")
+            if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+                _require_owner_only_entry(
+                    entry,
+                    directory=True,
+                    label="native Taira Inrou guest payload directory",
+                )
+                pending.append(entry)
+            elif stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+                guest += _require_owner_only_entry(
+                    entry,
+                    directory=False,
+                    label="native Taira Inrou guest payload file",
+                ).st_size
+            else:
+                fail(f"native Taira Inrou guest payload has an unsafe entry: {entry}")
+    discovery = _require_owner_only_entry(
+        stage_dir / INROU_STAGE_DISCOVERY_DOCUMENT,
+        directory=False,
+        label="native Taira Inrou discovery document",
+    ).st_size
+    if any(not 0 < value < 1 << 64 for value in (bundle, guest, discovery)):
+        fail("native Taira Inrou stage has invalid payload geometry")
+    return {"bundle": bundle, "guest": guest, "discovery": discovery}
+
+
+def require_canonical_inrou_operator_preseed_receipt(
+    value: object,
+    target: Path,
+    stage_dir: Path,
+) -> dict[str, Any]:
+    """Bind one V1 ready receipt to the exact stage and four config pairs."""
+
+    require_inrou_stage_placement_targets(target, stage_dir)
+    trusted_guest = require_inrou_stage_guest_artifact(stage_dir)
+    store_roots = [
+        _require_custodied_directory_chain(
+            peer_sorafs_preseed_dir(target, index, trusted_guest),
+            label=f"peer{index} Taira Inrou preseed root",
+        )
+        for index in range(PEER_COUNT)
+    ]
+    if not isinstance(value, dict) or set(value) != INROU_OPERATOR_PRESEED_RECEIPT_KEYS_V1:
+        fail("Inrou operator-preseed receipt violates the exact V1 schema")
+    if (
+        type(value.get("schema_version")) is not int
+        or value["schema_version"] != 1
+        or value.get("status") != "ready"
+        or value.get("mode") != "ingest"
+        or type(value.get("max_capacity_bytes")) is not int
+        or value["max_capacity_bytes"] != TAIRA_SORAFS_MAX_CAPACITY_BYTES
+    ):
+        fail("Inrou operator-preseed receipt is not the exact ingest-ready V1 mode")
+    expected_targets = [
+        {
+            "validator_account_id": placement["validator_account_id"],
+            "peer_id": placement["peer_id"],
+            "store_root": str(store_root),
+        }
+        for placement, store_root in zip(
+            taira_inrou_placement_targets(target), store_roots, strict=True
+        )
+    ]
+    targets = value.get("targets")
+    if (
+        not isinstance(targets, list)
+        or len(targets) != PEER_COUNT
+        or any(
+            not isinstance(item, dict)
+            or set(item) != INROU_OPERATOR_PRESEED_TARGET_KEYS_V1
+            for item in targets
+        )
+        or targets != expected_targets
+    ):
+        fail(
+            "Inrou operator-preseed receipt differs from the exact configured "
+            "account+peer targets"
+        )
+    stage = _read_inrou_stage_receipt(stage_dir)
+    content_lengths = _inrou_stage_payload_content_lengths(stage_dir)
+    expected_artifacts = {
+        stage["bundle_manifest_digest_hex"]: content_lengths["bundle"],
+        stage["guest_manifest_digest_hex"]: content_lengths["guest"],
+        stage["discovery_manifest_digest_hex"]: content_lengths["discovery"],
+    }
+    artifacts = value.get("artifacts")
+    if not isinstance(artifacts, list) or len(artifacts) != 3:
+        fail("Inrou operator-preseed receipt must contain the three exact stage artifacts")
+    manifest_digests = [
+        artifact.get("manifest_digest_blake3")
+        if isinstance(artifact, dict)
+        else None
+        for artifact in artifacts
+    ]
+    if manifest_digests != sorted(expected_artifacts):
+        fail("Inrou operator-preseed artifacts are not the exact canonical digest order")
+    canonical_artifacts = []
+    for index, artifact in enumerate(artifacts):
+        if (
+            not isinstance(artifact, dict)
+            or set(artifact) != INROU_OPERATOR_PRESEED_ARTIFACT_KEYS_V1
+        ):
+            fail(f"Inrou operator-preseed artifact {index} violates the exact V1 schema")
+        manifest_digest = artifact.get("manifest_digest_blake3")
+        expected_content_length = expected_artifacts.get(manifest_digest)
+        payload_digest = artifact.get("payload_digest_blake3")
+        content_length = artifact.get("content_length")
+        store_count = artifact.get("store_count")
+        if (
+            expected_content_length is None
+            or not isinstance(payload_digest, str)
+            or LOWER_32_BYTE_HEX_RE.fullmatch(payload_digest) is None
+            or type(content_length) is not int
+            or content_length != expected_content_length
+            or type(store_count) is not int
+            or store_count != PEER_COUNT
+        ):
+            fail(f"Inrou operator-preseed artifact {index} differs from the exact stage")
+        canonical_artifacts.append(
+            {
+                "manifest_digest_blake3": manifest_digest,
+                "payload_digest_blake3": payload_digest,
+                "content_length": content_length,
+                "store_count": PEER_COUNT,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "status": "ready",
+        "mode": "ingest",
+        "max_capacity_bytes": TAIRA_SORAFS_MAX_CAPACITY_BYTES,
+        "targets": expected_targets,
+        "artifacts": canonical_artifacts,
+    }
+
+
+def require_canonical_inrou_operator_preseed_receipt_line(
+    payload: bytes,
+    target: Path,
+    stage_dir: Path,
+) -> dict[str, Any]:
+    """Require the helper's sole newline-terminated canonical compact JSON line."""
+
+    if (
+        not payload.endswith(b"\n")
+        or not payload[:-1]
+        or b"\n" in payload[:-1]
+        or b"\r" in payload[:-1]
+    ):
+        fail("Inrou operator-preseed helper emitted a noncanonical receipt line")
+    try:
+        decoded = json_loads_no_duplicates(payload[:-1].decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        fail("Inrou operator-preseed helper emitted invalid V1 JSON")
+    receipt = require_canonical_inrou_operator_preseed_receipt(
+        decoded,
+        target,
+        stage_dir,
+    )
+    canonical = (
+        json.dumps(receipt, ensure_ascii=False, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    if payload != canonical:
+        fail("Inrou operator-preseed helper receipt is not canonical compact JSON")
+    return receipt
 
 
 def preseed_inrou_stage(
@@ -3748,10 +4537,10 @@ def preseed_inrou_stage(
     stage_dir: Path,
     trusted_guest: TrustedInrouGuestArtifact,
     timeout_seconds: float,
-    run: Runner,
-) -> None:
-    """Ingest both exact stage commitments into all four disjoint stores."""
+) -> dict[str, Any]:
+    """Preseed all three stage artifacts under one four-store ready barrier."""
 
+    require_inrou_stage_placement_targets(target, stage_dir)
     if require_inrou_stage_guest_artifact(stage_dir) != trusted_guest:
         fail("Taira Inrou stage guest identity changed before SoraFS preseed")
     data_dirs = [
@@ -3760,39 +4549,150 @@ def preseed_inrou_stage(
     ]
     if len(set(data_dirs)) != PEER_COUNT:
         fail("Taira Inrou preseed requires four disjoint SoraFS roots")
+    for data_dir in data_dirs:
+        try:
+            data_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+        except OSError as error:
+            fail(f"cannot create Taira Inrou preseed root {data_dir}: {error}")
+        _require_custodied_directory_chain(data_dir, label="Taira Inrou preseed root")
+    placements = taira_inrou_placement_targets(target)
+    command = [str(sorafs_node), "preseed-session"]
+    command.extend(
+        f"--target={placement['validator_account_id']},{placement['peer_id']},{data_dir}"
+        for placement, data_dir in zip(placements, data_dirs, strict=True)
+    )
+    command.append(f"--max-capacity-bytes={TAIRA_SORAFS_MAX_CAPACITY_BYTES}")
+    for manifest, source_flag, source in (
+        (
+            stage_dir / INROU_STAGE_BUNDLE_MANIFEST,
+            "--payload",
+            stage_dir / INROU_STAGE_BUNDLE_PAYLOAD,
+        ),
+        (
+            stage_dir / INROU_STAGE_GUEST_MANIFEST,
+            "--payload-dir",
+            stage_dir / INROU_STAGE_GUEST_PAYLOAD,
+        ),
+        (
+            stage_dir / INROU_STAGE_DISCOVERY_MANIFEST,
+            "--payload-dir",
+            stage_dir / INROU_STAGE_DISCOVERY_PAYLOAD,
+        ),
+    ):
+        command.extend((f"--manifest={manifest}", f"{source_flag}={source}"))
+    return run_locked_inrou_operator_preseed_session(
+        command,
+        cwd=target,
+        timeout_seconds=timeout_seconds + 300,
+        verify_ready_receipt=lambda payload: require_canonical_inrou_operator_preseed_receipt_line(
+            payload,
+            target,
+            stage_dir,
+        ),
+    )
 
-    def preseed_peer(data_dir: Path) -> None:
-        for manifest, source_flag, source in (
-            (
-                stage_dir / INROU_STAGE_BUNDLE_MANIFEST,
-                "--payload",
-                stage_dir / INROU_STAGE_BUNDLE_PAYLOAD,
-            ),
-            (
-                stage_dir / INROU_STAGE_GUEST_MANIFEST,
-                "--payload-dir",
-                stage_dir / INROU_STAGE_GUEST_PAYLOAD,
-            ),
+
+def require_canonical_inrou_local_placement(
+    value: object,
+    context: str,
+) -> dict[str, Any]:
+    """Require one exact node-local placement identity from the Torii root."""
+
+    if not isinstance(value, dict) or set(value) != INROU_LOCAL_PLACEMENT_KEYS_V1:
+        fail(f"{context} violates the exact V1 local-placement schema")
+    peer_id = value.get("peer_id")
+    validator_account_id = value.get("validator_account_id")
+    if (
+        not isinstance(peer_id, str)
+        or not peer_id
+        or peer_id.strip() != peer_id
+        or any(character.isspace() for character in peer_id)
+    ):
+        fail(f"{context} has a malformed peer_id")
+    try:
+        # The canonical decoder also re-encodes the controller bytes. Pinning
+        # the discriminant makes this the one exact testnet I105 rendering.
+        _decode_canonical_i105_account_id(
+            validator_account_id,
+            expected_discriminant=DEFAULT_CHAIN_DISCRIMINANT,
+        )
+    except (TypeError, ValueError):
+        fail(f"{context} has a malformed canonical testnet I105 validator_account_id")
+    replica_slot = value.get("replica_slot")
+    if type(replica_slot) is not int or replica_slot not in range(1, PEER_COUNT + 1):
+        fail(f"{context} has a malformed replica_slot")
+    if not is_canonical_iroha_hash_hex(value.get("placement_incarnation")):
+        fail(f"{context} has a malformed placement_incarnation")
+    return value
+
+
+def peer_index_for_local_placement(target: Path, placement: object) -> int:
+    """Map one exact receipt account+peer pair to one generated peer config."""
+
+    canonical = require_canonical_inrou_local_placement(
+        placement,
+        "compiled Taira Inrou local placement",
+    )
+    placements = taira_inrou_placement_targets(target)
+    matches = [
+        index
+        for index, expected in enumerate(placements)
+        if expected["validator_account_id"] == canonical["validator_account_id"]
+        and expected["peer_id"] == canonical["peer_id"]
+    ]
+    if len(matches) != 1:
+        fail(
+            "Inrou local placement account+peer pair does not map to exactly one "
+            "generated peer config"
+        )
+    return matches[0]
+
+
+def require_canonical_inrou_replicas(value: object, context: str) -> list[dict[str, Any]]:
+    """Require the four ordered V1 replica identities and durable boot evidence."""
+
+    if not isinstance(value, list) or len(value) != PEER_COUNT:
+        fail(f"{context} must contain four replica identities")
+    app_data_markers: set[str] = set()
+    guest_boot_ids: set[str] = set()
+    for expected_slot, replica in enumerate(value, start=1):
+        if (
+            not isinstance(replica, dict)
+            or set(replica) != INROU_CANARY_REPLICA_KEYS_V1
         ):
-            run(
-                [
-                    str(sorafs_node),
-                    "ingest",
-                    f"--data-dir={data_dir}",
-                    f"--max-capacity-bytes={TAIRA_SORAFS_MAX_CAPACITY_BYTES}",
-                    f"--manifest={manifest}",
-                    f"{source_flag}={source}",
-                ],
-                cwd=target,
-                timeout=timeout_seconds + 300,
-            )
-
-    parallel_map(data_dirs, preseed_peer)
+            fail(f"{context} has a malformed replica identity")
+        slot = replica.get("replica_slot")
+        if (
+            type(slot) is not int
+            or slot != expected_slot
+            or replica.get("identity") != f"taira_inrou_canary:replica:{slot}"
+        ):
+            fail(f"{context} has a non-canonical replica identity")
+        for field in (
+            "response_sha256",
+            "app_data_marker_sha256",
+            "guest_boot_id_sha256",
+        ):
+            digest = replica.get(field)
+            if not isinstance(digest, str) or LOWER_32_BYTE_HEX_RE.fullmatch(digest) is None:
+                fail(f"{context} has a malformed {field}")
+        app_data_markers.add(replica["app_data_marker_sha256"])
+        guest_boot_ids.add(replica["guest_boot_id_sha256"])
+        boot_sequence = replica.get("boot_sequence")
+        if type(boot_sequence) is not int or not 1 <= boot_sequence < 1 << 64:
+            fail(f"{context} has a malformed boot_sequence")
+    if len(app_data_markers) != PEER_COUNT:
+        fail(f"{context} repeats a durable app-data marker")
+    if len(guest_boot_ids) != PEER_COUNT:
+        fail(f"{context} repeats a guest boot identity")
+    return value
 
 
 def require_canonical_inrou_canary_receipt(
     receipt: object,
     expected_public_root: str,
+    started_at_unix_ms: int | None = None,
+    finished_at_unix_ms: int | None = None,
 ) -> dict[str, Any]:
     """Require one exact compiled four-replica Inrou success receipt."""
 
@@ -3819,9 +4719,27 @@ def require_canonical_inrou_canary_receipt(
         value = receipt.get(field)
         if type(value) is not int or value != PEER_COUNT:
             fail(f"compiled Taira Inrou canary receipt requires {field}=4")
+    observed_at_unix_ms = receipt.get("observed_at_unix_ms")
+    if (
+        type(observed_at_unix_ms) is not int
+        or not 1 <= observed_at_unix_ms < 1 << 64
+    ):
+        fail("compiled Taira Inrou canary receipt has malformed observed_at_unix_ms")
+    if (started_at_unix_ms is None) != (finished_at_unix_ms is None):
+        fail("compiled Taira Inrou canary freshness window is incomplete")
+    if started_at_unix_ms is not None and finished_at_unix_ms is not None:
+        if (
+            type(started_at_unix_ms) is not int
+            or type(finished_at_unix_ms) is not int
+            or observed_at_unix_ms < started_at_unix_ms
+            or observed_at_unix_ms > finished_at_unix_ms
+        ):
+            fail("compiled Taira Inrou canary evidence is not fresh for this invocation")
 
     for field in (
         "bundle_hash",
+        "discovery_document_hash",
+        "deployment_bundle_hash",
         "container_manifest_hash",
         "service_manifest_hash",
         "transaction_hash_hex",
@@ -3837,11 +4755,19 @@ def require_canonical_inrou_canary_receipt(
         value = receipt.get(field)
         if not isinstance(value, str) or LOWER_32_BYTE_HEX_RE.fullmatch(value) is None:
             fail(f"compiled Taira Inrou canary receipt has malformed {field}")
-    for field in ("bundle_content_cid", "guest_content_cid"):
+    for field in (
+        "bundle_content_cid",
+        "guest_content_cid",
+        "discovery_content_cid",
+    ):
         value = receipt.get(field)
         if not isinstance(value, str) or SORAFS_CONTENT_CID_V1_RE.fullmatch(value) is None:
             fail(f"compiled Taira Inrou canary receipt has malformed {field}")
-    for field in ("bundle_manifest_digest_hex", "guest_manifest_digest_hex"):
+    for field in (
+        "bundle_manifest_digest_hex",
+        "guest_manifest_digest_hex",
+        "discovery_manifest_digest_hex",
+    ):
         value = receipt.get(field)
         if not isinstance(value, str) or LOWER_32_BYTE_HEX_RE.fullmatch(value) is None:
             fail(f"compiled Taira Inrou canary receipt has malformed {field}")
@@ -3878,8 +4804,17 @@ def require_canonical_inrou_canary_receipt(
         receipt.get("fee_quote"), "compiled Taira Inrou canary receipt.fee_quote"
     )
 
+    discovery_cid = receipt["discovery_content_cid"]
+    if (
+        receipt.get("discovery_payload_dir") != str(INROU_STAGE_DISCOVERY_PAYLOAD)
+        or receipt.get("public_discovery_url")
+        != f"https://taira.sora.org/sorafs/cid/{discovery_cid}/index.json"
+        or receipt.get("public_discovery_cid_host_url")
+        != f"https://{discovery_cid}.sorafs.taira.sora.org/index.json"
+    ):
+        fail("compiled Taira Inrou canary has noncanonical discovery identity")
     checks = receipt.get("checks")
-    if not isinstance(checks, list) or len(checks) != 2:
+    if not isinstance(checks, list) or len(checks) != 3:
         fail("compiled Taira Inrou canary receipt has malformed checks")
     expected_checks = (
         (
@@ -3888,7 +4823,12 @@ def require_canonical_inrou_canary_receipt(
         ),
         (
             "inrou_public_routes",
-            "observed deterministic identities for replica slots 1, 2, 3, and 4",
+            "observed distinct durable identities and guest boots for replica slots "
+            "1, 2, 3, and 4",
+        ),
+        (
+            "inrou_public_discovery",
+            "current and revision authority plus public path and CID-host bytes, headers, and hash are exact",
         ),
     )
     for check, (name, detail) in zip(checks, expected_checks, strict=True):
@@ -3904,27 +4844,18 @@ def require_canonical_inrou_canary_receipt(
         if check["http_status"] != 200:
             fail(f"compiled Taira Inrou canary check did not pass: {name}")
 
-    replicas = receipt.get("replica_identities")
-    if not isinstance(replicas, list) or len(replicas) != PEER_COUNT:
-        fail("compiled Taira Inrou canary receipt must contain four replica identities")
-    for expected_slot, replica in enumerate(replicas, start=1):
-        if (
-            not isinstance(replica, dict)
-            or set(replica) != INROU_CANARY_REPLICA_KEYS_V1
-        ):
-            fail("compiled Taira Inrou canary receipt has a malformed replica identity")
-        slot = replica.get("replica_slot")
-        identity = replica.get("identity")
-        if (
-            isinstance(slot, bool)
-            or not isinstance(slot, int)
-            or slot != expected_slot
-            or identity != f"taira_inrou_canary:replica:{slot}"
-        ):
-            fail("compiled Taira Inrou canary receipt has a non-canonical replica identity")
-        digest = replica.get("response_sha256")
-        if not isinstance(digest, str) or LOWER_32_BYTE_HEX_RE.fullmatch(digest) is None:
-            fail("compiled Taira Inrou canary receipt has a malformed response digest")
+    replicas = require_canonical_inrou_replicas(
+        receipt.get("replica_identities"),
+        "compiled Taira Inrou canary receipt",
+    )
+    placement = require_canonical_inrou_local_placement(
+        receipt.get("local_placement"),
+        "compiled Taira Inrou canary receipt.local_placement",
+    )
+    if placement["replica_slot"] not in {
+        replica["replica_slot"] for replica in replicas
+    }:
+        fail("compiled Taira Inrou canary local placement has no matching replica identity")
     return receipt
 
 
@@ -3964,20 +4895,40 @@ def require_canonical_inrou_check_receipt(
             fail(f"compiled Taira Inrou check receipt requires {field}=4")
     for field in (
         "bundle_hash",
+        "discovery_document_hash",
+        "deployment_bundle_hash",
         "container_manifest_hash",
         "service_manifest_hash",
     ):
         value = receipt.get(field)
         if not is_canonical_iroha_hash_hex(value):
             fail(f"compiled Taira Inrou check receipt has malformed {field}")
-    for field in ("bundle_manifest_digest_hex", "guest_manifest_digest_hex"):
+    for field in (
+        "bundle_manifest_digest_hex",
+        "guest_manifest_digest_hex",
+        "discovery_manifest_digest_hex",
+    ):
         value = receipt.get(field)
         if not isinstance(value, str) or LOWER_32_BYTE_HEX_RE.fullmatch(value) is None:
             fail(f"compiled Taira Inrou check receipt has malformed {field}")
-    for field in ("bundle_content_cid", "guest_content_cid"):
+    for field in (
+        "bundle_content_cid",
+        "guest_content_cid",
+        "discovery_content_cid",
+    ):
         value = receipt.get(field)
         if not isinstance(value, str) or SORAFS_CONTENT_CID_V1_RE.fullmatch(value) is None:
             fail(f"compiled Taira Inrou check receipt has malformed {field}")
+    live_placement = require_canonical_inrou_local_placement(
+        receipt.get("local_placement"),
+        "compiled Taira Inrou check receipt.local_placement",
+    )
+    stored_placement = require_canonical_inrou_local_placement(
+        stored_deploy_receipt.get("local_placement"),
+        "stored Taira Inrou deploy receipt.local_placement",
+    )
+    if live_placement != stored_placement:
+        fail("fresh Inrou check identity differs from stored deploy field local_placement")
     for field in (
         "service_name",
         "service_version",
@@ -3988,6 +4939,13 @@ def require_canonical_inrou_check_receipt(
         "bundle_manifest_digest_hex",
         "guest_content_cid",
         "guest_manifest_digest_hex",
+        "discovery_payload_dir",
+        "discovery_document_hash",
+        "discovery_content_cid",
+        "discovery_manifest_digest_hex",
+        "public_discovery_url",
+        "public_discovery_cid_host_url",
+        "deployment_bundle_hash",
         "container_manifest_hash",
         "service_manifest_hash",
     ):
@@ -4002,14 +4960,29 @@ def require_canonical_inrou_check_receipt(
     ):
         fail("compiled Taira Inrou check evidence is not fresh for this invocation")
 
+    discovery_cid = receipt["discovery_content_cid"]
+    if (
+        receipt.get("discovery_payload_dir") != str(INROU_STAGE_DISCOVERY_PAYLOAD)
+        or receipt.get("public_discovery_url")
+        != f"https://taira.sora.org/sorafs/cid/{discovery_cid}/index.json"
+        or receipt.get("public_discovery_cid_host_url")
+        != f"https://{discovery_cid}.sorafs.taira.sora.org/index.json"
+    ):
+        fail("compiled Taira Inrou check has noncanonical discovery identity")
+
     checks = receipt.get("checks")
-    if not isinstance(checks, list) or len(checks) != 2:
+    if not isinstance(checks, list) or len(checks) != 3:
         fail("compiled Taira Inrou check receipt has malformed checks")
     expected_checks = (
         ("inrou_authoritative_status", "active_adverts=4, hosted_replicas=4"),
         (
             "inrou_public_routes",
-            "observed deterministic identities for replica slots 1, 2, 3, and 4",
+            "observed distinct durable identities and guest boots for replica slots "
+            "1, 2, 3, and 4",
+        ),
+        (
+            "inrou_public_discovery",
+            "current and revision authority plus public path and CID-host bytes, headers, and hash are exact",
         ),
     )
     for check, (name, detail) in zip(checks, expected_checks, strict=True):
@@ -4024,27 +4997,188 @@ def require_canonical_inrou_check_receipt(
         ):
             fail(f"compiled Taira Inrou check did not pass: {name}")
 
-    replicas = receipt.get("replica_identities")
-    if not isinstance(replicas, list) or len(replicas) != PEER_COUNT:
-        fail("compiled Taira Inrou check receipt must contain four replica identities")
-    for expected_slot, replica in enumerate(replicas, start=1):
-        if (
-            not isinstance(replica, dict)
-            or set(replica) != INROU_CANARY_REPLICA_KEYS_V1
-        ):
-            fail("compiled Taira Inrou check has a malformed replica identity")
-        slot = replica.get("replica_slot")
-        if (
-            isinstance(slot, bool)
-            or not isinstance(slot, int)
-            or slot != expected_slot
-            or replica.get("identity") != f"taira_inrou_canary:replica:{slot}"
-        ):
-            fail("compiled Taira Inrou check has a non-canonical replica identity")
-        digest = replica.get("response_sha256")
-        if not isinstance(digest, str) or LOWER_32_BYTE_HEX_RE.fullmatch(digest) is None:
-            fail("compiled Taira Inrou check has a malformed response digest")
+    replicas = require_canonical_inrou_replicas(
+        receipt.get("replica_identities"),
+        "compiled Taira Inrou check receipt",
+    )
+    stored_replicas = require_canonical_inrou_replicas(
+        stored_deploy_receipt.get("replica_identities"),
+        "stored Taira Inrou deploy receipt",
+    )
+    for stored, live in zip(stored_replicas, replicas, strict=True):
+        if live["identity"] != stored["identity"]:
+            fail("fresh Inrou check has a substituted replica identity")
+        if live["app_data_marker_sha256"] != stored["app_data_marker_sha256"]:
+            fail("fresh Inrou check durable app-data marker differs from deployment")
     return receipt
+
+
+def _require_restart_pid_vector(value: object, context: str) -> tuple[int, ...]:
+    """Require four distinct positive OS PIDs in generated peer order."""
+
+    if (
+        not isinstance(value, list)
+        or len(value) != PEER_COUNT
+        or any(type(pid) is not int or not 1 < pid <= 2_147_483_647 for pid in value)
+        or len(set(value)) != PEER_COUNT
+    ):
+        fail(f"{context} must contain four distinct positive peer PIDs")
+    return tuple(value)
+
+
+def require_inrou_restart_transition(
+    deploy_receipt: dict[str, Any],
+    restart_receipt: dict[str, Any],
+) -> None:
+    """Require one durable reboot on the locally placed replica and no other drift."""
+
+    placement = require_canonical_inrou_local_placement(
+        deploy_receipt.get("local_placement"),
+        "stored Taira Inrou deploy receipt.local_placement",
+    )
+    if restart_receipt.get("local_placement") != placement:
+        fail("post-restart Inrou local placement differs from deployment")
+    before_rows = require_canonical_inrou_replicas(
+        deploy_receipt.get("replica_identities"),
+        "stored Taira Inrou deploy receipt",
+    )
+    after_rows = require_canonical_inrou_replicas(
+        restart_receipt.get("replica_identities"),
+        "post-restart Taira Inrou check receipt",
+    )
+    restarted_slot = placement["replica_slot"]
+    for before, after in zip(before_rows, after_rows, strict=True):
+        slot = before["replica_slot"]
+        if after["app_data_marker_sha256"] != before["app_data_marker_sha256"]:
+            fail(f"Inrou replica slot {slot} lost its durable app-data marker on restart")
+        if slot == restarted_slot:
+            if after["boot_sequence"] != before["boot_sequence"] + 1:
+                fail("selected Inrou replica boot sequence did not advance exactly once")
+            if after["guest_boot_id_sha256"] == before["guest_boot_id_sha256"]:
+                fail("selected Inrou replica guest boot identity did not change")
+            if after["response_sha256"] == before["response_sha256"]:
+                fail("selected Inrou replica health response did not change after reboot")
+        elif after != before:
+            fail(f"non-selected Inrou replica slot {slot} changed during exact-host restart")
+
+
+def require_inrou_live_continuity(
+    restart_receipt: dict[str, Any],
+    live_receipt: dict[str, Any],
+) -> None:
+    """Reject durable rollback while allowing fully evidenced later guest boots."""
+
+    if live_receipt.get("local_placement") != restart_receipt.get("local_placement"):
+        fail("live Inrou local placement differs from restart qualification")
+    stored_rows = require_canonical_inrou_replicas(
+        restart_receipt.get("replica_identities"),
+        "stored post-restart Taira Inrou receipt",
+    )
+    live_rows = require_canonical_inrou_replicas(
+        live_receipt.get("replica_identities"),
+        "fresh Taira Inrou continuity receipt",
+    )
+    for stored, live in zip(stored_rows, live_rows, strict=True):
+        slot = stored["replica_slot"]
+        if live["app_data_marker_sha256"] != stored["app_data_marker_sha256"]:
+            fail(f"Inrou replica slot {slot} durable marker changed after qualification")
+        if live["boot_sequence"] < stored["boot_sequence"]:
+            fail(f"Inrou replica slot {slot} durable boot sequence rolled back")
+        if live["boot_sequence"] == stored["boot_sequence"]:
+            if (
+                live["guest_boot_id_sha256"] != stored["guest_boot_id_sha256"]
+                or live["response_sha256"] != stored["response_sha256"]
+            ):
+                fail(f"Inrou replica slot {slot} broke same-boot continuity")
+        elif (
+            live["guest_boot_id_sha256"] == stored["guest_boot_id_sha256"]
+            or live["response_sha256"] == stored["response_sha256"]
+        ):
+            fail(f"Inrou replica slot {slot} advanced without a new guest boot identity")
+
+
+def require_inrou_restart_proof(
+    target: Path,
+    expected_public_root: str,
+    deploy_receipt: dict[str, Any],
+    source_observation: dict[str, str],
+    target_triple: str,
+    value: object,
+) -> dict[str, Any]:
+    """Require the exact persisted V1 selected-validator restart proof."""
+
+    if not isinstance(value, dict) or set(value) != INROU_RESTART_PROOF_KEYS_V1:
+        fail("Inrou restart proof violates the exact V1 schema")
+    if type(value.get("schema_version")) is not int or value["schema_version"] != 1:
+        fail("Inrou restart proof has a non-V1 schema version")
+    placement = require_canonical_inrou_local_placement(
+        value.get("local_placement"),
+        "Inrou restart proof.local_placement",
+    )
+    if placement != deploy_receipt.get("local_placement"):
+        fail("Inrou restart proof placement differs from its deploy receipt")
+    peer_index = value.get("peer_index")
+    if type(peer_index) is not int or peer_index not in range(PEER_COUNT):
+        fail("Inrou restart proof has a malformed peer_index")
+    if peer_index != peer_index_for_local_placement(target, placement):
+        fail("Inrou restart proof peer_index does not match local placement peer_id")
+
+    pids_before = _require_restart_pid_vector(
+        value.get("pids_before"), "Inrou restart proof.pids_before"
+    )
+    pids_after = _require_restart_pid_vector(
+        value.get("pids_after"), "Inrou restart proof.pids_after"
+    )
+    if pids_after[peer_index] == pids_before[peer_index]:
+        fail("Inrou restart proof did not replace the selected validator PID")
+    for index in range(PEER_COUNT):
+        if index != peer_index and pids_after[index] != pids_before[index]:
+            fail("Inrou restart proof changed a non-selected validator PID")
+
+    height_before = value.get("height_before")
+    height_after = value.get("height_after")
+    if (
+        type(height_before) is not int
+        or type(height_after) is not int
+        or height_before <= 0
+        or height_after <= height_before
+    ):
+        fail("Inrou restart proof does not show a strictly advancing cluster height")
+    for field in ("start_script_sha256", "stop_script_sha256"):
+        digest = value.get(field)
+        if not isinstance(digest, str) or LOWER_32_BYTE_HEX_RE.fullmatch(digest) is None:
+            fail(f"Inrou restart proof has a malformed {field}")
+    if value["start_script_sha256"] != generated_script_sha256(target / "start.sh"):
+        fail("generated start script changed after Inrou restart qualification")
+    if value["stop_script_sha256"] != generated_script_sha256(target / "stop.sh"):
+        fail("generated stop script changed after Inrou restart qualification")
+
+    build_identity = value.get("build_identity")
+    if (
+        not isinstance(build_identity, dict)
+        or set(build_identity) != INROU_RESTART_BUILD_IDENTITY_KEYS_V1
+        or build_identity.get("git_commit_sha") != source_observation.get("git_head")
+        or build_identity.get("target_triple") != target_triple
+    ):
+        fail("Inrou restart proof has a substituted validator build identity")
+    started_at = value.get("inrou_check_started_at_unix_ms")
+    finished_at = value.get("inrou_check_finished_at_unix_ms")
+    if (
+        type(started_at) is not int
+        or type(finished_at) is not int
+        or started_at <= 0
+        or finished_at < started_at
+    ):
+        fail("Inrou restart proof has a malformed live-check observation window")
+    restart_receipt = require_canonical_inrou_check_receipt(
+        value.get("inrou_check"),
+        expected_public_root,
+        deploy_receipt,
+        started_at,
+        finished_at,
+    )
+    require_inrou_restart_transition(deploy_receipt, restart_receipt)
+    return value
 
 
 def _read_inrou_guest_qualification_payload(path: Path) -> object:
@@ -4194,11 +5328,34 @@ def require_inrou_guest_qualification(
         record.get("inrou_canary"),
         expected_public_root,
     )
+    retained_guest = require_inrou_stage_guest_artifact(
+        target / INROU_STAGE_DIRECTORY
+    )
+    if retained_guest != TrustedInrouGuestArtifact(
+        manifest_digest_hex=inrou_canary["guest_manifest_digest_hex"],
+        content_cid=inrou_canary["guest_content_cid"],
+    ):
+        fail("retained Inrou stage guest identity differs from qualification evidence")
+    inrou_operator_preseed = require_canonical_inrou_operator_preseed_receipt(
+        record.get("inrou_operator_preseed"),
+        target,
+        target / INROU_STAGE_DIRECTORY,
+    )
+    inrou_restart = require_inrou_restart_proof(
+        target,
+        expected_public_root,
+        inrou_canary,
+        source_observation,
+        target_triple,
+        record.get("inrou_restart"),
+    )
     return {
         "schema_version": INROU_GUEST_QUALIFICATION_SCHEMA_VERSION_V1,
         "inrou_guest_workload_qualification": "verified",
         "inrou_canary_input_content_sha256": input_digest,
+        "inrou_operator_preseed": inrou_operator_preseed,
         "inrou_canary": inrou_canary,
+        "inrou_restart": inrou_restart,
         "source_observation": source_observation,
         "target_triple": target_triple,
         "toolchain": toolchain,
@@ -4209,7 +5366,9 @@ def write_inrou_guest_qualification(
     target: Path,
     expected_public_root: str,
     input_content_sha256: str,
+    inrou_operator_preseed: dict[str, Any],
     inrou_canary: dict[str, Any],
+    inrou_restart: dict[str, Any],
     source_observation: dict[str, str],
     target_triple: str,
     toolchain: dict[str, dict[str, int | str]],
@@ -4221,15 +5380,31 @@ def write_inrou_guest_qualification(
         or LOWER_32_BYTE_HEX_RE.fullmatch(input_content_sha256) is None
     ):
         fail("cannot persist a malformed Inrou canary input digest")
+    canonical_source_observation = require_source_observation_evidence(source_observation)
+    canonical_inrou_operator_preseed = require_canonical_inrou_operator_preseed_receipt(
+        inrou_operator_preseed,
+        target,
+        target / INROU_STAGE_DIRECTORY,
+    )
+    canonical_inrou_canary = require_canonical_inrou_canary_receipt(
+        inrou_canary,
+        expected_public_root,
+    )
     record = {
         "schema_version": INROU_GUEST_QUALIFICATION_SCHEMA_VERSION_V1,
         "inrou_guest_workload_qualification": "verified",
         "inrou_canary_input_content_sha256": input_content_sha256,
-        "inrou_canary": require_canonical_inrou_canary_receipt(
-            inrou_canary,
+        "inrou_operator_preseed": canonical_inrou_operator_preseed,
+        "inrou_canary": canonical_inrou_canary,
+        "inrou_restart": require_inrou_restart_proof(
+            target,
             expected_public_root,
+            canonical_inrou_canary,
+            canonical_source_observation,
+            target_triple,
+            inrou_restart,
         ),
-        "source_observation": require_source_observation_evidence(source_observation),
+        "source_observation": canonical_source_observation,
         "target_triple": target_triple,
         "toolchain": require_compiled_toolchain_evidence(toolchain, target_triple),
     }
@@ -5209,6 +6384,13 @@ def _validate_inrou_stage_v1(value: Any, context: str) -> None:
                 "bundle_manifest_digest_hex",
                 "guest_content_cid",
                 "guest_manifest_digest_hex",
+                "discovery_payload_dir",
+                "discovery_document_hash",
+                "discovery_content_cid",
+                "discovery_manifest_digest_hex",
+                "public_discovery_url",
+                "public_discovery_cid_host_url",
+                "deployment_bundle_hash",
                 "container_manifest_hash",
                 "service_manifest_hash",
             }
@@ -5317,10 +6499,16 @@ def _validate_prepared_envelope_v1(
         _validate_prepared_faucet_v1(payload, context, binding)
     elif tag == "final_canary":
         _validate_final_canary_v1(payload, context, binding, root["authority"])
-    elif tag in {"inrou_bundle_pin", "inrou_guest_pin", "inrou_canary"}:
+    elif tag in {
+        "inrou_bundle_pin",
+        "inrou_guest_pin",
+        "inrou_discovery_pin",
+        "inrou_canary",
+    }:
         expected_operation = {
             "inrou_bundle_pin": "bundle_pin",
             "inrou_guest_pin": "guest_pin",
+            "inrou_discovery_pin": "discovery_pin",
             "inrou_canary": "service_mutation",
         }[tag]
         _validate_prepared_inrou_v1(
@@ -5500,6 +6688,7 @@ def _prepared_report(
         "write_canary": {"final_canary"},
         "inrou_bundle_pin": {"inrou_bundle_pin"},
         "inrou_guest_pin": {"inrou_guest_pin"},
+        "inrou_discovery_pin": {"inrou_discovery_pin"},
         "inrou_canary": {"inrou_canary"},
     }.get(kind)
     if expected_tags is None:
@@ -5841,7 +7030,7 @@ def require_prepared_canary_closure(
     expected_public_root: str,
     stored_deploy_receipt: dict[str, Any] | None = None,
 ) -> tuple[Path, ...]:
-    """Require all and only the six exact retained prepared envelopes."""
+    """Require all and only the seven exact retained prepared envelopes."""
 
     directory = target / PREPARED_CANARY_DIRECTORY
     try:
@@ -5865,7 +7054,12 @@ def require_prepared_canary_closure(
         ("02-final-canary.json", "write_canary", {"final_canary"}),
         ("03-bundle-pin.json", "inrou_bundle_pin", {"inrou_bundle_pin"}),
         ("04-guest-pin.json", "inrou_guest_pin", {"inrou_guest_pin"}),
-        ("05-service-mutation.json", "inrou_canary", {"inrou_canary"}),
+        (
+            "05-discovery-pin.json",
+            "inrou_discovery_pin",
+            {"inrou_discovery_pin"},
+        ),
+        ("06-service-mutation.json", "inrou_canary", {"inrou_canary"}),
     )
     expected_names = {name for name, _kind, _tags in specifications}
     actual_names = {entry.name for entry in directory.iterdir()}
@@ -5907,7 +7101,7 @@ def require_prepared_canary_closure(
         elif identity != common:
             fail("prepared canary envelope closure spans multiple authorizations")
         if (
-            name == "05-service-mutation.json"
+            name == "06-service-mutation.json"
             and stored_deploy_receipt is not None
             and stored_deploy_receipt.get("prepared_envelope_sha256")
             != hashlib.sha256(payload).hexdigest()
@@ -5925,8 +7119,9 @@ def run_inrou_canary(
     timeout_seconds: float,
     run: Runner,
 ) -> dict[str, Any]:
-    """Execute and verify the exact six-child prepared canary chain."""
+    """Execute and verify the exact seven-child prepared canary chain."""
 
+    started_at_unix_ms = time.time_ns() // 1_000_000
     require_inrou_stage(stage_dir)
     public_root = root.rstrip("/")
     onboarding_token = target / LOCALNET_ONBOARDING_TOKEN_FILE
@@ -6063,7 +7258,14 @@ def run_inrou_canary(
         predecessor = path
     if final_receipt is None:
         fail("prepared Inrou canary chain produced no service receipt")
-    receipt = require_canonical_inrou_canary_receipt(final_receipt, public_root)
+    finished_at_unix_ms = time.time_ns() // 1_000_000
+    receipt = require_canonical_inrou_canary_receipt(
+        final_receipt,
+        public_root,
+        started_at_unix_ms,
+        finished_at_unix_ms,
+    )
+    peer_index_for_local_placement(target, receipt["local_placement"])
     require_prepared_canary_closure(target, public_root, receipt)
     return receipt
 
@@ -6076,7 +7278,7 @@ def run_inrou_check(
     timeout_seconds: float,
     stored_deploy_receipt: dict[str, Any],
     run: Runner,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], int, int]:
     """Revalidate the retained stage and collect one fresh read-only live receipt."""
 
     require_inrou_stage(stage_dir)
@@ -6107,12 +7309,112 @@ def run_inrou_check(
         receipt = json_loads_no_duplicates(completed.stdout or "")
     except (TypeError, ValueError):
         fail("compiled Taira Inrou check did not return its JSON evidence")
-    return require_canonical_inrou_check_receipt(
+    canonical_receipt = require_canonical_inrou_check_receipt(
         receipt,
         public_root,
         stored_deploy_receipt,
         started_at_unix_ms,
         finished_at_unix_ms,
+    )
+    peer_index_for_local_placement(target, canonical_receipt["local_placement"])
+    return (
+        canonical_receipt,
+        started_at_unix_ms,
+        finished_at_unix_ms,
+    )
+
+
+def qualify_inrou_host_restart(
+    target: Path,
+    iroha: Path,
+    roots: Sequence[str],
+    stage_dir: Path,
+    deploy_receipt: dict[str, Any],
+    peer_index: int,
+    pids_before: Sequence[int],
+    height_before: int,
+    start_script_sha256: str,
+    stop_script_sha256: str,
+    source_observation: dict[str, str],
+    target_triple: str,
+    env: dict[str, str],
+    timeout_seconds: float,
+    run: Runner,
+    request: Request,
+) -> tuple[dict[str, Any], list[int]]:
+    """Restart the exact local Inrou host and prove durable guest continuity."""
+
+    if generated_script_sha256(target / "start.sh") != start_script_sha256:
+        fail("generated start script changed before selected Inrou host restart")
+    if generated_script_sha256(target / "stop.sh") != stop_script_sha256:
+        fail("generated stop script changed before selected Inrou host restart")
+    print(f"Restarting exact Inrou host peer{peer_index}...", flush=True)
+    stop_peer_for_restart(target, peer_index, pids_before, run)
+    if generated_script_sha256(target / "start.sh") != start_script_sha256:
+        fail("generated start script changed while selected Inrou host was stopped")
+    pids_after = start_peer_after_restart(
+        target,
+        peer_index,
+        pids_before,
+        env,
+        run,
+    )
+    heights_after = wait_for_cluster(
+        roots,
+        timeout_seconds,
+        request,
+        above=height_before,
+    )
+    require_cluster_build_identity(
+        roots,
+        source_observation["git_head"],
+        target_triple,
+        request,
+    )
+    require_cli_build_identity(
+        target,
+        iroha,
+        source_observation["git_head"],
+        run,
+        timeout_seconds,
+    )
+    inrou_check, check_started_at, check_finished_at = run_inrou_check(
+        target,
+        iroha,
+        roots[0],
+        stage_dir,
+        timeout_seconds,
+        deploy_receipt,
+        run,
+    )
+    proof = {
+        "schema_version": 1,
+        "peer_index": peer_index,
+        "local_placement": deploy_receipt["local_placement"],
+        "pids_before": list(pids_before),
+        "pids_after": list(pids_after),
+        "height_before": height_before,
+        "height_after": heights_after[0],
+        "start_script_sha256": start_script_sha256,
+        "stop_script_sha256": stop_script_sha256,
+        "build_identity": {
+            "git_commit_sha": source_observation["git_head"],
+            "target_triple": target_triple,
+        },
+        "inrou_check_started_at_unix_ms": check_started_at,
+        "inrou_check_finished_at_unix_ms": check_finished_at,
+        "inrou_check": inrou_check,
+    }
+    return (
+        require_inrou_restart_proof(
+            target,
+            roots[0].rstrip("/"),
+            deploy_receipt,
+            source_observation,
+            target_triple,
+            proof,
+        ),
+        heights_after,
     )
 
 
@@ -6258,6 +7560,8 @@ def up(
     roots = torii_roots(args.base_api_port)
     inrou_stage: Path
     inrou_canary_outcome: dict[str, Any]
+    restart_cleanup_peer_index: int | None = None
+    restart_cleanup_pids: tuple[int, ...] | None = None
     try:
         print("Generating a fresh four-validator Taira network...", flush=True)
         generate_network(
@@ -6280,14 +7584,15 @@ def up(
         )
         trusted_guest = inject_trusted_inrou_guest_artifact(target, inrou_stage)
         validate_configs(target, irohad, trusted_guest, run)
-        preseed_inrou_stage(
+        inrou_operator_preseed = preseed_inrou_stage(
             target,
             sorafs_node,
             inrou_stage,
             trusted_guest,
             args.timeout_seconds,
-            run,
         )
+        initial_start_script_sha256 = generated_script_sha256(target / "start.sh")
+        initial_stop_script_sha256 = generated_script_sha256(target / "stop.sh")
         env = os.environ.copy()
         env.update(
             {
@@ -6306,7 +7611,7 @@ def up(
             timeout=60,
             capture_output=False,
         )
-        require_running_cohort(target, run)
+        initial_pids = require_running_cohort(target, run)
         # Health/readiness can become available before genesis is committed.
         # Do not quote or submit a signed transaction against the empty height-0
         # state, where the freshly generated authority is not registered yet.
@@ -6398,6 +7703,34 @@ def up(
             request,
             above=max(final),
         )
+        restart_peer_index = peer_index_for_local_placement(
+            target,
+            inrou_canary_outcome["local_placement"],
+        )
+        restart_cleanup_pids = require_running_cohort(target, run)
+        if restart_cleanup_pids != initial_pids:
+            fail("Taira peer PIDs changed before selected Inrou host restart")
+        restart_cleanup_peer_index = restart_peer_index
+        inrou_restart, final = qualify_inrou_host_restart(
+            target,
+            iroha,
+            roots,
+            inrou_stage,
+            inrou_canary_outcome,
+            restart_peer_index,
+            restart_cleanup_pids,
+            max(final),
+            initial_start_script_sha256,
+            initial_stop_script_sha256,
+            source_observation,
+            target_triple,
+            env,
+            args.timeout_seconds,
+            run,
+            request,
+        )
+        restart_cleanup_peer_index = None
+        restart_cleanup_pids = None
         if args.full_doctor:
             run_full_doctor(target, iroha, roots[0], run)
         if current_source_observation(run) != source_observation:
@@ -6408,7 +7741,9 @@ def up(
             target,
             roots[0].rstrip("/"),
             inrou_canary_workspace.content_sha256,
+            inrou_operator_preseed,
             inrou_canary_outcome,
+            inrou_restart,
             source_observation,
             target_triple,
             toolchain_evidence,
@@ -6424,7 +7759,13 @@ def up(
                 f"warning: cannot safely identify failed Taira network: {cleanup_error}",
                 file=sys.stderr,
             )
-        stopped = stop_network(root, run, tolerate_failure=True)
+        stopped = stop_network(
+            root,
+            run,
+            tolerate_failure=True,
+            expected_partial_peer_index=restart_cleanup_peer_index,
+            expected_partial_pids=restart_cleanup_pids,
+        )
         dump_logs(target)
         if stopped and cleanup_target_was_validated:
             try:
@@ -6449,7 +7790,9 @@ def up(
         "terminal_status": "Applied",
         "configured_inrou_vm_capacity_per_peer": TAIRA_INROU_VM_CAPACITY,
         "inrou_startup_boundary_qualified_peers": PEER_COUNT,
+        "inrou_operator_preseed": guest_qualification["inrou_operator_preseed"],
         "inrou_canary": guest_qualification["inrou_canary"],
+        "inrou_restart": guest_qualification["inrou_restart"],
         "inrou_guest_workload_qualification": "verified",
         "inrou_canary_input_content_sha256": guest_qualification[
             "inrou_canary_input_content_sha256"
@@ -6489,6 +7832,7 @@ def check(
         guest_qualification["inrou_canary"],
     )
     trusted_guest = require_inrou_stage_guest_artifact(target / INROU_STAGE_DIRECTORY)
+    require_inrou_stage_placement_targets(target, target / INROU_STAGE_DIRECTORY)
     expected_trusted_guest = TrustedInrouGuestArtifact(
         manifest_digest_hex=guest_qualification["inrou_canary"][
             "guest_manifest_digest_hex"
@@ -6526,6 +7870,8 @@ def check(
     iroha = Path(str(toolchain["iroha"]["path"]))
     require_running_cohort(target, run)
     heights = wait_for_cluster(roots, args.timeout_seconds, request)
+    if heights[0] < guest_qualification["inrou_restart"]["height_after"]:
+        fail("current Taira cluster height rolled back below restart qualification")
     require_cluster_build_identity(
         roots,
         guest_qualification["source_observation"]["git_head"],
@@ -6547,7 +7893,7 @@ def check(
         run,
     )
     check_all_mcp(roots, request)
-    inrou_live_check = run_inrou_check(
+    inrou_live_check, _check_started_at, _check_finished_at = run_inrou_check(
         target,
         iroha,
         roots[0],
@@ -6556,13 +7902,19 @@ def check(
         guest_qualification["inrou_canary"],
         run,
     )
+    require_inrou_live_continuity(
+        guest_qualification["inrou_restart"]["inrou_check"],
+        inrou_live_check,
+    )
     report = {
         "directory": str(target),
         "torii_roots": list(roots),
         "height": heights[0],
         "configured_inrou_vm_capacity_per_peer": TAIRA_INROU_VM_CAPACITY,
         "configured_peers": PEER_COUNT,
+        "inrou_operator_preseed": guest_qualification["inrou_operator_preseed"],
         "inrou_stored_deploy_receipt": guest_qualification["inrou_canary"],
+        "inrou_restart": guest_qualification["inrou_restart"],
         "inrou_live_check": inrou_live_check,
         "onboarding_live_proof": onboarding_live_proof,
         "inrou_guest_workload_qualification": "verified",
@@ -6580,10 +7932,8 @@ def down(args: argparse.Namespace, *, run: Runner = run_command) -> dict[str, An
     """Stop the peers and destroy the complete disposable network tree."""
 
     root = managed_root(args.dir, create=False)
-    target = require_stoppable_network(root)
+    target = network_dir(root)
     target_identity = require_safe_cleanup_target(root, target)
-    if target_identity is None:
-        fail(f"network cleanup target disappeared before teardown: {target}")
     stop_network(root, run)
     destroy_network(root, target, target_identity)
     return {

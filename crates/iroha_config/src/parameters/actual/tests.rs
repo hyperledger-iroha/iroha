@@ -7,6 +7,15 @@ mod tests {
     };
 
     #[test]
+    fn mcp_inflight_dispatch_limit_is_never_zero() {
+        let mut configured = user::ToriiMcp::default();
+        configured.max_inflight_dispatches = 0;
+        let actual = ToriiMcp::from(configured);
+        assert_eq!(actual.max_inflight_dispatches.get(), 1);
+        assert_eq!(ToriiMcp::default().max_inflight_dispatches.get(), 32);
+    }
+
+    #[test]
     #[should_panic(expected = "inrou.enabled requires soracloud_runtime.production_mode = true")]
     fn soracloud_actual_posture_rejects_nonproduction_inrou() {
         let mut runtime = SoracloudRuntime {

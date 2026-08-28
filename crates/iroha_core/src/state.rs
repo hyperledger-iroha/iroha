@@ -25204,16 +25204,25 @@ impl State {
         &self.telemetry
     }
     pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
+        let kaigi_retained_timestamp_ceiling = self
+            .latest_block_header_fast()
+            .map(|header| u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX));
         crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut self.world)
             .map_err(|error| format!("failed to rebuild Kaigi relay registry: {error}"))?;
-        crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies(&mut self.world)
-            .map_err(|error| format!("failed to rebuild Kaigi account dependencies: {error}"))?;
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies_at(
+            &mut self.world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| format!("failed to rebuild Kaigi account dependencies: {error}"))?;
         let nexus = self.nexus_snapshot();
         let world = self.world_view_with_nexus(&nexus);
         crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
             .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
-        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies(&world)
-            .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies_at(
+            &world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
         drop(world);
         self.world
             .rebuild_asset_definition_alias_indexes()
@@ -25256,12 +25265,18 @@ impl State {
             );
             return Ok(());
         }
+        let kaigi_retained_timestamp_ceiling = self
+            .latest_block_header_fast()
+            .map(|header| u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX));
         let nexus = self.nexus_snapshot();
         let world = self.world_view_with_nexus(&nexus);
         crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
             .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
-        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies(&world)
-            .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies_at(
+            &world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
         drop(world);
         let leases = self.world.vpn_leases.view();
         for (_, record) in leases.iter() {

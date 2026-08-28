@@ -620,11 +620,28 @@ pub(in crate::sumeragi) fn finalize_lifecycle_height<T>(
 /// response, retrying the exact-output owner is the only transition which can
 /// deliver it while ordinary runtime is fenced. Only the two Apply barriers
 /// which admit decided-lane recovery may perform this retry.
+#[cfg(test)]
 pub(super) fn retry_decided_lane_recovery_exact_output(
     _permit: LifecycleDecidedLaneRecoveryPermitV1,
     retry: impl FnOnce() -> Result<bool, String>,
 ) -> Result<bool, V2RunnerError> {
     retry().map_err(V2RunnerError::Service)
+}
+
+/// Reconcile already-owned lane/output handoffs behind a terminal scheduler cut.
+///
+/// Finalized lane preflight can retire a historical request or observe an
+/// authenticated sidecar cancellation while ordinary runtime is fenced. The
+/// sealed permit allows those bounded cancellation and admission handoffs to
+/// settle before exact-output ownership is sampled. This helper cannot dequeue
+/// ingress, advance the reducer, or plan fresh producer work.
+pub(in crate::sumeragi) fn reconcile_terminal_lane_output_handoffs(
+    _permit: LifecycleDecidedLaneRecoveryPermitV1,
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+    limit: usize,
+) -> Result<bool, V2RunnerError> {
+    retry_exact_output_and_apply_sidecar_admissions(lane_work, services, limit)
 }
 
 /// Exercise the production decided-lane drain without exposing its private outcome carrier.
@@ -725,6 +742,8 @@ fn run_lifecycle_active_height(
 ) -> Result<Option<FinalizedLifecycleHeightV1>, V2RunnerError> {
     let mut next_block_sync_attempt =
         initial_block_sync_deadline(height_started_at, round_timeout, *eager_block_sync);
+    let mut next_recovered_decision_fetch_retransmit =
+        deadline_after(height_started_at, retransmit_interval);
     let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut next_npos_beacon_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut block_sync_request = None;
@@ -751,6 +770,19 @@ fn run_lifecycle_active_height(
         }
         let now = Instant::now();
         liveness_watchdog.poll(now);
+        activated.with_runner_runtime(
+            &mut active_runner,
+            |_owner, executor, services, _local_proposal| {
+                retry_recovered_decision_fetch_if_due(
+                    now,
+                    &mut next_recovered_decision_fetch_retransmit,
+                    retransmit_interval,
+                    executor,
+                    services,
+                )?;
+                Ok::<_, V2RunnerError>(())
+            },
+        )?;
         let ingress_snapshot = receiver.snapshot_at(now);
         let ingress_stall_due = if ingress_snapshot.depth == 0 {
             next_scheduler_stall_diagnostic = deadline_after(now, scheduler_stall_diagnostic_age);
@@ -806,7 +838,6 @@ fn run_lifecycle_active_height(
             );
         }
         let lane_only_completion_barrier = producer_claim.blocks_runtime();
-        let mut terminal_exact_output_pending = false;
         if let Some(cut) = terminal_finalization_cut.as_ref() {
             let _ = activated
                 .reconcile_decided_lane_certified_serve(
@@ -814,12 +845,14 @@ fn run_lifecycle_active_height(
                     cut.decided_lane_recovery_permit(),
                 )
                 .map_err(V2RunnerError::Service)?;
-            terminal_exact_output_pending = activated.with_runner_runtime(
+            let _ = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, _executor, services, _local_proposal| {
-                    retry_decided_lane_recovery_exact_output(
+                    reconcile_terminal_lane_output_handoffs(
                         cut.decided_lane_recovery_permit(),
-                        || services.retry_pending_exact_output(),
+                        &mut lane_work,
+                        services,
+                        control_queue_capacity,
                     )
                 },
             )?;
@@ -876,9 +909,12 @@ fn run_lifecycle_active_height(
                             output_guard.as_ref(),
                             &permit,
                         )?;
-                        let _ = retry_decided_lane_recovery_exact_output(permit, || {
-                            services.retry_pending_exact_output()
-                        })?;
+                        let _ = reconcile_terminal_lane_output_handoffs(
+                            permit,
+                            &mut lane_work,
+                            services,
+                            control_queue_capacity,
+                        )?;
                         if producer_claim.permits_open_decided_lane_recovery_ingress() {
                             drain_decided_lane_recovery_ingress(
                                 receiver,
@@ -1471,24 +1507,17 @@ fn run_lifecycle_active_height(
             // top-of-loop sample. Recheck after preflight and immediately
             // before closure so transient backpressure cannot enter the
             // restart-closed finalized-output drain.
-            terminal_exact_output_pending = activated.with_runner_runtime(
+            let _ = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, _executor, services, _local_proposal| {
-                    retry_decided_lane_recovery_exact_output(
+                    reconcile_terminal_lane_output_handoffs(
                         cut.decided_lane_recovery_permit(),
-                        || services.retry_pending_exact_output(),
+                        &mut lane_work,
+                        services,
+                        control_queue_capacity,
                     )
                 },
             )?;
-        }
-
-        if rollover_ready && terminal_exact_output_pending {
-            // Preflight must run before a source-retained exact output yields:
-            // canonical recovery can publish the lane votes whose matching
-            // inbound quorum traffic releases that source. Physical ingress
-            // remains open, but no non-terminal lifecycle owner runs here.
-            let _ = wake_rx.recv_timeout(IDLE_POLL);
-            continue;
         }
 
         if rollover_ready {
@@ -1513,42 +1542,55 @@ fn run_lifecycle_active_height(
                 activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;
                 finalized_ingress_closed = true;
             }
-            let drained_terminal_ingress = activated.with_runner_runtime(
-                &mut active_runner,
-                |_owner, executor, services, _local_proposal| {
-                    let drained = drain_decided_lane_recovery_ingress(
-                        receiver,
-                        executor,
-                        services,
-                        &mut lane_work,
-                        executor.current_tag().view(),
-                        output_guard.as_ref(),
-                        kura.as_ref(),
-                        &common_config.key_pair,
-                        block_sync_server,
-                        DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
-                    )?;
-                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
-                    Ok::<_, V2RunnerError>(drained.is_some())
-                },
-            )?;
-            if drained_terminal_ingress {
-                continue;
-            }
+            let (drained_terminal_ingress, drained_terminal_relay) = activated
+                .with_runner_runtime(
+                    &mut active_runner,
+                    |_owner, executor, services, _local_proposal| {
+                        let drained = drain_decided_lane_recovery_ingress(
+                            receiver,
+                            executor,
+                            services,
+                            &mut lane_work,
+                            executor.current_tag().view(),
+                            output_guard.as_ref(),
+                            kura.as_ref(),
+                            &common_config.key_pair,
+                            block_sync_server,
+                            DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
+                        )?;
+                        let drained_relay = drain_finalized_lane_relay_prefix(
+                            lane_relay_rx,
+                            &mut lane_work,
+                            executor.current_tag().view(),
+                            control_queue_capacity,
+                        );
+                        dispatch_lane_work_effects(
+                            &mut lane_work,
+                            services,
+                            control_queue_capacity,
+                        )?;
+                        Ok::<_, V2RunnerError>((drained.is_some(), drained_relay))
+                    },
+                )?;
             let cut = terminal_finalization_cut
                 .as_ref()
                 .expect("rollover-ready closure authenticated the terminal cut above");
-            terminal_exact_output_pending = activated.with_runner_runtime(
+            let terminal_exact_output_pending = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, _executor, services, _local_proposal| {
-                    retry_decided_lane_recovery_exact_output(
+                    reconcile_terminal_lane_output_handoffs(
                         cut.decided_lane_recovery_permit(),
-                        || services.retry_pending_exact_output(),
+                        &mut lane_work,
+                        services,
+                        control_queue_capacity,
                     )
                 },
             )?;
             if terminal_exact_output_pending {
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
+                continue;
+            }
+            if drained_terminal_ingress || drained_terminal_relay {
                 continue;
             }
             receiver

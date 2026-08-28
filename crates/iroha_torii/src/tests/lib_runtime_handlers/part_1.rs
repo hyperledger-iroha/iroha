@@ -1719,18 +1719,20 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         defaults::torii::PROOF_BODY_MAX_INFLIGHT.get(),
     ));
     let mcp = iroha_config::parameters::actual::ToriiMcp::default();
-    let mcp_rate_per_sec = mcp.rate_per_minute.map(|rate| {
-        let per_minute = rate.get();
-        let per_sec = per_minute.div_ceil(60);
-        per_sec.max(1)
-    });
+    let mcp_rate_per_minute = mcp.rate_per_minute.map(std::num::NonZeroU32::get);
     let mcp_burst = mcp.burst.map(std::num::NonZeroU32::get);
-    let mcp_rate_limiter = limits::RateLimiter::new(mcp_rate_per_sec, mcp_burst);
+    let mcp_rate_limiter = limits::RateLimiter::new_per_minute(mcp_rate_per_minute, mcp_burst);
     let mcp_tools = Arc::new(if mcp.enabled {
         mcp::build_tool_specs(&mcp)
     } else {
         Vec::new()
     });
+    let mcp_dispatch_inflight = Arc::new(tokio::sync::Semaphore::new(
+        mcp.max_inflight_dispatches.get(),
+    ));
+    let mcp_long_poll_inflight = Arc::new(tokio::sync::Semaphore::new(
+        mcp::long_poll_dispatch_capacity(mcp.max_inflight_dispatches.get()),
+    ));
     let query_memory = query_memory_geometry(
         usize::try_from(defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES.get())
             .expect("default query memory pool fits usize"),
@@ -1866,6 +1868,9 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         mcp,
         mcp_rate_limiter,
         mcp_tools,
+        mcp_dispatch_inflight,
+        mcp_long_poll_inflight,
+        mcp_allowed_origins: Arc::new(Vec::new()),
         mcp_dispatch_router: std::sync::RwLock::new(None),
         fee_policy: FeePolicy::Disabled,
         norito_rpc: norito_rpc_cfg,

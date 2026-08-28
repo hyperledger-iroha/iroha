@@ -893,6 +893,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitParliamentLifecycleTransiti
 mod tests {
     use super::*;
     use crate::{
+        account::AccountId,
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
             ParliamentSeatAssignmentV1, ProposalContentId, parliament_candidate_root_v1,

@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.address
 import java.io.ByteArrayOutputStream
 import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKey
 import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKeyAdmission
+import org.hyperledger.iroha.sdk.crypto.SignatureAdmission
 import org.hyperledger.iroha.sdk.norito.Varint
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.MultisigSignature
@@ -132,6 +133,27 @@ class MlDsa65KeyShapeTest {
     }
 
     @Test
+    fun canonicalDecodeRejectsReservedHeaderVersionsAndNormalization() {
+        val canonical = AccountAddress
+            .fromAccount(TestEd25519Keys.publicKey(0x44), "ed25519")
+            .canonicalBytes
+        for (version in 1..0b111) {
+            val reserved = canonical.copyOf().apply { this[0] = ((version shl 5) or 0x02).toByte() }
+            val error = assertFailsWith<AccountAddressException> {
+                AccountAddress.fromCanonicalBytes(reserved)
+            }
+            assertEquals(AccountAddressErrorCode.INVALID_HEADER_VERSION, error.code)
+        }
+        for (normVersion in listOf(0, 2, 3)) {
+            val reserved = canonical.copyOf().apply { this[0] = (normVersion shl 1).toByte() }
+            val error = assertFailsWith<AccountAddressException> {
+                AccountAddress.fromCanonicalBytes(reserved)
+            }
+            assertEquals(AccountAddressErrorCode.INVALID_NORM_VERSION, error.code)
+        }
+    }
+
+    @Test
     fun publicKeyLiteralAndCompactCodecEnforceProtocolShape() {
         val valid = validMlDsa65Key()
         val literal = encodePublicKeyMultihash(0x02, valid)
@@ -161,7 +183,7 @@ class MlDsa65KeyShapeTest {
     @Test
     fun multisigSignatureConstructionEnforcesProtocolShape() {
         val valid = validMlDsa65Key()
-        val signature = ByteArray(64) { (it + 1).toByte() }
+        val signature = nonzeroBytes(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH)
         val direct = MultisigSignature.fromCurveId(0x02, valid, signature)
         assertContentEquals(valid, direct.publicKey())
         assertContentEquals(byteArrayOf(4) + valid, direct.publicKeyNoritoPayload())
@@ -180,6 +202,22 @@ class MlDsa65KeyShapeTest {
                 MultisigSignature.fromPublicKeyLiteral(rawMlDsaLiteral(invalid), signature)
             }
         }
+
+        val invalidSignatures = listOf(
+            "1 byte" to nonzeroBytes(1),
+            "64 bytes" to nonzeroBytes(64),
+            "3308 bytes" to nonzeroBytes(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH - 1),
+            "3310 bytes" to nonzeroBytes(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH + 1),
+            "all-zero" to ByteArray(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH),
+        )
+        for ((name, invalidSignature) in invalidSignatures) {
+            assertFailsWith<IllegalArgumentException>(name) {
+                MultisigSignature.fromCurveId(0x02, valid, invalidSignature)
+            }
+            assertFailsWith<IllegalArgumentException>(name) {
+                MultisigSignature.fromPublicKeyLiteral(literal, invalidSignature)
+            }
+        }
     }
 
     private fun withMlDsaSupport(block: () -> Unit) {
@@ -192,6 +230,9 @@ class MlDsa65KeyShapeTest {
             AccountAddress.configureCurveSupport(CurveSupportConfig.ed25519Only())
         }
     }
+
+    private fun nonzeroBytes(length: Int): ByteArray =
+        ByteArray(length) { ((it % 251) + 1).toByte() }
 
     private fun singleKeyCanonical(
         publicKey: ByteArray,

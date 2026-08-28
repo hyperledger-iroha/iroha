@@ -9348,10 +9348,10 @@ const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
 const METRIC_CATALOG_V2_ROWS: usize = 813;
 const METRIC_CATALOG_V2_REGISTERED: usize = 768;
-const METRIC_CATALOG_V2_BYTES: usize = 111_005;
+const METRIC_CATALOG_V2_BYTES: usize = 111_021;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "4fcfbcff77a0db0a63403cd82f7bd5b221f7a7989cdd58fa4e2c0f6666569699";
+    "cdd04d34e3057c330976ce4d57af70f75f7d1908790d3511216161209955f028";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

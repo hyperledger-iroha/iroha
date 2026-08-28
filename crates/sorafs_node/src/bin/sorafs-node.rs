@@ -1,5 +1,9 @@
 //! Offline developer CLI helpers for inspecting the SoraFS storage backend.
 use iroha_config::base::util::Bytes;
+use iroha_data_model::{
+    account::{AccountId, address::AccountAddress},
+    peer::PeerId,
+};
 use norito::json::{self, Map, Value};
 use sorafs_car::{
     CAR_PLAN_MAX_CHUNKS, CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, DirectoryPayload,
@@ -10,6 +14,11 @@ use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, MAX_MANIFEST_ENCODED_BYTES, ManifestV1, PinPolicyConstraints,
     decode_manifest_v1_canonical,
+    operator_preseed::{
+        OPERATOR_PRESEED_SESSION_MAX_ARTIFACTS_V1, OPERATOR_PRESEED_SESSION_MAX_STORES_V1,
+        OPERATOR_PRESEED_SESSION_RECEIPT_VERSION_V1, OperatorPreseedArtifactReceiptV1,
+        OperatorPreseedSessionReceiptV1, OperatorPreseedTargetReceiptV1,
+    },
     por::{
         AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1, AuditOutcomeV1, AuditVerdictV1,
         POR_CHALLENGE_MAX_CANONICAL_BYTES_V1, POR_PROOF_MAX_CANONICAL_BYTES_V1, PorChallengeV1,
@@ -17,10 +26,20 @@ use sorafs_manifest::{
     },
     validate_manifest,
 };
-use sorafs_node::{NodeHandle, PorVerdictOutcome, config::StorageConfig, store::StorageBackend};
+use sorafs_node::{
+    NodeHandle, PorVerdictOutcome,
+    config::StorageConfig,
+    operator_preseed::{
+        install_operator_preseed_store_receipt_staging, operator_preseed_store_receipt_dir,
+        operator_preseed_store_receipt_path, preflight_operator_preseed_store_receipt,
+        read_operator_preseed_store_receipt, recover_operator_preseed_store_receipt_staging,
+    },
+    store::StorageBackend,
+};
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt};
 use std::{
+    collections::BTreeSet,
     env, fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -44,6 +63,7 @@ fn run() -> Result<(), String> {
     };
     match command.as_str() {
         "ingest" => ingest_command(args.collect()),
+        "preseed-session" => preseed_session_command(args.collect()),
         "export" => export_command(args.collect()),
         "--help" | "-h" => {
             print_usage();
@@ -57,6 +77,7 @@ fn print_usage() {
         "Usage: sorafs-node <command> [options]\n\n\
          Commands:\n  \
          ingest --data-dir=<dir> --max-capacity-bytes=<bytes> --manifest=<path> (--payload=<path>|--payload-dir=<dir>) [--plan-json-out=<path>]\n  \
+         preseed-session --target=<validator-account-id>,<peer-id>,<data-dir>... --max-capacity-bytes=<bytes> [--verify-only] (--manifest=<path> (--payload=<path>|--payload-dir=<dir>))...\n  \
          ingest por --data-dir=<dir> --challenge=<path> --proof=<path> [--verdict=<path>] [--manifest-id=<hex>] [--json-out=<path>]\n  \
          export --data-dir=<dir> --manifest-id=<hex> --manifest-out=<path> --payload-out=<path> [--plan-json-out=<path>]\n  \
          --help, -h   Show this help message"
@@ -77,7 +98,7 @@ struct IngestOptions {
     payload_dir: Option<PathBuf>,
     plan_json_out: Option<PathBuf>,
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum IngestPayloadSource {
     File(PathBuf),
     Directory(PathBuf),
@@ -185,6 +206,711 @@ fn require_ingest_payload_source(
         (Some(_), Some(_)) => Err("--payload and --payload-dir are mutually exclusive".to_owned()),
     }
 }
+
+#[derive(Default)]
+struct PreseedSessionOptions {
+    targets: Vec<PreseedSessionTargetOptions>,
+    max_capacity_bytes: Option<u64>,
+    verify_only: bool,
+    artifacts: Vec<PreseedArtifactOptions>,
+    pending_manifest: Option<PathBuf>,
+}
+
+struct PreseedSessionTargetOptions {
+    validator_account_literal: String,
+    validator_account_id: AccountId,
+    peer_id: String,
+    data_dir: PathBuf,
+}
+
+struct CanonicalPreseedSessionTarget {
+    validator_account_literal: String,
+    peer_id: String,
+    store_root: PathBuf,
+}
+
+struct PreseedArtifactOptions {
+    manifest_path: PathBuf,
+    payload_source: IngestPayloadSource,
+}
+
+struct PreparedPreseedArtifact {
+    manifest: ManifestV1,
+    manifest_bytes: Vec<u8>,
+    plan: CarBuildPlan,
+    payload_source: IngestPayloadSource,
+}
+
+fn preseed_session_command(args: Vec<String>) -> Result<(), String> {
+    let mut options = PreseedSessionOptions::default();
+    for arg in args {
+        if let Some(rest) = arg.strip_prefix("--target=") {
+            if options.targets.len() >= OPERATOR_PRESEED_SESSION_MAX_STORES_V1 {
+                return Err(format!(
+                    "preseed-session admits at most {OPERATOR_PRESEED_SESSION_MAX_STORES_V1} --target values"
+                ));
+            }
+            options.targets.push(parse_preseed_session_target(rest)?);
+        } else if let Some(rest) = arg.strip_prefix("--max-capacity-bytes=") {
+            if options.max_capacity_bytes.is_some() {
+                return Err("duplicate option --max-capacity-bytes".to_owned());
+            }
+            options.max_capacity_bytes =
+                Some(parse_nonzero_canonical_u64(rest, "--max-capacity-bytes")?);
+        } else if arg == "--verify-only" {
+            if options.verify_only {
+                return Err("duplicate option --verify-only".to_owned());
+            }
+            options.verify_only = true;
+        } else if let Some(rest) = arg.strip_prefix("--manifest=") {
+            if options
+                .pending_manifest
+                .replace(PathBuf::from(rest))
+                .is_some()
+            {
+                return Err("each --manifest must be followed by one payload source".to_owned());
+            }
+        } else if let Some(rest) = arg.strip_prefix("--payload=") {
+            push_preseed_artifact_source(
+                &mut options,
+                IngestPayloadSource::File(PathBuf::from(rest)),
+            )?;
+        } else if let Some(rest) = arg.strip_prefix("--payload-dir=") {
+            push_preseed_artifact_source(
+                &mut options,
+                IngestPayloadSource::Directory(PathBuf::from(rest)),
+            )?;
+        } else {
+            return Err(format!("unknown option: {arg}"));
+        }
+    }
+    if options.pending_manifest.is_some() {
+        return Err("final --manifest is missing its payload source".to_owned());
+    }
+    let max_capacity_bytes = options
+        .max_capacity_bytes
+        .ok_or_else(|| "missing required option --max-capacity-bytes".to_owned())?;
+    if options.targets.is_empty() {
+        return Err("preseed-session requires at least one --target".to_owned());
+    }
+    if options.artifacts.is_empty() {
+        return Err("preseed-session requires at least one manifest/payload pair".to_owned());
+    }
+    run_preseed_session(
+        options.targets,
+        max_capacity_bytes,
+        options.artifacts,
+        options.verify_only,
+    )
+}
+
+fn parse_preseed_session_target(value: &str) -> Result<PreseedSessionTargetOptions, String> {
+    let mut fields = value.splitn(3, ',');
+    let validator_account_literal = fields
+        .next()
+        .filter(|field| !field.is_empty())
+        .ok_or_else(|| "--target must be <validator-account-id>,<peer-id>,<data-dir>".to_owned())?;
+    if validator_account_literal.trim() != validator_account_literal {
+        return Err(
+            "--target validator account must not contain surrounding whitespace".to_owned(),
+        );
+    }
+    let validator_account_id = AccountAddress::parse_encoded(validator_account_literal, None)
+        .map_err(|error| format!("invalid --target validator account: {error}"))?
+        .to_account_id()
+        .map_err(|error| format!("invalid --target validator account: {error}"))?;
+    validator_account_id.try_signatory().ok_or_else(|| {
+        "invalid --target validator account: expected a single-signatory account".to_owned()
+    })?;
+    let peer_id = fields
+        .next()
+        .filter(|field| !field.is_empty())
+        .ok_or_else(|| "--target must be <validator-account-id>,<peer-id>,<data-dir>".to_owned())?
+        .to_owned();
+    let parsed_peer_id = peer_id
+        .parse::<PeerId>()
+        .map_err(|error| format!("invalid --target peer id: {error}"))?;
+    if parsed_peer_id.to_string() != peer_id {
+        return Err("--target peer id must use its exact canonical V1 spelling".to_owned());
+    }
+    let data_dir = fields
+        .next()
+        .filter(|field| !field.is_empty())
+        .ok_or_else(|| "--target must be <validator-account-id>,<peer-id>,<data-dir>".to_owned())?;
+    Ok(PreseedSessionTargetOptions {
+        validator_account_literal: validator_account_literal.to_owned(),
+        validator_account_id,
+        peer_id,
+        data_dir: PathBuf::from(data_dir),
+    })
+}
+
+fn push_preseed_artifact_source(
+    options: &mut PreseedSessionOptions,
+    payload_source: IngestPayloadSource,
+) -> Result<(), String> {
+    if options.artifacts.len() >= OPERATOR_PRESEED_SESSION_MAX_ARTIFACTS_V1 {
+        return Err(format!(
+            "preseed-session admits at most {OPERATOR_PRESEED_SESSION_MAX_ARTIFACTS_V1} artifacts"
+        ));
+    }
+    let manifest_path = options
+        .pending_manifest
+        .take()
+        .ok_or_else(|| "payload source must follow one --manifest".to_owned())?;
+    options.artifacts.push(PreseedArtifactOptions {
+        manifest_path,
+        payload_source,
+    });
+    Ok(())
+}
+
+fn canonical_preseed_path(path: &Path, label: &str, directory: bool) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!(
+            "{label} must be an absolute path: {}",
+            path.display()
+        ));
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {label} {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink()
+        || (directory && !metadata.is_dir())
+        || (!directory && !metadata.is_file())
+    {
+        let kind = if directory { "directory" } else { "file" };
+        return Err(format!(
+            "{label} {} must be one existing real {kind}",
+            path.display()
+        ));
+    }
+    fs::canonicalize(path)
+        .map_err(|error| format!("failed to canonicalize {label} {}: {error}", path.display()))
+}
+
+fn canonical_preseed_targets(
+    targets: Vec<PreseedSessionTargetOptions>,
+) -> Result<Vec<CanonicalPreseedSessionTarget>, String> {
+    let mut canonical_targets = Vec::with_capacity(targets.len());
+    let mut distinct = BTreeSet::new();
+    let mut validators = BTreeSet::new();
+    let mut peers = BTreeSet::new();
+    for target in targets {
+        if !validators.insert(target.validator_account_id.clone())
+            || !peers.insert(target.peer_id.clone())
+        {
+            return Err(
+                "preseed-session --target validator and peer identities must each be distinct"
+                    .to_owned(),
+            );
+        }
+        let root = canonical_preseed_path(&target.data_dir, "--target data-dir", true)?;
+        if !distinct.insert(root.clone()) {
+            return Err(format!(
+                "preseed-session --target roots must be distinct; {} is repeated",
+                root.display()
+            ));
+        }
+        if let Some(existing) =
+            canonical_targets
+                .iter()
+                .find(|existing: &&CanonicalPreseedSessionTarget| {
+                    root.starts_with(existing.store_root.as_path())
+                        || existing.store_root.starts_with(&root)
+                })
+        {
+            return Err(format!(
+                "preseed-session --target roots must not overlap: {} and {}",
+                existing.store_root.display(),
+                root.display()
+            ));
+        }
+        canonical_targets.push(CanonicalPreseedSessionTarget {
+            validator_account_literal: target.validator_account_literal,
+            peer_id: target.peer_id,
+            store_root: root,
+        });
+    }
+    canonical_targets.sort_by(|left, right| {
+        (
+            left.validator_account_literal.as_str(),
+            left.peer_id.as_str(),
+            left.store_root.as_path(),
+        )
+            .cmp(&(
+                right.validator_account_literal.as_str(),
+                right.peer_id.as_str(),
+                right.store_root.as_path(),
+            ))
+    });
+    Ok(canonical_targets)
+}
+
+fn prepare_preseed_artifact(
+    options: PreseedArtifactOptions,
+    max_capacity_bytes: u64,
+) -> Result<PreparedPreseedArtifact, String> {
+    let manifest_path = canonical_preseed_path(&options.manifest_path, "--manifest", false)?;
+    let manifest_bytes =
+        read_bounded_por_file(&manifest_path, "manifest", MAX_MANIFEST_ENCODED_BYTES)?;
+    let manifest = decode_manifest_v1_canonical(&manifest_bytes)
+        .map_err(|error| format!("failed to parse manifest: {error}"))?;
+    validate_manifest(
+        &manifest,
+        &PinPolicyConstraints {
+            require_council_signatures: true,
+            ..PinPolicyConstraints::default()
+        },
+    )
+    .map_err(|error| format!("failed to validate manifest: {error}"))?;
+    enforce_ingest_capacity(manifest.content_length, max_capacity_bytes)?;
+    let chunk_profile = chunk_profile_from_manifest(&manifest)?;
+    let (payload_source, plan) = match options.payload_source {
+        IngestPayloadSource::File(path) => {
+            let path = canonical_preseed_path(&path, "--payload", false)?;
+            let mut source = open_exact_file_payload(&path, manifest.content_length)?;
+            let plan =
+                build_streaming_file_plan(&mut source, manifest.content_length, chunk_profile)
+                    .map_err(|error| {
+                        format!(
+                            "failed to build exact preseed file plan from {}: {error}",
+                            path.display()
+                        )
+                    })?;
+            ensure_streaming_manifest_alignment(&manifest, &plan, &mut source, "file")?;
+            (IngestPayloadSource::File(path), plan)
+        }
+        IngestPayloadSource::Directory(path) => {
+            let path = canonical_preseed_path(&path, "--payload-dir", true)?;
+            let plan = build_streaming_directory_plan(&path, chunk_profile).map_err(|error| {
+                format!(
+                    "failed to build exact preseed directory plan from {}: {error}",
+                    path.display()
+                )
+            })?;
+            ensure_streaming_directory_manifest_alignment(&manifest, &plan, &path)?;
+            (IngestPayloadSource::Directory(path), plan)
+        }
+    };
+    Ok(PreparedPreseedArtifact {
+        manifest,
+        manifest_bytes,
+        plan,
+        payload_source,
+    })
+}
+
+fn ingest_or_verify_preseed_artifact<P: PayloadSource>(
+    backend: &StorageBackend,
+    artifact: &PreparedPreseedArtifact,
+    source: &mut P,
+    allow_ingest: bool,
+) -> Result<(), String> {
+    let manifest_digest = artifact
+        .manifest
+        .digest()
+        .map_err(|error| format!("failed to digest preseed manifest: {error}"))?;
+    if backend
+        .manifest_by_digest(manifest_digest.as_bytes())
+        .is_none()
+    {
+        if !allow_ingest {
+            return Err(format!(
+                "verify-only preseed store {} is missing the expected manifest",
+                backend.root_dir().display()
+            ));
+        }
+        let mut reader = OfflineSequentialPayloadReader::new(source, artifact.plan.content_length);
+        backend
+            .ingest_manifest(&artifact.manifest, &artifact.plan, &mut reader)
+            .map_err(|error| format!("failed to ingest exact preseed artifact: {error}"))?;
+        reader.finish()?;
+    }
+    verify_exact_preseed_artifact(backend, artifact, source)
+}
+
+fn verify_exact_preseed_artifact<P: PayloadSource>(
+    backend: &StorageBackend,
+    artifact: &PreparedPreseedArtifact,
+    source: &mut P,
+) -> Result<(), String> {
+    let manifest_digest = artifact
+        .manifest
+        .digest()
+        .map_err(|error| format!("failed to digest preseed manifest: {error}"))?;
+    if manifest_digest.as_bytes() != blake3::hash(&artifact.manifest_bytes).as_bytes() {
+        return Err("preseed manifest bytes and canonical digest disagree".to_owned());
+    }
+    let stored = backend
+        .manifest_by_digest(manifest_digest.as_bytes())
+        .ok_or_else(|| {
+            format!(
+                "preseed store {} is missing the expected manifest after ingest",
+                backend.root_dir().display()
+            )
+        })?;
+    if stored
+        .load_manifest_bytes()
+        .map_err(|error| format!("failed to re-read stored preseed manifest: {error}"))?
+        != artifact.manifest_bytes
+        || stored.manifest_cid() != artifact.manifest.root_cid.as_slice()
+        || stored.payload_digest() != artifact.plan.payload_digest.as_bytes()
+        || stored.content_length() != artifact.plan.content_length
+        || stored.chunk_count() != artifact.plan.chunks.len()
+        || stored.files().len() != artifact.plan.files.len()
+    {
+        return Err(format!(
+            "preseed store {} retained different manifest, CID, payload, chunk, or file geometry",
+            backend.root_dir().display()
+        ));
+    }
+    let mut file_offset = 0_u64;
+    for (stored_file, planned_file) in stored.files().iter().zip(&artifact.plan.files) {
+        if stored_file.path != planned_file.path
+            || stored_file.offset != file_offset
+            || stored_file.size != planned_file.size
+            || stored_file.first_chunk != planned_file.first_chunk
+            || stored_file.chunk_count != planned_file.chunk_count
+        {
+            return Err(format!(
+                "preseed store {} retained different logical-file geometry",
+                backend.root_dir().display()
+            ));
+        }
+        file_offset = file_offset
+            .checked_add(planned_file.size)
+            .ok_or_else(|| "preseed logical-file offset overflow".to_owned())?;
+    }
+    if file_offset != artifact.plan.content_length {
+        return Err("preseed logical files do not cover the exact payload".to_owned());
+    }
+    for (index, planned_chunk) in artifact.plan.chunks.iter().enumerate() {
+        let stored_chunk = stored.chunk(index).ok_or_else(|| {
+            format!(
+                "preseed store {} omitted chunk {index}",
+                backend.root_dir().display()
+            )
+        })?;
+        if stored_chunk.offset != planned_chunk.offset
+            || stored_chunk.length != planned_chunk.length
+            || stored_chunk.digest != planned_chunk.digest
+        {
+            return Err(format!(
+                "preseed store {} retained different chunk {index} metadata",
+                backend.root_dir().display()
+            ));
+        }
+        let mut expected = vec![
+            0_u8;
+            usize::try_from(planned_chunk.length).map_err(|_| {
+                "preseed chunk length exceeds host width".to_owned()
+            })?
+        ];
+        PayloadSource::read_exact(source, planned_chunk.offset, &mut expected)
+            .map_err(|error| format!("failed to read exact preseed chunk {index}: {error}"))?;
+        let actual = backend
+            .read_payload_range(stored.manifest_id(), planned_chunk.offset, expected.len())
+            .map_err(|error| format!("failed to re-read stored preseed chunk {index}: {error}"))?;
+        if actual != expected {
+            return Err(format!(
+                "preseed store {} retained different bytes at chunk {index}",
+                backend.root_dir().display()
+            ));
+        }
+    }
+    source
+        .ensure_exhausted(artifact.plan.content_length)
+        .map_err(|error| format!("failed to revalidate exact preseed source length: {error}"))?;
+    Ok(())
+}
+
+fn ingest_preseed_artifact_into_store(
+    backend: &StorageBackend,
+    artifact: &PreparedPreseedArtifact,
+    allow_ingest: bool,
+) -> Result<(), String> {
+    match &artifact.payload_source {
+        IngestPayloadSource::File(path) => {
+            let mut source = open_exact_file_payload(path, artifact.plan.content_length)?;
+            ingest_or_verify_preseed_artifact(backend, artifact, &mut source, allow_ingest)
+        }
+        IngestPayloadSource::Directory(path) => {
+            let mut source = DirectoryPayload::new(path, &artifact.plan.files)
+                .map_err(|error| format!("failed to open exact preseed directory: {error}"))?;
+            ingest_or_verify_preseed_artifact(backend, artifact, &mut source, allow_ingest)
+        }
+    }
+}
+
+fn validate_distinct_preseed_artifacts(
+    artifacts: &[PreparedPreseedArtifact],
+) -> Result<(), String> {
+    let mut manifest_digests = BTreeSet::new();
+    for artifact in artifacts {
+        let digest = artifact
+            .manifest
+            .digest()
+            .map_err(|error| format!("failed to digest preseed manifest: {error}"))?;
+        if !manifest_digests.insert(*digest.as_bytes()) {
+            return Err(
+                "preseed-session artifact manifest digests must be distinct; duplicate manifest/payload pairs are not canonical"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn run_preseed_session(
+    target_options: Vec<PreseedSessionTargetOptions>,
+    max_capacity_bytes: u64,
+    artifact_options: Vec<PreseedArtifactOptions>,
+    verify_only: bool,
+) -> Result<(), String> {
+    let targets = canonical_preseed_targets(target_options)?;
+    let artifacts = artifact_options
+        .into_iter()
+        .map(|artifact| prepare_preseed_artifact(artifact, max_capacity_bytes))
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_distinct_preseed_artifacts(&artifacts)?;
+    let mut stores = Vec::with_capacity(targets.len());
+    for target in &targets {
+        let root = &target.store_root;
+        let backend = StorageBackend::new(offline_ingest_storage_config(
+            root.clone(),
+            max_capacity_bytes,
+        ))
+        .map_err(|error| {
+            format!(
+                "failed to lock and validate preseed store {}: {error}",
+                root.display()
+            )
+        })?;
+        let locked_root = fs::canonicalize(backend.root_dir()).map_err(|error| {
+            format!(
+                "failed to revalidate locked preseed store {}: {error}",
+                root.display()
+            )
+        })?;
+        if &locked_root != root {
+            return Err(format!(
+                "locked preseed store root changed from {} to {}",
+                root.display(),
+                locked_root.display()
+            ));
+        }
+        stores.push(backend);
+    }
+    let store_count =
+        u32::try_from(targets.len()).map_err(|_| "preseed store count exceeds u32".to_owned())?;
+    let receipt_targets = targets
+        .iter()
+        .map(|target| {
+            target
+                .store_root
+                .to_str()
+                .map(|store_root| OperatorPreseedTargetReceiptV1 {
+                    validator_account_id: target.validator_account_literal.clone(),
+                    peer_id: target.peer_id.clone(),
+                    store_root: store_root.to_owned(),
+                })
+                .ok_or_else(|| "preseed store roots must be valid UTF-8".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut receipt_artifacts = artifacts
+        .iter()
+        .map(|artifact| {
+            let manifest_digest = artifact
+                .manifest
+                .digest()
+                .map_err(|error| format!("failed to digest preseed receipt: {error}"))?;
+            Ok(OperatorPreseedArtifactReceiptV1 {
+                manifest_digest_blake3: hex::encode(manifest_digest.as_bytes()),
+                payload_digest_blake3: hex::encode(artifact.plan.payload_digest.as_bytes()),
+                content_length: artifact.plan.content_length,
+                store_count,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    receipt_artifacts.sort_by(|left, right| {
+        left.manifest_digest_blake3
+            .cmp(&right.manifest_digest_blake3)
+    });
+    let receipt = OperatorPreseedSessionReceiptV1 {
+        schema_version: OPERATOR_PRESEED_SESSION_RECEIPT_VERSION_V1,
+        status: "ready".to_owned(),
+        mode: if verify_only {
+            "verify_only".to_owned()
+        } else {
+            "ingest".to_owned()
+        },
+        max_capacity_bytes,
+        targets: receipt_targets,
+        artifacts: receipt_artifacts,
+    };
+    receipt.validate()?;
+    let mut durable_receipt = receipt.clone();
+    durable_receipt.mode = "ingest".to_owned();
+    let durable_receipt_bytes = json::to_vec(&durable_receipt)
+        .map_err(|error| format!("failed to encode durable preseed receipt: {error}"))?;
+    for store in &stores {
+        recover_operator_preseed_store_receipt_staging(store.root_dir())?;
+        let exact_exists =
+            preflight_operator_preseed_store_receipt(store.root_dir(), &durable_receipt_bytes)?;
+        if verify_only && !exact_exists {
+            return Err(format!(
+                "verify-only preseed store {} has no exact durable ingest qualification",
+                store.root_dir().display()
+            ));
+        }
+    }
+    for artifact in &artifacts {
+        for store in &stores {
+            ingest_preseed_artifact_into_store(store, artifact, !verify_only)?;
+        }
+    }
+    if verify_only {
+        for store in &stores {
+            let path =
+                operator_preseed_store_receipt_path(store.root_dir(), &durable_receipt_bytes);
+            let (installed, installed_bytes) = read_operator_preseed_store_receipt(&path)?;
+            if installed != durable_receipt || installed_bytes != durable_receipt_bytes {
+                return Err(format!(
+                    "verify-only preseed store {} has a different durable qualification receipt",
+                    store.root_dir().display()
+                ));
+            }
+        }
+    } else {
+        for (index, store) in stores.iter().enumerate() {
+            persist_operator_preseed_store_receipt(
+                store.root_dir(),
+                &durable_receipt_bytes,
+                index,
+            )?;
+        }
+    }
+    let receipt_bytes = json::to_vec(&receipt)
+        .map_err(|error| format!("failed to encode preseed ready receipt: {error}"))?;
+    let mut stdout = io::stdout().lock();
+    stdout
+        .write_all(&receipt_bytes)
+        .and_then(|()| stdout.write_all(b"\n"))
+        .and_then(|()| stdout.flush())
+        .map_err(|error| format!("failed to emit preseed ready receipt: {error}"))?;
+    let mut input = [0_u8; 1];
+    match io::stdin().read(&mut input) {
+        Ok(0) => Ok(()),
+        Ok(_) => Err("preseed-session stdin accepts only EOF after readiness".to_owned()),
+        Err(error) => Err(format!(
+            "failed while waiting for preseed-session EOF: {error}"
+        )),
+    }
+}
+
+fn persist_operator_preseed_store_receipt(
+    store_root: &Path,
+    receipt_bytes: &[u8],
+    store_index: usize,
+) -> Result<(), String> {
+    let directory = operator_preseed_store_receipt_dir(store_root);
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(format!(
+                "operator-preseed qualification root {} must be one direct directory",
+                directory.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            builder.create(&directory).map_err(|error| {
+                format!(
+                    "failed to create operator-preseed qualification root {}: {error}",
+                    directory.display()
+                )
+            })?;
+            fs::File::open(store_root)
+                .and_then(|root| root.sync_all())
+                .map_err(|error| {
+                    format!(
+                        "failed to synchronize operator-preseed store root {}: {error}",
+                        store_root.display()
+                    )
+                })?;
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect operator-preseed qualification root {}: {error}",
+                directory.display()
+            ));
+        }
+    }
+    preflight_operator_preseed_store_receipt(store_root, receipt_bytes)?;
+    let destination = operator_preseed_store_receipt_path(store_root, receipt_bytes);
+    if destination.exists() {
+        let (installed, installed_bytes) = read_operator_preseed_store_receipt(&destination)?;
+        let expected: OperatorPreseedSessionReceiptV1 = json::from_slice(receipt_bytes)
+            .map_err(|error| format!("failed to decode expected preseed receipt: {error}"))?;
+        if installed == expected && installed_bytes == receipt_bytes {
+            return Ok(());
+        }
+        return Err(format!(
+            "content-addressed operator-preseed qualification {} has conflicting bytes",
+            destination.display()
+        ));
+    }
+    let staging = directory.join(format!(
+        ".qualification.{}.{}.tmp",
+        process::id(),
+        store_index
+    ));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    set_no_follow_flag(&mut options);
+    let mut file = options.open(&staging).map_err(|error| {
+        format!(
+            "failed to create staged operator-preseed receipt {}: {error}",
+            staging.display()
+        )
+    })?;
+    let write_result = file
+        .write_all(receipt_bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| {
+            format!(
+                "failed to persist staged operator-preseed receipt {}: {error}",
+                staging.display()
+            )
+        });
+    if let Err(error) = write_result {
+        drop(file);
+        let _ = fs::remove_file(&staging);
+        return Err(error);
+    }
+    drop(file);
+    install_operator_preseed_store_receipt_staging(&staging, &destination).map_err(|error| {
+        format!(
+            "failed to install operator-preseed receipt {} without replacement: {error}",
+            destination.display()
+        )
+    })?;
+    let (installed, installed_bytes) = read_operator_preseed_store_receipt(&destination)?;
+    let expected: OperatorPreseedSessionReceiptV1 = json::from_slice(receipt_bytes)
+        .map_err(|error| format!("failed to decode expected preseed receipt: {error}"))?;
+    if installed != expected || installed_bytes != receipt_bytes {
+        return Err(format!(
+            "installed operator-preseed receipt {} differs from its exact staged bytes",
+            destination.display()
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OfflineDirectoryFile {
     path: Vec<String>,

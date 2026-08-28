@@ -140,6 +140,12 @@ impl SoranetHandshakeRuntime {
             })
     }
 
+    /// Return the active replay-store path for reload compatibility tests.
+    #[cfg(test)]
+    pub(crate) fn replay_state_path_for_tests(&self) -> &Path {
+        &self.owner.replay_state_path
+    }
+
     /// Validate and atomically publish a policy that reuses the active owner.
     pub(crate) fn reload(
         &self,

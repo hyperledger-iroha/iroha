@@ -1887,7 +1887,7 @@ impl KotoTestHost {
         self.record_nested_trace(&nested_vm);
         match nested_outcome {
             Ok(()) if expect_reject => {
-                let _ = self.inner.restore(rollback.as_ref());
+                self.inner.restore(rollback.as_ref())?;
                 self.fail_test(format!(
                     "expected actor `{actor_alias}` calling kotoage `{entrypoint}` with payload {:?} to reject, but it succeeded",
                     payload
@@ -1910,12 +1910,12 @@ impl KotoTestHost {
                 Ok(0)
             }
             Err(_err) if expect_reject => {
-                let _ = self.inner.restore(rollback.as_ref());
+                self.inner.restore(rollback.as_ref())?;
                 vm.set_register(10, 0);
                 Ok(0)
             }
             Err(err) => {
-                let _ = self.inner.restore(rollback.as_ref());
+                self.inner.restore(rollback.as_ref())?;
                 self.fail_test(Self::nested_failure_message(
                     &actor_alias,
                     &entrypoint,
@@ -2024,18 +2024,16 @@ impl IVMHost for KotoTestHost {
             supplemental_delta_trace: self.supplemental_delta_trace.clone(),
         }))
     }
-    fn restore(&mut self, snapshot: &dyn Any) -> bool {
-        let Some(snapshot) = snapshot.downcast_ref::<KotoTestHostSnapshot>() else {
-            return false;
-        };
-        if !self.inner.restore(snapshot.inner.as_ref()) {
-            return false;
-        }
+    fn restore(&mut self, snapshot: &dyn Any) -> Result<(), crate::VMError> {
+        let snapshot = snapshot
+            .downcast_ref::<KotoTestHostSnapshot>()
+            .ok_or(crate::VMError::HostUnavailable)?;
+        self.inner.restore(snapshot.inner.as_ref())?;
         self.actors = snapshot.actors.clone();
         self.last_test_error = snapshot.last_test_error.clone();
         self.supplemental_trace_pcs = snapshot.supplemental_trace_pcs.clone();
         self.supplemental_delta_trace = snapshot.supplemental_delta_trace.clone();
-        true
+        Ok(())
     }
     fn access_logging_supported(&self) -> bool {
         self.inner.access_logging_supported()

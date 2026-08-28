@@ -9383,6 +9383,15 @@ pub(crate) trait RuntimeDriver {
     ) -> RuntimeCommandAdmissionPreflight {
         RuntimeCommandAdmissionPreflight::Admit
     }
+    /// Return whether this Progress command must wait for a certified view transition.
+    ///
+    /// Synthetic drivers have no wire-level view relation, so their Progress
+    /// commands remain runnable by default. Production closes this predicate
+    /// only over an authenticated future-view PrepareQC whose exact FIFO owner
+    /// must survive until certified timeout progress reaches its view.
+    fn pacemaker_progress_is_view_blocked(&self, _command: &Self::Command) -> bool {
+        false
+    }
     /// Return whether this deeply authenticated Progress root carries a TC or
     /// CommitQC which may supersede an outstanding local signature fence.
     /// The default is deliberately closed; only a driver which owns the
@@ -9711,6 +9720,18 @@ impl RuntimeDriver for SumeragiV2Adapter {
         command: &Self::Command,
     ) -> RuntimeCommandAdmissionPreflight {
         self.preflight_runtime_command_admission(tag, command)
+    }
+    fn pacemaker_progress_is_view_blocked(&self, command: &Self::Command) -> bool {
+        matches!(
+            command,
+            AdapterCommand::Authenticated(authenticated)
+                if matches!(
+                    authenticated.payload(),
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
+                        if certificate.phase == wire::GlobalPhase::Prepare
+                            && certificate.round.view > self.current_tag().view()
+                )
+        )
     }
     fn certified_progress_bypasses_signature_fence(&self, command: &Self::Command) -> bool {
         self.signature_fence_is_active()
@@ -13995,6 +14016,15 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .ingress
             .pop_pacemaker_progress_with_ownership(
                 |queued| {
+                    if queued.class == CommandClass::Progress
+                        && driver.pacemaker_progress_is_view_blocked(&queued.command)
+                    {
+                        // The exact FIFO occurrence stays owned while a later
+                        // TC remains eligible to install the missing view.
+                        // Re-evaluate it against the reducer tag after that
+                        // certified transition rather than spinning on Busy.
+                        return false;
+                    }
                     if queued
                         .admission_ordinal
                         .is_some_and(|ordinal| retry_blocked_admissions.contains(&ordinal))

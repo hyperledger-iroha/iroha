@@ -332,34 +332,6 @@ fn build_accounts_onboard_submit_body(arguments: &Map) -> Result<BorrowedMcpJson
     build_accounts_onboard_exact_body(arguments, FIELDS, FIELDS)
 }
 
-fn build_accounts_faucet_prepare_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
-    build_accounts_onboard_exact_body(
-        arguments,
-        &["schema", "binding", "claim", "fee_payment"],
-        &["schema", "binding", "claim", "fee_payment"],
-    )
-}
-
-fn build_accounts_faucet_submit_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
-    const FIELDS: &[&str] = &[
-        "schema",
-        "binding",
-        "operation",
-        "claim",
-        "semantic_hash_hex",
-        "account_id",
-        "asset_definition_id",
-        "asset_id",
-        "amount",
-        "transaction_hash_hex",
-        "signed_transaction_wire_hex",
-        "signed_transaction_wire_sha256",
-        "fee_payment",
-        "server_signature",
-    ];
-    build_accounts_onboard_exact_body(arguments, FIELDS, FIELDS)
-}
-
 fn require_borrowed_governance_body_string<'a>(
     body: &BorrowedMcpJson<'a>,
     field: &str,

@@ -489,14 +489,14 @@ async fn local_mcp_rate_limit_preserves_retry_after() {
         return;
     };
     let throttled = server.mock(|when, then| {
-        when.method(GET).path("/v1/mcp");
+        when.method(POST).path("/v1/mcp");
         then.status(429).header("retry-after", "7");
     });
     let client = ToriiClient::new(server.url("/")).expect("client");
     let error = client
         .validate_local_mcp()
         .await
-        .expect_err("throttled MCP capabilities probe must remain retryable");
+        .expect_err("throttled MCP initialize probe must remain retryable");
     assert!(matches!(
         error,
         ToriiError::RateLimited {
@@ -525,18 +525,6 @@ async fn validate_local_mcp_accepts_curated_iroha_tools() {
     let Some(server) = try_start_mock_server() else {
         return;
     };
-    let capabilities = server.mock(|when, then| {
-        when.method(GET).path("/v1/mcp");
-        then.status(200)
-            .header("content-type", "application/json")
-            .body(mock_json_body(norito::json!({
-                "capabilities": {
-                    "tools": {
-                        "count": 4
-                    }
-                }
-            })));
-    });
     let initialize = server.mock(|when, then| {
         when.method(POST)
             .path("/v1/mcp")
@@ -571,6 +559,7 @@ async fn validate_local_mcp_accepts_curated_iroha_tools() {
     let initialized = server.mock(|when, then| {
         when.method(POST)
             .path("/v1/mcp")
+            .header("mcp-protocol-version", "2025-06-18")
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/initialized"
@@ -580,6 +569,7 @@ async fn validate_local_mcp_accepts_curated_iroha_tools() {
     let tools_list = server.mock(|when, then| {
         when.method(POST)
             .path("/v1/mcp")
+            .header("mcp-protocol-version", "2025-06-18")
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -592,7 +582,11 @@ async fn validate_local_mcp_accepts_curated_iroha_tools() {
                 "jsonrpc": "2.0",
                 "id": 1,
                 "result": {
-                    "toolsetVersion": "demo-v1",
+                    "_meta": {
+                        "iroha": {
+                            "toolsetVersion": "demo-v1"
+                        }
+                    },
                     "tools": [
                         { "name": "iroha.health" },
                         { "name": "iroha.parameters.get" },
@@ -613,7 +607,6 @@ async fn validate_local_mcp_accepts_curated_iroha_tools() {
             .iter()
             .all(|name| name.starts_with("iroha."))
     );
-    capabilities.assert();
     initialize.assert();
     initialized.assert();
     tools_list.assert();
@@ -624,14 +617,9 @@ async fn validate_local_mcp_rejects_raw_torii_tools() {
         return;
     };
     server.mock(|when, then| {
-        when.method(GET).path("/v1/mcp");
-        then.status(200)
-            .header("content-type", "application/json")
-            .body(mock_json_body(norito::json!({ "capabilities": {} })));
-    });
-    server.mock(|when, then| {
         when.method(POST)
             .path("/v1/mcp")
+            .header("mcp-protocol-version", "2025-06-18")
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -656,6 +644,7 @@ async fn validate_local_mcp_rejects_raw_torii_tools() {
     server.mock(|when, then| {
         when.method(POST)
             .path("/v1/mcp")
+            .header("mcp-protocol-version", "2025-06-18")
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/initialized"
@@ -665,6 +654,7 @@ async fn validate_local_mcp_rejects_raw_torii_tools() {
     server.mock(|when, then| {
         when.method(POST)
             .path("/v1/mcp")
+            .header("mcp-protocol-version", "2025-06-18")
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
                 "id": 1,

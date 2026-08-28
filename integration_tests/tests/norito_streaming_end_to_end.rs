@@ -248,7 +248,7 @@ async fn run_viewer(
     }
     // Keep the viewer endpoint alive until the publisher closes so all chunk
     // acknowledgements are delivered before connection teardown.
-    let _ = client.connection().quic_connection().closed().await;
+    let _ = client.connection().closed().await;
     client.close().await;
     Ok((manifest, chunks))
 }

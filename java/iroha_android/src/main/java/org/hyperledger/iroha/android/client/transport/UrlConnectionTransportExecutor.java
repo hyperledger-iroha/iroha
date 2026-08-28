@@ -83,7 +83,7 @@ public final class UrlConnectionTransportExecutor
       final byte[] body =
           readBody(connection, status, request.method(), responseLimit);
       final Map<String, List<String>> headers = normalizeHeaders(connection.getHeaderFields());
-      return new TransportResponse(status, body, message, headers);
+      return new TransportResponse(status, body, message, headers, request.uri(), false);
     } catch (final IOException ex) {
       throw new RuntimeException("HTTP request failed", ex);
     } finally {

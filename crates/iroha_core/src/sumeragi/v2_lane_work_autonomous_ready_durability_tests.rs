@@ -32,6 +32,7 @@ fn autonomous_test_fixture(
         true,
         locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
         Some(local_validator_index),
+        true,
     )
 }
 
@@ -1823,6 +1824,7 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
         true,
         locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
         Some(0),
+        true,
     );
     let quorum_keys = if local_signer_quorum {
         &keys[..3]

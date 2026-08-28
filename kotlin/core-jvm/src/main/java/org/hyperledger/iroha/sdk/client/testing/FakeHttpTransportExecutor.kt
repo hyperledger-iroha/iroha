@@ -52,7 +52,14 @@ class FakeHttpTransportExecutor : HttpTransportExecutor {
             response = defaultResponse
         }
         return CompletableFuture.completedFuture(
-            TransportResponse(response.statusCode, response.body, response.message, response.headers)
+            TransportResponse(
+                response.statusCode,
+                response.body,
+                response.message,
+                response.headers,
+                response.finalUri,
+                response.redirected,
+            ),
         )
     }
 }

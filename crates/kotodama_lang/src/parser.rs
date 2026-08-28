@@ -207,6 +207,31 @@ impl Drop for PendingExpr {
         }
     }
 }
+struct PendingType(Option<TypeExpr>);
+impl PendingType {
+    fn new(ty: TypeExpr) -> Self {
+        Self(Some(ty))
+    }
+    fn take(&mut self) -> TypeExpr {
+        self.0.take().expect("pending type must be present")
+    }
+    fn replace(&mut self, ty: TypeExpr) {
+        assert!(
+            self.0.replace(ty).is_none(),
+            "pending type must be empty before replacement"
+        );
+    }
+    fn into_inner(mut self) -> TypeExpr {
+        self.take()
+    }
+}
+impl Drop for PendingType {
+    fn drop(&mut self) {
+        if let Some(ty) = self.0.take() {
+            crate::ast::drop_type_iterative(ty);
+        }
+    }
+}
 struct PendingStatement(Option<Statement>);
 impl PendingStatement {
     fn new(statement: Statement) -> Self {
@@ -452,8 +477,6 @@ pub(crate) fn parse_with_syntax(
     budget: FrontendBudget,
     tokens: &[Token],
 ) -> GrammarParseOutput {
-    #[cfg(test)]
-    CANONICAL_GRAMMAR_PARSES.with(|count| count.set(count.get().saturating_add(1)));
     let mut parser = CstAstLowerer::new(tokens, source, true, budget);
     let parsed = parser.parse_program();
     let mut errors = std::mem::take(&mut parser.errors);
@@ -570,6 +593,10 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn reset_direct_cst_lowering_count() {
     CANONICAL_GRAMMAR_PARSES.with(|count| count.set(0));
+}
+#[cfg(test)]
+pub(crate) fn record_direct_cst_lowering() {
+    CANONICAL_GRAMMAR_PARSES.with(|count| count.set(count.get().saturating_add(1)));
 }
 #[cfg(test)]
 pub(crate) fn direct_cst_lowering_count() -> usize {
@@ -2000,14 +2027,16 @@ impl<'a> CstAstLowerer<'a> {
             None,
         );
         self.expect(TokenKind::LBrace)?;
-        let mut fields = Vec::new();
+        let mut fields = PendingValues::new(|(_, ty): (String, TypeExpr)| {
+            crate::ast::drop_type_iterative(ty);
+        });
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             // Allow stray separators.
             if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
                 self.bump();
                 continue;
             }
-            let ty = self.parse_type_expr()?;
+            let mut ty = PendingType::new(self.parse_type_expr()?);
             let field_name = if self.peek(TokenKind::Colon) {
                 let token = self.bump();
                 return Err(self.coded_error(
@@ -2018,20 +2047,23 @@ impl<'a> CstAstLowerer<'a> {
             } else {
                 self.expect_ident()?
             };
-            fields.push((field_name, ty));
+            fields.push((field_name, ty.take()));
             if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
                 self.bump();
             }
         }
         self.expect(TokenKind::RBrace)?;
         self.finish_node(node);
-        Ok(Item::Struct(super::ast::StructDef { name, fields }))
+        Ok(Item::Struct(super::ast::StructDef {
+            name,
+            fields: fields.into_inner(),
+        }))
     }
     fn parse_state_decl(&mut self) -> ParseResult<Item> {
         // Canonical V1 form: `state Type name;`.
         let node = self.begin_node(AstNodeKind::State, self.current_start());
         self.expect(TokenKind::State)?;
-        let ty = self.parse_type_expr()?;
+        let mut ty = PendingType::new(self.parse_type_expr()?);
         if self.peek(TokenKind::Colon) {
             let token = self.bump();
             return Err(self.coded_error(
@@ -2050,12 +2082,15 @@ impl<'a> CstAstLowerer<'a> {
         );
         self.expect(TokenKind::Semicolon)?;
         self.finish_node(node);
-        Ok(Item::State(super::ast::StateDecl { name, ty }))
+        Ok(Item::State(super::ast::StateDecl {
+            name,
+            ty: ty.take(),
+        }))
     }
     fn parse_const_decl(&mut self) -> ParseResult<Item> {
         let node = self.begin_node(AstNodeKind::Const, self.current_start());
         self.expect(TokenKind::Const)?;
-        let ty = Some(self.parse_type_expr()?);
+        let mut ty = PendingType::new(self.parse_type_expr()?);
         if self.peek(TokenKind::Colon) {
             let token = self.bump();
             return Err(self.coded_error(
@@ -2078,7 +2113,7 @@ impl<'a> CstAstLowerer<'a> {
         self.finish_node(node);
         Ok(Item::Const(super::ast::ConstDecl {
             name,
-            ty,
+            ty: Some(ty.take()),
             value: value.take(),
         }))
     }
@@ -2122,7 +2157,11 @@ impl<'a> CstAstLowerer<'a> {
             let params_start = self.current_start();
             let params = self.with_syntax(SyntaxKind::ParamList, params_start, |this| {
                 this.expect(TokenKind::LParen)?;
-                let mut params = Vec::new();
+                let mut params = PendingValues::new(|parameter: Param| {
+                    if let Some(ty) = parameter.ty {
+                        crate::ast::drop_type_iterative(ty);
+                    }
+                });
                 if !this.peek(TokenKind::RParen) {
                     loop {
                         params.push(this.parse_param()?);
@@ -2154,7 +2193,7 @@ impl<'a> CstAstLowerer<'a> {
             let mut ret_ty = None;
             if self.peek(TokenKind::Arrow) {
                 self.bump();
-                ret_ty = Some(self.parse_type_expr()?);
+                ret_ty = Some(PendingType::new(self.parse_type_expr()?));
             }
             // Caller authorization is mandatory for mutating public kotoage
             // and optional for read-only views.
@@ -2229,8 +2268,8 @@ impl<'a> CstAstLowerer<'a> {
             let body = self.parse_block()?;
             Ok(Item::Function(Function {
                 name,
-                params,
-                ret_ty,
+                params: params.into_inner(),
+                ret_ty: ret_ty.as_mut().map(PendingType::take),
                 body,
                 modifiers,
                 location,
@@ -2303,8 +2342,8 @@ impl<'a> CstAstLowerer<'a> {
             let owner = self.begin_node(AstNodeKind::Statement, statement_start);
             let mutable = self.peek(TokenKind::Var);
             self.bump();
-            let ty = if self.typed_local_starts_here() {
-                Some(self.parse_type_expr()?)
+            let mut ty = if self.typed_local_starts_here() {
+                Some(PendingType::new(self.parse_type_expr()?))
             } else {
                 None
             };
@@ -2353,7 +2392,7 @@ impl<'a> CstAstLowerer<'a> {
                 Statement::Let {
                     mutable,
                     pat,
-                    ty,
+                    ty: ty.as_mut().map(PendingType::take),
                     value: expr.take(),
                 },
             )))
@@ -4153,7 +4192,7 @@ impl<'a> CstAstLowerer<'a> {
         }
         let mut frames = Vec::new();
         'next_type: loop {
-            let mut current = loop {
+            let mut current = PendingType::new(loop {
                 if self.peek(TokenKind::LParen) {
                     let opening = self.bump();
                     if self.peek(TokenKind::RParen) {
@@ -4239,10 +4278,10 @@ impl<'a> CstAstLowerer<'a> {
                     continue;
                 }
                 break self.source_type(base_token.range, TypeExpr::Path(base));
-            };
+            });
             loop {
                 let Some(frame) = frames.pop() else {
-                    return Ok(current);
+                    return Ok(current.into_inner());
                 };
                 match frame {
                     Frame::Generic {
@@ -4250,23 +4289,23 @@ impl<'a> CstAstLowerer<'a> {
                         base,
                         mut args,
                     } => {
-                        args.push(current);
+                        args.push(current.take());
                         if self.peek(TokenKind::Comma) {
                             self.bump();
                             frames.push(Frame::Generic { start, base, args });
                             continue 'next_type;
                         }
                         self.expect(TokenKind::Greater)?;
-                        current = self.source_type(
+                        current.replace(self.source_type(
                             TextRange::new(start, self.previous_end(start)),
                             TypeExpr::Generic {
                                 base,
                                 args: args.into_inner(),
                             },
-                        );
+                        ));
                     }
                     Frame::Tuple { opening, mut args } => {
-                        args.push(current);
+                        args.push(current.take());
                         if self.peek(TokenKind::Comma) {
                             self.bump();
                             frames.push(Frame::Tuple { opening, args });
@@ -4277,10 +4316,10 @@ impl<'a> CstAstLowerer<'a> {
                         if args.len() < 2 {
                             return Err(self.tuple_type_arity_error(&opening, closing));
                         }
-                        current = self.source_type(
+                        current.replace(self.source_type(
                             TextRange::new(opening.range.start, closing.range.end),
                             TypeExpr::Tuple(args.into_inner()),
-                        );
+                        ));
                     }
                 }
             }
@@ -4446,6 +4485,7 @@ impl<'a> CstAstLowerer<'a> {
     fn parse_param(&mut self) -> ParseResult<Param> {
         // Canonical V1 form: `Type name`.
         let (is_state, ty) = self.parse_param_type_annotation()?;
+        let mut ty = PendingType::new(ty);
         if self.peek(TokenKind::Colon) {
             let token = self.bump();
             return Err(self.coded_error(
@@ -4465,7 +4505,7 @@ impl<'a> CstAstLowerer<'a> {
         );
         self.finish_node(node);
         Ok(Param {
-            ty: Some(ty),
+            ty: Some(ty.take()),
             name,
             is_state,
         })

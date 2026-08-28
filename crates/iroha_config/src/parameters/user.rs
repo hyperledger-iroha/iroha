@@ -14274,6 +14274,18 @@ pub struct Torii {
         default = "defaults::torii::ATTACHMENTS_PER_TENANT_MAX_BYTES"
     )]
     pub attachments_per_tenant_max_bytes: u64,
+    /// Maximum number of attachments retained by this node (1..=20,000).
+    #[config(
+        env = "TORII_ATTACHMENTS_GLOBAL_MAX_COUNT",
+        default = "defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT"
+    )]
+    pub attachments_global_max_count: u64,
+    /// Maximum aggregate attachment bytes retained by this node.
+    #[config(
+        env = "TORII_ATTACHMENTS_GLOBAL_MAX_BYTES",
+        default = "defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES"
+    )]
+    pub attachments_global_max_bytes: u64,
     /// Allowed MIME types for attachment payloads (post-sniff).
     #[config(default = "defaults::torii::attachments_allowed_mime_types()")]
     pub attachments_allowed_mime_types: Vec<String>,
@@ -15075,6 +15087,27 @@ impl Torii {
                 ),
             );
         }
+        if self.attachments_global_max_count == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.attachments_global_max_count must be greater than zero",
+            );
+        }
+        if self.attachments_global_max_count > defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT_MAX {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.attachments_global_max_count must not exceed {}",
+                    defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT_MAX
+                ),
+            );
+        }
+        if self.attachments_global_max_bytes < self.attachments_max_bytes {
+            emit_torii_config_error(
+                emitter,
+                "torii.attachments_global_max_bytes must be at least torii.attachments_max_bytes so one maximum-size attachment can be retained",
+            );
+        }
         if self.zk_prover_max_scan_millis == 0 {
             emit_torii_config_error(
                 emitter,
@@ -15338,6 +15371,8 @@ impl Torii {
             attachments_max_bytes: self.attachments_max_bytes,
             attachments_per_tenant_max_count: self.attachments_per_tenant_max_count,
             attachments_per_tenant_max_bytes: self.attachments_per_tenant_max_bytes,
+            attachments_global_max_count: self.attachments_global_max_count,
+            attachments_global_max_bytes: self.attachments_global_max_bytes,
             attachments_allowed_mime_types: self.attachments_allowed_mime_types,
             attachments_max_expanded_bytes: self.attachments_max_expanded_bytes,
             attachments_max_archive_depth: self.attachments_max_archive_depth,
@@ -15965,6 +16000,9 @@ pub struct ToriiMcp {
     /// Maximum number of tools emitted in one `tools/list` response page.
     #[config(default = "defaults::torii::mcp::MAX_TOOLS_PER_LIST")]
     pub max_tools_per_list: usize,
+    /// Maximum number of MCP tool dispatches executing concurrently.
+    #[config(default = "defaults::torii::mcp::MAX_INFLIGHT_DISPATCHES")]
+    pub max_inflight_dispatches: usize,
     /// MCP tool profile (`read_only`, `writer`, `operator`).
     #[config(default = "defaults::torii::mcp::PROFILE.to_string()")]
     pub profile: String,
@@ -16339,6 +16377,7 @@ impl Default for ToriiMcp {
             enabled: defaults::torii::mcp::ENABLED,
             max_request_bytes: defaults::torii::mcp::MAX_REQUEST_BYTES,
             max_tools_per_list: defaults::torii::mcp::MAX_TOOLS_PER_LIST,
+            max_inflight_dispatches: defaults::torii::mcp::MAX_INFLIGHT_DISPATCHES,
             profile: defaults::torii::mcp::PROFILE.to_string(),
             expose_operator_routes: defaults::torii::mcp::EXPOSE_OPERATOR_ROUTES,
             allow_tool_prefixes: defaults::torii::mcp::allow_tool_prefixes(),
@@ -32493,6 +32532,7 @@ policy_digest_hex = "{policy_digest_hex}"
         );
     }
     include!("user/zk_prover_report_retention_tests.rs");
+    include!("user/zk_attachment_retention_tests.rs");
     include!("user/query_fanout_memory_tests.rs");
     include!("user/app_routed_read_body_timeout_tests.rs");
     include!("user/operator_signature_body_timeout_tests.rs");

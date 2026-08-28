@@ -101,6 +101,20 @@ fn inrou_first_release_openapi_matches_block_clock_and_exact_admission() {
     assert_eq!(admitted_guest_isas, BTreeSet::from(["aarch64", "x86_64"]));
 
     assert_eq!(contract_property(&schemas, "SoraInrouReplicaPlacementV1", "lease_started_height").get("minimum").and_then(Value::as_u64), Some(1));
+    for schema_name in [
+        "SoraInrouPlacementTargetV1",
+        "SoraInrouReplicaPlacementV1",
+    ] {
+        for field in ["validator_account_id", "peer_id"] {
+            assert_eq!(
+                contract_property(&schemas, schema_name, field)
+                    .get("minLength")
+                    .and_then(Value::as_u64),
+                Some(1),
+                "{schema_name}.{field} must reject an empty identity",
+            );
+        }
+    }
 
     let exact_resource_bounds = [
         ("cpu_millis", u64::from(iroha_data_model::soracloud::SORA_INROU_MIN_CPU_MILLIS_V1), Some(u64::from(iroha_data_model::soracloud::SORA_INROU_CPU_MILLIS_ALIGNMENT_V1))),
@@ -115,6 +129,7 @@ fn inrou_first_release_openapi_matches_block_clock_and_exact_admission() {
     }
 
     assert_exact_closed_required_schema_fields(&schemas, "SoraInrouHostCapabilityRecordV1", &["schema_version", "validator_account_id", "peer_id", "supported_guest_isas", "trusted_guest_artifact", "max_hosted_replica_capacity", "max_cpu_millis", "max_memory_bytes", "max_storage_bytes", "advertised_at_ms", "heartbeat_expires_at_ms"]);
+    assert_exact_closed_required_schema_fields(&schemas, "SoraInrouPlacementTargetV1", &["validator_account_id", "peer_id"]);
     assert_exact_closed_required_schema_fields(&schemas, "SoraInrouReplicaPlacementV1", &["replica_slot", "economic_clock", "lease_started_height", "placement_incarnation", "host_availability", "validator_account_id", "peer_id", "selected_guest_isa"]);
     assert_exact_closed_required_schema_fields(&schemas, "SoracloudRuntimeInrouPlan", &["selected_guest_isa", "kernel_image_path", "rootfs_image_path", "initrd_image_path", "root_volume_name"]);
     assert_exact_closed_required_schema_fields(&schemas, "SoracloudRuntimeLeaseVolumePlan", &["volume_name", "kind", "storage_class", "mount_path", "max_total_bytes", "lease_started_height", "lease_expires_height", "authoritative_generation", "local_materialization_dir"]);
@@ -122,7 +137,7 @@ fn inrou_first_release_openapi_matches_block_clock_and_exact_admission() {
     assert_exact_closed_required_schema_fields(
         &schemas,
         "SoracloudPublicServiceDiscoveryV1",
-        &["schema_version", "service_name", "service_version", "execution_plane", "runtime", "route_host", "path_prefix", "base_url", "healthcheck_path", "healthcheck_url", "service_manifest_hash", "container_manifest_hash", "deployment_bundle_hash", "content_cid", "public_discovery_url", "public_discovery_cid_host_url", "manifest_digest_hex"],
+        &["schema_version", "service_name", "service_version", "execution_plane", "runtime", "route_host", "path_prefix", "base_url", "healthcheck_path", "healthcheck_url", "service_manifest_hash", "container_manifest_hash", "deployment_bundle_hash", "document_hash", "content_cid", "public_discovery_url", "public_discovery_cid_host_url", "manifest_digest_hex"],
     );
 
     let runtime_service = contract_schema(&schemas, "SoracloudRuntimeServicePlan").get("properties").and_then(Value::as_object).expect("SoracloudRuntimeServicePlan properties");
@@ -134,10 +149,22 @@ fn inrou_first_release_openapi_matches_block_clock_and_exact_admission() {
     let control_plane_service = contract_schema(&schemas, "ControlPlaneServiceSnapshot");
     let control_plane_properties = control_plane_service.get("properties").and_then(Value::as_object).expect("ControlPlaneServiceSnapshot properties");
     let control_plane_required = schema_string_field_set(control_plane_service, "required", "ControlPlaneServiceSnapshot");
-    assert!(control_plane_properties.contains_key("lease_expires_height"));
-    assert!(!control_plane_properties.contains_key("lease_expires_sequence"));
-    assert!(control_plane_required.contains("lease_expires_height"));
-    assert!(!control_plane_required.contains("lease_expires_sequence"));
+    assert!(control_plane_properties.contains_key("service_lease"));
+    assert!(control_plane_required.contains("service_lease"));
+    for retired in [
+        "quota_class",
+        "service_lease_status",
+        "lease_expires_height",
+        "lease_expires_sequence",
+        "prepaid_runtime_balance",
+        "remaining_runtime_balance",
+    ] {
+        assert!(
+            !control_plane_properties.contains_key(retired),
+            "ControlPlaneServiceSnapshot retained flattened lease field `{retired}`",
+        );
+        assert!(!control_plane_required.contains(retired));
+    }
 }
 
 #[test]
@@ -797,14 +824,14 @@ fn generated_spec_documents_exact_soracloud_priority_contracts() {
     assert_eq!(schema_fields(routing, "required", "Soracloud status routing").iter().map(|field| field.as_str().expect("routing field")).collect::<BTreeSet<_>>(), routing_fields);
     assert_eq!(property_ref(schemas, "SoracloudStatusV1", "runtime_manager"), "#/components/schemas/SoracloudStatusRuntimeManagerV1");
     assert_exact_closed_required_schema_fields(schemas, "ControlPlaneAuditEvent",
-        &["sequence", "action", "service_name", "from_version", "to_version", "service_manifest_hash", "container_manifest_hash", "binding_name", "state_key", "config_name", "secret_name", "governance_tx_hash", "rollout_handle", "policy_name", "policy_snapshot_hash", "jurisdiction_tag", "consent_evidence_hash", "break_glass", "break_glass_reason", "lease_reporting_epoch_rollover", "signed_by"]);
+        &["sequence", "action", "service_name", "from_version", "to_version", "service_manifest_hash", "container_manifest_hash", "process_generation", "config_generation", "secret_generation", "config_snapshot_hash", "secret_snapshot_hash", "binding_name", "state_key", "config_mutations", "secret_mutations", "governance_tx_hash", "rollout_state", "policy_name", "policy_snapshot_hash", "jurisdiction_tag", "consent_evidence_hash", "break_glass", "break_glass_reason", "lease_usage", "service_lease_commitment", "lease_reporting_epoch_rollover", "signed_by"]);
     assert_eq!(nullable_property_ref(schemas, "ControlPlaneAuditEvent", "lease_reporting_epoch_rollover"), "#/components/schemas/SoraServiceLeaseReportingEpochRolloverV1");
     assert_exact_closed_required_schema_fields(schemas, "SoraServiceLeaseReportingEpochRolloverV1", &["schema_version", "economic_clock", "lease_started_height", "previous_reporting_epoch", "new_reporting_epoch", "reporter_account_id", "active_service_version", "replica_slot", "placement_incarnation", "finalized_checkpoint_count", "settled_egress_bytes_delta", "settled_egress_bytes"]);
     assert_eq!(property_ref(schemas, "SoraServiceLeaseReportingEpochRolloverV1", "economic_clock"), "#/components/schemas/SoraServiceLeaseClockV1");
     assert_eq!(property_ref(schemas, "SoraServiceLeaseReportingEpochRolloverV1", "placement_incarnation"), "#/components/schemas/Hash");
     let action_variants = contract_schema(schemas, "SoracloudAction").get("oneOf").and_then(Value::as_array).expect("SoracloudAction variants").iter()
         .map(|variant| variant.get("properties").and_then(Value::as_object).and_then(|properties| properties.get("action")).and_then(Value::as_object).and_then(|action| action.get("const")).and_then(Value::as_str).expect("SoracloudAction const")).collect::<BTreeSet<_>>();
-    assert_eq!(action_variants, BTreeSet::from(["CiphertextQuery", "ConfigMutation", "DecryptionRequest", "Deploy", "FheJobRun", "FhePolicyRegister", "FhePolicyRevoke", "FhePolicyRotate", "LeaseReportingEpochRollover", "Rollback", "Rollout", "SecretMutation", "StateMutation", "Upgrade"]));
+    assert_eq!(action_variants, BTreeSet::from(["CiphertextQuery", "ConfigMutation", "DecryptionRequest", "Deploy", "FheJobRun", "FhePolicyRegister", "FhePolicyRevoke", "FhePolicyRotate", "LeaseUsage", "LeaseReportingEpochRollover", "Rollback", "Rollout", "SecretMutation", "StateMutation", "Upgrade"]));
 
     for (path, method, request, response) in [("/v1/soracloud/agent/autonomy/allow", "post", Some("#/components/schemas/SignedAgentArtifactAllowRequest"), "#/components/schemas/SoracloudMutationDraftResponse"), ("/v1/soracloud/agent/autonomy/status", "get", None, "#/components/schemas/AgentAutonomyStatusResponse")] {
         let operation = openapi_operation(&document, path, method);

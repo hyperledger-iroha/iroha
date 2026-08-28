@@ -4,6 +4,7 @@ use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetDefinition},
     domain::Domain,
+    hijiri::HijiriParametersV1,
     isi::{Grant, GrantBox, Mint, MintBox, Register, RegisterBox, SetParameter, Transfer},
     metadata::Metadata,
     nexus::DataSpaceId,
@@ -105,7 +106,10 @@ pub fn default_manifest(
         ALICE_ID.clone(),
     );
     let npos_defaults = SumeragiNposParameters::default();
-    let parameters = Parameters::default();
+    let mut parameters = Parameters::default();
+    parameters.set_parameter(Parameter::Custom(
+        HijiriParametersV1::first_release_genesis().into_custom_parameter(),
+    ));
     for parameter in parameters.parameters() {
         builder = builder.append_parameter(parameter);
     }
@@ -419,6 +423,21 @@ mod tests {
             Some(gas_limit),
         )
         .expect("build default manifest");
+        let effective_parameters = manifest
+            .effective_parameters()
+            .expect("derive Mochi genesis parameters");
+        let hijiri_custom = effective_parameters
+            .custom()
+            .get(&HijiriParametersV1::parameter_id())
+            .expect("Mochi genesis must seed global Hijiri parameters");
+        let hijiri_parameters = HijiriParametersV1::from_custom_parameter(hijiri_custom)
+            .expect("decode Mochi genesis Hijiri parameters")
+            .expect("Mochi genesis must preserve the reserved Hijiri identity");
+        assert_eq!(
+            hijiri_parameters,
+            HijiriParametersV1::first_release_genesis(),
+            "Mochi genesis must match the neutral first-release Hijiri bootstrap"
+        );
         let hijiri_permission = Permission::from(CanSetHijiriParameters);
         let hijiri_admin_grants = manifest
             .instructions()

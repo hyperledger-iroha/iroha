@@ -8,7 +8,7 @@
 )]
 use bytes::Bytes;
 use norito::{
-    deserialize_from,
+    decode_from_bytes,
     streaming::{
         self, CapabilityAck, CapabilityReport, ControlFrame, TransportCapabilities,
         TransportCapabilitiesFrame, TransportCapabilityError, TransportCapabilityResolution,
@@ -25,18 +25,29 @@ use quinn::{
 };
 use rustls::{client::danger::ServerCertVerifier, pki_types::PrivatePkcs8KeyDer};
 use std::{
+    collections::VecDeque,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU8, AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{sync::Notify, task::JoinHandle};
 const CONTROL_STREAM_PREFACE: &[u8; 5] = b"NSC/1";
 const CONTROL_TYPE_PUBLISHER_TO_VIEWER: u8 = 0x01;
 const CONTROL_TYPE_VIEWER_TO_PUBLISHER: u8 = 0x02;
 const DEFAULT_MAX_DATAGRAM_SIZE: usize = 1350;
 const DEFAULT_DATAGRAM_BUFFER: usize = 1 << 20;
 const MAX_CONTROL_FRAME_LEN: usize = 512 * 1024;
+const MAX_DATAGRAM_INBOX_ENTRIES: usize = 256;
+const DATAGRAM_NEGOTIATING: usize = usize::MAX;
+const DATAGRAM_PROTOCOL_ERROR_CODE: u32 = 0x4e53_4301;
+const SETUP_PENDING: u8 = 0;
+const SETUP_COMPLETE: u8 = 1;
+const SETUP_TIMED_OUT: u8 = 2;
 const ALPN: &[u8] = b"nsc/1";
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Fingerprint that pins one streaming server certificate.
@@ -115,6 +126,9 @@ pub enum Error {
     /// Peer delivered an unexpected control frame while a specific response was required.
     #[error("protocol violation: {0}")]
     ProtocolViolation(String),
+    /// Streaming transport setup exceeded its single absolute pre-authentication deadline.
+    #[error("streaming setup exceeded its pre-authentication deadline")]
+    SetupTimeout,
 }
 /// Direction of the dedicated QUIC control stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -238,11 +252,21 @@ impl StreamingServer {
             .accept()
             .await
             .ok_or_else(|| Error::ProtocolViolation("listener closed".into()))?;
+        let deadline = setup_deadline(self.settings)?;
         let connecting = incoming
             .accept()
             .map_err(|e| std::io::Error::other(format!("listener accept failed: {e}")))?;
-        let connection = connecting.await?;
-        StreamingConnection::new(connection, EndpointRole::Publisher, self.settings).await
+        let connection = deadline
+            .run(None, connecting)
+            .await
+            .map_err(|_| Error::SetupTimeout)??;
+        StreamingConnection::new_with_deadline(
+            connection,
+            EndpointRole::Publisher,
+            self.settings,
+            deadline,
+        )
+        .await
     }
     /// Close the listener and wait for active connections to drain.
     pub async fn shutdown(&self) {
@@ -285,10 +309,19 @@ impl StreamingClient {
         client_config.transport_config(transport);
         endpoint.set_default_client_config(client_config);
         let server_addr = SocketAddr::new(parsed.host, parsed.port);
+        let deadline = setup_deadline(settings)?;
         let connecting = endpoint.connect(server_addr, &parsed.server_name)?;
-        let connection = connecting.await?;
-        let connection =
-            StreamingConnection::new(connection, EndpointRole::Viewer, settings).await?;
+        let connection = deadline
+            .run(None, connecting)
+            .await
+            .map_err(|_| Error::SetupTimeout)??;
+        let connection = StreamingConnection::new_with_deadline(
+            connection,
+            EndpointRole::Viewer,
+            settings,
+            deadline,
+        )
+        .await?;
         Ok(Self {
             endpoint,
             connection,
@@ -305,36 +338,354 @@ impl StreamingClient {
         self.endpoint.wait_idle().await;
     }
 }
+
+fn setup_deadline(settings: TransportConfigSettings) -> Result<crate::preauth::PreauthDeadline> {
+    crate::preauth::PreauthDeadline::from_now(settings.idle_timeout).ok_or_else(|| {
+        Error::TransportConfig("streaming setup timeout cannot be represented".into())
+    })
+}
+
+#[derive(Clone, Debug)]
+enum DatagramTerminal {
+    Connection(ConnectionError),
+    Protocol(String),
+}
+
+impl DatagramTerminal {
+    fn into_error(self) -> Error {
+        match self {
+            Self::Connection(error) => Error::Connection(error),
+            Self::Protocol(reason) => Error::ProtocolViolation(reason),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DatagramInboxState {
+    frames: VecDeque<Bytes>,
+    bytes: usize,
+    terminal: Option<DatagramTerminal>,
+    policy: usize,
+}
+
+impl Default for DatagramInboxState {
+    fn default() -> Self {
+        Self {
+            frames: VecDeque::new(),
+            bytes: 0,
+            terminal: None,
+            policy: DATAGRAM_NEGOTIATING,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DatagramInbox {
+    state: Mutex<DatagramInboxState>,
+    notify: Notify,
+    max_bytes: usize,
+}
+
+impl DatagramInbox {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            state: Mutex::new(DatagramInboxState::default()),
+            notify: Notify::new(),
+            max_bytes,
+        }
+    }
+
+    fn admit(&self, frame: Bytes, configured_max: usize) -> core::result::Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.terminal.is_some() {
+            return Err("DATAGRAM session is already terminal".to_owned());
+        }
+        let max_datagram = if state.policy == DATAGRAM_NEGOTIATING {
+            configured_max
+        } else {
+            state.policy
+        };
+        if max_datagram == 0 {
+            return Err("peer sent a DATAGRAM while delivery was disabled".to_owned());
+        }
+        if frame.len() > max_datagram {
+            return Err(format!(
+                "peer sent datagram of {} bytes above negotiated maximum {max_datagram}",
+                frame.len()
+            ));
+        }
+        if state.frames.len() == MAX_DATAGRAM_INBOX_ENTRIES
+            || frame.len() > self.max_bytes.saturating_sub(state.bytes)
+        {
+            // QUIC DATAGRAM delivery is unreliable. Dropping a newest frame
+            // keeps both count and bytes bounded without backpressuring the
+            // eager transport drain.
+            return Ok(());
+        }
+        state.bytes += frame.len();
+        state.frames.push_back(frame);
+        drop(state);
+        self.notify.notify_one();
+        Ok(())
+    }
+
+    fn fail(&self, terminal: DatagramTerminal) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.terminal.is_none() {
+            state.frames.clear();
+            state.bytes = 0;
+            state.terminal = Some(terminal);
+        }
+        drop(state);
+        self.notify.notify_waiters();
+    }
+
+    fn apply_policy(&self, max_datagram: usize) -> Option<String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.policy = max_datagram;
+        let violation = state.frames.iter().find_map(|frame| {
+            if max_datagram == 0 {
+                Some("peer sent a DATAGRAM while delivery was disabled".to_owned())
+            } else if frame.len() > max_datagram {
+                Some(format!(
+                    "peer sent datagram of {} bytes above negotiated maximum {max_datagram}",
+                    frame.len()
+                ))
+            } else {
+                None
+            }
+        });
+        if let Some(reason) = violation.as_ref() {
+            state.frames.clear();
+            state.bytes = 0;
+            state.terminal = Some(DatagramTerminal::Protocol(reason.clone()));
+        }
+        drop(state);
+        self.notify.notify_waiters();
+        violation
+    }
+
+    fn has_protocol_terminal(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .terminal
+            .as_ref()
+            .is_some_and(|terminal| matches!(terminal, DatagramTerminal::Protocol(_)))
+    }
+
+    async fn recv(&self) -> Result<Bytes> {
+        loop {
+            let notified = self.notify.notified();
+            let outcome = {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                match state.terminal.clone() {
+                    Some(terminal) => Some(Err(terminal.into_error())),
+                    None => {
+                        let max_datagram = state.policy;
+                        if max_datagram == DATAGRAM_NEGOTIATING {
+                            None
+                        } else if max_datagram == 0 {
+                            Some(Err(Error::ProtocolViolation(
+                                "DATAGRAM delivery is disabled for this session".into(),
+                            )))
+                        } else {
+                            state.frames.pop_front().map(|frame| {
+                            state.bytes = state.bytes.saturating_sub(frame.len());
+                            if frame.len() > max_datagram {
+                                let reason = format!(
+                                    "peer sent datagram of {} bytes above negotiated maximum {max_datagram}",
+                                    frame.len()
+                                );
+                                state.frames.clear();
+                                state.bytes = 0;
+                                state.terminal =
+                                    Some(DatagramTerminal::Protocol(reason.clone()));
+                                Err(Error::ProtocolViolation(reason))
+                            } else {
+                                Ok(frame)
+                            }
+                        })
+                        }
+                    }
+                }
+            };
+            if let Some(outcome) = outcome {
+                return outcome;
+            }
+            notified.await;
+        }
+    }
+}
+
+fn spawn_datagram_pump(
+    connection: Connection,
+    inbox: Arc<DatagramInbox>,
+    configured_max: usize,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let frame = match connection.read_datagram().await {
+                Ok(frame) => frame,
+                Err(error) => {
+                    inbox.fail(DatagramTerminal::Connection(error));
+                    return;
+                }
+            };
+            if frame.is_empty() {
+                let reason = "peer sent a zero-length QUIC DATAGRAM".to_owned();
+                inbox.fail(DatagramTerminal::Protocol(reason));
+                connection.close(
+                    VarInt::from_u32(DATAGRAM_PROTOCOL_ERROR_CODE),
+                    b"zero-length DATAGRAM",
+                );
+                let mut drained = 0_u32;
+                while connection.read_datagram().await.is_ok() {
+                    drained = drained.wrapping_add(1);
+                    if drained % 64 == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                }
+                return;
+            }
+            if let Err(reason) = inbox.admit(frame, configured_max) {
+                inbox.fail(DatagramTerminal::Protocol(reason));
+                connection.close(
+                    VarInt::from_u32(DATAGRAM_PROTOCOL_ERROR_CODE),
+                    b"invalid DATAGRAM",
+                );
+                while connection.read_datagram().await.is_ok() {
+                    tokio::task::yield_now().await;
+                }
+                return;
+            }
+        }
+    })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingCapabilityAck {
+    stream_id: streaming::Hash,
+    protocol_version: u16,
+    dplpmtud: bool,
+    resolution: TransportCapabilityResolution,
+}
+
 /// Active streaming session over QUIC.
 pub struct StreamingConnection {
     role: EndpointRole,
     connection: Connection,
     control_send: ControlStreamWriter,
     control_recv: ControlStreamReader,
-    max_datagram: usize,
+    configured_max_datagram: usize,
+    max_datagram: Arc<AtomicUsize>,
+    datagram_inbox: Arc<DatagramInbox>,
+    datagram_task: JoinHandle<()>,
+    setup_deadline: Option<crate::preauth::PreauthDeadline>,
+    setup_state: Arc<AtomicU8>,
+    setup_watchdog: JoinHandle<()>,
+    pending_publisher_ack: Option<PendingCapabilityAck>,
 }
 impl StreamingConnection {
+    #[cfg(test)]
     async fn new(
         connection: Connection,
         role: EndpointRole,
         settings: TransportConfigSettings,
     ) -> Result<Self> {
-        let send = connection
-            .open_uni()
-            .await
-            .map_err(|e| Error::Io(std::io::Error::from(e)))?;
-        let control_send = ControlStreamWriter::new(send, role.outgoing_direction()).await?;
-        // QUIC streams are created implicitly when the first frame is sent. If we wait on
-        // `accept_uni()` before writing anything to our outgoing stream, both endpoints can
-        // deadlock waiting for the other side to "open" its control stream.
-        let recv = connection.accept_uni().await?;
-        let control_recv = ControlStreamReader::new(recv, role.incoming_direction()).await?;
+        let deadline = setup_deadline(settings)?;
+        Self::new_with_deadline(connection, role, settings, deadline).await
+    }
+
+    async fn new_with_deadline(
+        connection: Connection,
+        role: EndpointRole,
+        settings: TransportConfigSettings,
+        deadline: crate::preauth::PreauthDeadline,
+    ) -> Result<Self> {
+        let max_datagram = Arc::new(AtomicUsize::new(DATAGRAM_NEGOTIATING));
+        let datagram_inbox = Arc::new(DatagramInbox::new(settings.datagram_receive_buffer));
+        // Drain Quinn continuously before the control stream is authenticated.
+        // The bounded application inbox counts entries as well as bytes and
+        // closes the connection on the first empty DATAGRAM.
+        // TODO: Patch or update Quinn so dependency-owned queued DATAGRAMs also
+        // carry a fixed per-entry charge before this pump gets scheduled.
+        let datagram_task = spawn_datagram_pump(
+            connection.clone(),
+            Arc::clone(&datagram_inbox),
+            settings.max_datagram_size,
+        );
+        let setup = deadline
+            .run(None, async {
+                let send = connection
+                    .open_uni()
+                    .await
+                    .map_err(|e| Error::Io(std::io::Error::from(e)))?;
+                let control_send =
+                    ControlStreamWriter::new(send, role.outgoing_direction()).await?;
+                // QUIC streams are created implicitly when the first frame is sent. If we wait on
+                // `accept_uni()` before writing anything to our outgoing stream, both endpoints can
+                // deadlock waiting for the other side to "open" its control stream.
+                let recv = connection.accept_uni().await?;
+                let control_recv =
+                    ControlStreamReader::new(recv, role.incoming_direction()).await?;
+                Ok::<_, Error>((control_send, control_recv))
+            })
+            .await;
+        let (control_send, control_recv) = match setup {
+            Ok(Ok(streams)) => streams,
+            Ok(Err(error)) => {
+                datagram_task.abort();
+                return Err(error);
+            }
+            Err(_) => {
+                connection.close(VarInt::from_u32(0), b"setup timeout");
+                datagram_task.abort();
+                return Err(Error::SetupTimeout);
+            }
+        };
+        let setup_state = Arc::new(AtomicU8::new(SETUP_PENDING));
+        let watchdog_state = Arc::clone(&setup_state);
+        let watchdog_connection = connection.clone();
+        let setup_watchdog = tokio::spawn(async move {
+            deadline.wait().await;
+            if watchdog_state
+                .compare_exchange(
+                    SETUP_PENDING,
+                    SETUP_TIMED_OUT,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                watchdog_connection.close(VarInt::from_u32(0), b"setup timeout");
+            }
+        });
         Ok(Self {
             role,
             connection,
             control_send,
             control_recv,
-            max_datagram: settings.max_datagram_size,
+            configured_max_datagram: settings.max_datagram_size,
+            max_datagram,
+            datagram_inbox,
+            datagram_task,
+            setup_deadline: Some(deadline),
+            setup_state,
+            setup_watchdog,
+            pending_publisher_ack: None,
         })
     }
     /// Return the local role.
@@ -343,18 +694,77 @@ impl StreamingConnection {
     }
     /// Send a control frame to the peer.
     pub async fn send_control_frame(&mut self, frame: &ControlFrame) -> Result<()> {
-        self.control_send.send_frame(frame).await
+        let completes_setup = if matches!(self.role, EndpointRole::Publisher) {
+            if let ControlFrame::CapabilityAck(ack) = frame {
+                let pending = self.pending_publisher_ack.ok_or_else(|| {
+                    Error::ProtocolViolation(
+                        "publisher sent a capability ack without a pending report".into(),
+                    )
+                })?;
+                validate_capability_ack_binding(
+                    ack,
+                    pending.stream_id,
+                    pending.protocol_version,
+                    pending.dplpmtud,
+                    pending.resolution,
+                )?;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        let result = if let Some(deadline) = self.setup_deadline {
+            if let Ok(result) = deadline
+                .run(None, self.control_send.send_frame(frame))
+                .await
+            {
+                result
+            } else {
+                self.connection.close(VarInt::from_u32(0), b"setup timeout");
+                return Err(Error::SetupTimeout);
+            }
+        } else {
+            self.control_send.send_frame(frame).await
+        };
+        result?;
+        if completes_setup {
+            self.pending_publisher_ack = None;
+            self.finish_setup()?;
+        }
+        Ok(())
     }
     /// Receive the next control frame from the peer.
     pub async fn next_control_frame(&mut self) -> Result<ControlFrame> {
-        self.control_recv.next_frame().await
+        if let Some(deadline) = self.setup_deadline {
+            if let Ok(result) = deadline.run(None, self.control_recv.next_frame()).await {
+                result
+            } else {
+                self.connection.close(VarInt::from_u32(0), b"setup timeout");
+                Err(Error::SetupTimeout)
+            }
+        } else {
+            self.control_recv.next_frame().await
+        }
     }
     /// Send a datagram payload.
     pub async fn send_datagram(&self, payload: &[u8]) -> Result<()> {
-        if payload.len() > self.max_datagram {
+        if payload.is_empty() {
+            return Err(Error::ProtocolViolation(
+                "zero-length QUIC DATAGRAMs are forbidden".into(),
+            ));
+        }
+        let max_datagram = self.max_datagram.load(Ordering::Acquire);
+        if max_datagram == DATAGRAM_NEGOTIATING {
+            return Err(Error::ProtocolViolation(
+                "DATAGRAM capability negotiation is incomplete".into(),
+            ));
+        }
+        if payload.len() > max_datagram {
             return Err(Error::DatagramTooLarge {
                 len: payload.len(),
-                max: self.max_datagram,
+                max: max_datagram,
             });
         }
         self.connection
@@ -363,40 +773,111 @@ impl StreamingConnection {
     }
     /// Receive the next datagram payload.
     pub async fn recv_datagram(&self) -> Result<Bytes> {
-        Ok(self.connection.read_datagram().await?)
+        let result = self.datagram_inbox.recv().await;
+        if result.is_err() && self.datagram_inbox.has_protocol_terminal() {
+            self.connection.close(
+                VarInt::from_u32(DATAGRAM_PROTOCOL_ERROR_CODE),
+                b"invalid DATAGRAM",
+            );
+        }
+        result
     }
     /// Return the negotiated DATAGRAM payload limit for this session.
-    pub const fn max_datagram_size(&self) -> usize {
-        self.max_datagram
+    pub fn max_datagram_size(&self) -> usize {
+        match self.max_datagram.load(Ordering::Acquire) {
+            DATAGRAM_NEGOTIATING => 0,
+            limit => limit,
+        }
     }
     /// Return `true` if DATAGRAM delivery is enabled for this session.
-    pub const fn datagram_enabled(&self) -> bool {
-        self.max_datagram > 0
+    pub fn datagram_enabled(&self) -> bool {
+        let limit = self.max_datagram.load(Ordering::Acquire);
+        limit != DATAGRAM_NEGOTIATING && limit > 0
     }
     /// Close the underlying QUIC connection.
     pub fn close(&self) {
         self.connection.close(VarInt::from_u32(0), &[]);
     }
-    /// Borrow the underlying QUIC connection.
-    pub fn quic_connection(&self) -> &Connection {
-        &self.connection
+    /// Wait for the underlying QUIC connection to close.
+    pub async fn closed(&self) -> ConnectionError {
+        self.connection.closed().await
     }
-    fn apply_transport_resolution(&mut self, resolution: TransportCapabilityResolution) {
+    fn finish_setup(&mut self) -> Result<()> {
+        let Some(deadline) = self.setup_deadline else {
+            return Err(Error::ProtocolViolation(
+                "streaming setup was already completed".into(),
+            ));
+        };
+        match self.setup_state.compare_exchange(
+            SETUP_PENDING,
+            SETUP_COMPLETE,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {}
+            Err(SETUP_TIMED_OUT) => {
+                self.connection.close(VarInt::from_u32(0), b"setup timeout");
+                return Err(Error::SetupTimeout);
+            }
+            Err(_) => {
+                return Err(Error::ProtocolViolation(
+                    "streaming setup was already completed".into(),
+                ));
+            }
+        }
+        // The compare-exchange is the logical completion instant. A task that
+        // was descheduled across the deadline must not win merely because the
+        // watchdog has not yet been polled.
+        if deadline.has_elapsed() {
+            self.setup_state.store(SETUP_TIMED_OUT, Ordering::Release);
+            self.connection.close(VarInt::from_u32(0), b"setup timeout");
+            return Err(Error::SetupTimeout);
+        }
+        self.setup_deadline = None;
+        self.setup_watchdog.abort();
+        Ok(())
+    }
+    fn normalize_local_transport_capabilities(
+        &self,
+        mut capabilities: TransportCapabilities,
+    ) -> TransportCapabilities {
+        if capabilities.supports_datagram && self.configured_max_datagram > 0 {
+            let configured = u16::try_from(self.configured_max_datagram).unwrap_or(u16::MAX);
+            capabilities.max_segment_datagram_size =
+                capabilities.max_segment_datagram_size.min(configured);
+        } else {
+            capabilities.supports_datagram = false;
+            capabilities.max_segment_datagram_size = 0;
+        }
+        capabilities
+    }
+    fn apply_transport_resolution(
+        &mut self,
+        resolution: TransportCapabilityResolution,
+    ) -> Result<()> {
         let negotiated = if resolution.use_datagram {
             usize::from(resolution.max_segment_datagram_size)
         } else {
             0
         };
-        self.max_datagram = match negotiated {
-            0 => 0,
-            limit => {
-                if self.max_datagram == 0 {
-                    limit
-                } else {
-                    limit.min(self.max_datagram)
-                }
-            }
-        };
+        let max_datagram = negotiated;
+        debug_assert!(max_datagram <= self.configured_max_datagram);
+        if let Some(reason) = self.datagram_inbox.apply_policy(max_datagram) {
+            self.connection.close(
+                VarInt::from_u32(DATAGRAM_PROTOCOL_ERROR_CODE),
+                b"invalid DATAGRAM",
+            );
+            return Err(Error::ProtocolViolation(reason));
+        }
+        self.max_datagram.store(max_datagram, Ordering::Release);
+        Ok(())
+    }
+}
+
+impl Drop for StreamingConnection {
+    fn drop(&mut self) {
+        self.datagram_task.abort();
+        self.setup_watchdog.abort();
     }
 }
 /// Capability negotiation helpers.
@@ -417,7 +898,7 @@ impl CapabilityNegotiation {
         let mut record = Some(record);
         let local_frame = TransportCapabilitiesFrame {
             endpoint_role: streaming::CapabilityRole::Viewer,
-            capabilities,
+            capabilities: conn.normalize_local_transport_capabilities(capabilities),
         };
         conn.send_control_frame(&ControlFrame::TransportCapabilities(local_frame.clone()))
             .await?;
@@ -476,7 +957,8 @@ impl CapabilityNegotiation {
                         expected_dplpmtud,
                         resolution,
                     )?;
-                    conn.apply_transport_resolution(resolution);
+                    conn.apply_transport_resolution(resolution)?;
+                    conn.finish_setup()?;
                     if let Some(callback) = record.take() {
                         callback(&resolution);
                     }
@@ -528,7 +1010,7 @@ impl CapabilityNegotiation {
         };
         let local_frame = TransportCapabilitiesFrame {
             endpoint_role: streaming::CapabilityRole::Publisher,
-            capabilities,
+            capabilities: conn.normalize_local_transport_capabilities(capabilities),
         };
         conn.send_control_frame(&ControlFrame::TransportCapabilities(local_frame.clone()))
             .await?;
@@ -552,7 +1034,13 @@ impl CapabilityNegotiation {
                             .max_segment_datagram_size
                             .min(report.max_datagram_size);
                     }
-                    conn.apply_transport_resolution(resolution);
+                    conn.apply_transport_resolution(resolution)?;
+                    conn.pending_publisher_ack = Some(PendingCapabilityAck {
+                        stream_id: report.stream_id,
+                        protocol_version: report.protocol_version,
+                        dplpmtud: report.dplpmtud,
+                        resolution,
+                    });
                     if let Some(callback) = record.take() {
                         callback(&resolution);
                     }
@@ -707,9 +1195,17 @@ impl ControlStreamReader {
             Err(ReadExactError::FinishedEarly(_)) => return Err(Error::ControlStreamClosed),
             Err(ReadExactError::ReadError(e)) => return Err(Error::Io(std::io::Error::from(e))),
         }
-        let frame = deserialize_from(buf.as_slice())?;
+        let frame = decode_control_frame(buf.as_slice())?;
         Ok(frame)
     }
+}
+
+fn decode_control_frame(bytes: &[u8]) -> Result<ControlFrame> {
+    // `decode_from_bytes` derives a cumulative allocation budget from the
+    // complete wire frame. This is intentionally narrower than the ambient
+    // archive limit used by `deserialize_from`, while preserving supported
+    // Norito compression and layout flags.
+    Ok(decode_from_bytes(bytes)?)
 }
 #[derive(Debug)]
 struct ParsedMultiaddr {
@@ -894,6 +1390,88 @@ mod tests {
             .expect("default capabilities resolve")
     }
     #[test]
+    fn control_frame_decode_uses_wire_derived_allocation_budget() {
+        let frame = ControlFrame::CapabilityReport(capability_report(1));
+        let encoded =
+            norito::to_compressed_bytes(&frame, Some(norito::CompressionConfig::default()))
+                .expect("compress control frame");
+        assert!(matches!(
+            decode_control_frame(&encoded).expect("valid compressed control frame"),
+            ControlFrame::CapabilityReport(_)
+        ));
+
+        const DECLARED_EXPANSION: u64 = 63 * 1024 * 1024;
+        const EXPECTED_WIRE_DERIVED_LIMIT: u64 = (MAX_CONTROL_FRAME_LEN as u64) * 64 + 64 * 1024;
+        let mut forged = encoded;
+        forged.resize(MAX_CONTROL_FRAME_LEN, 0);
+        let length_offset = 4 + 1 + 1 + 16 + 1;
+        forged[length_offset..length_offset + 8].copy_from_slice(&DECLARED_EXPANSION.to_le_bytes());
+        let error = decode_control_frame(&forged)
+            .expect_err("attacker-declared expansion must exceed the wire-derived budget");
+        assert!(
+            matches!(
+                &error,
+                Error::Norito(norito::Error::TotalAllocationExceeded { attempted, limit })
+                    if *attempted == DECLARED_EXPANSION
+                        && *limit == EXPECTED_WIRE_DERIVED_LIMIT
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+    #[tokio::test]
+    async fn datagram_inbox_bounds_count_and_bytes_and_revalidates_policy() {
+        let inbox = DatagramInbox::new(MAX_DATAGRAM_INBOX_ENTRIES + 32);
+        for _ in 0..(MAX_DATAGRAM_INBOX_ENTRIES + 32) {
+            inbox
+                .admit(Bytes::from_static(&[1]), 8)
+                .expect("configured pre-negotiation DATAGRAM");
+        }
+        {
+            let state = inbox.state.lock().expect("inbox state");
+            assert_eq!(state.frames.len(), MAX_DATAGRAM_INBOX_ENTRIES);
+            assert_eq!(state.bytes, MAX_DATAGRAM_INBOX_ENTRIES);
+        }
+
+        let inbox = DatagramInbox::new(8);
+        inbox
+            .admit(Bytes::from_static(&[1, 2, 3, 4]), 8)
+            .expect("first DATAGRAM");
+        inbox
+            .admit(Bytes::from_static(&[5, 6, 7, 8]), 8)
+            .expect("second DATAGRAM");
+        inbox
+            .admit(Bytes::from_static(&[9]), 8)
+            .expect("unreliable inbox may drop at its byte bound");
+        {
+            let state = inbox.state.lock().expect("inbox state");
+            assert_eq!(state.frames.len(), 2);
+            assert_eq!(state.bytes, 8);
+        }
+        assert!(inbox.apply_policy(0).is_some());
+        assert!(matches!(
+            inbox.recv().await,
+            Err(Error::ProtocolViolation(_))
+        ));
+
+        let disabled = DatagramInbox::new(8);
+        assert!(disabled.apply_policy(0).is_none());
+        assert!(
+            disabled
+                .admit(Bytes::from_static(&[1]), 8)
+                .expect_err("policy update and admission share one lock")
+                .contains("disabled")
+        );
+        let bounded = DatagramInbox::new(8);
+        assert!(bounded.apply_policy(4).is_none());
+        assert!(bounded.admit(Bytes::from_static(&[1, 2, 3, 4]), 8).is_ok());
+        assert!(
+            bounded
+                .admit(Bytes::from_static(&[1, 2, 3, 4, 5]), 8)
+                .expect_err("post-negotiation admission must use the negotiated bound")
+                .contains("above negotiated maximum 4")
+        );
+    }
+    #[test]
     fn streaming_certificate_pin_rejects_another_certificate() {
         let rcgen::CertifiedKey { cert, .. } =
             rcgen::generate_simple_self_signed(["nsc.local".to_owned()])
@@ -914,6 +1492,107 @@ mod tests {
             .verify_server_cert(&cert_der, &[], &server_name, &[], now)
             .expect_err("different certificate fingerprint must fail closed");
         assert!(error.to_string().contains("fingerprint mismatch"));
+    }
+    #[tokio::test]
+    async fn accept_rejects_client_that_never_opens_control_stream() {
+        let settings = TransportConfigSettings {
+            idle_timeout: TokioDuration::from_millis(100),
+            ..TransportConfigSettings::default()
+        };
+        let server = match StreamingServer::bind(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            settings,
+        )
+        .await
+        {
+            Ok(server) => server,
+            Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("quic test skipped: {err}");
+                return;
+            }
+            Err(error) => panic!("server bind failed: {error:?}"),
+        };
+        let listen_addr = server.local_addr().expect("listen addr");
+        let fingerprint = server.certificate_fingerprint();
+        let raw_client = async move {
+            let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap()).expect("endpoint");
+            let verifier: Arc<dyn ServerCertVerifier> = Arc::new(
+                crate::transport::CertificateKeyProofVerifier::pinned(fingerprint),
+            );
+            let mut tls_config = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(verifier)
+                .with_no_client_auth();
+            tls_config.alpn_protocols = vec![ALPN.to_vec()];
+            let crypto = QuinnRustlsClientConfig::try_from(Arc::new(tls_config))
+                .expect("QUIC client config");
+            let mut client_config = ClientConfig::new(Arc::new(crypto));
+            client_config.transport_config(build_transport_config(settings).expect("transport"));
+            endpoint.set_default_client_config(client_config);
+            let connection = endpoint
+                .connect(listen_addr, "nsc.local")
+                .expect("connect start")
+                .await
+                .expect("QUIC handshake");
+            // Keep the transport alive beyond the setup deadline without ever
+            // opening the required viewer-to-publisher control stream.
+            sleep(TokioDuration::from_millis(250)).await;
+            connection.close(VarInt::from_u32(0), &[]);
+            endpoint.close(VarInt::from_u32(0), &[]);
+        };
+        let (accepted, ()) =
+            tokio::join!(within("server setup deadline", server.accept()), raw_client);
+        assert!(matches!(accepted, Err(Error::SetupTimeout)));
+        within("server.shutdown", server.shutdown()).await;
+    }
+    #[tokio::test]
+    async fn setup_watchdog_closes_an_active_connection_between_api_calls() {
+        let settings = TransportConfigSettings {
+            idle_timeout: TokioDuration::from_millis(150),
+            ..TransportConfigSettings::default()
+        };
+        let server = match StreamingServer::bind(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            settings,
+        )
+        .await
+        {
+            Ok(server) => server,
+            Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("quic test skipped: {err}");
+                return;
+            }
+            Err(error) => panic!("server bind failed: {error:?}"),
+        };
+        let listen_addr = server.local_addr().expect("listen addr");
+        let fingerprint = server.certificate_fingerprint();
+        let multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port());
+        let (accepted, connected) = tokio::join!(
+            within("server.accept", server.accept()),
+            within(
+                "client.connect",
+                StreamingClient::connect(&multiaddr, fingerprint, settings)
+            )
+        );
+        let publisher = accepted.expect("publisher control streams");
+        let mut client = connected.expect("viewer control streams");
+        let raw_connection = client.connection().connection.clone();
+        let transport_activity = tokio::spawn(async move {
+            loop {
+                if raw_connection
+                    .send_datagram(Bytes::from_static(&[1]))
+                    .is_err()
+                {
+                    break;
+                }
+                sleep(TokioDuration::from_millis(20)).await;
+            }
+        });
+
+        within("setup watchdog close", publisher.closed()).await;
+        transport_activity.abort();
+        within("client.close", client.close()).await;
+        within("server.shutdown", server.shutdown()).await;
     }
     #[test]
     fn capability_report_zero_protocol_version_rejected() {
@@ -1022,6 +1701,7 @@ mod tests {
         };
         let listen_addr = server.local_addr().expect("listen addr");
         let server_certificate_fingerprint = server.certificate_fingerprint();
+        let (datagram_read_tx, datagram_read_rx) = tokio::sync::oneshot::channel();
         let server_task = {
             let server = server.clone();
             async move {
@@ -1087,9 +1767,13 @@ mod tests {
                 within("send_datagram", conn.send_datagram(&chunk))
                     .await
                     .expect("datagram");
-                // allow the viewer to read before we close
-                sleep(TokioDuration::from_millis(50)).await;
-                conn.close();
+                datagram_read_rx.await.expect("viewer read datagram");
+                for _ in 0..1_024 {
+                    conn.connection
+                        .send_datagram(Bytes::new())
+                        .expect("raw peer can queue an empty DATAGRAM burst");
+                }
+                let _ = within("wait_empty_datagram_close", conn.closed()).await;
             }
         };
         let viewer_task = async {
@@ -1196,6 +1880,19 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(chunk.as_ref(), &[0xDE, 0xAD, 0xBE, 0xEF]);
+            datagram_read_tx.send(()).expect("notify publisher");
+            let error = within("reject_empty_datagram", client.connection().recv_datagram())
+                .await
+                .expect_err("empty DATAGRAM must close the session");
+            match error {
+                Error::ProtocolViolation(reason) => {
+                    assert!(
+                        reason.contains("zero-length"),
+                        "unexpected reason: {reason}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
             within("client.close", client.close()).await;
         };
         tokio::join!(server_task, viewer_task);
@@ -1366,21 +2063,24 @@ mod tests {
             // Wait for the publisher to process frames and close the connection before we tear down
             // our endpoint. Closing immediately can race with stream delivery and spuriously abort
             // the server-side receive loop.
-            let _ = within(
-                "wait_server_close",
-                client.connection().quic_connection().closed(),
-            )
-            .await;
+            let _ = within("wait_server_close", client.connection().closed()).await;
             within("client.close", client.close()).await;
         };
         tokio::join!(server_task, viewer_task);
         within("server.shutdown", server.shutdown()).await;
     }
     #[tokio::test]
-    async fn mtu_negotiation_clamps_to_smallest_limit() {
-        let settings = TransportConfigSettings::default();
+    async fn mtu_negotiation_clamps_asymmetric_local_limits_on_the_wire() {
+        let server_settings = TransportConfigSettings {
+            max_datagram_size: 1_200,
+            ..TransportConfigSettings::default()
+        };
+        let viewer_settings = TransportConfigSettings {
+            max_datagram_size: 800,
+            ..TransportConfigSettings::default()
+        };
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let server = match StreamingServer::bind(server_addr, settings).await {
+        let server = match StreamingServer::bind(server_addr, server_settings).await {
             Ok(server) => server,
             Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
                 eprintln!("quic test skipped: {err}");
@@ -1390,6 +2090,7 @@ mod tests {
         };
         let listen_addr = server.local_addr().expect("listen addr");
         let server_certificate_fingerprint = server.certificate_fingerprint();
+        let (datagram_received_tx, datagram_received_rx) = tokio::sync::oneshot::channel();
         let server_task = {
             let server = server.clone();
             async move {
@@ -1397,7 +2098,7 @@ mod tests {
                     .await
                     .expect("accept");
                 let mut publisher_caps = TransportCapabilities::kyber768_default();
-                publisher_caps.max_segment_datagram_size = 1100;
+                publisher_caps.max_segment_datagram_size = 1_350;
                 let (report, resolution) = within(
                     "publisher_handshake",
                     CapabilityNegotiation::publisher_handshake(&mut conn, publisher_caps, |_| {}),
@@ -1405,8 +2106,8 @@ mod tests {
                 .await
                 .expect("handshake");
                 assert!(resolution.use_datagram);
-                assert_eq!(resolution.max_segment_datagram_size, 900);
-                assert_eq!(conn.max_datagram_size(), 900);
+                assert_eq!(resolution.max_segment_datagram_size, 800);
+                assert_eq!(conn.max_datagram_size(), 800);
                 assert!(conn.datagram_enabled());
                 let ack = CapabilityAck {
                     stream_id: report.stream_id,
@@ -1423,7 +2124,13 @@ mod tests {
                 )
                 .await
                 .expect("ack");
-                let _ = within("wait_client_close", conn.quic_connection().closed()).await;
+                let datagram = within("receive_negotiated_datagram", conn.recv_datagram())
+                    .await
+                    .expect("negotiated DATAGRAM delivery");
+                assert_eq!(datagram.len(), 800);
+                datagram_received_tx
+                    .send(())
+                    .expect("viewer still waits for DATAGRAM receipt");
             }
         };
         let viewer_task = async move {
@@ -1432,13 +2139,13 @@ mod tests {
                 StreamingClient::connect(
                     &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
                     server_certificate_fingerprint,
-                    settings,
+                    viewer_settings,
                 ),
             )
             .await
             .expect("client");
             let mut viewer_caps = TransportCapabilities::kyber768_default();
-            viewer_caps.max_segment_datagram_size = 1024;
+            viewer_caps.max_segment_datagram_size = 1_350;
             let report = CapabilityReport {
                 stream_id: hash(7),
                 endpoint_role: CapabilityRole::Viewer,
@@ -1453,7 +2160,7 @@ mod tests {
                     max_channels: 2,
                 },
                 feature_bits: CapabilityFlags::from_bits(0b11),
-                max_datagram_size: 900,
+                max_datagram_size: 1_350,
                 dplpmtud: true,
             };
             let (ack, resolution) = within(
@@ -1468,11 +2175,11 @@ mod tests {
             .await
             .expect("handshake");
             assert!(resolution.use_datagram);
-            assert_eq!(resolution.max_segment_datagram_size, 900);
-            assert_eq!(ack.max_datagram_size, 900);
-            assert_eq!(client.connection().max_datagram_size(), 900);
+            assert_eq!(resolution.max_segment_datagram_size, 800);
+            assert_eq!(ack.max_datagram_size, 800);
+            assert_eq!(client.connection().max_datagram_size(), 800);
             assert!(client.connection().datagram_enabled());
-            let payload = vec![0_u8; 901];
+            let payload = vec![0_u8; 801];
             let err = within(
                 "send_oversized_datagram",
                 client.connection().send_datagram(&payload),
@@ -1480,9 +2187,18 @@ mod tests {
             .await
             .unwrap_err();
             match err {
-                Error::DatagramTooLarge { max, .. } => assert_eq!(max, 900),
+                Error::DatagramTooLarge { max, .. } => assert_eq!(max, 800),
                 other => panic!("unexpected error: {other:?}"),
             }
+            within(
+                "send_maximum_datagram",
+                client.connection().send_datagram(&vec![0_u8; 800]),
+            )
+            .await
+            .expect("maximum negotiated DATAGRAM size must be accepted");
+            within("wait_datagram_receipt", datagram_received_rx)
+                .await
+                .expect("server received maximum-sized DATAGRAM");
             within("client.close", client.close()).await;
         };
         tokio::join!(server_task, viewer_task);
@@ -1533,7 +2249,7 @@ mod tests {
                 )
                 .await
                 .expect("ack");
-                let _ = within("wait_client_close", conn.quic_connection().closed()).await;
+                let _ = within("wait_client_close", conn.closed()).await;
             }
         };
         let viewer_task = async move {
@@ -1590,6 +2306,12 @@ mod tests {
                 Error::DatagramTooLarge { max, .. } => assert_eq!(max, 0),
                 other => panic!("unexpected error: {other:?}"),
             }
+            client
+                .connection()
+                .connection
+                .send_datagram(Bytes::from_static(&[1]))
+                .expect("raw peer can attempt to violate negotiated policy");
+            let _ = within("wait_server_close", client.connection().closed()).await;
             within("client.close", client.close()).await;
         };
         tokio::join!(server_task, viewer_task);

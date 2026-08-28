@@ -100,7 +100,6 @@ pub enum Item {
     Trigger(TriggerDecl),
 }
 /// A syntactic type expression as written by the user.
-#[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
     /// Parser-internal provenance carrier removed before any canonical public
     /// parse/session output is returned. This is not a Kotodama type variant.
@@ -127,6 +126,176 @@ pub enum TypeExpr {
     /// A non-negative compile-time integer argument, used by `List<T, N>`.
     Const(u64),
 }
+impl std::fmt::Debug for TypeExpr {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Source { node, source, .. } => formatter
+                .debug_struct("Source")
+                .field("node", node)
+                .field("source", source)
+                .field("ty", &"..")
+                .finish(),
+            Self::Resolved { id, source, .. } => formatter
+                .debug_struct("Resolved")
+                .field("id", id)
+                .field("source", source)
+                .field("ty", &"..")
+                .finish(),
+            Self::Path(path) => formatter.debug_tuple("Path").field(path).finish(),
+            Self::Generic { base, args } => formatter
+                .debug_struct("Generic")
+                .field("base", base)
+                .field("args", &args.len())
+                .finish(),
+            Self::Tuple(items) => formatter
+                .debug_tuple("Tuple")
+                .field(&format_args!("{} item(s)", items.len()))
+                .finish(),
+            Self::Const(value) => formatter.debug_tuple("Const").field(value).finish(),
+        }
+    }
+}
+impl PartialEq for TypeExpr {
+    fn eq(&self, other: &Self) -> bool {
+        let mut pending = vec![(self, other)];
+        while let Some((left, right)) = pending.pop() {
+            match (left, right) {
+                (
+                    Self::Source {
+                        node: left_node,
+                        source: left_source,
+                        ty: left_ty,
+                    },
+                    Self::Source {
+                        node: right_node,
+                        source: right_source,
+                        ty: right_ty,
+                    },
+                ) => {
+                    if left_node != right_node || left_source != right_source {
+                        return false;
+                    }
+                    pending.push((left_ty, right_ty));
+                }
+                (
+                    Self::Resolved {
+                        id: left_id,
+                        source: left_source,
+                        ty: left_ty,
+                    },
+                    Self::Resolved {
+                        id: right_id,
+                        source: right_source,
+                        ty: right_ty,
+                    },
+                ) => {
+                    if left_id != right_id || left_source != right_source {
+                        return false;
+                    }
+                    pending.push((left_ty, right_ty));
+                }
+                (Self::Path(left), Self::Path(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                (
+                    Self::Generic {
+                        base: left_base,
+                        args: left_args,
+                    },
+                    Self::Generic {
+                        base: right_base,
+                        args: right_args,
+                    },
+                ) => {
+                    if left_base != right_base || left_args.len() != right_args.len() {
+                        return false;
+                    }
+                    pending.extend(left_args.iter().zip(right_args).rev());
+                }
+                (Self::Tuple(left), Self::Tuple(right)) => {
+                    if left.len() != right.len() {
+                        return false;
+                    }
+                    pending.extend(left.iter().zip(right).rev());
+                }
+                (Self::Const(left), Self::Const(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+impl Clone for TypeExpr {
+    fn clone(&self) -> Self {
+        enum Pending<'a> {
+            Type(&'a TypeExpr),
+            Source(NodeId, SourceRange),
+            Resolved(HirId, Option<SourceRange>),
+            Generic(String, usize),
+            Tuple(usize),
+        }
+
+        let mut pending = vec![Pending::Type(self)];
+        let mut values = Vec::new();
+        while let Some(operation) = pending.pop() {
+            match operation {
+                Pending::Type(ty) => match ty {
+                    Self::Source { node, source, ty } => {
+                        pending.push(Pending::Source(*node, *source));
+                        pending.push(Pending::Type(ty));
+                    }
+                    Self::Resolved { id, source, ty } => {
+                        pending.push(Pending::Resolved(*id, *source));
+                        pending.push(Pending::Type(ty));
+                    }
+                    Self::Path(path) => values.push(Self::Path(path.clone())),
+                    Self::Generic { base, args } => {
+                        pending.push(Pending::Generic(base.clone(), args.len()));
+                        pending.extend(args.iter().rev().map(Pending::Type));
+                    }
+                    Self::Tuple(items) => {
+                        pending.push(Pending::Tuple(items.len()));
+                        pending.extend(items.iter().rev().map(Pending::Type));
+                    }
+                    Self::Const(value) => values.push(Self::Const(*value)),
+                },
+                Pending::Source(node, source) => {
+                    let ty = values.pop().expect("visited source type child");
+                    values.push(Self::Source {
+                        node,
+                        source,
+                        ty: Box::new(ty),
+                    });
+                }
+                Pending::Resolved(id, source) => {
+                    let ty = values.pop().expect("visited resolved type child");
+                    values.push(Self::Resolved {
+                        id,
+                        source,
+                        ty: Box::new(ty),
+                    });
+                }
+                Pending::Generic(base, len) => {
+                    let start = values.len().saturating_sub(len);
+                    let args = values.split_off(start);
+                    values.push(Self::Generic { base, args });
+                }
+                Pending::Tuple(len) => {
+                    let start = values.len().saturating_sub(len);
+                    let items = values.split_off(start);
+                    values.push(Self::Tuple(items));
+                }
+            }
+        }
+        values.pop().expect("type traversal produces one root")
+    }
+}
 #[derive(Debug, PartialEq, Clone)]
 pub struct Param {
     pub ty: Option<TypeExpr>,
@@ -149,6 +318,7 @@ pub struct Block {
     /// Final expression without a semicolon, evaluated as the block value.
     pub tail: Option<Box<Expr>>,
 }
+
 /// A user-defined struct with named fields.
 #[derive(Debug, PartialEq, Clone)]
 pub struct StructDef {
@@ -174,6 +344,7 @@ pub struct ConstDecl {
     pub ty: Option<TypeExpr>,
     pub value: Expr,
 }
+
 /// A seiyaku-level `state` declaration: `state Type name;`.
 #[derive(Debug, PartialEq, Clone)]
 pub struct StateDecl {
@@ -191,6 +362,7 @@ pub struct FixtureDecl {
     pub name: String,
     pub actions: Vec<FixtureAction>,
 }
+
 /// One fixture action expressed as a function-style command, for example
 /// `caller(account("alice@wonderland"))`.
 #[derive(Debug, PartialEq, Clone)]
@@ -198,6 +370,7 @@ pub struct FixtureAction {
     pub name: String,
     pub args: Vec<Expr>,
 }
+
 /// Seiyaku-level trigger declaration.
 #[derive(Debug, PartialEq, Clone)]
 pub struct TriggerDecl {
@@ -210,6 +383,7 @@ pub struct TriggerDecl {
     pub authority: Option<String>,
     pub metadata: Vec<TriggerMetadataEntry>,
 }
+
 /// Trigger callback target.
 #[derive(Debug, PartialEq, Clone)]
 pub struct TriggerCall {
@@ -291,6 +465,7 @@ pub struct TriggerMetadataEntry {
     pub key: String,
     pub value: Expr,
 }
+
 /// Seiyaku-level localization table.
 #[derive(Debug, PartialEq, Clone)]
 pub struct MessageBlock {
@@ -342,6 +517,7 @@ pub struct MatchArm {
     pub pattern: SumPattern,
     pub body: Block,
 }
+
 /// One native JSON object entry with its decoded key and exact source spelling.
 #[derive(Debug, PartialEq, Clone)]
 pub struct JsonObjectEntry {
@@ -369,7 +545,6 @@ pub enum AssignOp {
     /// Compound assignment: `%=`.
     Mod,
 }
-#[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     /// Parser-internal provenance carrier removed before any canonical public
     /// parse/session output is returned. This is not a Kotodama statement.
@@ -441,7 +616,36 @@ pub enum Statement {
         body: Block,
     },
 }
-#[derive(Debug, PartialEq, Clone)]
+impl std::fmt::Debug for Statement {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Source { .. } => "Source(..)",
+            Self::Resolved { .. } => "Resolved(..)",
+            Self::Let { .. } => "Let(..)",
+            Self::Assign { .. } => "Assign(..)",
+            Self::AssignExpr { .. } => "AssignExpr(..)",
+            Self::Expr(_) => "Expr(..)",
+            Self::Return(_) => "Return(..)",
+            Self::Break => "Break",
+            Self::Continue => "Continue",
+            Self::If { .. } => "If(..)",
+            Self::IfLet { .. } => "IfLet(..)",
+            Self::While { .. } => "While(..)",
+            Self::For { .. } => "For(..)",
+            Self::ForEachMap { .. } => "ForEachMap(..)",
+        })
+    }
+}
+impl PartialEq for Statement {
+    fn eq(&self, other: &Self) -> bool {
+        ast_nodes_equal(CompareNode::Statement(self, other))
+    }
+}
+impl Clone for Statement {
+    fn clone(&self) -> Self {
+        clone_statement_iterative(self)
+    }
+}
 pub enum Expr {
     /// Parser-internal provenance carrier removed before any canonical public
     /// parse/session output is returned. This is not a Kotodama expression.
@@ -554,6 +758,61 @@ pub enum Expr {
     Bytes(Vec<u8>),
     Ident(String),
 }
+impl std::fmt::Debug for Expr {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bool(value) => formatter.debug_tuple("Bool").field(value).finish(),
+            Self::IntLiteral(value) => formatter.debug_tuple("IntLiteral").field(value).finish(),
+            Self::DecimalLiteral(value) => formatter
+                .debug_tuple("DecimalLiteral")
+                .field(value)
+                .finish(),
+            Self::String(value) => formatter.debug_tuple("String").field(value).finish(),
+            Self::Bytes(value) => formatter.debug_tuple("Bytes").field(value).finish(),
+            Self::Ident(value) => formatter.debug_tuple("Ident").field(value).finish(),
+            other => formatter.write_str(match other {
+                Self::Source { .. } => "Source(..)",
+                Self::Resolved { .. } => "Resolved(..)",
+                Self::Binary { .. } => "Binary(..)",
+                Self::Unary { .. } => "Unary(..)",
+                Self::Conditional { .. } => "Conditional(..)",
+                Self::If { .. } => "If(..)",
+                Self::IfLet { .. } => "IfLet(..)",
+                Self::Match { .. } => "Match(..)",
+                Self::OptionSome(_) => "OptionSome(..)",
+                Self::OptionNone => "OptionNone",
+                Self::ResultOk(_) => "ResultOk(..)",
+                Self::ResultErr(_) => "ResultErr(..)",
+                Self::Propagate(_) => "Propagate(..)",
+                Self::Call { .. } => "Call(..)",
+                Self::StructLiteral { .. } => "StructLiteral(..)",
+                Self::Member { .. } => "Member(..)",
+                Self::Index { .. } => "Index(..)",
+                Self::Tuple(_) => "Tuple(..)",
+                Self::List(_) => "List(..)",
+                Self::ListComprehension { .. } => "ListComprehension(..)",
+                Self::JsonObject(_) => "JsonObject(..)",
+                Self::JsonArray(_) => "JsonArray(..)",
+                Self::Bool(_)
+                | Self::IntLiteral(_)
+                | Self::DecimalLiteral(_)
+                | Self::String(_)
+                | Self::Bytes(_)
+                | Self::Ident(_) => unreachable!("scalar expressions were rendered above"),
+            }),
+        }
+    }
+}
+impl PartialEq for Expr {
+    fn eq(&self, other: &Self) -> bool {
+        ast_nodes_equal(CompareNode::Expr(self, other))
+    }
+}
+impl Clone for Expr {
+    fn clone(&self) -> Self {
+        clone_expr_iterative(self)
+    }
+}
 /// One source field in a named struct literal.
 #[derive(Debug, PartialEq, Clone)]
 pub struct StructLiteralField {
@@ -564,6 +823,1317 @@ pub struct StructLiteralField {
     /// Whether the source used shorthand spelling without `: value`.
     pub shorthand: bool,
 }
+
+enum CloneNode<'a> {
+    Expr(&'a Expr),
+    Statement(&'a Statement),
+    Block(&'a Block),
+}
+
+enum CloneTask<'a> {
+    Visit(CloneNode<'a>),
+    BuildExpr(CloneExpr<'a>),
+    BuildStatement(CloneStatement<'a>),
+    BuildBlock {
+        statement_count: usize,
+        has_tail: bool,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum WrappedExpr {
+    OptionSome,
+    ResultOk,
+    ResultErr,
+    Propagate,
+}
+
+#[derive(Clone, Copy)]
+enum SequenceExpr {
+    Tuple,
+    List,
+    JsonArray,
+}
+
+enum CloneExpr<'a> {
+    Source(NodeId, SourceRange),
+    Resolved(HirId, Option<SourceRange>),
+    Binary(BinaryOp),
+    Unary(UnaryOp),
+    Conditional,
+    If {
+        has_else: bool,
+    },
+    IfLet {
+        pattern: &'a SumPattern,
+        has_else: bool,
+    },
+    Match(&'a [MatchArm]),
+    Wrapped(WrappedExpr),
+    Call {
+        name: &'a str,
+        argument_names: &'a Option<Vec<String>>,
+        implicit_receiver: bool,
+        argument_count: usize,
+    },
+    StructLiteral {
+        name: &'a str,
+        fields: &'a [StructLiteralField],
+    },
+    Member(&'a str),
+    Index,
+    Sequence(SequenceExpr, usize),
+    ListComprehension {
+        item: &'a str,
+        has_condition: bool,
+    },
+    JsonObject(&'a [JsonObjectEntry]),
+}
+
+enum CloneStatement<'a> {
+    Source(NodeId, SourceRange),
+    Resolved(HirId, Option<SourceRange>),
+    Let {
+        mutable: bool,
+        pat: &'a Pattern,
+        ty: &'a Option<TypeExpr>,
+    },
+    Assign(&'a str),
+    AssignExpr(AssignOp),
+    Expr,
+    Return,
+    If {
+        has_else: bool,
+    },
+    IfLet {
+        pattern: &'a SumPattern,
+        has_else: bool,
+    },
+    While,
+    For {
+        line: usize,
+        has_init: bool,
+        has_cond: bool,
+        has_step: bool,
+    },
+    ForEachMap {
+        key: &'a str,
+        value: &'a Option<String>,
+    },
+}
+
+enum CloneValue {
+    Expr(Expr),
+    Statement(Statement),
+    Block(Block),
+}
+
+impl CloneValue {
+    fn into_expr(self) -> Expr {
+        let Self::Expr(expression) = self else {
+            panic!("AST clone traversal produced a non-expression child")
+        };
+        expression
+    }
+
+    fn into_statement(self) -> Statement {
+        let Self::Statement(statement) = self else {
+            panic!("AST clone traversal produced a non-statement child")
+        };
+        statement
+    }
+
+    fn into_block(self) -> Block {
+        let Self::Block(block) = self else {
+            panic!("AST clone traversal produced a non-block child")
+        };
+        block
+    }
+}
+
+fn take_clone_children(values: &mut Vec<CloneValue>, count: usize) -> Vec<CloneValue> {
+    let start = values
+        .len()
+        .checked_sub(count)
+        .expect("AST clone traversal visited every child before its parent");
+    values.split_off(start)
+}
+
+fn clone_ast_node(root: CloneNode<'_>) -> CloneValue {
+    let mut tasks = vec![CloneTask::Visit(root)];
+    let mut values = Vec::new();
+    while let Some(task) = tasks.pop() {
+        match task {
+            CloneTask::Visit(CloneNode::Expr(expression)) => match expression {
+                Expr::Source {
+                    node,
+                    source,
+                    expression,
+                } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Source(*node, *source)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(expression)));
+                }
+                Expr::Resolved {
+                    id,
+                    source,
+                    expression,
+                } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Resolved(*id, *source)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(expression)));
+                }
+                Expr::Binary { op, left, right } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Binary(*op)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(right)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(left)));
+                }
+                Expr::Unary { op, expr } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Unary(*op)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(expr)));
+                }
+                Expr::Conditional {
+                    cond,
+                    then_expr,
+                    else_expr,
+                } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Conditional));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(else_expr)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(then_expr)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(cond)));
+                }
+                Expr::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::If {
+                        has_else: else_branch.is_some(),
+                    }));
+                    if let Some(else_branch) = else_branch {
+                        tasks.push(CloneTask::Visit(CloneNode::Block(else_branch)));
+                    }
+                    tasks.push(CloneTask::Visit(CloneNode::Block(then_branch)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(condition)));
+                }
+                Expr::IfLet {
+                    pattern,
+                    value,
+                    then_branch,
+                    else_branch,
+                } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::IfLet {
+                        pattern,
+                        has_else: else_branch.is_some(),
+                    }));
+                    if let Some(else_branch) = else_branch {
+                        tasks.push(CloneTask::Visit(CloneNode::Block(else_branch)));
+                    }
+                    tasks.push(CloneTask::Visit(CloneNode::Block(then_branch)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                }
+                Expr::Match { value, arms } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Match(arms)));
+                    for arm in arms.iter().rev() {
+                        tasks.push(CloneTask::Visit(CloneNode::Block(&arm.body)));
+                    }
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                }
+                Expr::OptionSome(value) => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Wrapped(
+                        WrappedExpr::OptionSome,
+                    )));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                }
+                Expr::ResultOk(value) => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Wrapped(
+                        WrappedExpr::ResultOk,
+                    )));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                }
+                Expr::ResultErr(value) => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Wrapped(
+                        WrappedExpr::ResultErr,
+                    )));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                }
+                Expr::Propagate(value) => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Wrapped(
+                        WrappedExpr::Propagate,
+                    )));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                }
+                Expr::Call {
+                    name,
+                    args,
+                    argument_names,
+                    implicit_receiver,
+                } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Call {
+                        name,
+                        argument_names,
+                        implicit_receiver: *implicit_receiver,
+                        argument_count: args.len(),
+                    }));
+                    tasks.extend(
+                        args.iter()
+                            .rev()
+                            .map(|argument| CloneTask::Visit(CloneNode::Expr(argument))),
+                    );
+                }
+                Expr::StructLiteral { name, fields } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::StructLiteral {
+                        name,
+                        fields,
+                    }));
+                    tasks.extend(
+                        fields
+                            .iter()
+                            .rev()
+                            .map(|field| CloneTask::Visit(CloneNode::Expr(&field.value))),
+                    );
+                }
+                Expr::Member { object, field } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Member(field)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(object)));
+                }
+                Expr::Index { target, index } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Index));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(index)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(target)));
+                }
+                Expr::Tuple(items) | Expr::List(items) | Expr::JsonArray(items) => {
+                    let kind = match expression {
+                        Expr::Tuple(_) => SequenceExpr::Tuple,
+                        Expr::List(_) => SequenceExpr::List,
+                        Expr::JsonArray(_) => SequenceExpr::JsonArray,
+                        _ => unreachable!("matched an expression sequence"),
+                    };
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::Sequence(kind, items.len())));
+                    tasks.extend(
+                        items
+                            .iter()
+                            .rev()
+                            .map(|item| CloneTask::Visit(CloneNode::Expr(item))),
+                    );
+                }
+                Expr::ListComprehension {
+                    expression,
+                    item,
+                    source,
+                    condition,
+                } => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::ListComprehension {
+                        item,
+                        has_condition: condition.is_some(),
+                    }));
+                    if let Some(condition) = condition {
+                        tasks.push(CloneTask::Visit(CloneNode::Expr(condition)));
+                    }
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(source)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(expression)));
+                }
+                Expr::JsonObject(entries) => {
+                    tasks.push(CloneTask::BuildExpr(CloneExpr::JsonObject(entries)));
+                    tasks.extend(
+                        entries
+                            .iter()
+                            .rev()
+                            .map(|entry| CloneTask::Visit(CloneNode::Expr(&entry.value))),
+                    );
+                }
+                Expr::OptionNone => values.push(CloneValue::Expr(Expr::OptionNone)),
+                Expr::Bool(value) => values.push(CloneValue::Expr(Expr::Bool(*value))),
+                Expr::IntLiteral(value) => {
+                    values.push(CloneValue::Expr(Expr::IntLiteral(value.clone())));
+                }
+                Expr::DecimalLiteral(value) => {
+                    values.push(CloneValue::Expr(Expr::DecimalLiteral(value.clone())));
+                }
+                Expr::String(value) => {
+                    values.push(CloneValue::Expr(Expr::String(value.clone())));
+                }
+                Expr::Bytes(value) => {
+                    values.push(CloneValue::Expr(Expr::Bytes(value.clone())));
+                }
+                Expr::Ident(value) => {
+                    values.push(CloneValue::Expr(Expr::Ident(value.clone())));
+                }
+            },
+            CloneTask::Visit(CloneNode::Statement(statement)) => match statement {
+                Statement::Source {
+                    node,
+                    source,
+                    statement,
+                } => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::Source(
+                        *node, *source,
+                    )));
+                    tasks.push(CloneTask::Visit(CloneNode::Statement(statement)));
+                }
+                Statement::Resolved {
+                    id,
+                    source,
+                    statement,
+                } => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::Resolved(
+                        *id, *source,
+                    )));
+                    tasks.push(CloneTask::Visit(CloneNode::Statement(statement)));
+                }
+                Statement::Let {
+                    mutable,
+                    pat,
+                    ty,
+                    value,
+                } => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::Let {
+                        mutable: *mutable,
+                        pat,
+                        ty,
+                    }));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                }
+                Statement::Assign { name, value } => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::Assign(name)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                }
+                Statement::AssignExpr { target, op, value } => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::AssignExpr(*op)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(target)));
+                }
+                Statement::Expr(expression) => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::Expr));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(expression)));
+                }
+                Statement::Return(Some(expression)) => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::Return));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(expression)));
+                }
+                Statement::Return(None) => {
+                    values.push(CloneValue::Statement(Statement::Return(None)));
+                }
+                Statement::Break => values.push(CloneValue::Statement(Statement::Break)),
+                Statement::Continue => values.push(CloneValue::Statement(Statement::Continue)),
+                Statement::If {
+                    cond,
+                    then_branch,
+                    else_branch,
+                } => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::If {
+                        has_else: else_branch.is_some(),
+                    }));
+                    if let Some(else_branch) = else_branch {
+                        tasks.push(CloneTask::Visit(CloneNode::Block(else_branch)));
+                    }
+                    tasks.push(CloneTask::Visit(CloneNode::Block(then_branch)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(cond)));
+                }
+                Statement::IfLet {
+                    pattern,
+                    value,
+                    then_branch,
+                    else_branch,
+                } => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::IfLet {
+                        pattern,
+                        has_else: else_branch.is_some(),
+                    }));
+                    if let Some(else_branch) = else_branch {
+                        tasks.push(CloneTask::Visit(CloneNode::Block(else_branch)));
+                    }
+                    tasks.push(CloneTask::Visit(CloneNode::Block(then_branch)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                }
+                Statement::While { cond, body } => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::While));
+                    tasks.push(CloneTask::Visit(CloneNode::Block(body)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(cond)));
+                }
+                Statement::For {
+                    line,
+                    init,
+                    cond,
+                    step,
+                    body,
+                } => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::For {
+                        line: *line,
+                        has_init: init.is_some(),
+                        has_cond: cond.is_some(),
+                        has_step: step.is_some(),
+                    }));
+                    tasks.push(CloneTask::Visit(CloneNode::Block(body)));
+                    if let Some(step) = step {
+                        tasks.push(CloneTask::Visit(CloneNode::Statement(step)));
+                    }
+                    if let Some(cond) = cond {
+                        tasks.push(CloneTask::Visit(CloneNode::Expr(cond)));
+                    }
+                    if let Some(init) = init {
+                        tasks.push(CloneTask::Visit(CloneNode::Statement(init)));
+                    }
+                }
+                Statement::ForEachMap {
+                    key,
+                    value,
+                    map,
+                    body,
+                } => {
+                    tasks.push(CloneTask::BuildStatement(CloneStatement::ForEachMap {
+                        key,
+                        value,
+                    }));
+                    tasks.push(CloneTask::Visit(CloneNode::Block(body)));
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(map)));
+                }
+            },
+            CloneTask::Visit(CloneNode::Block(block)) => {
+                tasks.push(CloneTask::BuildBlock {
+                    statement_count: block.statements.len(),
+                    has_tail: block.tail.is_some(),
+                });
+                if let Some(tail) = &block.tail {
+                    tasks.push(CloneTask::Visit(CloneNode::Expr(tail)));
+                }
+                tasks.extend(
+                    block
+                        .statements
+                        .iter()
+                        .rev()
+                        .map(|statement| CloneTask::Visit(CloneNode::Statement(statement))),
+                );
+            }
+            CloneTask::BuildExpr(builder) => {
+                let child_count = match &builder {
+                    CloneExpr::Source(..)
+                    | CloneExpr::Resolved(..)
+                    | CloneExpr::Unary(..)
+                    | CloneExpr::Wrapped(..)
+                    | CloneExpr::Member(..) => 1,
+                    CloneExpr::Binary(..) | CloneExpr::Index => 2,
+                    CloneExpr::Conditional => 3,
+                    CloneExpr::If { has_else } | CloneExpr::IfLet { has_else, .. } => {
+                        2 + usize::from(*has_else)
+                    }
+                    CloneExpr::Match(arms) => 1 + arms.len(),
+                    CloneExpr::Call { argument_count, .. } => *argument_count,
+                    CloneExpr::StructLiteral { fields, .. } => fields.len(),
+                    CloneExpr::Sequence(_, count) => *count,
+                    CloneExpr::ListComprehension { has_condition, .. } => {
+                        2 + usize::from(*has_condition)
+                    }
+                    CloneExpr::JsonObject(entries) => entries.len(),
+                };
+                let mut children = take_clone_children(&mut values, child_count).into_iter();
+                let expression = match builder {
+                    CloneExpr::Source(node, source) => Expr::Source {
+                        node,
+                        source,
+                        expression: Box::new(children.next().unwrap().into_expr()),
+                    },
+                    CloneExpr::Resolved(id, source) => Expr::Resolved {
+                        id,
+                        source,
+                        expression: Box::new(children.next().unwrap().into_expr()),
+                    },
+                    CloneExpr::Binary(op) => Expr::Binary {
+                        op,
+                        left: Box::new(children.next().unwrap().into_expr()),
+                        right: Box::new(children.next().unwrap().into_expr()),
+                    },
+                    CloneExpr::Unary(op) => Expr::Unary {
+                        op,
+                        expr: Box::new(children.next().unwrap().into_expr()),
+                    },
+                    CloneExpr::Conditional => Expr::Conditional {
+                        cond: Box::new(children.next().unwrap().into_expr()),
+                        then_expr: Box::new(children.next().unwrap().into_expr()),
+                        else_expr: Box::new(children.next().unwrap().into_expr()),
+                    },
+                    CloneExpr::If { has_else } => Expr::If {
+                        condition: Box::new(children.next().unwrap().into_expr()),
+                        then_branch: children.next().unwrap().into_block(),
+                        else_branch: has_else.then(|| children.next().unwrap().into_block()),
+                    },
+                    CloneExpr::IfLet { pattern, has_else } => Expr::IfLet {
+                        pattern: pattern.clone(),
+                        value: Box::new(children.next().unwrap().into_expr()),
+                        then_branch: children.next().unwrap().into_block(),
+                        else_branch: has_else.then(|| children.next().unwrap().into_block()),
+                    },
+                    CloneExpr::Match(arms) => Expr::Match {
+                        value: Box::new(children.next().unwrap().into_expr()),
+                        arms: arms
+                            .iter()
+                            .map(|arm| MatchArm {
+                                pattern: arm.pattern.clone(),
+                                body: children.next().unwrap().into_block(),
+                            })
+                            .collect(),
+                    },
+                    CloneExpr::Wrapped(kind) => {
+                        let child = Box::new(children.next().unwrap().into_expr());
+                        match kind {
+                            WrappedExpr::OptionSome => Expr::OptionSome(child),
+                            WrappedExpr::ResultOk => Expr::ResultOk(child),
+                            WrappedExpr::ResultErr => Expr::ResultErr(child),
+                            WrappedExpr::Propagate => Expr::Propagate(child),
+                        }
+                    }
+                    CloneExpr::Call {
+                        name,
+                        argument_names,
+                        implicit_receiver,
+                        ..
+                    } => Expr::Call {
+                        name: name.to_owned(),
+                        args: children.by_ref().map(CloneValue::into_expr).collect(),
+                        argument_names: argument_names.clone(),
+                        implicit_receiver,
+                    },
+                    CloneExpr::StructLiteral { name, fields } => Expr::StructLiteral {
+                        name: name.to_owned(),
+                        fields: fields
+                            .iter()
+                            .map(|field| StructLiteralField {
+                                name: field.name.clone(),
+                                value: children.next().unwrap().into_expr(),
+                                shorthand: field.shorthand,
+                            })
+                            .collect(),
+                    },
+                    CloneExpr::Member(field) => Expr::Member {
+                        object: Box::new(children.next().unwrap().into_expr()),
+                        field: field.to_owned(),
+                    },
+                    CloneExpr::Index => Expr::Index {
+                        target: Box::new(children.next().unwrap().into_expr()),
+                        index: Box::new(children.next().unwrap().into_expr()),
+                    },
+                    CloneExpr::Sequence(kind, _) => {
+                        let items = children.by_ref().map(CloneValue::into_expr).collect();
+                        match kind {
+                            SequenceExpr::Tuple => Expr::Tuple(items),
+                            SequenceExpr::List => Expr::List(items),
+                            SequenceExpr::JsonArray => Expr::JsonArray(items),
+                        }
+                    }
+                    CloneExpr::ListComprehension {
+                        item,
+                        has_condition,
+                    } => Expr::ListComprehension {
+                        expression: Box::new(children.next().unwrap().into_expr()),
+                        item: item.to_owned(),
+                        source: Box::new(children.next().unwrap().into_expr()),
+                        condition: has_condition
+                            .then(|| Box::new(children.next().unwrap().into_expr())),
+                    },
+                    CloneExpr::JsonObject(entries) => Expr::JsonObject(
+                        entries
+                            .iter()
+                            .map(|entry| JsonObjectEntry {
+                                key: entry.key.clone(),
+                                key_spelling: entry.key_spelling.clone(),
+                                key_range: entry.key_range,
+                                value: children.next().unwrap().into_expr(),
+                            })
+                            .collect(),
+                    ),
+                };
+                debug_assert!(children.next().is_none());
+                values.push(CloneValue::Expr(expression));
+            }
+            CloneTask::BuildStatement(builder) => {
+                let child_count = match &builder {
+                    CloneStatement::Source(..)
+                    | CloneStatement::Resolved(..)
+                    | CloneStatement::Let { .. }
+                    | CloneStatement::Assign(..)
+                    | CloneStatement::Expr
+                    | CloneStatement::Return => 1,
+                    CloneStatement::AssignExpr(..) | CloneStatement::While => 2,
+                    CloneStatement::If { has_else } | CloneStatement::IfLet { has_else, .. } => {
+                        2 + usize::from(*has_else)
+                    }
+                    CloneStatement::For {
+                        has_init,
+                        has_cond,
+                        has_step,
+                        ..
+                    } => {
+                        usize::from(*has_init) + usize::from(*has_cond) + usize::from(*has_step) + 1
+                    }
+                    CloneStatement::ForEachMap { .. } => 2,
+                };
+                let mut children = take_clone_children(&mut values, child_count).into_iter();
+                let statement = match builder {
+                    CloneStatement::Source(node, source) => Statement::Source {
+                        node,
+                        source,
+                        statement: Box::new(children.next().unwrap().into_statement()),
+                    },
+                    CloneStatement::Resolved(id, source) => Statement::Resolved {
+                        id,
+                        source,
+                        statement: Box::new(children.next().unwrap().into_statement()),
+                    },
+                    CloneStatement::Let { mutable, pat, ty } => Statement::Let {
+                        mutable,
+                        pat: pat.clone(),
+                        ty: ty.clone(),
+                        value: children.next().unwrap().into_expr(),
+                    },
+                    CloneStatement::Assign(name) => Statement::Assign {
+                        name: name.to_owned(),
+                        value: children.next().unwrap().into_expr(),
+                    },
+                    CloneStatement::AssignExpr(op) => Statement::AssignExpr {
+                        target: children.next().unwrap().into_expr(),
+                        op,
+                        value: children.next().unwrap().into_expr(),
+                    },
+                    CloneStatement::Expr => Statement::Expr(children.next().unwrap().into_expr()),
+                    CloneStatement::Return => {
+                        Statement::Return(Some(children.next().unwrap().into_expr()))
+                    }
+                    CloneStatement::If { has_else } => Statement::If {
+                        cond: children.next().unwrap().into_expr(),
+                        then_branch: children.next().unwrap().into_block(),
+                        else_branch: has_else.then(|| children.next().unwrap().into_block()),
+                    },
+                    CloneStatement::IfLet { pattern, has_else } => Statement::IfLet {
+                        pattern: pattern.clone(),
+                        value: children.next().unwrap().into_expr(),
+                        then_branch: children.next().unwrap().into_block(),
+                        else_branch: has_else.then(|| children.next().unwrap().into_block()),
+                    },
+                    CloneStatement::While => Statement::While {
+                        cond: children.next().unwrap().into_expr(),
+                        body: children.next().unwrap().into_block(),
+                    },
+                    CloneStatement::For {
+                        line,
+                        has_init,
+                        has_cond,
+                        has_step,
+                    } => Statement::For {
+                        line,
+                        init: has_init.then(|| Box::new(children.next().unwrap().into_statement())),
+                        cond: has_cond.then(|| children.next().unwrap().into_expr()),
+                        step: has_step.then(|| Box::new(children.next().unwrap().into_statement())),
+                        body: children.next().unwrap().into_block(),
+                    },
+                    CloneStatement::ForEachMap { key, value } => Statement::ForEachMap {
+                        key: key.to_owned(),
+                        value: value.clone(),
+                        map: children.next().unwrap().into_expr(),
+                        body: children.next().unwrap().into_block(),
+                    },
+                };
+                debug_assert!(children.next().is_none());
+                values.push(CloneValue::Statement(statement));
+            }
+            CloneTask::BuildBlock {
+                statement_count,
+                has_tail,
+            } => {
+                let mut children =
+                    take_clone_children(&mut values, statement_count + usize::from(has_tail))
+                        .into_iter();
+                let statements = children
+                    .by_ref()
+                    .take(statement_count)
+                    .map(CloneValue::into_statement)
+                    .collect();
+                let tail = has_tail.then(|| Box::new(children.next().unwrap().into_expr()));
+                debug_assert!(children.next().is_none());
+                values.push(CloneValue::Block(Block { statements, tail }));
+            }
+        }
+    }
+    assert_eq!(values.len(), 1, "AST clone traversal produced one root");
+    values.pop().unwrap()
+}
+
+fn clone_expr_iterative(expression: &Expr) -> Expr {
+    clone_ast_node(CloneNode::Expr(expression)).into_expr()
+}
+
+fn clone_statement_iterative(statement: &Statement) -> Statement {
+    clone_ast_node(CloneNode::Statement(statement)).into_statement()
+}
+
+enum CompareNode<'a> {
+    Expr(&'a Expr, &'a Expr),
+    Statement(&'a Statement, &'a Statement),
+    Block(&'a Block, &'a Block),
+}
+
+fn ast_nodes_equal(root: CompareNode<'_>) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        match node {
+            CompareNode::Block(left, right) => {
+                if left.statements.len() != right.statements.len()
+                    || left.tail.is_some() != right.tail.is_some()
+                {
+                    return false;
+                }
+                if let (Some(left), Some(right)) = (&left.tail, &right.tail) {
+                    pending.push(CompareNode::Expr(left, right));
+                }
+                pending.extend(
+                    left.statements
+                        .iter()
+                        .zip(&right.statements)
+                        .rev()
+                        .map(|(left, right)| CompareNode::Statement(left, right)),
+                );
+            }
+            CompareNode::Statement(left, right) => match (left, right) {
+                (
+                    Statement::Source {
+                        node: left_node,
+                        source: left_source,
+                        statement: left_statement,
+                    },
+                    Statement::Source {
+                        node: right_node,
+                        source: right_source,
+                        statement: right_statement,
+                    },
+                ) => {
+                    if left_node != right_node || left_source != right_source {
+                        return false;
+                    }
+                    pending.push(CompareNode::Statement(left_statement, right_statement));
+                }
+                (
+                    Statement::Resolved {
+                        id: left_id,
+                        source: left_source,
+                        statement: left_statement,
+                    },
+                    Statement::Resolved {
+                        id: right_id,
+                        source: right_source,
+                        statement: right_statement,
+                    },
+                ) => {
+                    if left_id != right_id || left_source != right_source {
+                        return false;
+                    }
+                    pending.push(CompareNode::Statement(left_statement, right_statement));
+                }
+                (
+                    Statement::Let {
+                        mutable: left_mutable,
+                        pat: left_pattern,
+                        ty: left_ty,
+                        value: left_value,
+                    },
+                    Statement::Let {
+                        mutable: right_mutable,
+                        pat: right_pattern,
+                        ty: right_ty,
+                        value: right_value,
+                    },
+                ) => {
+                    if left_mutable != right_mutable
+                        || left_pattern != right_pattern
+                        || left_ty != right_ty
+                    {
+                        return false;
+                    }
+                    pending.push(CompareNode::Expr(left_value, right_value));
+                }
+                (
+                    Statement::Assign {
+                        name: left_name,
+                        value: left_value,
+                    },
+                    Statement::Assign {
+                        name: right_name,
+                        value: right_value,
+                    },
+                ) => {
+                    if left_name != right_name {
+                        return false;
+                    }
+                    pending.push(CompareNode::Expr(left_value, right_value));
+                }
+                (
+                    Statement::AssignExpr {
+                        target: left_target,
+                        op: left_op,
+                        value: left_value,
+                    },
+                    Statement::AssignExpr {
+                        target: right_target,
+                        op: right_op,
+                        value: right_value,
+                    },
+                ) => {
+                    if left_op != right_op {
+                        return false;
+                    }
+                    pending.push(CompareNode::Expr(left_value, right_value));
+                    pending.push(CompareNode::Expr(left_target, right_target));
+                }
+                (Statement::Expr(left), Statement::Expr(right)) => {
+                    pending.push(CompareNode::Expr(left, right));
+                }
+                (Statement::Return(left), Statement::Return(right)) => match (left, right) {
+                    (Some(left), Some(right)) => pending.push(CompareNode::Expr(left, right)),
+                    (None, None) => {}
+                    _ => return false,
+                },
+                (Statement::Break, Statement::Break)
+                | (Statement::Continue, Statement::Continue) => {}
+                (
+                    Statement::If {
+                        cond: left_cond,
+                        then_branch: left_then,
+                        else_branch: left_else,
+                    },
+                    Statement::If {
+                        cond: right_cond,
+                        then_branch: right_then,
+                        else_branch: right_else,
+                    },
+                ) => {
+                    if left_else.is_some() != right_else.is_some() {
+                        return false;
+                    }
+                    if let (Some(left), Some(right)) = (left_else, right_else) {
+                        pending.push(CompareNode::Block(left, right));
+                    }
+                    pending.push(CompareNode::Block(left_then, right_then));
+                    pending.push(CompareNode::Expr(left_cond, right_cond));
+                }
+                (
+                    Statement::IfLet {
+                        pattern: left_pattern,
+                        value: left_value,
+                        then_branch: left_then,
+                        else_branch: left_else,
+                    },
+                    Statement::IfLet {
+                        pattern: right_pattern,
+                        value: right_value,
+                        then_branch: right_then,
+                        else_branch: right_else,
+                    },
+                ) => {
+                    if left_pattern != right_pattern || left_else.is_some() != right_else.is_some()
+                    {
+                        return false;
+                    }
+                    if let (Some(left), Some(right)) = (left_else, right_else) {
+                        pending.push(CompareNode::Block(left, right));
+                    }
+                    pending.push(CompareNode::Block(left_then, right_then));
+                    pending.push(CompareNode::Expr(left_value, right_value));
+                }
+                (
+                    Statement::While {
+                        cond: left_cond,
+                        body: left_body,
+                    },
+                    Statement::While {
+                        cond: right_cond,
+                        body: right_body,
+                    },
+                ) => {
+                    pending.push(CompareNode::Block(left_body, right_body));
+                    pending.push(CompareNode::Expr(left_cond, right_cond));
+                }
+                (
+                    Statement::For {
+                        line: left_line,
+                        init: left_init,
+                        cond: left_cond,
+                        step: left_step,
+                        body: left_body,
+                    },
+                    Statement::For {
+                        line: right_line,
+                        init: right_init,
+                        cond: right_cond,
+                        step: right_step,
+                        body: right_body,
+                    },
+                ) => {
+                    if left_line != right_line
+                        || left_init.is_some() != right_init.is_some()
+                        || left_cond.is_some() != right_cond.is_some()
+                        || left_step.is_some() != right_step.is_some()
+                    {
+                        return false;
+                    }
+                    pending.push(CompareNode::Block(left_body, right_body));
+                    if let (Some(left), Some(right)) = (left_step, right_step) {
+                        pending.push(CompareNode::Statement(left, right));
+                    }
+                    if let (Some(left), Some(right)) = (left_cond, right_cond) {
+                        pending.push(CompareNode::Expr(left, right));
+                    }
+                    if let (Some(left), Some(right)) = (left_init, right_init) {
+                        pending.push(CompareNode::Statement(left, right));
+                    }
+                }
+                (
+                    Statement::ForEachMap {
+                        key: left_key,
+                        value: left_value,
+                        map: left_map,
+                        body: left_body,
+                    },
+                    Statement::ForEachMap {
+                        key: right_key,
+                        value: right_value,
+                        map: right_map,
+                        body: right_body,
+                    },
+                ) => {
+                    if left_key != right_key || left_value != right_value {
+                        return false;
+                    }
+                    pending.push(CompareNode::Block(left_body, right_body));
+                    pending.push(CompareNode::Expr(left_map, right_map));
+                }
+                _ => return false,
+            },
+            CompareNode::Expr(left, right) => match (left, right) {
+                (
+                    Expr::Source {
+                        node: left_node,
+                        source: left_source,
+                        expression: left_expression,
+                    },
+                    Expr::Source {
+                        node: right_node,
+                        source: right_source,
+                        expression: right_expression,
+                    },
+                ) => {
+                    if left_node != right_node || left_source != right_source {
+                        return false;
+                    }
+                    pending.push(CompareNode::Expr(left_expression, right_expression));
+                }
+                (
+                    Expr::Resolved {
+                        id: left_id,
+                        source: left_source,
+                        expression: left_expression,
+                    },
+                    Expr::Resolved {
+                        id: right_id,
+                        source: right_source,
+                        expression: right_expression,
+                    },
+                ) => {
+                    if left_id != right_id || left_source != right_source {
+                        return false;
+                    }
+                    pending.push(CompareNode::Expr(left_expression, right_expression));
+                }
+                (
+                    Expr::Binary {
+                        op: left_op,
+                        left: left_left,
+                        right: left_right,
+                    },
+                    Expr::Binary {
+                        op: right_op,
+                        left: right_left,
+                        right: right_right,
+                    },
+                ) => {
+                    if left_op != right_op {
+                        return false;
+                    }
+                    pending.push(CompareNode::Expr(left_right, right_right));
+                    pending.push(CompareNode::Expr(left_left, right_left));
+                }
+                (
+                    Expr::Unary {
+                        op: left_op,
+                        expr: left_expression,
+                    },
+                    Expr::Unary {
+                        op: right_op,
+                        expr: right_expression,
+                    },
+                ) => {
+                    if left_op != right_op {
+                        return false;
+                    }
+                    pending.push(CompareNode::Expr(left_expression, right_expression));
+                }
+                (
+                    Expr::Conditional {
+                        cond: left_cond,
+                        then_expr: left_then,
+                        else_expr: left_else,
+                    },
+                    Expr::Conditional {
+                        cond: right_cond,
+                        then_expr: right_then,
+                        else_expr: right_else,
+                    },
+                ) => {
+                    pending.push(CompareNode::Expr(left_else, right_else));
+                    pending.push(CompareNode::Expr(left_then, right_then));
+                    pending.push(CompareNode::Expr(left_cond, right_cond));
+                }
+                (
+                    Expr::If {
+                        condition: left_condition,
+                        then_branch: left_then,
+                        else_branch: left_else,
+                    },
+                    Expr::If {
+                        condition: right_condition,
+                        then_branch: right_then,
+                        else_branch: right_else,
+                    },
+                ) => {
+                    if left_else.is_some() != right_else.is_some() {
+                        return false;
+                    }
+                    if let (Some(left), Some(right)) = (left_else, right_else) {
+                        pending.push(CompareNode::Block(left, right));
+                    }
+                    pending.push(CompareNode::Block(left_then, right_then));
+                    pending.push(CompareNode::Expr(left_condition, right_condition));
+                }
+                (
+                    Expr::IfLet {
+                        pattern: left_pattern,
+                        value: left_value,
+                        then_branch: left_then,
+                        else_branch: left_else,
+                    },
+                    Expr::IfLet {
+                        pattern: right_pattern,
+                        value: right_value,
+                        then_branch: right_then,
+                        else_branch: right_else,
+                    },
+                ) => {
+                    if left_pattern != right_pattern || left_else.is_some() != right_else.is_some()
+                    {
+                        return false;
+                    }
+                    if let (Some(left), Some(right)) = (left_else, right_else) {
+                        pending.push(CompareNode::Block(left, right));
+                    }
+                    pending.push(CompareNode::Block(left_then, right_then));
+                    pending.push(CompareNode::Expr(left_value, right_value));
+                }
+                (
+                    Expr::Match {
+                        value: left_value,
+                        arms: left_arms,
+                    },
+                    Expr::Match {
+                        value: right_value,
+                        arms: right_arms,
+                    },
+                ) => {
+                    if left_arms.len() != right_arms.len()
+                        || left_arms
+                            .iter()
+                            .zip(right_arms)
+                            .any(|(left, right)| left.pattern != right.pattern)
+                    {
+                        return false;
+                    }
+                    pending.extend(
+                        left_arms
+                            .iter()
+                            .zip(right_arms)
+                            .rev()
+                            .map(|(left, right)| CompareNode::Block(&left.body, &right.body)),
+                    );
+                    pending.push(CompareNode::Expr(left_value, right_value));
+                }
+                (Expr::OptionSome(left), Expr::OptionSome(right))
+                | (Expr::ResultOk(left), Expr::ResultOk(right))
+                | (Expr::ResultErr(left), Expr::ResultErr(right))
+                | (Expr::Propagate(left), Expr::Propagate(right)) => {
+                    pending.push(CompareNode::Expr(left, right));
+                }
+                (Expr::OptionNone, Expr::OptionNone) => {}
+                (
+                    Expr::Call {
+                        name: left_name,
+                        args: left_args,
+                        argument_names: left_names,
+                        implicit_receiver: left_receiver,
+                    },
+                    Expr::Call {
+                        name: right_name,
+                        args: right_args,
+                        argument_names: right_names,
+                        implicit_receiver: right_receiver,
+                    },
+                ) => {
+                    if left_name != right_name
+                        || left_names != right_names
+                        || left_receiver != right_receiver
+                        || left_args.len() != right_args.len()
+                    {
+                        return false;
+                    }
+                    pending.extend(
+                        left_args
+                            .iter()
+                            .zip(right_args)
+                            .rev()
+                            .map(|(left, right)| CompareNode::Expr(left, right)),
+                    );
+                }
+                (
+                    Expr::StructLiteral {
+                        name: left_name,
+                        fields: left_fields,
+                    },
+                    Expr::StructLiteral {
+                        name: right_name,
+                        fields: right_fields,
+                    },
+                ) => {
+                    if left_name != right_name
+                        || left_fields.len() != right_fields.len()
+                        || left_fields.iter().zip(right_fields).any(|(left, right)| {
+                            left.name != right.name || left.shorthand != right.shorthand
+                        })
+                    {
+                        return false;
+                    }
+                    pending.extend(
+                        left_fields
+                            .iter()
+                            .zip(right_fields)
+                            .rev()
+                            .map(|(left, right)| CompareNode::Expr(&left.value, &right.value)),
+                    );
+                }
+                (
+                    Expr::Member {
+                        object: left_object,
+                        field: left_field,
+                    },
+                    Expr::Member {
+                        object: right_object,
+                        field: right_field,
+                    },
+                ) => {
+                    if left_field != right_field {
+                        return false;
+                    }
+                    pending.push(CompareNode::Expr(left_object, right_object));
+                }
+                (
+                    Expr::Index {
+                        target: left_target,
+                        index: left_index,
+                    },
+                    Expr::Index {
+                        target: right_target,
+                        index: right_index,
+                    },
+                ) => {
+                    pending.push(CompareNode::Expr(left_index, right_index));
+                    pending.push(CompareNode::Expr(left_target, right_target));
+                }
+                (Expr::Tuple(left), Expr::Tuple(right))
+                | (Expr::List(left), Expr::List(right))
+                | (Expr::JsonArray(left), Expr::JsonArray(right)) => {
+                    if left.len() != right.len() {
+                        return false;
+                    }
+                    pending.extend(
+                        left.iter()
+                            .zip(right)
+                            .rev()
+                            .map(|(left, right)| CompareNode::Expr(left, right)),
+                    );
+                }
+                (
+                    Expr::ListComprehension {
+                        expression: left_expression,
+                        item: left_item,
+                        source: left_source,
+                        condition: left_condition,
+                    },
+                    Expr::ListComprehension {
+                        expression: right_expression,
+                        item: right_item,
+                        source: right_source,
+                        condition: right_condition,
+                    },
+                ) => {
+                    if left_item != right_item
+                        || left_condition.is_some() != right_condition.is_some()
+                    {
+                        return false;
+                    }
+                    if let (Some(left), Some(right)) = (left_condition, right_condition) {
+                        pending.push(CompareNode::Expr(left, right));
+                    }
+                    pending.push(CompareNode::Expr(left_source, right_source));
+                    pending.push(CompareNode::Expr(left_expression, right_expression));
+                }
+                (Expr::JsonObject(left), Expr::JsonObject(right)) => {
+                    if left.len() != right.len()
+                        || left.iter().zip(right).any(|(left, right)| {
+                            left.key != right.key
+                                || left.key_spelling != right.key_spelling
+                                || left.key_range != right.key_range
+                        })
+                    {
+                        return false;
+                    }
+                    pending.extend(
+                        left.iter()
+                            .zip(right)
+                            .rev()
+                            .map(|(left, right)| CompareNode::Expr(&left.value, &right.value)),
+                    );
+                }
+                (Expr::Bool(left), Expr::Bool(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                (Expr::IntLiteral(left), Expr::IntLiteral(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                (Expr::DecimalLiteral(left), Expr::DecimalLiteral(right))
+                | (Expr::String(left), Expr::String(right))
+                | (Expr::Ident(left), Expr::Ident(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                (Expr::Bytes(left), Expr::Bytes(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                _ => return false,
+            },
+        }
+    }
+    true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinaryOp {
     Add,
@@ -1750,6 +3320,210 @@ pub(crate) fn drop_block_iterative(block: Block) {
 mod provenance_tests {
     use super::*;
     use crate::source::{SourceId, TextRange};
+
+    #[test]
+    fn recursive_traits_are_spawn_free_for_flat_width_and_aggregates() {
+        let expressions: Vec<_> = (0..16_384)
+            .map(|_| Expr::IntLiteral(BigInt::one()))
+            .collect();
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned_expressions = expressions.clone();
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+        crate::session::reset_compiler_worker_spawn_count();
+        assert_eq!(expressions, cloned_expressions);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        let statements: Vec<_> = (0..16_384)
+            .map(|_| Statement::Expr(Expr::IntLiteral(BigInt::one())))
+            .collect();
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned_statements = statements.clone();
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+        crate::session::reset_compiler_worker_spawn_count();
+        assert_eq!(statements, cloned_statements);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        let items: Vec<_> = (0..16_384)
+            .map(|index| {
+                Item::Const(ConstDecl {
+                    name: format!("VALUE_{index}"),
+                    ty: None,
+                    value: Expr::IntLiteral(BigInt::one()),
+                })
+            })
+            .collect();
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned_items = items.clone();
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+        crate::session::reset_compiler_worker_spawn_count();
+        assert_eq!(items, cloned_items);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        let function = Function {
+            name: "wide".to_owned(),
+            params: Vec::new(),
+            ret_ty: None,
+            body: Block {
+                statements,
+                tail: None,
+            },
+            modifiers: FunctionModifiers::default(),
+            location: SourceLocation { line: 1, column: 1 },
+        };
+
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned = function.clone();
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        crate::session::reset_compiler_worker_spawn_count();
+        assert_eq!(function, cloned);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        crate::session::reset_compiler_worker_spawn_count();
+        assert!(format!("{function:?}").contains("Function"));
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        let program = Program {
+            unit: SourceUnit {
+                kind: SourceUnitKind::Module,
+                name: "Wide".to_owned(),
+            },
+            items,
+            test_target: None,
+            fixtures: Vec::new(),
+        };
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned = program.clone();
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+        crate::session::reset_compiler_worker_spawn_count();
+        assert_eq!(program, cloned);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+    }
+
+    #[test]
+    fn recursive_traits_fit_an_exact_depth_tree_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("kotodama-ast-trait-boundary".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut expression = Expr::Ident("value".to_owned());
+                for depth in 0..crate::source::MAX_NESTING_DEPTH {
+                    expression = match depth % 4 {
+                        0 => Expr::StructLiteral {
+                            name: "Wrapper".to_owned(),
+                            fields: vec![StructLiteralField {
+                                name: "value".to_owned(),
+                                value: expression,
+                                shorthand: false,
+                            }],
+                        },
+                        1 => Expr::JsonObject(vec![JsonObjectEntry {
+                            key: "value".to_owned(),
+                            key_spelling: "value".to_owned(),
+                            key_range: TextRange::new(depth as u32, depth as u32 + 1),
+                            value: expression,
+                        }]),
+                        2 => Expr::Match {
+                            value: Box::new(Expr::OptionNone),
+                            arms: vec![MatchArm {
+                                pattern: SumPattern {
+                                    variant: SumVariant::OptionNone,
+                                    binding: None,
+                                },
+                                body: Block {
+                                    statements: Vec::new(),
+                                    tail: Some(Box::new(expression)),
+                                },
+                            }],
+                        },
+                        _ => Expr::If {
+                            condition: Box::new(Expr::Bool(true)),
+                            then_branch: Block {
+                                statements: vec![Statement::Expr(expression)],
+                                tail: None,
+                            },
+                            else_branch: None,
+                        },
+                    };
+                }
+
+                let mut statement = Statement::Expr(Expr::Ident("item".to_owned()));
+                for line in 0..crate::source::MAX_NESTING_DEPTH {
+                    statement = Statement::For {
+                        line,
+                        init: Some(Box::new(statement)),
+                        cond: Some(Expr::Bool(true)),
+                        step: None,
+                        body: Block {
+                            statements: Vec::new(),
+                            tail: None,
+                        },
+                    };
+                }
+
+                crate::session::reset_compiler_worker_spawn_count();
+                let cloned_expression = expression.clone();
+                let cloned_statement = statement.clone();
+                assert_eq!(expression, cloned_expression);
+                assert_eq!(statement, cloned_statement);
+                assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+                for (expression, statement) in [
+                    (expression, statement),
+                    (cloned_expression, cloned_statement),
+                ] {
+                    drop_program_iterative(Program {
+                        unit: SourceUnit {
+                            kind: SourceUnitKind::Module,
+                            name: "Boundary".to_owned(),
+                        },
+                        items: vec![
+                            Item::Const(ConstDecl {
+                                name: "VALUE".to_owned(),
+                                ty: None,
+                                value: expression,
+                            }),
+                            Item::Function(Function {
+                                name: "boundary".to_owned(),
+                                params: Vec::new(),
+                                ret_ty: None,
+                                body: Block {
+                                    statements: vec![statement],
+                                    tail: None,
+                                },
+                                modifiers: FunctionModifiers::default(),
+                                location: SourceLocation { line: 1, column: 1 },
+                            }),
+                        ],
+                        test_target: None,
+                        fixtures: Vec::new(),
+                    });
+                }
+            })
+            .expect("small-stack AST trait worker must spawn")
+            .join()
+            .expect("small-stack AST trait worker must complete");
+    }
+
+    #[test]
+    fn type_traits_are_iterative_at_the_depth_boundary() {
+        let mut ty = TypeExpr::Path("int".to_owned());
+        for _ in 0..crate::source::MAX_NESTING_DEPTH {
+            ty = TypeExpr::Generic {
+                base: "Option".to_owned(),
+                args: vec![ty],
+            };
+        }
+
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned = ty.clone();
+        assert_eq!(ty, cloned);
+        assert!(!format!("{ty:?}").is_empty());
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+        drop_type_iterative(ty);
+        drop_type_iterative(cloned);
+    }
+
     fn deeply_sourced_program(depth: u32) -> Program {
         let old_source = SourceId(11);
         let mut expression = Expr::IntLiteral(BigInt::one());

@@ -253,7 +253,8 @@ fn bench_mock_wsv_checkpoint_restore(c: &mut Criterion) {
             let (mut host, tmp_dir) = mock_wsv_host_with_persisted_state(entries, 128);
             b.iter(|| {
                 let snapshot = IVMHost::checkpoint(&host).expect("checkpoint mock WSV host");
-                black_box(IVMHost::restore(&mut host, snapshot.as_ref()));
+                IVMHost::restore(&mut host, snapshot.as_ref()).expect("restore mock WSV host");
+                black_box(&host);
             });
             let _ = fs::remove_dir_all(tmp_dir);
         });

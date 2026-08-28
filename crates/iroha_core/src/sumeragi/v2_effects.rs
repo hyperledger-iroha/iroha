@@ -2968,6 +2968,39 @@ fn authenticate_recovered_lifecycle_next_vote_body_catalogs(
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Borrow the sole response-free recovered Decision Fetch owner for one
+    /// periodic retransmission.
+    ///
+    /// Network-actor admission is not a remote-delivery receipt.  The executor
+    /// therefore remains the semantic source of the exact signed request until
+    /// an authenticated response claims it.  This projection neither changes
+    /// the external lifecycle wait nor creates a second request identity.
+    pub(in crate::sumeragi) fn recovered_decision_fetch_retransmission_owner(
+        &self,
+    ) -> Result<Option<&RecoveredDecisionFetchRequestOwnerV1>, EffectExecutorError> {
+        self.ensure_open()?;
+        if self.recovered_decision_fetches.len() > 1
+            || !self.recovered_decision_fetch_request_index_is_exact()
+        {
+            return Err(EffectExecutorError::Contract(
+                "recovered Decision Fetch retransmission indexes are not exact".to_owned(),
+            ));
+        }
+        let Some(owner) = self.recovered_decision_fetches.values().next() else {
+            return Ok(None);
+        };
+        if !owner.validates_exact_executor_context(&self.context, &self.requester) {
+            return Err(EffectExecutorError::Contract(
+                "recovered Decision Fetch retransmission owner changed context".to_owned(),
+            ));
+        }
+        Ok(owner
+            .candidate_projection()
+            .response_claim
+            .is_none()
+            .then_some(owner))
+    }
+
     /// Project the sole exact recovered request indexes for lifecycle tests.
     #[cfg(test)]
     pub(in crate::sumeragi) fn recovered_decision_fetch_owner_for_test(

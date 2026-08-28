@@ -52,7 +52,7 @@ else:
     )
 
 
-SCHEMA = "iroha.native-sdk-abi22-artifact.v1"
+SCHEMA = "iroha.native-sdk-abi23-artifact.v1"
 REQUIRED_BRIDGE_ABI_VERSION = 23
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_SYMBOL_TOOL_OUTPUT_BYTES = 16 * 1024 * 1024
@@ -86,11 +86,15 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "c-jni": (
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
+        "connect_norito_validation_fee_hijiri_quote_request_v1",
+        "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     ),
     "csharp": (
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
+        "connect_norito_validation_fee_hijiri_quote_request_v1",
+        "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
         "iroha_privacy_compiled_profile_catalog_v1",
         "iroha_privacy_validate_compiled_profile_catalog_v1",
@@ -102,12 +106,16 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connectNoritoBridgeAbiVersion",
         "inspectSorafsOrderbookSubmissionForDiscriminantV1",
         "sorafsValidateAppealFinanceCancelAssetLockJson",
+        "validationFeeHijiriQuoteRequestV1",
+        "validationFeeVerifyHijiriQuoteResponseV1",
         "verifySorafsOrderbookSubmissionReceiptV1",
     ),
     "python": (
         "connect_norito_bridge_abi_version",
         "inspect_sorafs_orderbook_submission_for_discriminant_v1",
         "sorafs_validate_appeal_finance_cancel_asset_lock_json",
+        "validation_fee_hijiri_quote_request_v1",
+        "validation_fee_verify_hijiri_quote_response_v1",
         "verify_sorafs_orderbook_submission_receipt_v1",
     ),
 }
@@ -594,7 +602,7 @@ import sys
 path = pathlib.Path(sys.argv[1])
 required = json.loads(sys.argv[2])
 if path.suffix == ".py":
-    name = "_iroha_native_abi22_fixture"
+    name = "_iroha_native_abi23_fixture"
     loader = importlib.machinery.SourceFileLoader(name, str(path))
 else:
     name = "iroha_python._crypto"
@@ -1291,7 +1299,7 @@ def retain_verified_manifest(
             or (created.st_dev, created.st_ino) != (current.st_dev, current.st_ino)
         ):
             fail("native artifact evidence directory changed while it was created")
-        output_name = f"{validated['sdk']}-native-abi22.json"
+        output_name = f"{validated['sdk']}-native-abi23.json"
         _exclusive_write_at(
             directory_descriptor,
             output_name,
@@ -1309,7 +1317,7 @@ def retain_verified_manifest(
             os.close(directory_descriptor)
         os.close(parent_descriptor)
 
-    retained_path = canonical_output / f"{validated['sdk']}-native-abi22.json"
+    retained_path = canonical_output / f"{validated['sdk']}-native-abi23.json"
     if load_manifest(retained_path) != validated:
         fail("retained native artifact manifest does not match verified evidence")
     return retained_path

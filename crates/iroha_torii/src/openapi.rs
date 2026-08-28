@@ -2719,6 +2719,102 @@ mod tests {
         }
     }
     #[test]
+    fn sccp_ton_openapi_tracks_state_init_and_curve_neutral_wire_contract() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        let ton_deployment = schemas
+            .get("SccpTonDestinationDeploymentV1")
+            .and_then(Value::as_object)
+            .expect("TON deployment schema");
+        let properties = ton_deployment
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("TON deployment properties");
+        let required = ton_deployment
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("TON deployment required fields");
+        for field in ["jetton_master_initial_data_hash", "route_initial_data_hash"] {
+            assert_eq!(
+                properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SccpNonzeroUpperHex32"),
+                "TON StateInit commitment `{field}` must remain a nonzero hash",
+            );
+            assert!(
+                required.iter().any(|entry| entry.as_str() == Some(field)),
+                "TON StateInit commitment `{field}` must remain required",
+            );
+        }
+
+        let expected_max = u64::try_from(iroha_sccp::SCCP_DESTINATION_PROOF_MAX_BASE64_BYTES_V1)
+            .expect("SCCP outer-envelope base64 bound fits u64");
+        for schema_name in [
+            "SccpBridgeProofPrepareRequest",
+            "SccpBridgeProofSignedRequest",
+        ] {
+            let proof = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("destination_proof_b64"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{schema_name} destination proof schema"));
+            assert_eq!(
+                proof.get("maxLength").and_then(Value::as_u64),
+                Some(expected_max),
+                "submit bound must cover the closed outer destination-proof envelope",
+            );
+            let description = proof
+                .get("description")
+                .and_then(Value::as_str)
+                .expect("destination proof description");
+            assert!(description.contains("BridgeSccpDestinationProofV1"));
+            assert!(description.contains("TON BLS12-381"));
+        }
+
+        let proof_request_response = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .and_then(|paths| paths.get("/v1/sccp/proof-requests/{message_id}"))
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|operation| operation.get("responses"))
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .expect("SCCP proof-request response content");
+        assert_eq!(
+            proof_request_response
+                .get("application/json")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("schema")),
+            Some(&schema_ref("SccpProofRequestV1")),
+        );
+        let binary_description = proof_request_response
+            .get("application/x-norito")
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("description"))
+            .and_then(Value::as_str)
+            .expect("SCCP proof-request binary description");
+        for concrete_type in [
+            "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
+            "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",
+            "No enum wrapper",
+        ] {
+            assert!(binary_description.contains(concrete_type));
+        }
+    }
+    #[test]
     fn production_constants_embedded_in_openapi_remain_frozen() {
         fn at<'a>(mut value: &'a Value, path: &[&str]) -> &'a Value {
             for component in path {
@@ -4891,6 +4987,64 @@ mod tests {
                 Some("^(?:0|[1-9][0-9]*)$")
             );
         }
+    }
+    #[test]
+    fn multisig_cancel_response_requires_typed_fee_payment_property() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        let response = schemas
+            .get("MultisigCancelResponse")
+            .and_then(Value::as_object)
+            .expect("MultisigCancelResponse schema");
+        let properties = response
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("MultisigCancelResponse properties");
+        let required = response
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("MultisigCancelResponse required fields");
+
+        assert_eq!(
+            properties
+                .get("fee_payment")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/FeePaymentIntent")
+        );
+        assert!(
+            required
+                .iter()
+                .any(|field| field.as_str() == Some("fee_payment")),
+            "MultisigCancelResponse.fee_payment must remain required"
+        );
+    }
+    #[test]
+    fn multisig_propose_instruction_schema_matches_native_norito_json() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        let instruction = schemas
+            .get("MultisigProposeInstructionInput")
+            .and_then(Value::as_object)
+            .expect("MultisigProposeInstructionInput schema");
+
+        assert_eq!(
+            instruction.get("type").and_then(Value::as_str),
+            Some("string")
+        );
+        assert_eq!(
+            instruction.get("contentEncoding").and_then(Value::as_str),
+            Some("base64")
+        );
+        assert_eq!(
+            instruction.get("minLength").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            instruction.get("pattern").and_then(Value::as_str),
+            Some("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
+        );
     }
     #[test]
     fn generated_operations_declare_tool_effects() {

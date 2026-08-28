@@ -815,6 +815,24 @@ impl HijiriParametersV1 {
     /// Reserved custom-parameter identifier for Hijiri V1.
     pub const PARAMETER_ID_STR: &'static str = "iroha:hijiri_parameters_v1";
 
+    /// Build the neutral Hijiri snapshot seeded by first-release genesis manifests.
+    ///
+    /// The single unit-multiplier band preserves the base validation fee for every
+    /// account while making Hijiri state and its signed quote binding explicit.
+    #[must_use]
+    pub fn first_release_genesis() -> Self {
+        let fee_policy = HijiriFeePolicy::new(
+            vec![
+                FeeMultiplierBand::new(Q16::ONE, Q16::ONE)
+                    .expect("the first-release Hijiri band is valid"),
+            ],
+            Q16::ONE,
+        )
+        .expect("the first-release Hijiri fee policy is valid");
+        Self::try_new(1, None, fee_policy, Q16::ZERO)
+            .expect("the first-release Hijiri genesis snapshot is valid")
+    }
+
     /// Build a canonical global Hijiri parameter.
     ///
     /// # Errors
@@ -1734,6 +1752,29 @@ mod tests {
         );
     }
     #[test]
+    fn fee_policy_enforces_the_exact_band_count_limit() {
+        let bands = |count: usize| {
+            let count = u64::try_from(count).expect("test band count fits u64");
+            (1..=count)
+                .map(|position| {
+                    let raw = u32::try_from(u64::from(Q16::ONE.raw()) * position / count)
+                        .expect("interpolated risk fits Q16");
+                    FeeMultiplierBand::new(Q16::from_raw(raw), Q16::ONE)
+                        .expect("strictly increasing bounded band")
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert!(
+            HijiriFeePolicy::new(bands(MAX_FEE_MULTIPLIER_BANDS), Q16::ONE).is_ok(),
+            "the exact band limit must remain accepted"
+        );
+        assert_eq!(
+            HijiriFeePolicy::new(bands(MAX_FEE_MULTIPLIER_BANDS + 1), Q16::ONE),
+            Err(FeePolicyError::TooManyBands)
+        );
+    }
+    #[test]
     fn fee_policy_revalidates_public_band_fields() {
         let forged_band = FeeMultiplierBand {
             max_risk: Q16::ONE,
@@ -1819,6 +1860,163 @@ mod tests {
             HijiriAccountRiskV1::from_custom_parameter(&risk_custom)
                 .expect("decode risk parameter"),
             Some(risk)
+        );
+    }
+    #[test]
+    fn first_release_genesis_is_exact_neutral_and_roundtrips_json() {
+        let parameters = HijiriParametersV1::first_release_genesis();
+        assert_eq!(parameters.version, HIJIRI_PARAMETERS_VERSION_V1);
+        assert_eq!(parameters.revision, 1);
+        assert_eq!(parameters.previous_digest, None);
+        assert_eq!(parameters.default_account_risk, Q16::ZERO);
+        assert_eq!(parameters.fee_policy.penalty_cap, Q16::ONE);
+        assert_eq!(
+            parameters.fee_policy.bands,
+            vec![FeeMultiplierBand {
+                max_risk: Q16::ONE,
+                multiplier: Q16::ONE,
+            }]
+        );
+        assert_eq!(
+            parameters
+                .apply_fee_minor_units(&account(13), None, 10)
+                .expect("neutral genesis policy must evaluate"),
+            Some(10)
+        );
+
+        let json = norito::json::to_json(&parameters).expect("encode genesis Hijiri JSON");
+        let actual = norito::json::parse_value(&json).expect("parse encoded genesis Hijiri JSON");
+        let expected = norito::json::parse_value(
+            r#"{
+                "version": 1,
+                "revision": 1,
+                "previous_digest": null,
+                "fee_policy": {
+                    "bands": [{
+                        "max_risk": [65536],
+                        "multiplier": [65536]
+                    }],
+                    "penalty_cap": [65536]
+                },
+                "default_account_risk": [0]
+            }"#,
+        )
+        .expect("parse expected genesis Hijiri JSON");
+        assert_eq!(actual, expected);
+
+        let decoded: HijiriParametersV1 =
+            norito::json::from_json(&json).expect("decode genesis Hijiri JSON");
+        assert_eq!(decoded, parameters);
+    }
+    #[test]
+    fn hijiri_global_parameter_rejects_malformed_matching_custom_payload() {
+        let custom = CustomParameter::new(
+            HijiriParametersV1::parameter_id(),
+            Json::from_raw_json(r#"{"version":1}"#.to_owned())
+                .expect("syntactically valid malformed Hijiri fixture"),
+        );
+
+        assert_eq!(
+            HijiriParametersV1::from_custom_parameter(&custom),
+            Err(HijiriParametersError::MalformedPayload)
+        );
+    }
+    #[test]
+    fn hijiri_account_risk_rejects_parameter_id_mismatch() {
+        let record = HijiriAccountRiskV1::try_new(account(9), 1, None, Q16::ZERO)
+            .expect("valid account-risk record");
+        let foreign_parameter_id = HijiriAccountRiskV1::parameter_id_for(&account(10))
+            .expect("foreign account-risk parameter id");
+        let custom = CustomParameter::new(foreign_parameter_id, Json::new(record));
+
+        assert_eq!(
+            HijiriAccountRiskV1::from_custom_parameter(&custom),
+            Err(HijiriParametersError::AccountRiskParameterIdMismatch)
+        );
+    }
+    #[test]
+    fn hijiri_global_transition_rejects_invalid_shapes_skips_and_overflow() {
+        assert_eq!(
+            HijiriParametersV1::try_new(0, None, fee_policy(), Q16::ONE),
+            Err(HijiriParametersError::ZeroRevision)
+        );
+        assert_eq!(
+            HijiriParametersV1::try_new(1, Some([1; 32]), fee_policy(), Q16::ONE),
+            Err(HijiriParametersError::InitialHasPreviousDigest)
+        );
+        assert_eq!(
+            HijiriParametersV1::try_new(2, None, fee_policy(), Q16::ONE),
+            Err(HijiriParametersError::SuccessorMissingPreviousDigest)
+        );
+
+        let first = HijiriParametersV1::try_new(1, None, fee_policy(), Q16::ONE)
+            .expect("valid initial parameters");
+        HijiriParametersV1::validate_transition(None, &first)
+            .expect("revision one is the exact initial install");
+
+        let successor = HijiriParametersV1::try_new(
+            2,
+            Some(first.digest().expect("initial digest")),
+            fee_policy(),
+            Q16::ZERO,
+        )
+        .expect("valid successor shape");
+        HijiriParametersV1::validate_transition(Some(&first), &successor)
+            .expect("revision two with the exact predecessor is valid");
+
+        let skipped = HijiriParametersV1::try_new(
+            3,
+            Some(first.digest().expect("initial digest")),
+            fee_policy(),
+            Q16::ZERO,
+        )
+        .expect("self-contained skipped-revision shape");
+        assert_eq!(
+            HijiriParametersV1::validate_transition(Some(&first), &skipped),
+            Err(HijiriParametersError::UnexpectedRevision {
+                expected: 2,
+                found: 3,
+            })
+        );
+
+        let first_revision_skipped =
+            HijiriParametersV1::try_new(2, Some([2; 32]), fee_policy(), Q16::ONE)
+                .expect("self-contained successor shape");
+        assert_eq!(
+            HijiriParametersV1::validate_transition(None, &first_revision_skipped),
+            Err(HijiriParametersError::FirstRevisionNotOne(2))
+        );
+
+        let previous_at_max = HijiriParametersV1 {
+            version: HIJIRI_PARAMETERS_VERSION_V1,
+            revision: u64::MAX,
+            previous_digest: Some([3; 32]),
+            fee_policy: fee_policy(),
+            default_account_risk: Q16::ONE,
+        };
+        previous_at_max
+            .validate()
+            .expect("maximum revision remains self-contained");
+        assert_eq!(
+            HijiriParametersV1::validate_transition(Some(&previous_at_max), &first),
+            Err(HijiriParametersError::RevisionOverflow)
+        );
+    }
+    #[test]
+    fn hijiri_account_risk_transition_rejects_account_change() {
+        let first = HijiriAccountRiskV1::try_new(account(11), 1, None, Q16::ZERO)
+            .expect("valid initial account-risk record");
+        let changed_account = HijiriAccountRiskV1::try_new(
+            account(12),
+            2,
+            Some(first.digest().expect("initial account-risk digest")),
+            Q16::ONE,
+        )
+        .expect("valid successor-shaped record for another account");
+
+        assert_eq!(
+            HijiriAccountRiskV1::validate_transition(Some(&first), &changed_account),
+            Err(HijiriParametersError::AccountRiskAccountChanged)
         );
     }
     #[test]

@@ -4721,12 +4721,11 @@ impl IVMHost for WsvHost {
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         Some(Box::new(self.checkpoint_state()))
     }
-    fn restore(&mut self, snapshot: &dyn Any) -> bool {
-        if let Some(saved) = snapshot.downcast_ref::<WsvHostSnapshot>() {
-            self.restore_state(saved).is_ok()
-        } else {
-            false
-        }
+    fn restore(&mut self, snapshot: &dyn Any) -> Result<(), VMError> {
+        let saved = snapshot
+            .downcast_ref::<WsvHostSnapshot>()
+            .ok_or(VMError::HostUnavailable)?;
+        self.restore_state(saved)
     }
     fn access_logging_supported(&self) -> bool {
         true

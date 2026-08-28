@@ -53,6 +53,21 @@ export function buildIntegrationGovernancePlainBallotPayload(
   };
 }
 
+function mlDsaManifestSigner(keyLength, fill = 0x5a) {
+  const lengthVarint = [];
+  let remaining = keyLength;
+  do {
+    const byte = remaining & 0x7f;
+    remaining = Math.floor(remaining / 0x80);
+    lengthVarint.push(remaining === 0 ? byte : byte | 0x80);
+  } while (remaining !== 0);
+  const multihash = Buffer.concat([
+    Buffer.from([0xee, 0x01, ...lengthVarint]),
+    Buffer.alloc(keyLength, fill),
+  ]);
+  return `ml-dsa:${multihash.toString("hex")}`;
+}
+
 export function registerToriiClientGovernanceTests({
   assert,
   BASE_URL,
@@ -72,6 +87,7 @@ export function registerToriiClientGovernanceTests({
   ValidationError,
   ValidationErrorCode,
   cloneFixture,
+  configureCurveSupport,
   createResponse,
   parseStrictLosslessIntegerJson,
   readFileSync,
@@ -1297,6 +1313,64 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         payload_hex: "00",
       },
     ]);
+  });
+
+  test("governanceProposeDeployContract validates ML-DSA manifest signer keys before fetch", async () => {
+    let capturedBody;
+    let fetchCalls = 0;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async (_url, init) => {
+        fetchCalls += 1;
+        capturedBody = JSON.parse(init.body);
+        return createResponse({
+          status: 200,
+          jsonData: cloneFixture(toriiFixtures.governance.deployContractDraft),
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    const base = {
+      contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+      codeHash: "aa".repeat(32),
+      abiHash: "bb".repeat(32),
+    };
+    const proposeWithSigner = (signer) => client.governanceProposeDeployContract(
+      {
+        ...base,
+        manifestProvenance: {
+          signer,
+          signature: "22".repeat(64),
+        },
+      },
+      governanceBallotOptions(FIXTURE_ALICE_ID),
+    );
+
+    configureCurveSupport({ allowMlDsa: true });
+    try {
+      for (const [label, signer, errorPattern] of [
+        ["one-byte", mlDsaManifestSigner(1), /expected 1952 bytes/u],
+        ["short", mlDsaManifestSigner(1_951), /expected 1952 bytes/u],
+        ["overlong", mlDsaManifestSigner(1_953), /expected 1952 bytes/u],
+        ["all-zero", mlDsaManifestSigner(1_952, 0), /all-zero/u],
+      ]) {
+        // eslint-disable-next-line no-await-in-loop
+        await assert.rejects(
+          () => proposeWithSigner(signer),
+          errorPattern,
+          `${label} ML-DSA signer must be rejected before fetch`,
+        );
+      }
+      assert.equal(fetchCalls, 0);
+
+      await proposeWithSigner(mlDsaManifestSigner(1_952));
+      assert.equal(fetchCalls, 1);
+      assert.equal(
+        capturedBody.manifest_provenance.signer,
+        `ee01a00f${"5A".repeat(1_952)}`,
+      );
+    } finally {
+      configureCurveSupport();
+    }
   });
 
   test("governanceProposeDeployContract rejects noncanonical draft responses", async () => {

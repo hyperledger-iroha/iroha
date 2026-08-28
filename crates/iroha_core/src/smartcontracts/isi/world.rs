@@ -10740,14 +10740,13 @@ pub mod isi {
         })
     }
     fn validate_sccp_finality_against_state(
-        context: &iroha_sccp::SccpVerifiedDestinationContextV1,
+        parsed: &iroha_sccp::SccpParsedDestinationProofV1,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        crate::bridge::verify_sccp_destination_context_against_local_state(
+    ) -> Result<iroha_sccp::TairaBridgeFinalityProofV1, Error> {
+        crate::bridge::verify_sccp_parsed_destination_proof_against_local_state(
             state_transaction,
-            context,
+            parsed,
         )
-        .map(|_| ())
         .map_err(|err| {
             invalid_bridge_proof(format!(
                 "SCCP finality proof is not locally anchored: {err}"
@@ -10758,12 +10757,6 @@ pub mod isi {
         chain_id: &iroha_data_model::ChainId,
     ) -> Option<iroha_data_model::bridge::SccpNetworkV1> {
         crate::state::sccp_local_sora_network_for_chain_id(chain_id)
-    }
-    fn validate_sccp_bridge_proof_range_matches_artifact(
-        proof: &iroha_data_model::bridge::BridgeProof,
-        artifact: &iroha_sccp::SccpVerifiedDestinationCallV1,
-    ) -> Result<(), Error> {
-        validate_sccp_bridge_proof_range(proof, artifact.public_inputs.finality_height)
     }
     fn validate_sccp_bridge_proof_range(
         proof: &iroha_data_model::bridge::BridgeProof,
@@ -10951,15 +10944,18 @@ pub mod isi {
                 "SCCP destination proof payload or configuration selects another route revision",
             ));
         }
-        let verified = iroha_sccp::verify_parsed_sccp_destination_proof_v1(parsed, route)
-            .ok_or_else(|| {
+        validate_sccp_bridge_proof_range(proof, parsed.finality().finality_artifact.height)?;
+        let trusted_finality = validate_sccp_finality_against_state(&parsed, state_transaction)?;
+        let artifact = iroha_sccp::verify_parsed_sccp_destination_proof_v1(
+            parsed,
+            route,
+            &trusted_finality,
+        )
+        .ok_or_else(|| {
             invalid_bridge_proof(
-                "SCCP destination artifact failed exact governed request, key, pairing, or calldata verification",
+                "SCCP destination artifact failed exact governed request, key, pairing, finality, or calldata verification",
             )
         })?;
-        let artifact = verified.call();
-        validate_sccp_bridge_proof_range_matches_artifact(proof, artifact)?;
-        validate_sccp_finality_against_state(&verified, state_transaction)?;
         if record.recorded_at_height != artifact.public_inputs.finality_height {
             return Err(invalid_bridge_proof(
                 "SCCP destination proof finality height differs from the authoritative outbound record height",
@@ -22111,6 +22107,7 @@ pub mod isi {
                 &exact.bridge_proof,
                 &exact.bundle,
                 &exact.route,
+                exact.finalized_block.proof(),
             )
             .expect("exact receipt artifact fixture");
             SccpReceiptArtifactFixture {
@@ -25695,11 +25692,16 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 "domain registration must reject an over-limit relay allowlist",
             );
-            assert_contains!(
-                error.to_string(),
-                "500-entry limit",
-                "unexpected error: {error}"
-            );
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_contains!(
+                        message,
+                        "500-entry limit",
+                        "unexpected smart-contract error"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
             assert!(
                 stx.world.domains.get(&rejected_domain_id).is_none(),
                 "rejected registration must not materialize the domain"
@@ -29195,6 +29197,7 @@ seiyaku GovernanceLifecycle {
                     bundle_decodes: 1,
                     groth16_pairings: 0,
                     bls_verifications: 0,
+                    bls12381_point_decodes: 0,
                 }
             );
             assert_eq!(

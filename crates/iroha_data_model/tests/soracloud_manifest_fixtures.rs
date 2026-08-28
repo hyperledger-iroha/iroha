@@ -1,6 +1,6 @@
 //! Canonical fixture and roundtrip checks for `Soracloud` V1 manifests.
 use iroha_crypto::{
-    Hash,
+    Algorithm, Hash, KeyPair,
     fhe_bfv::{
         ram_lfe_bfv_parameters_v1, registered_bfv_key_switch_decomposition_chain_digest,
         registered_bfv_parameter_digest, registered_bfv_rns_modulus_chain_digest,
@@ -11,6 +11,8 @@ use iroha_data_model::soracloud::SoraInrouManifestV1;
 use iroha_data_model::soracloud::SoracloudManifestError;
 use iroha_data_model::{
     Decode, Encode,
+    account::AccountId,
+    peer::PeerId,
     soracloud::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
         AgentToolCapabilityV1, AgentUpgradePolicyV1, BfvRefreshTranscriptModeV1,
@@ -29,12 +31,13 @@ use iroha_data_model::{
         SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1,
         SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportTargetV1,
         SoraConfigExportV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
-        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraLeaseVolumeBindingV1,
-        SoraLeaseVolumeKindV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
-        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
-        SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceExecutionPlaneV1,
-        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1, SoraStateBindingV1,
-        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
+        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraInrouPlacementTargetV1,
+        SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
+        SoraMailboxContractV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
+        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        SoraStateScopeV1, SoraTlsModeV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -42,7 +45,7 @@ use iroha_primitives::numeric::{Numeric, Quantity};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt::Debug,
     fs,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
@@ -79,6 +82,24 @@ const FHE_EXECUTION_POLICY_FIXTURE: &str = include_str!(concat!(
 fn xor_quantity_nanos(value: u128) -> Quantity {
     Quantity::from_canonical_numeric(Numeric::new(value, SORACLOUD_XOR_SCALE))
         .expect("u128 nano-XOR manifest fixture fits Quantity")
+}
+#[cfg(feature = "json")]
+fn expected_inrou_placement_targets(count: u16) -> BTreeSet<SoraInrouPlacementTargetV1> {
+    (0..count)
+        .map(|index| {
+            let index = u8::try_from(index).expect("fixture target index fits u8");
+            let account_key =
+                KeyPair::try_from_seed(vec![0x80_u8.wrapping_add(index); 32], Algorithm::Ed25519)
+                    .expect("fixture validator account key");
+            let peer_key =
+                KeyPair::try_from_seed(vec![0xA0_u8.wrapping_add(index); 32], Algorithm::BlsNormal)
+                    .expect("fixture consensus peer key");
+            SoraInrouPlacementTargetV1 {
+                validator_account_id: AccountId::new(account_key.public_key().clone()),
+                peer_id: PeerId::from(peer_key.public_key().clone()).to_string(),
+            }
+        })
+        .collect()
 }
 const FHE_GOVERNANCE_BUNDLE_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -220,6 +241,7 @@ fn expected_service_manifest() -> SoraServiceManifestV1 {
             expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
         },
         replicas: NonZeroU16::new(3).expect("nonzero"),
+        placement_targets: BTreeSet::new(),
         route: Some(expected_service_route()),
         rollout: SoraRolloutPolicyV1 {
             canary_percent: 0,
@@ -343,6 +365,7 @@ fn expected_inrou_http_deployment_bundle() -> SoraDeploymentBundleV1 {
     let mut service = expected_service_manifest();
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.replicas = NonZeroU16::new(2).expect("nonzero");
+    service.placement_targets = expected_inrou_placement_targets(service.replicas.get());
     service.state_bindings.clear();
     service.handlers.clear();
     service.artifacts.clear();

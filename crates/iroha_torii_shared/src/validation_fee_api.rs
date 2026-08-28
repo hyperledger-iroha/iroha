@@ -107,7 +107,9 @@ pub struct ValidationFeeCurrentPolicyProofRequestV1 {
 pub struct ValidationFeeHijiriQuoteRequestV1 {
     /// Request layout version.
     pub version: u16,
-    /// Canonical universal account whose effective Hijiri risk is priced.
+    /// Canonical universal account whose effective Hijiri risk is priced. Torii permits the
+    /// authenticated account itself or a live multisig controller for which it is a direct
+    /// signatory.
     #[norito(rename = "accountId")]
     pub account_id: AccountId,
     /// Number of qualifying transfers priced as one aggregate before a single ceiling operation.
@@ -1829,10 +1831,12 @@ mod tests {
         let authorization = parliament_authorization([0x02; 32], 2_048);
         let proposal = verified_parliament_proposal("ValidationFeePolicyV1", &authorization)
             .expect("project canonical certificate authorization");
+        let fee_asset_definition_id = fixture_asset_definition().to_string();
+        let treasury_account_id = fixture_account(44).to_string();
         let current = ValidationFeeVerifiedCurrentPolicyV1 {
             active_policy_version: "1".to_owned(),
             active_policy_hash: "03".repeat(32),
-            fee_asset_definition_id: "asset".to_owned(),
+            fee_asset_definition_id: fee_asset_definition_id.clone(),
             fee_scale: 2,
             fee_minor_units: "10".to_owned(),
             charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION".to_owned(),
@@ -1852,7 +1856,7 @@ mod tests {
                 entrypoint: "autonomous_validation_fee_tick".to_owned(),
                 ds_asset_definition_id: "asset".to_owned(),
                 xor_asset_definition_id: "xor".to_owned(),
-                treasury_account_id: "treasury".to_owned(),
+                treasury_account_id: treasury_account_id.clone(),
                 vault_account_id: "vault".to_owned(),
                 batch_ds_minor_units: "1000".to_owned(),
                 ds_scale: 2,
@@ -1940,7 +1944,8 @@ mod tests {
             Q16::from_parts(0, 0xC000).raw()
         );
         assert_eq!(quote.fee_multiplier_q16, Q16::from_parts(1, 0x4000).raw());
-        assert_eq!(quote.treasury_account_id, "treasury");
+        assert_eq!(quote.fee_asset_definition_id, fee_asset_definition_id);
+        assert_eq!(quote.treasury_account_id, treasury_account_id);
         assert_eq!(quote.evaluated_state_height, "120961");
         assert_eq!(quote.quoted_execution_height, "120961");
         assert_eq!(quote.base_per_transfer_fee_minor_units, "10");
@@ -2215,6 +2220,124 @@ mod tests {
         };
         assert!(build("asset".to_owned(), treasury.clone()).is_err());
         assert!(build(asset, "treasury".to_owned()).is_err());
+    }
+    #[test]
+    fn hijiri_quote_base_rejects_invalid_policy_invariants() {
+        let build = |evaluated_state_height,
+                     quoted_execution_height,
+                     active_policy_version,
+                     active_policy_hash,
+                     fee_scale,
+                     base_fee_minor_units| {
+            ValidationFeeHijiriQuoteBaseV1::try_new(
+                evaluated_state_height,
+                quoted_execution_height,
+                active_policy_version,
+                active_policy_hash,
+                fixture_asset_definition().to_string(),
+                fixture_account(45).to_string(),
+                fee_scale,
+                base_fee_minor_units,
+            )
+        };
+        assert!(
+            build(
+                42,
+                43,
+                1,
+                [0x03; 32],
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            )
+            .is_ok()
+        );
+        for invalid in [
+            build(
+                0,
+                1,
+                1,
+                [0x03; 32],
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            ),
+            build(
+                42,
+                44,
+                1,
+                [0x03; 32],
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            ),
+            build(
+                43,
+                42,
+                1,
+                [0x03; 32],
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            ),
+            build(
+                42,
+                43,
+                0,
+                [0x03; 32],
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            ),
+            build(
+                42,
+                43,
+                1,
+                [0x02; 32],
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            ),
+            build(
+                42,
+                43,
+                1,
+                [0x03; 32],
+                VALIDATION_FEE_DS_SCALE - 1,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1,
+            ),
+            build(
+                42,
+                43,
+                1,
+                [0x03; 32],
+                VALIDATION_FEE_DS_SCALE,
+                VALIDATION_FEE_BASE_MINOR_UNITS_V1 + 1,
+            ),
+        ] {
+            assert!(invalid.is_err());
+        }
+    }
+    #[test]
+    fn hijiri_quote_is_absent_before_base_policy_enactment() {
+        let projection = ValidationFeeVerifiedPolicyProjectionV1 {
+            schema: VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA_NAME.to_owned(),
+            version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+            network_id: "network".to_owned(),
+            policy_chain_genesis_hash: "03".repeat(32),
+            registry_hash: "03".repeat(32),
+            head_policy_version: 0,
+            head_policy_hash: "03".repeat(32),
+            current_policy: None,
+            trusted_checkpoint_height: 1,
+            trusted_checkpoint_context_id: "03".repeat(32),
+            evaluated_block_height: 1,
+            evaluated_context_id: "03".repeat(32),
+            evaluated_block_hash: "03".repeat(32),
+            observed_ledger_tip_height: 1,
+            more_available: false,
+        };
+        let account_id = fixture_account(46);
+        assert_eq!(
+            projection
+                .evaluate_hijiri_quote(&account_id, &hijiri_parameters(Q16::ZERO), None)
+                .expect("an absent base policy is a valid pre-enactment state"),
+            None
+        );
     }
     #[test]
     fn exact_decimal_u64_rejects_noncanonical_spellings() {

@@ -4327,7 +4327,7 @@ fn live_profile_accepts_pacs009_canonical_app_header_aliases() {
         .expect("custom profile");
     let parsed = parse_message(
             "pacs.009",
-            b"AppHdr/BizMsgIdr=HDR-009\nAppHdr/MsgDefIdr=pacs.009.001.10\nAppHdr/CreDt=2025-01-01T12:00:00Z\nAppHdr/BizSvc=swift.cbprplus.02\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF",
+            b"AppHdr/BizMsgIdr=HDR-009\nAppHdr/MsgDefIdr=pacs.009.001.10\nAppHdr/CreDt=2025-01-01T12:00:00Z\nAppHdr/BizSvc=swift.cbprplus.02\nMsgId=PACS009-GRP\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF",
         )
         .expect("parsed");
     let metadata = runtime
@@ -8552,6 +8552,61 @@ fn concurrent_admission_commits_one_complete_identity_tuple() {
     assert_eq!(runtime.uetr_index.len(), 1);
 }
 #[test]
+fn pacs009_group_message_id_owns_payment_replay_reservation() {
+    let parse = |business_message_id: &str| {
+        parse_message(
+            "pacs.009",
+            format!(
+                "MsgId=pacs009-stable-group\nBizMsgIdr={business_message_id}\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB33BUKB20201555555555\nInstgAgt=DEUTDEFF\nInstdAgt=MARKDEFF\nPurp=SECU"
+            )
+            .as_bytes(),
+        )
+        .expect("valid pacs.009 payment")
+    };
+    let first = parse("pacs009-header-a");
+    let replay = parse("pacs009-header-b");
+    let first_id =
+        Iso20022BridgeRuntime::payment_message_id("pacs.009", &first).expect("group message id");
+    let replay_id =
+        Iso20022BridgeRuntime::payment_message_id("pacs.009", &replay).expect("group message id");
+    assert_eq!(first_id, "pacs009-stable-group");
+    assert_eq!(replay_id, first_id);
+
+    let runtime = sample_runtime();
+    let first_metadata = IsoMessageMetadata::inbound(
+        "generic-iso20022",
+        "pacs.009",
+        None,
+        Some("pacs009-header-a".to_owned()),
+        None,
+        "pacs009-payload-a".to_owned(),
+        "snapshot".to_owned(),
+        false,
+    );
+    let replay_metadata = IsoMessageMetadata::inbound(
+        "generic-iso20022",
+        "pacs.009",
+        None,
+        Some("pacs009-header-b".to_owned()),
+        None,
+        "pacs009-payload-b".to_owned(),
+        "snapshot".to_owned(),
+        false,
+    );
+    assert!(runtime.check_and_record_inbound(&first_id, first_metadata));
+    assert!(!runtime.check_and_record_inbound(&replay_id, replay_metadata));
+
+    let missing_group_id = parse_message(
+        "pacs.009",
+        b"BizMsgIdr=pacs009-header-only\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB33BUKB20201555555555\nInstgAgt=DEUTDEFF\nInstdAgt=MARKDEFF\nPurp=SECU",
+    )
+    .expect("schema-compatible pacs.009 without group id");
+    assert!(matches!(
+        Iso20022BridgeRuntime::payment_message_id("pacs.009", &missing_group_id),
+        Err(MsgError::MissingField("MsgId"))
+    ));
+}
+#[test]
 fn durable_in_flight_reservation_pins_capacity_until_transaction_binding() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
@@ -10396,7 +10451,7 @@ impl PaymentRail {
                 "MsgId=m1\nIntrBkSttlmAmt={amount}\nIntrBkSttlmCcy={currency}\nIntrBkSttlmDt=2024-01-01\nDbtrAcct={iban}\nCdtrAcct={iban}\nDbtrAgt={bic}\nCdtrAgt={bic}\n{extra}"
             ),
             Self::FinancialInstitutionCreditTransfer => format!(
-                "BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt={amount}\nIntrBkSttlmCcy={currency}\nIntrBkSttlmDt=2024-01-03\nDbtrAcct={iban}\nCdtrAcct={iban}\nInstgAgt={bic}\nInstdAgt={bic}\nPurp=SECU\n{extra}"
+                "MsgId=pacs009-group\nBizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt={amount}\nIntrBkSttlmCcy={currency}\nIntrBkSttlmDt=2024-01-03\nDbtrAcct={iban}\nCdtrAcct={iban}\nInstgAgt={bic}\nInstdAgt={bic}\nPurp=SECU\n{extra}"
             ),
         };
         parse_message(self.message_type(), input.as_bytes()).expect("payment message parses")
@@ -10607,7 +10662,7 @@ fn build_pacs009_payload_extracts_transfer() {
         .expect("i105 encoding");
     let msg = parse_message(
             "pacs.009",
-            format!("BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\nSplmtryData/SourceAccountAddress={account_i105}\nSplmtryData/TargetAccountAddress={account_i105}").as_bytes(),
+            format!("MsgId=pacs009-group\nBizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\nSplmtryData/SourceAccountAddress={account_i105}\nSplmtryData/TargetAccountAddress={account_i105}").as_bytes(),
         )
         .expect("parsed");
     let world = sample_world(None);
@@ -10667,7 +10722,7 @@ fn pacs009_requires_securities_purpose() {
     let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
     let msg = parse_message(
             "pacs.009",
-            b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=OTHR",
+            b"MsgId=pacs009-group\nBizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=OTHR",
         )
         .expect("parsed");
     let world = sample_world(None);

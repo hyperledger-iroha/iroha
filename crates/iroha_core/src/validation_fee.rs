@@ -3027,16 +3027,20 @@ fn enforce_policy_with_credit_and_hijiri(
             resolve_fee_coordinate_context(coordinate, &transfer_collection.transfers)
         })
         .transpose()?;
+    // The signed metadata describes the explicitly coordinated fee context. For ordinary
+    // transactions that is context zero; a multisig proposal can instead coordinate a nested
+    // execution account whose account-bound Hijiri quote hash necessarily differs from its signer.
+    let metadata_fee_context_index = explicit_fee_context_index.unwrap_or(0);
     let mut requires_policy_metadata = false;
     let mut credited_minor_units = 0_u64;
-    let mut top_level_hijiri_quote_hash = None;
+    let mut metadata_hijiri_quote_hash = None;
     for (context_index, context) in transfer_collection.contexts.iter().enumerate() {
         let resolved_hijiri =
             resolve_hijiri_fee(hijiri, &context.execution_account_id, resolve_account_risk)?;
-        if context_index == 0 {
-            top_level_hijiri_quote_hash = resolved_hijiri.map(|resolved| resolved.quote_hash);
+        if context_index == metadata_fee_context_index {
+            metadata_hijiri_quote_hash = resolved_hijiri.map(|resolved| resolved.quote_hash);
             if metadata_contains_validation_fee {
-                validate_policy_metadata(tx.metadata(), policy, top_level_hijiri_quote_hash)?;
+                validate_policy_metadata(tx.metadata(), policy, metadata_hijiri_quote_hash)?;
             }
         }
         let transaction_fee_coordinate = if explicit_fee_context_index == Some(context_index) {
@@ -3079,7 +3083,7 @@ fn enforce_policy_with_credit_and_hijiri(
         }
     }
     if requires_policy_metadata && !metadata_contains_validation_fee {
-        validate_policy_metadata(tx.metadata(), policy, top_level_hijiri_quote_hash)?;
+        validate_policy_metadata(tx.metadata(), policy, metadata_hijiri_quote_hash)?;
     }
     Ok(credited_minor_units)
 }
@@ -6396,6 +6400,24 @@ mod tests {
         );
     }
     #[test]
+    fn hijiri_quote_hash_only_metadata_is_detected_and_rejected_as_incomplete() {
+        let policy = policy(&account(3));
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str(VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY)
+                .expect("metadata key"),
+            Json::new("ab".repeat(32)),
+        );
+        let transaction = tx(1, Vec::new(), metadata);
+
+        assert!(has_validation_fee_metadata(transaction.metadata()));
+        assert!(transaction_has_validation_fee_metadata(&transaction));
+        assert_eq!(
+            enforce_policy(&transaction, &policy),
+            Err(ValidationFeeAdmissionError::MissingPolicyVersionMetadata)
+        );
+    }
+    #[test]
     fn active_policy_rejects_raw_contract_and_ivm_executables_fail_closed() {
         let treasury = account(3);
         let policy = policy(&treasury);
@@ -9666,6 +9688,95 @@ mod tests {
                 ValidationFeeAdmissionError::AmbiguousFeeInstructionCoordinate {
                     instruction_index: 1,
                     entry_index: None,
+                }
+            )
+        );
+    }
+    #[test]
+    fn multisig_hijiri_metadata_binds_the_explicit_nested_fee_context() {
+        let outer_signer = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let multisig = account(4);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let hijiri = HijiriParametersV1::first_release_genesis();
+        let outer_quote_hash = hijiri
+            .fee_quote_hash(&outer_signer, None)
+            .expect("outer signer quote hash");
+        let nested_quote_hash = hijiri
+            .fee_quote_hash(&multisig, None)
+            .expect("nested multisig quote hash");
+        assert_ne!(
+            outer_quote_hash, nested_quote_hash,
+            "Hijiri quote hashes must remain account-bound"
+        );
+
+        let transaction = |metadata_quote_hash, marker_quote_hash| {
+            tx(
+                1,
+                vec![
+                    MultisigPropose::new(
+                        multisig.clone(),
+                        with_multisig_fee_marker_and_hijiri(
+                            &policy,
+                            Some(marker_quote_hash),
+                            vec![
+                                transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
+                                transfer(
+                                    &multisig,
+                                    &fee_asset,
+                                    minor_units(TEST_VALIDATION_FEE_MINOR_UNITS),
+                                    &treasury,
+                                ),
+                            ],
+                            1,
+                            None,
+                        ),
+                        None,
+                    )
+                    .into(),
+                ],
+                metadata_for_hijiri_fee_instruction(&policy, metadata_quote_hash, 1),
+            )
+        };
+
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &transaction(nested_quote_hash, nested_quote_hash),
+                &policy,
+                Some(&hijiri),
+                &no_hijiri_account_risk,
+            )
+            .expect("nested-account metadata and marker hashes must validate"),
+            0,
+            "registering the nested proposal must not credit its deferred fee"
+        );
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &transaction(outer_quote_hash, nested_quote_hash),
+                &policy,
+                Some(&hijiri),
+                &no_hijiri_account_risk,
+            ),
+            Err(
+                ValidationFeeAdmissionError::WrongHijiriFeeQuoteHashMetadata {
+                    expected_hash_hex: hex::encode(nested_quote_hash),
+                    observed_hash_hex: hex::encode(outer_quote_hash),
+                }
+            )
+        );
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &transaction(nested_quote_hash, outer_quote_hash),
+                &policy,
+                Some(&hijiri),
+                &no_hijiri_account_risk,
+            ),
+            Err(
+                ValidationFeeAdmissionError::WrongMultisigFeeMarkerHijiriFeeQuoteHash {
+                    expected_hash_hex: Some(hex::encode(nested_quote_hash)),
+                    observed_hash_hex: Some(hex::encode(outer_quote_hash)),
                 }
             )
         );

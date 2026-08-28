@@ -613,7 +613,7 @@ pub struct KaigiRecord {
     pub id: KaigiId,
     /// Host account that created the call.
     pub host: AccountId,
-    /// Optional dedicated billing account.
+    /// Optional billing account, which must equal the host in V1.
     pub billing_account: Option<AccountId>,
     /// Optional human readable title.
     pub title: Option<String>,
@@ -655,7 +655,7 @@ pub struct KaigiRecord {
     pub total_billed_gas: u64,
     /// Number of usage segments recorded.
     pub segments_recorded: u32,
-    /// Participants currently associated with the call (excluding the host unless explicitly added).
+    /// Participants currently associated with the call; the host is always implicit and absent.
     pub participants: Vec<AccountId>,
     /// Additional participant metadata (keyed by participant id) for future expansion.
     #[cfg_attr(

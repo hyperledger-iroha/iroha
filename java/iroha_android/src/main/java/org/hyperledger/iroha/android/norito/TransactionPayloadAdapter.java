@@ -1102,7 +1102,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           encoder,
           ACCOUNT_ID_ADAPTER,
           requireNonBlank(value.signerAccountId(), "signerAccountId"));
-      encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, Optional.empty());
       encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.publicKeyHex()));
       encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.signatureB64()));
       encodeSizedField(

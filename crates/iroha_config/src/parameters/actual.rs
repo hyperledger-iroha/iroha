@@ -7779,6 +7779,10 @@ pub struct Torii {
     pub attachments_per_tenant_max_count: u64,
     /// Maximum aggregate attachment bytes retained per tenant (0 = unlimited).
     pub attachments_per_tenant_max_bytes: u64,
+    /// Maximum number of attachments retained by this node (1..=20,000).
+    pub attachments_global_max_count: u64,
+    /// Maximum aggregate attachment bytes retained by this node.
+    pub attachments_global_max_bytes: u64,
     /// Allowed MIME types for attachment payloads (post-sniff).
     pub attachments_allowed_mime_types: Vec<String>,
     /// Maximum expanded bytes allowed when decompressing attachments.
@@ -8292,6 +8296,10 @@ impl_default!(ToriiMcp => {
             enabled: defaults::torii::mcp::ENABLED,
             max_request_bytes: defaults::torii::mcp::MAX_REQUEST_BYTES,
             max_tools_per_list: defaults::torii::mcp::MAX_TOOLS_PER_LIST,
+            max_inflight_dispatches: NonZeroUsize::new(
+                defaults::torii::mcp::MAX_INFLIGHT_DISPATCHES,
+            )
+            .expect("default MCP in-flight dispatch limit is non-zero"),
             profile: ToriiMcpProfile::parse(defaults::torii::mcp::PROFILE)
                 .expect("default MCP profile label is valid"),
             expose_operator_routes: defaults::torii::mcp::EXPOSE_OPERATOR_ROUTES,
@@ -8307,6 +8315,8 @@ impl From<user::ToriiMcp> for ToriiMcp {
             enabled: value.enabled,
             max_request_bytes: value.max_request_bytes.max(1),
             max_tools_per_list: value.max_tools_per_list.max(1),
+            max_inflight_dispatches: NonZeroUsize::new(value.max_inflight_dispatches.max(1))
+                .expect("clamped MCP in-flight dispatch limit is non-zero"),
             profile: ToriiMcpProfile::parse(&value.profile).unwrap_or_else(|| {
                 panic!(
                     "invalid torii.mcp.profile value `{}`. Expected read_only|writer|operator",

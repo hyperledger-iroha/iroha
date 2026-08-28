@@ -196,20 +196,13 @@ fn validate_validator_account_peer_id(
     peer_id: &str,
 ) -> Result<(), SoracloudManifestError> {
     validate_peer_id_field(manifest, peer_id)?;
-    let signatory = validator_account_id.try_signatory().ok_or_else(|| {
+    validator_account_id.try_signatory().ok_or_else(|| {
         invalid_field(
             manifest,
             "validator_account_id",
-            "account-derived peer identity requires a single-signatory validator account",
+            "validator identity requires a single-signatory account",
         )
     })?;
-    if PeerId::from(signatory.clone()).to_string() != peer_id {
-        return Err(invalid_field(
-            manifest,
-            "peer_id",
-            "peer must be derived from the validator account's single signatory",
-        ));
-    }
     Ok(())
 }
 fn invalid_field(
@@ -2379,6 +2372,31 @@ impl SoraServiceHandlerV1 {
         Ok(())
     }
 }
+/// One identity-bound operator-preseed store eligible for Inrou placement.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraInrouPlacementTargetV1 {
+    /// Validator whose identity-bound operator-preseed store contains every release artifact.
+    pub validator_account_id: AccountId,
+    /// Exact active peer identity from the authoritative validator record.
+    pub peer_id: String,
+}
+impl SoraInrouPlacementTargetV1 {
+    /// Validate the exact validator/peer identity pair.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the account is not single-signatory or the peer
+    /// identity is noncanonical. Ledger admission binds the pair to the authoritative validator
+    /// record.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_validator_account_peer_id(
+            "sora inrou placement target",
+            &self.validator_account_id,
+            &self.peer_id,
+        )
+    }
+}
 /// Canonical deployment manifest for a routable `Soracloud` service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2396,6 +2414,10 @@ pub struct SoraServiceManifestV1 {
     pub container: SoraContainerManifestRefV1,
     /// Desired replica count.
     pub replicas: NonZeroU16,
+    /// Signed allowlist of identity-bound operator-preseed stores eligible for Inrou placement.
+    /// Source manifests may leave this empty until release preparation; admitted Inrou bundles
+    /// require at least one distinct target per desired replica.
+    pub placement_targets: BTreeSet<SoraInrouPlacementTargetV1>,
     /// Optional route exposure metadata.
     #[norito(required)]
     pub route: Option<SoraRouteTargetV1>,
@@ -2450,6 +2472,29 @@ impl SoraServiceManifestV1 {
                 "rollout.canary_percent",
                 "must be within 0..=100",
             ));
+        }
+        if self.placement_targets.len() > usize::from(SORA_HTTP_SERVICE_REPLICA_MAX_V1) {
+            return Err(invalid_field(
+                "sora service manifest",
+                "placement_targets",
+                format!(
+                    "must contain at most {SORA_HTTP_SERVICE_REPLICA_MAX_V1} first-release targets"
+                ),
+            ));
+        }
+        let mut placement_validators = BTreeSet::new();
+        let mut placement_peers = BTreeSet::new();
+        for target in &self.placement_targets {
+            target.validate()?;
+            if !placement_validators.insert(target.validator_account_id.clone())
+                || !placement_peers.insert(target.peer_id.clone())
+            {
+                return Err(invalid_field(
+                    "sora service manifest",
+                    "placement_targets",
+                    "validator and peer identities must each be distinct",
+                ));
+            }
         }
         self.validate_route()?;
         self.economics.validate()?;

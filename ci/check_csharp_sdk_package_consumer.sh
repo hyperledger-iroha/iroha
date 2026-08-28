@@ -137,12 +137,14 @@ write_consumer_program() {
   local program_path="$1"
   local expected_query="$2"
   cat > "${program_path}" <<EOF
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Sccp;
 using Hyperledger.Iroha.SoraFs;
+using Hyperledger.Iroha.Torii;
 
 var seed = new byte[Ed25519Signer.PrivateKeySeedLength];
 for (var index = 0; index < seed.Length; index++)
@@ -179,6 +181,30 @@ if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 23u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {
     throw new InvalidOperationException("Packed ABI-23 SoraFS native bridge is unavailable");
+}
+
+var hijiriRequest = new ValidationFeeHijiriQuoteRequestV1(
+    "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+    2);
+var hijiriRequestNorito = ValidationFeeHijiriQuoteNative.EncodeRequestV1(hijiriRequest);
+if (ValidationFeeHijiriQuoteNative.RequiredBridgeAbiVersion != 23u
+    || hijiriRequestNorito.Length == 0
+    || hijiriRequestNorito.Length > ValidationFeeHijiriQuoteRequestV1.MaximumRequestBytes)
+{
+    throw new InvalidOperationException("Packed ABI-23 Hijiri quote encoder is unavailable");
+}
+var malformedHijiriResponseRejected = false;
+try
+{
+    ValidationFeeHijiriQuoteNative.VerifyResponseV1(new byte[] { 0 }, hijiriRequestNorito);
+}
+catch (InvalidDataException)
+{
+    malformedHijiriResponseRejected = true;
+}
+if (!malformedHijiriResponseRejected)
+{
+    throw new InvalidOperationException("Packed ABI-23 Hijiri quote verifier did not fail closed");
 }
 
 Console.WriteLine("Hyperledger.Iroha.Sdk package consumer smoke passed");

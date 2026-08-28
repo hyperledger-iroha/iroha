@@ -171,6 +171,8 @@ class UrlConnectionTransportExecutorTest {
             val response = UrlConnectionTransportExecutor().execute(request).get()
 
             assertEquals(status, response.statusCode)
+            assertEquals(request.uri, response.finalUri)
+            assertEquals(false, response.redirected)
             serverThread.join(3_000)
             assertNull(redirectedRequest.get(), "redirect target must not receive a second request")
         }

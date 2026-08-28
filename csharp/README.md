@@ -2,6 +2,16 @@
 
 Preview `.NET 8` SDK for Hyperledger Iroha.
 
+`TairaTestnetProfile` exposes the public Torii origin, address discriminant,
+Digital Shekel, and XOR metadata without embedding runtime secrets. Create a
+client with the current deployment's genesis-derived network identity; the
+stable chain UUID is not a signing identity:
+
+```csharp
+var networkId = NetworkId.Parse(configuredNetworkIdLiteral);
+using var torii = TairaTestnetProfile.CreateClient(networkId);
+```
+
 ## Scope
 
 This initial slice provides the foundation needed for a usable managed SDK:
@@ -43,6 +53,17 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - a `LedgerClient` plus `TransactionBuilder` that can build, sign, and submit canonical asset/domain/asset-definition/NFT transfer transactions, asset mint/burn transactions, `SetAssetKeyValue`, `RemoveAssetKeyValue`, `SetDomainKeyValue`, `RemoveDomainKeyValue`, `SetAccountKeyValue`, `RemoveAccountKeyValue`, `SetAssetDefinitionKeyValue`, `RemoveAssetDefinitionKeyValue`, `SetNftKeyValue`, `RemoveNftKeyValue`, `SetTriggerKeyValue`, `RemoveTriggerKeyValue`, `MintTriggerRepetitions`, `BurnTriggerRepetitions`, and `ExecuteTrigger` transactions with deterministic hashes and pipeline-status polling
 - managed transaction builders and Norito encoders validate exact chain/account/asset/domain/NFT/trigger/metadata/numeric/hash boundary fields before signing, including canonical I105 transaction authorities and account-bearing instruction fields, noncanonical numeric aliases such as signed positives, exponent notation, missing integer/fraction digits, leading integer zeros, trailing fractional zeros, negative values, scale overflow, and 512-bit mantissa overflow; asset transfer/mint/burn inputs are stored as nominal `NumericV1.QuantityValue` instances and accept only canonical non-negative V1 quantity strings or the validated lossless type, transaction creation times must be positive Unix milliseconds, and trigger repetition mints/burns must be positive before signing; JSON metadata values remain free-form but are defensively snapshotted by transaction builders and JSON-bearing instruction records so later caller mutation cannot alter signed payloads, public transaction-builder instruction/metadata accessors return detached snapshots, and signed transaction/query envelopes defensively copy all exposed byte arrays while rejecting empty, mismatched, malformed encoded-body, or wrong-size direct constructor byte fields before callers submit or trust them
 - typed Torii runtime and account-query models for capabilities, ABI, account pages, explorer inventory, contract reads and writes, identifier and alias resolution, sponsored account-onboarding preparation, faucet preparation, multisig transaction proposals, UAID portfolios, and space-directory inventory. Sponsored onboarding is a closed plan → prepare → persist → submit protocol: the SDK verifies the pinned plan receipt, reset binding, exact signed transaction wire, fee intent, metadata, transaction signature, and server-authenticated V1 transcript before returning a persistable prepared envelope. A signed `ProofRequired` result is nonterminal: `ProveAccountOnboardingCurrentStateAsync` must re-authenticate it and POST one closed request to `/v1/accounts/onboarding/current-state`; the returned single-snapshot anchor classifies the alias as `Applied`, `AliasAbsent`, or `AliasConflict`. Faucet mutation follows the same one-envelope prepare/persist/submit rule after solving PoW. The submit APIs accept only the exact prepared envelopes; there are no direct registration, direct faucet-claim, or multisig-specific onboarding routes.
+- typed ABI-23 native-Norito Hijiri validation-fee quotes through
+  `PostValidationFeeHijiriQuoteAsync(...)`. The client signs the exact bounded
+  request only over HTTPS, accepts only one non-redirected HTTP 200
+  `application/x-norito` response, requires every response to be private and
+  `no-store`, rejects encoded, oversized, noncanonically framed, or
+  length-mismatched bodies and success rejection headers, bounds error bodies,
+  and returns the projection only after native canonical decoding and exact
+  request, height, hash, and aggregate-Q16 validation. The assurance is an
+  authenticated same-snapshot evaluation rather than an independent state
+  witness, so transaction admission remains authoritative for stale policy or
+  Hijiri bindings
 - direct generic and contract-call multisig response DTO construction rejects
   false `ok`, malformed resolved account ids, proposal/instruction hashes,
   transaction hashes, creation times, and signing-message base64 before callers
@@ -214,6 +235,10 @@ sends the nonce-bearing body once without redirects or retries.
   trap/message text to be present and non-null before exact validation runs;
   nullable returned contract addresses and call entrypoints remain optional but
   exact when present
+- `CallContractAsync` accepts a contract-call receipt only when
+  `payload_digest_hex` is the exact lowercase BLAKE3-256 digest of the
+  canonical UTF-8 JSON request payload; an omitted payload hashes the empty
+  byte sequence, and a mismatch fails closed
 - raw VPN profile, quote, session, receipt, and receipt-list DTO deserialization
   requires operational timing, MTU, fee/grace, flow-label, and padding fields to
   be present instead of defaulting absent wire fields to trusted zero values
@@ -461,6 +486,11 @@ supported wallet/prover implementation, snapshot the bytes, and bind
 artifact installation, and device-key handling remain outside this SDK. The
 transport accepts at most 512 KiB for top-up and 48 MiB for redemption, matching
 Torii's route-specific request limits.
+Kagemusha command submission uses `ToriiClient`'s internally managed one-shot,
+no-redirect transport. A caller-injected `HttpClient` remains valid for the
+read-only routes but is rejected before a signed command body is dispatched,
+because the SDK cannot inspect an arbitrary handler chain for redirects or
+automatic retries.
 
 Each request constructor validates the route-specific Norito schema hash,
 version, compression, CRC64, compact layout flag, non-empty payload, and exactly
@@ -998,9 +1028,9 @@ assets:
 
 Build each library on a runner whose Rust host exactly matches its target. Each
 runner must record and reverify the copied release library with
-`scripts/check_native_sdk_abi22_artifact.py --sdk csharp`. Merge the five
+`scripts/check_native_sdk_abi23_artifact.py --sdk csharp`. Merge the five
 uploads into an input root containing exactly
-`<target>/<library>` and `<target>/native-sdk-abi22.json`, then assemble the
+`<target>/<library>` and `<target>/native-sdk-abi23.json`, then assemble the
 pack tree:
 
 ```bash

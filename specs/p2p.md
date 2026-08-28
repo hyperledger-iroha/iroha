@@ -211,6 +211,10 @@ p2p_scion_outbound_total 0
   - High: `Consensus`, `Control` (biased priority)
   - Low: `BlockSync`, `TxGossip`, `PeerGossip`, `Health`, `Other` (fair scheduling)
 - Message payload types implement `iroha_p2p::network::message::ClassifyTopic` to supply their topic. `iroha_core::NetworkMessage` provides the mapping for core messages.
+- Inbound and forwarded egress scheduling derive their lanes from that semantic
+  topic. A remote peer's signed `Priority` field remains part of
+  relay-envelope integrity, but cannot promote low-cost gossip into a protected
+  high-priority queue at either hop.
 - A small fairness budget guarantees Low topics make progress during sustained High traffic.
 
 ### Proxy Support (HTTP CONNECT / SOCKS5)
@@ -228,6 +232,10 @@ p2p_scion_outbound_total 0
   - SOCKS5 `CONNECT` for `socks5://...` / `socks5h://...`
 - Notes:
   - Basic authentication is supported via `user:pass@...` in the proxy URL.
+  - HTTP CONNECT authorities are constructed from the typed socket address.
+    Hostnames must be ASCII DNS names with valid LDH labels; malformed names
+    are rejected before credentials or any other bytes are written to the
+    proxy.
   - Exemptions are matched as simple host suffixes (e.g., `.example.com`, `localhost`) when `p2p_proxy_required=false`.
   - Disabling `p2p_proxy_tls_verify` may expose proxy credentials (and proxy traffic metadata) to MITM on the proxy hop.
   - Proxies apply only to the mandatory TLS-over-TCP dial. QUIC (UDP) bypasses the proxy; set `quic_enabled=false` and `p2p_proxy_required=true` (with no `p2p_no_proxy` exemptions) if you must force all outbound P2P traffic through a proxy.
@@ -249,6 +257,26 @@ peer's semantic origin. Unsigned relay envelopes are not accepted. TTL is
 deliberately hop-local rather than cryptographically monotonic: the shipped
 forwarder only decrements it, while a Byzantine relay can still replay a valid
 envelope or replace its TTL without changing any signed semantic field.
+The signed priority remains wire-integrity metadata, not local queue authority;
+ingress and forwarded-egress scheduling derive priority from the authenticated
+payload topic.
+Every receiver clamps that mutable TTL to its own configured `relay_ttl` before
+delivery/forwarding decisions. A hub address learned from topology gossip is a
+dial candidate, not relay authority: a spoke or assist node grants hub
+authority only after its own exact address-and-PeerId dial authenticates a peer
+advertising the Hub role. That proof remains pinned until local configuration or
+the peer ACL revokes it, and its exact outbound attempt is not suppressed by an
+unproven inbound connection for the same identity. Assist and Spoke nodes reserve
+one slot below `max_total_connections` while no authenticated hub or exact hub
+dial occupies it. Ordinary inbound and outbound connections cannot spend that
+slot; only a current address-snapshot entry whose PeerId and address match a
+configured hub candidate may do so, and the physical hard cap is never exceeded.
+For Assist mode, operators must size `max_total_connections` for the direct
+protected-source topology plus the hub. An invalid origin signature or a
+mismatch between the signed origin and the authenticated direct sender rejects
+and quarantines that exact connection tenure until queued deliveries drain. A
+violation without an exact connection tenure is dropped and cannot evict a
+replacement session by PeerId alone.
 
 - Knobs (`[network]`):
   - `relay_mode` (string; `disabled` | `hub` | `spoke` | `assist`)
@@ -412,6 +440,30 @@ trust_min_score = -20              # drop trust gossip at or below this score
 - Trusted peers configured locally remain in the P2P topology even if they are not in the
   world-state topology (e.g., observers). They still receive gossip and block sync but do not
   change the consensus roster.
+- Peer-address gossip is accepted only from a current topology member or a
+  locally configured peer; runtime trust promotion does not create metadata
+  authority. Address votes are narrower: only active validators contribute,
+  the complete roster must have exact `3f + 1` geometry (including the local
+  node exactly when it is an active validator),
+  and a uniquely top-ranked mapping backed by at least `f + 1` distinct
+  active-validator reports is required before a non-configured mapping reaches
+  the dialer. Conflicting top-count mappings fail closed.
+  Honest nodes advertise only their operator-provided startup mappings, never a
+  connected peer's self-asserted handshake address, so one Byzantine peer
+  cannot manufacture independent echo endorsements. Startup mappings retain
+  precedence over all gossip. Before the first committed block, the configured
+  validator roster is authoritative. After replay and after every applied block,
+  a supervised daemon task publishes the exact committed roster to the gossiper;
+  a lagged event receiver reconciles directly from the latest committed state,
+  so removed validators lose address-vote authority without a restart.
+  A new or rotated non-startup mapping cannot bootstrap from its target's
+  handshake claim; at least `f + 1` active validators must be configured with
+  the identical mapping and observe that peer online.
+- Transport capability metadata is self-authoritative only: a gossiped
+  capability entry is accepted only when its subject is the authenticated
+  sender. Third-party capability hints cannot force preferred-transport dial
+  attempts for another peer; directly observed signed handshake capabilities
+  remain available for reconnect scheduling.
 - Trust gossip capability: peers advertise `trust_gossip` during the handshake. When a peer sets
   `trust_gossip=false`, it will neither send nor accept trust gossip frames, but regular peer-address
   gossip continues unaffected. The default is `true`, and public (NPoS) deployments should leave it on
@@ -509,6 +561,7 @@ admission API.
 - Best-effort datagrams: when `[network].quic_datagrams_enabled = true` (default), small best-effort topics (`TxGossip`, `PeerGossip`, `TrustGossip`, `Health`) may be sent over QUIC DATAGRAM instead of streams. This avoids retransmission/head-of-line blocking for "green" traffic and is safe to drop. Reliable topics remain stream-only.
   - `[network].quic_datagram_max_payload_bytes` (default: 1200) caps the QUIC DATAGRAM payload size conservatively to avoid fragmentation.
   - `[network].quic_datagram_receive_buffer_bytes` / `[network].quic_datagram_send_buffer_bytes` control the QUIC DATAGRAM buffers **per active QUIC connection** (default: 1 MiB each; both must be non-zero to enable the extension). Their process-level memory term is `max_total_connections × (receive + send)`, in addition to the bounded actor, connected-stream, deferred-frame, and subscriber owners; they are not aggregate endpoint-wide caps.
+  - Production P2P and the feature-gated streaming helper drain received DATAGRAMs eagerly before application authentication and close on empty or oversized frames. Production P2P admits authenticated frames through a 256-entry queue charged to the existing process-wide low-priority byte budget. Quinn's dependency-owned queue does not yet charge a fixed amount per entry before an eager pump receives its first poll; the remaining upstream accounting task is tracked in `roadmap.md`.
 
 ### Mandatory TLS-over-TCP
 

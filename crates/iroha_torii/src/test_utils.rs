@@ -887,6 +887,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             attachments_max_bytes: 4 * 1024 * 1024,
             attachments_per_tenant_max_count: defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
             attachments_per_tenant_max_bytes: defaults::torii::ATTACHMENTS_PER_TENANT_MAX_BYTES,
+            attachments_global_max_count: defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT,
+            attachments_global_max_bytes: defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES,
             attachments_allowed_mime_types: defaults::torii::attachments_allowed_mime_types(),
             attachments_max_expanded_bytes: defaults::torii::ATTACHMENTS_MAX_EXPANDED_BYTES,
             attachments_max_archive_depth: defaults::torii::ATTACHMENTS_MAX_ARCHIVE_DEPTH,

@@ -1052,7 +1052,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
-            "check_native_sdk_abi22_artifact.py verify",
+            "check_native_sdk_abi23_artifact.py verify",
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",

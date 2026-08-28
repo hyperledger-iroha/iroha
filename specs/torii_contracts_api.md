@@ -24,6 +24,17 @@ the standard transaction pipeline.
   - Invoke or read an already registered contract by canonical address or active
     alias.
 
+`POST /v1/contracts/call` returns an unsigned transaction and is therefore not
+a signing oracle. Before exposing or signing its bytes, a client must decode the
+canonical payload and compare its exact network, authority, resolved address,
+expected code hash, entrypoint, canonical argument record, final merged
+metadata, response-enriched fee, creation time, TTL, ordinary admission mode,
+absent nonce, and absent attachments against caller-trusted state. The signing
+message must equal `HashOf(transaction_payload)`. Executable and metadata intent
+must come from a verified local artifact/schema and authenticated deployment
+binding, not from the response being validated. Clients fail closed when that
+off-wire intent or the exact local network identity is unavailable.
+
 The retired `/v1/contracts/deploy`, `/v1/contracts/deploy-bundle`, and
 `/v1/contracts/deploy-bundles/{bundle_digest}` routes are not part of the
 first-release API.

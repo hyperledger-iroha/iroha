@@ -568,7 +568,7 @@ mod tests {
 
         let source = include_str!("validation_fee_api.rs");
         let start = source
-            .find("pub(crate) async fn handler_hijiri_quote")
+            .rfind("pub(crate) async fn handler_hijiri_quote")
             .expect("Hijiri quote handler");
         let implementation = &source[start..];
         let end = implementation
@@ -580,10 +580,22 @@ mod tests {
         assert!(!implementation.contains("effective_entry_at_height(evaluated_state_height)"));
         assert!(implementation.contains("policy_entry.policy.network_id"));
         assert!(implementation.contains("*app.state.network_id_ref()"));
-        assert!(implementation.contains("request.account_id != verified.account"));
+        assert!(implementation.contains("is_live_multisig_signatory_in_world"));
         assert!(implementation.contains("validation_fee_hijiri_quote_account_mismatch"));
+        assert!(implementation.contains("let state_view = app.state.view()"));
+        assert!(implementation.contains("state_view.world()"));
         assert!(implementation.contains("account-risk parameter changed its reserved identity"));
         assert!(!implementation.contains(".flatten()"));
+        let authorization = implementation
+            .find("if !is_authorized")
+            .expect("member-aware quote authorization");
+        let risk_lookup = implementation
+            .find("let account_risk_parameter_id")
+            .expect("account-risk lookup");
+        assert!(
+            authorization < risk_lookup,
+            "cross-account authorization must precede account-risk key derivation and lookup"
+        );
     }
 }
 fn registry_at_height(
@@ -624,15 +636,31 @@ pub(crate) async fn handler_hijiri_quote(
     )
     .await?;
     request.validate().map_err(bad_request)?;
-    if request.account_id != verified.account {
+    let state_view = app.state.view();
+    let is_authorized = request.account_id == verified.account
+        || match crate::routing::is_live_multisig_signatory_in_world(
+            state_view.world(),
+            &request.account_id,
+            &verified.account,
+        ) {
+            Ok(is_signatory) => is_signatory,
+            Err(error) => {
+                iroha_logger::warn!(
+                    requested_account = %request.account_id,
+                    authenticated_account = %verified.account,
+                    ?error,
+                    "cross-account Hijiri quote authorization could not validate a live multisig controller"
+                );
+                false
+            }
+        };
+    if !is_authorized {
         return Err(Error::AppForbidden {
             code: "validation_fee_hijiri_quote_account_mismatch",
-            message: "authenticated account must equal the requested Hijiri quote account"
-                .to_owned(),
+            message: "authenticated account must equal the requested Hijiri quote account or be a direct signatory of that live multisig controller".to_owned(),
         });
     }
 
-    let state_view = app.state.view();
     let evaluated_state_height = u64::try_from(state_view.height())
         .map_err(|_| inconsistent("ledger height does not fit the public Hijiri fee quote"))?;
     let quoted_execution_height =

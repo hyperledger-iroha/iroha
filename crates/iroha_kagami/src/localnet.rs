@@ -35,6 +35,7 @@ use iroha_data_model::{
             ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
             EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
         },
+        space_directory::PublishSpaceDirectoryManifest,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         verifying_keys,
     },
@@ -766,6 +767,9 @@ fn localnet_fee_sponsor_revision(
     program_id: FeeSponsorProgramId,
     fee_asset_id: AssetDefinitionId,
 ) -> FeeSponsorProgramRevision {
+    let publish_space_directory_manifest_wire_id = iroha_data_model::isi::registry::default()
+        .wire_id(std::any::type_name::<PublishSpaceDirectoryManifest>())
+        .expect("space-directory publication must have a registered V1 wire ID");
     let native = |wire_id: &str| {
         FeeSponsorRuleSelector::NativeInstruction(FeeSponsorNativeInstructionSelector {
             wire_id: wire_id.to_owned(),
@@ -786,9 +790,7 @@ fn localnet_fee_sponsor_revision(
                 native(GrantBox::WIRE_ID),
                 native("iroha.alias.ensure"),
                 native("nexus::EnrollFeeSponsorBeneficiary"),
-                native(std::any::type_name::<
-                    iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
-                >()),
+                native(publish_space_directory_manifest_wire_id),
                 native("iroha.account.alias.primary.compare_and_set"),
             ],
         }],
@@ -1327,8 +1329,6 @@ fn generate_localnet_inner<T: Write>(
         &genesis_account_id,
         &client_identity.account_id,
     );
-    genesis =
-        append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
     genesis = append_peer_pop(genesis, &peers);
     if npos_bootstrap {
         let gas_account_id = gas_account_id
@@ -1369,6 +1369,8 @@ fn generate_localnet_inner<T: Write>(
         &alias_setup_request,
         append_alias_setup_to_current_transaction,
     );
+    genesis =
+        append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
     let alias_setup_intent_path =
         write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
     let genesis_json_path = out_dir.join("genesis.json");
@@ -2804,6 +2806,10 @@ fn render_peer_config(
             &iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
             Some(chain_discriminant),
         );
+        let sorafs_pin_fee_treasury_account = account_id_runtime_literal(
+            &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id(),
+            Some(chain_discriminant),
+        );
         governance.insert(
             "citizenship_escrow_account".into(),
             Value::String(citizenship_escrow_account),
@@ -2823,6 +2829,10 @@ fn render_peer_config(
         governance.insert(
             "viral_escrow_account".into(),
             Value::String(slash_receiver_account),
+        );
+        governance.insert(
+            "sorafs_pin_fee_treasury_account".into(),
+            Value::String(sorafs_pin_fee_treasury_account),
         );
         let telemetry_submitters =
             iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters()
@@ -3004,6 +3014,14 @@ fn render_peer_config(
     let mut soranet_handshake = Table::new();
     soranet_handshake.insert("pow".into(), Value::Table(soranet_pow));
     network.insert("soranet_handshake".into(), Value::Table(soranet_handshake));
+    // The disabled VPN profile still parses its operator account. Pin it to the
+    // generated localnet authority so strict V1 address parsing uses this chain's prefix.
+    let mut soranet_vpn = Table::new();
+    soranet_vpn.insert(
+        "operator_account_id".into(),
+        Value::String(localnet_operator_account.clone()),
+    );
+    network.insert("soranet_vpn".into(), Value::Table(soranet_vpn));
     if let Some(overrides) = tx_gossip_overrides {
         network.insert(
             "transaction_gossip_period_ms".into(),
@@ -3726,8 +3744,8 @@ fn append_localnet_onboarding_permissions(
             Some((grant.destination().clone(), grant.object().clone()))
         })
         .collect::<BTreeSet<_>>();
-    // The preceding contract grants and these onboarding grants all target the universal
-    // execution world, so keep them in one routing and staging boundary.
+    // Alias setup has already materialized the target domain in this transaction. Keep the
+    // dependent onboarding grants after those intents so strict domain resolution succeeds.
     let mut builder = genesis.into_builder();
     for permission in permissions {
         if existing.insert((onboarding_account_id.clone(), permission.clone())) {
@@ -4572,7 +4590,7 @@ fn write_scripts(
         client_account_literal,
         fee_asset_definition_id,
     )?;
-    write_stop_script(&stop)?;
+    write_stop_script(&stop, peers)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -4604,6 +4622,36 @@ fn write_start_script(
     writeln!(start_file, "umask 077")?;
     writeln!(start_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
     writeln!(start_file, "cd \"$DIR\"")?;
+    writeln!(start_file, "PEER_COUNT={peers}")?;
+    writeln!(
+        start_file,
+        "SELECTED_PEERS=\"$(seq 0 \"$((PEER_COUNT - 1))\")\""
+    )?;
+    writeln!(start_file, "if [ \"$#\" -ne 0 ]; then")?;
+    writeln!(
+        start_file,
+        "  if [ \"$#\" -ne 2 ] || [ \"$1\" != \"--peer-index\" ]; then"
+    )?;
+    writeln!(
+        start_file,
+        "    echo \"usage: $0 [--peer-index INDEX]\" >&2"
+    )?;
+    writeln!(start_file, "    exit 2")?;
+    writeln!(start_file, "  fi")?;
+    writeln!(
+        start_file,
+        "  if [[ ! $2 =~ ^(0|[1-9][0-9]{{0,4}})$ ]]; then"
+    )?;
+    writeln!(start_file, "    echo \"invalid peer index: $2\" >&2")?;
+    writeln!(start_file, "    exit 2")?;
+    writeln!(start_file, "  fi")?;
+    writeln!(start_file, "  peer_index=$((10#$2))")?;
+    writeln!(start_file, "  if (( peer_index >= PEER_COUNT )); then")?;
+    writeln!(start_file, "    echo \"invalid peer index: $2\" >&2")?;
+    writeln!(start_file, "    exit 2")?;
+    writeln!(start_file, "  fi")?;
+    writeln!(start_file, "  SELECTED_PEERS=\"$peer_index\"")?;
+    writeln!(start_file, "fi")?;
     writeln!(start_file, "pid_is_running() {{")?;
     writeln!(start_file, "  pid=\"$1\"")?;
     writeln!(
@@ -4699,7 +4747,7 @@ fn write_start_script(
         start_file,
         "FAUCET_RESERVE_RETRIES=\"${{IROHA_LOCALNET_FAUCET_RESERVE_RETRIES:-30}}\""
     )?;
-    writeln!(start_file, "for i in $(seq 0 {}); do", peers - 1)?;
+    writeln!(start_file, "for i in $SELECTED_PEERS; do")?;
     writeln!(
         start_file,
         "  SNAPSHOT_STORE_DIR=\"$DIR/state/peer${{i}}/snapshot\""
@@ -4920,12 +4968,39 @@ fn write_start_script(
     writeln!(start_file, "ensure_faucet_reserve")?;
     Ok(start_file.flush()?)
 }
-fn write_stop_script(stop: &Path) -> Result<()> {
+fn write_stop_script(stop: &Path, peers: u16) -> Result<()> {
     let mut stop_file = BufWriter::new(File::create(stop)?);
     writeln!(stop_file, "#!/usr/bin/env bash")?;
     writeln!(stop_file, "set -euo pipefail")?;
     writeln!(stop_file, "umask 077")?;
     writeln!(stop_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
+    writeln!(stop_file, "PEER_COUNT={peers}")?;
+    writeln!(
+        stop_file,
+        "SELECTED_PEERS=\"$(seq 0 \"$((PEER_COUNT - 1))\")\""
+    )?;
+    writeln!(stop_file, "if [ \"$#\" -ne 0 ]; then")?;
+    writeln!(
+        stop_file,
+        "  if [ \"$#\" -ne 2 ] || [ \"$1\" != \"--peer-index\" ]; then"
+    )?;
+    writeln!(stop_file, "    echo \"usage: $0 [--peer-index INDEX]\" >&2")?;
+    writeln!(stop_file, "    exit 2")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(
+        stop_file,
+        "  if [[ ! $2 =~ ^(0|[1-9][0-9]{{0,4}})$ ]]; then"
+    )?;
+    writeln!(stop_file, "    echo \"invalid peer index: $2\" >&2")?;
+    writeln!(stop_file, "    exit 2")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  peer_index=$((10#$2))")?;
+    writeln!(stop_file, "  if (( peer_index >= PEER_COUNT )); then")?;
+    writeln!(stop_file, "    echo \"invalid peer index: $2\" >&2")?;
+    writeln!(stop_file, "    exit 2")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  SELECTED_PEERS=\"$peer_index\"")?;
+    writeln!(stop_file, "fi")?;
     writeln!(stop_file, "pid_matches_peer() {{")?;
     writeln!(stop_file, "  pid=\"$1\"")?;
     writeln!(stop_file, "  config=\"$2\"")?;
@@ -4957,7 +5032,8 @@ fn write_stop_script(stop: &Path) -> Result<()> {
     writeln!(stop_file, "  command -v ps >/dev/null 2>&1 || return 1")?;
     writeln!(stop_file, "  ps -p \"$pid\" -o pid= >/dev/null 2>&1")?;
     writeln!(stop_file, "}}")?;
-    writeln!(stop_file, "for pidfile in \"$DIR\"/peer*.pid; do")?;
+    writeln!(stop_file, "for i in $SELECTED_PEERS; do")?;
+    writeln!(stop_file, "  pidfile=\"$DIR/peer${{i}}.pid\"")?;
     writeln!(stop_file, "  [ -f \"$pidfile\" ] || continue")?;
     writeln!(
         stop_file,
@@ -5422,6 +5498,9 @@ mod tests {
             opts.base_p2p_port,
         )
         .expect("rebuild deterministic peer identities");
+        let operator_identity =
+            localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
+                .expect("rebuild deterministic operator identity");
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse generated Taira genesis");
         let peer_config_text = fs::read_to_string(temp.path().join("peer0.toml"))
@@ -5512,6 +5591,15 @@ mod tests {
             let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
                 .expect("read Taira peer config");
             let parsed = actual::Root::from_toml_source(source).expect("parse Taira peer config");
+            assert_eq!(
+                parsed.network.soranet_vpn.operator_account_id,
+                operator_identity.account_id
+            );
+            assert_eq!(
+                parsed.gov.sorafs_pin_fee_treasury_account,
+                iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id(
+                )
+            );
             let binding = parsed
                 .soracloud_runtime
                 .submission
@@ -6234,13 +6322,7 @@ mod tests {
         let setup_instructions = setup_transaction
             .instructions()
             .iter()
-            .map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<EnsureAlias>()
-                    .cloned()
-                    .expect("final transaction contains only EnsureAlias instructions")
-            })
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<EnsureAlias>().cloned())
             .collect::<Vec<_>>();
         assert_eq!(setup_instructions.len(), 3);
         assert!(matches!(
@@ -6255,6 +6337,26 @@ mod tests {
             &setup_instructions[2].intent,
             AliasIntentV1::AccountAlias(_)
         ));
+        let final_instructions = setup_transaction.instructions();
+        let last_alias_setup_index = final_instructions
+            .iter()
+            .rposition(|instruction| instruction.as_any().is::<EnsureAlias>())
+            .expect("final transaction contains alias setup");
+        assert!(
+            final_instructions[last_alias_setup_index + 1..]
+                .iter()
+                .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+                .filter_map(|grant| match grant {
+                    GrantBox::Permission(grant)
+                        if grant.destination() == &onboarding_identity.account_id =>
+                    {
+                        Some(grant)
+                    }
+                    _ => None,
+                })
+                .count()
+                >= 3
+        );
         let setup_intent_json =
             fs::read_to_string(temp.path().join(LOCALNET_ALIAS_SETUP_INTENT_FILE))
                 .expect("read secret-free setup intent");
@@ -8658,6 +8760,18 @@ mod tests {
             .revision()
             .validate()
             .expect("localnet sponsor revision must validate");
+        let publish_manifest_wire_id = iroha_data_model::isi::registry::default()
+            .wire_id(std::any::type_name::<PublishSpaceDirectoryManifest>())
+            .expect("space-directory publication must be registered");
+        assert!(staged[0].revision().rules.iter().any(|rule| {
+            rule.selectors.iter().any(|selector| {
+                matches!(
+                    selector,
+                    FeeSponsorRuleSelector::NativeInstruction(selector)
+                        if selector.wire_id == publish_manifest_wire_id
+                )
+            })
+        }));
         let enrollment = manifest
             .instructions()
             .filter_map(|instruction| {

@@ -60,7 +60,12 @@ public final class FakeHttpTransportExecutor implements HttpTransportExecutor {
     }
     return CompletableFuture.completedFuture(
         new TransportResponse(
-            response.statusCode(), response.body(), response.message(), response.headers()));
+            response.statusCode(),
+            response.body(),
+            response.message(),
+            response.headers(),
+            response.finalUri(),
+            response.redirected()));
   }
 
   private static TransportResponse poll(final ConcurrentLinkedQueue<TransportResponse> queue) {

@@ -1507,12 +1507,18 @@ struct ProductionTransportFixture {
 }
 impl ProductionTransportFixture {
     fn new() -> Self {
-        Self::new_with_local_validator(None)
+        Self::new_with_local_validator_and_queue_config(None, RuntimeQueueConfig::default())
     }
     fn new_validator() -> Self {
-        Self::new_with_local_validator(Some(0))
+        Self::new_with_local_validator_and_queue_config(Some(0), RuntimeQueueConfig::default())
     }
-    fn new_with_local_validator(local_validator: Option<wire::ValidatorIndex>) -> Self {
+    fn new_with_runtime_queue_config(queue_config: RuntimeQueueConfig) -> Self {
+        Self::new_with_local_validator_and_queue_config(None, queue_config)
+    }
+    fn new_with_local_validator_and_queue_config(
+        local_validator: Option<wire::ValidatorIndex>,
+        queue_config: RuntimeQueueConfig,
+    ) -> Self {
         let mut validator_keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -1623,7 +1629,7 @@ impl ProductionTransportFixture {
             startup_effects,
             started,
             Duration::from_secs(10),
-            RuntimeQueueConfig::default(),
+            queue_config,
             lifecycle_ordinals.clone(),
         )
         .expect("serialized production runtime");
@@ -1839,14 +1845,22 @@ impl ProductionTransportFixture {
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal))
     }
     fn signed_timeout_vote(&self, view: u64) -> wire::ConsensusMessageV2 {
+        self.signed_timeout_vote_from(view, 0)
+    }
+    fn signed_timeout_vote_from(
+        &self,
+        view: u64,
+        signer: wire::ValidatorIndex,
+    ) -> wire::ConsensusMessageV2 {
         let mut vote = wire::TimeoutVote {
             round: round(&self.context, view),
             highest_prepare_qc: None,
-            signer: 0,
+            signer,
             signature: Vec::new(),
         };
+        let signer_index = usize::try_from(signer).expect("small timeout-vote signer index");
         vote.signature = Signature::new(
-            self.validator_keys[0].private_key(),
+            self.validator_keys[signer_index].private_key(),
             &vote.signature_preimage(),
         )
         .payload()

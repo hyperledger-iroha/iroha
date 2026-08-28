@@ -975,6 +975,8 @@ fn taira_inrou_stage_cli_requires_mode_and_parses_explicit_upgrade() {
         "/tmp/inrou/service.json",
         "--bundle-file",
         "/tmp/inrou/bundle.bin",
+        "--sorafs-retention-epoch",
+        "2000000000",
         "--stage-dir",
         "/tmp/taira-inrou-stage-upgrade",
     ])
@@ -983,6 +985,7 @@ fn taira_inrou_stage_cli_requires_mode_and_parses_explicit_upgrade() {
         panic!("expected taira inrou-stage command");
     };
     assert_eq!(cmd.mode, crate::taira::InrouCanaryMode::Upgrade);
+    assert_eq!(cmd.sorafs_retention_epoch.get(), 2_000_000_000);
 
     let error = Args::try_parse_from([
         "iroha",
@@ -994,10 +997,30 @@ fn taira_inrou_stage_cli_requires_mode_and_parses_explicit_upgrade() {
         "/tmp/inrou/service.json",
         "--bundle-file",
         "/tmp/inrou/bundle.bin",
+        "--sorafs-retention-epoch",
+        "2000000000",
         "--stage-dir",
         "/tmp/taira-inrou-stage",
     ])
     .expect_err("Inrou stage must require an explicit mutation mode");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+
+    let error = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-stage",
+        "--mode",
+        "deploy",
+        "--container",
+        "/tmp/inrou/container.json",
+        "--service",
+        "/tmp/inrou/service.json",
+        "--bundle-file",
+        "/tmp/inrou/bundle.bin",
+        "--stage-dir",
+        "/tmp/taira-inrou-stage",
+    ])
+    .expect_err("Inrou stage must require an explicit SoraFS retention epoch");
     assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
 }
 #[test]
@@ -1113,11 +1136,20 @@ fn soracloud_offline_app_commands_allow_fallback_config() {
         "simulate",
         "--manifest",
         "app_manifest.json",
+        "--sorafs-retention-epoch",
+        "2000000000",
     ])
     .expect("app simulate should parse");
     assert!(simulate.command.allows_fallback_config());
-    let release = Args::try_parse_from(["iroha", "soracloud", "app", "release"])
-        .expect("app release should parse");
+    let release = Args::try_parse_from([
+        "iroha",
+        "soracloud",
+        "app",
+        "release",
+        "--sorafs-retention-epoch",
+        "2000000000",
+    ])
+    .expect("app release should parse");
     assert!(!release.command.allows_fallback_config());
 }
 #[test]
@@ -1166,6 +1198,30 @@ fn soracloud_service_model_hf_and_agent_parsers_are_namespaced() {
         "agent_a",
     ])
     .expect("top-level soracloud agent status should parse");
+}
+#[test]
+fn soracloud_workspace_mutation_requires_explicit_retention_identity() {
+    Args::try_parse_from([
+        "iroha",
+        "soracloud",
+        "service",
+        "deploy-workspace",
+        "--sorafs-retention-epoch",
+        "2000000000",
+        "--torii-url",
+        "http://127.0.0.1:8080",
+    ])
+    .expect("workspace deploy should parse one explicit retention identity");
+    let error = Args::try_parse_from([
+        "iroha",
+        "soracloud",
+        "service",
+        "upgrade-workspace",
+        "--torii-url",
+        "http://127.0.0.1:8080",
+    ])
+    .expect_err("workspace upgrade must not derive a retention identity from wall time");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
 }
 #[test]
 fn resolve_account_id_with_rejects_public_key_domain() {

@@ -40,6 +40,7 @@ const REQUIRED_OUTPUTS = [
   "sorafsOrderbookSubmission.d.ts",
   "smartContractDeploymentSubmit.js",
   "sumeragiTyped.js",
+  "tairaTestnetProfile.js",
   "toriiBrowserClient.js",
   "toriiClient.js",
   "toriiOptional.js",

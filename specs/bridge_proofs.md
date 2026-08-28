@@ -40,12 +40,16 @@ corridor profiles are:
 | `ethereum-mainnet` | 1 | EIP-155 chain id 1 |
 | `bsc-mainnet` | 2 | EIP-155 chain id 56 |
 | `tron-mainnet` | 5 | mainnet network magic `0x2b6653dc` |
+| `ton-mainnet` | 4 | global id `-239` and the canonical mainnet zero state |
 
 Domain 3 is the exact implemented Solana testnet runtime and SDK profile, but it
-is outside this production evidence corridor. Domain 4 and TON have no SCCP V1
-wire/runtime representation. The pinned release fixture and its evidence
-validators reject Solana and TON lane records, proofs, deployments, policies,
-and evidence rather than reporting them as supported-but-unready.
+is outside this production evidence corridor. Domain 4 is the mandatory TON
+mainnet profile, with a native masterchain source proof and BLS12-381 outbound
+proof path. TON testnet has an exact wire/runtime and SDK profile for schema and
+conformance testing, but cannot satisfy a production evidence row. Release
+validation therefore requires TON mainnet alongside Ethereum, BSC, and TRON,
+and allows neither Solana testnet nor TON testnet to substitute for a mainnet
+row.
 
 The closed network enum represents `sora-taira` as its sole SORA endpoint;
 `sora-nexus` has no SCCP V1 representation. Every value-moving governed V1
@@ -69,9 +73,9 @@ small-order and mixed-torsion points are rejected. A proof-authenticated
 Taira-to-external sender may be a canonical single-key or multisig `AccountId`,
 but every controller key must be Ed25519 or compressed secp256k1 in V1. Core
 checks the typed controller and exact discriminant-`369` spelling before moving
-assets into custody; the EVM/TVM contracts independently check the same
-AccountAddress tags, policy ordering, key admission, I105 round trip, and
-checksum before proof dispatch. Other Rust-supported controller algorithms are
+assets into custody; the EVM/TVM and TON destination contracts independently
+check the same AccountAddress tags, policy ordering, key admission, I105 round
+trip, and checksum before proof dispatch. Other Rust-supported controller algorithms are
 fail-closed for SCCP V1 so they cannot create an outbound lock that the
 destination route cannot finalize.
 
@@ -105,8 +109,20 @@ derivations:
 
 - `sccp_evm_destination_binding_hash_v1`;
 - `sccp_tron_destination_binding_hash_v1`;
-- `sccp_exact_evm_xor_route_config_hash_v1`; and
-- `sccp_exact_tron_xor_route_config_hash_v1`.
+- `sccp_ton_destination_binding_hash_v1`;
+- `sccp_exact_evm_xor_route_config_hash_v1`;
+- `sccp_exact_tron_xor_route_config_hash_v1`; and
+- `sccp_exact_ton_xor_route_config_hash_v1`.
+
+For TON, the exact bidirectional bridge contract is both the native source
+emitter and the destination route: its source-emitter address and code hash
+must equal the destination route address and code hash. The Jetton master is a
+separate contract role. The primitive TON destination-binding and route-config
+preimages intentionally omit StateInit-derived addresses and initial-data
+roots, because the data cells themselves store those commitments and including
+them would require a cryptographic fixed point. The validated full governed
+deployment stored in the registry and its signed destination readback bind both
+addresses and both initial-data roots after StateInit derivation.
 
 Registration starts in `Staged`. `Bidirectional` is the only state that permits
 new SORA-origin locks. `InboundOnly` drains already-issued external claims
@@ -127,9 +143,10 @@ known hash paired with forged height/backend material fails closed.
 
 Anchor intervals use an authenticated consensus-progress coordinate, not a
 generic event block number: Ethereum uses the fully verified finalized beacon
-slot, while BSC and TRON use the fully verified finalized native block height.
+slot, BSC and TRON use the fully verified finalized native block height, and
+TON uses the finalized masterchain sequence number.
 An old anchor remains valid through its successor checkpoint inclusively (a
-one-height overlap needed by BSC/TRON boundary proofs) and never beyond it; the
+one-height overlap needed by native boundary proofs) and never beyond it; the
 last current anchor is open-ended. A terminal route carries a mandatory
 `inbound_finality_cutoff` whose `max_anchor_interval_height` must equal the
 referenced historical anchor's successor checkpoint. Governance must therefore
@@ -185,6 +202,35 @@ and exposes it through `routeRevision()`. The canonical `Transfer` payload
 encodes the revision immediately after the nonce. Its route-config asset tuple
 is exactly `(keccak256(assetKey), keccak256(routeId), uint32 revision,
 amountMultiplier)`.
+
+For TON, the governed deployment contains raw workchain/account addresses for
+the Jetton master and bidirectional SCCP route; representation hashes for the
+Jetton-master, Jetton-wallet, route, and linked verifier code cells; the exact
+initial Jetton-master and route data-cell hashes; the complete BLS12-381
+Groth16 key, circuit commitment, and proof-profile commitment; the mandatory
+outbound proof policy; and the fixed amount multiplier. Both contracts are
+first-release basechain contracts. The source emitter must select the same
+route address, route code hash, and route-configuration hash as this deployment;
+a distinct source-only contract is invalid.
+
+TON deployment evidence carries complete, single-root ordinary code and data
+BOCs. `ton_state_init_address_hash_v1` constructs the canonical StateInit with
+absent `split_depth` and `special`, present code and data references, and an
+empty library (`00110` in TL-B field order). The resulting representation hash
+must equal the raw account id at workchain `0` for both the Jetton master and
+the route. The pinned attestor's semantic readback must report Jetton storage
+version 1, zero supply, and empty mint/burn replay dictionaries, plus route
+storage version 1, zero refund sequence, and empty nonce, replay, and pending
+dictionaries.
+
+The verified TON destination call uses one exact typed 14-cell
+`SccpFinalizeFromTaira` body BOC. Its root contains the opcode, query id, V1
+schema, message id, and statement hash and references four linked public-signal
+cells split `3/3/3/2`, one proof root with fixed compressed `A/B/C` cells of
+`48/96/48` bytes, and one payload root with fixed
+`50/100/100/remainder` cells. Canonical transfer payloads are therefore bounded
+to 50 through 374 bytes, and generic snake-cell encodings are not accepted by
+the contract boundary.
 
 The TRON source route uses the exact
 `transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI. Successful execution
@@ -265,12 +311,20 @@ First-release availability is explicit:
 | Ethereum mainnet | native proof verifier available |
 | BSC mainnet | native proof verifier available |
 | TRON mainnet | native proof verifier available |
+| TON mainnet | native masterchain and shard proof verifier available |
 
-Solana entries are excluded from this three-profile production evidence table
-and pinned fixture; TON inputs fail profile admission before proof
-verification. Neither can be inserted into the release fixture by observer
-assertions, environment variables, or release flags. This fixture boundary
-does not remove the separately implemented Solana testnet runtime surface.
+Solana testnet and TON testnet are excluded from this four-profile production
+evidence table. Neither can replace a required mainnet row through observer
+assertions, environment variables, or release flags. This production boundary
+does not remove their separately implemented runtime/schema surfaces.
+
+The TON verifier starts from the governed zero state, checkpoint, post-state
+root, and validator configuration. It authenticates a consecutive bounded
+masterchain continuation using the exact ordinary-catchain or Simplex Ed25519
+transcript, follows the finalized masterchain `ShardHashes` commitment to the
+selected shard, proves the transaction's pre-state account code and route
+configuration, and opens the exact outbound message. A shard post-state alone
+is insufficient because another transaction could restore governed state.
 
 Cryptographic finality is mandatory in every SCCP build. The crate has no
 consensus-changing BLS feature switch: it always compiles the same
@@ -279,6 +333,12 @@ paths for Taira and BSC finality. Structural parsers and proof-controlled
 self-consistency helpers are diagnostics, not trust anchors. A validator binary
 whose build metadata enables test-fixture code is not a production release
 validator.
+
+TON native admission has the same deterministic reservation boundary. Its
+length-only work estimator charges the bounded BOCs, at most 64 masterchain
+continuations, supplied Ed25519 signatures, and the conservative validator-key
+upper bound before parsing cells, hashing, validating keys, or verifying
+signatures.
 
 Native continuations are canonical shortest prefixes. A BSC proof may select a
 target only within the first full 1,000-block Parlia epoch after its governed
@@ -316,13 +376,16 @@ default first-release transaction/block limits are:
 |---|---:|---:|
 | proofs | 1 | 4 |
 | canonical proof bytes | 8 MiB | 32 MiB |
-| BSC/TRON continuation headers | 1,004 | 4,016 |
+| native continuation headers/blocks | 1,004 | 4,016 |
 | Ethereum light-client updates | 128 | 512 |
 | framed native-finality bytes | 8 MiB | 32 MiB |
 | secp256k1 recoveries | 1,005 | 4,020 |
 | BLS aggregate checks | 1,004 | 4,016 |
 | BLS key/contribution work items | 131,713 | 526,852 |
+| Ed25519 signature checks | 65,536 | 262,144 |
+| TON Ed25519 validator-key checks | 198,656 | 794,624 |
 | BN254 pairing-product checks | 1 | 4 |
+| BLS12-381 pairing-product checks | 1 | 4 |
 
 One proof may contain at most 8 MiB of canonical bytes. All limits are nonzero,
 transaction limits cannot exceed block limits, and they are included in the ZK
@@ -339,7 +402,7 @@ shared validator configuration, but every validator must use the same values.
 Core preflights proof count and bytes before any proof-controlled canonical
 decode. It then derives hardware-independent work from bounded framing and
 atomically registers the complete transaction/block delta before signature
-recovery, BLS verification, or BN254 pairing. An abandoned or rejected
+recovery, BLS verification, BN254 pairing, or BLS12-381 pairing. An abandoned or rejected
 transaction does not leak staged work into the block. Destination admission
 conservatively reserves two passes over the maximum 31-validator Taira
 roster, covering both key validation and all-signer PoP/aggregation. Ethereum
@@ -348,6 +411,11 @@ committee key validations and 512 possible signer contributions. BSC reserves
 all framed headers, the anchor seal and continuation recoveries, every possible
 attestation, and all active/pending/epoch roster validation passes. These are
 upper bounds, so different peer hardware cannot change admission results.
+TON source admission reserves its Ed25519 signature and key-validation work
+before BOC parsing. TON destination admission reserves one BLS12-381 Groth16
+pairing-product check, while EVM, BSC, TRON, and the non-production Solana
+profile reserve one BN254 check. The backend is a closed enum, so a caller
+cannot select an unmetered curve.
 
 ## Outbound commitment, retention, and discovery
 
@@ -364,14 +432,21 @@ canonical SCCP payload archive in commitment-index order. It validates every
 payload, reconstructs the header commitment root, and rejects a conflicting
 rewrite. The same version-3 record may contain the compact merge reference
 extracted from the live canonical body for local historical sidecar service;
-that field is not part of SCCP proof authority. Finality-proof, message-bundle, proof-request, and recent-message
-reconstruction use this root-authenticated archive. They never require the
+that field is not part of SCCP proof authority. Finality-proof,
+message-bundle, proof-request, and recent-message reconstruction use this
+root-authenticated archive. They never require the
 historical block body and never treat a mutable WSV payload copy as proof
 material. Restart performs the same header, canonical-hash, archive, and root
 checks before serving history. Canonical version-2 records remain readable;
 because they predate the optional merge field, Kura upgrades one only from the
 exact still-present body before eviction and otherwise preserves its absent
 witness without weakening SCCP proof authority.
+
+`GET /v1/sccp/proof-requests/{message_id}` returns the concrete governed
+request, not an opaque generic proof job: an EVM/BSC/TRON/Solana route returns
+the canonical BN254 request and a TON route returns the canonical BLS12-381
+request. `SccpDestinationProofRequestV1` is the internal closed classifier; the
+wire response is the selected concrete request with its own exact schema.
 
 Every V1 proof request exposes the governed policy as four required fields:
 `semantic_proof_profile`, `semantic_proof_profile_hash`,
@@ -422,9 +497,10 @@ the caller. Its payload owns a role-preserving `BridgeProofBinding`:
 - `NativeProtocol(BridgeNativeProtocolProofV1)` carries a closed native backend,
   the exact historical SCCP route-configuration hash, and one canonical typed
   native envelope;
-- `SccpDestination(BridgeSccpDestinationProofV1)` carries a closed EVM/TVM
-  Groth16 backend, the exact historical route-configuration hash, and one
-  canonical destination artifact; and
+- `SccpDestination(BridgeSccpDestinationProofV1)` is the only SCCP destination
+  submit envelope. It carries a closed EVM/TVM/Solana BN254 or TON BLS12-381
+  backend, the exact historical route-configuration hash, and one canonical
+  curve-specific destination artifact; and
 - generic `Ics` and `TransparentZk` payloads carry a distinct
   `VerifierManifest` binding only.
 
@@ -508,7 +584,9 @@ trailing/oversized Norito envelope fails before model parsing.
 Every SDK preflights SCCP binary values as canonical, uncompressed NRT0 frames
 with a nonempty payload, valid CRC64, the exact endpoint-specific schema hash,
 and exactly zero header-padding bytes. Destination submissions are bound to
-`iroha_sccp::SccpGroth16Bn254ProofArtifactV1`; native submissions are bound to
+the closed `iroha_data_model::bridge::BridgeSccpDestinationProofV1` envelope;
+its backend selects either `iroha_sccp::SccpGroth16Bn254ProofArtifactV1` or
+`iroha_sccp::SccpTonGroth16Bls12381ProofArtifactV1`. Native submissions are bound to
 `iroha_sccp::native_admission::SccpNativeInboundMessageProofV1`. Typed registry,
 message-bundle, and proof-request reads likewise bind their own exact schemas.
 Cross-type replay, one-, eight-, and 64-byte padded alternatives, nonzero
@@ -518,8 +596,8 @@ framing check does not claim to decode or bind the embedded SCCP message id.
 
 `GET /v1/sccp/capabilities` requires two closed limit objects in every V1
 response. `registry_limits` advertises the five fixed lane/live/retained
-capacities. `resource_limits` has exactly 23 fields: the two fixed outbound
-limits, the two configured pending-outbox limits, and all 19 verifier-work
+capacities. `resource_limits` has exactly 29 fields: the two fixed outbound
+limits, the two configured pending-outbox limits, and all 25 verifier-work
 limits from `[zk.sccp]`. Rust, Swift, Kotlin, Java, JavaScript/TypeScript, Python,
 and .NET clients reject missing, unknown, zero, reversed transaction/block, or
 drifted fixed limits before accepting the capability snapshot. All eight
@@ -534,16 +612,17 @@ consensus limit.
 ## Outbound destination authentication
 
 An outbound lane is `verified` only when the canonical Rust release validator
-authenticates a complete destination-state statement. For EVM, BSC, and TRON,
-the statement is signed by the per-profile Ed25519 destination attestor pinned
-in the external production trust policy. The signature covers the canonical
-Norito JSON statement under the
+authenticates a complete destination-state statement. For all four production
+profiles, the statement is signed by the per-profile Ed25519 destination
+attestor pinned in the external production trust policy. The signature covers
+the canonical Norito JSON statement under the
 `iroha:sccp:destination-state-attestation:v1` domain.
 
-The statement contains the typed governed route, finalized chain identity and
-block, exact raw token/verifier/route runtime bytecode, immutable contract
-readbacks, verifier-key hash, destination binding, concrete route configuration,
-and governed-route configuration. The Rust validator:
+For EVM, BSC, and TRON, the statement contains the typed governed route,
+finalized chain identity and block, exact raw token/verifier/route runtime
+bytecode, immutable contract readbacks, verifier-key hash, destination binding,
+concrete route configuration, and governed-route configuration. The Rust
+validator:
 
 1. verifies the pinned attestor signature;
 2. validates the governed route with the data-model implementation;
@@ -561,12 +640,28 @@ and governed-route configuration. The Rust validator:
 9. derives and compares destination-binding, concrete route-config, and
    governed-route configuration hashes with canonical Rust APIs.
 
+For TON, the signed statement binds mainnet global id `-239`, the canonical
+zero state and authenticated masterchain position, the typed governed route,
+and complete single-root ordinary BOCs for Jetton-master code and data,
+Jetton-wallet code, route code and data, and linked verifier code. Rust checks
+each BOC representation hash, requires the signed semantic zero-state fields,
+derives both canonical StateInit account ids, and requires them to equal the
+governed master and route addresses.
+It then compares the full BLS12-381 key, circuit/profile commitments, policy
+hashes, destination binding, concrete route configuration, and governed route
+configuration. Signed attestation is the evidence authority; an unauthenticated
+TON RPC self-report cannot make the lane verified. Rust does not execute the
+Tolk storage decoder over the opaque initial-data BOCs, so production assurance
+also depends on the policy-pinned attestor's TON decoder and the independent
+audit of the checked-in Tolk storage layout. That residual boundary is why live
+audited deployment evidence remains mandatory.
+
 The release timestamp must be no more than 24 hours after the authenticated
 readback and must not precede it. Missing authenticated destination state is
 `unavailable`, never `verified`.
 
-The readiness report remains `ready: false` while any required ETH, BSC, or
-TRON capability is unavailable.
+The readiness report remains `ready: false` while any required Ethereum, BSC,
+TRON, or TON-mainnet capability is unavailable.
 
 ## Semantic circuit policy
 
@@ -603,15 +698,17 @@ is explicitly forbidden. Circuit ids containing `smoke`, `test`,
 of the checked-in labeled-signal-only circuit is forbidden independently of
 its name.
 
-The verifier consumes exactly eleven public signals. Signal 10 is the governed
-Taira finality-anchor hash; there are twelve IC points including the constant
-point, and the canonical verifying-key preimage is exactly 38 ABI words.
-Ten-signal, eleven-IC-point, and 36-word representations are invalid. The policy
-therefore establishes that the deployed key proves canonical transfer
-semantics, message inclusion, the complete Sumeragi-v2 finality artifact and
-dual quorum, and continuity from the governed checkpoint rather than merely
-checking a syntactically valid Groth16 equation. The bundle commits the
-complete policy hash.
+Every curve consumes exactly eleven public signals, with signal 10 equal to the
+governed Taira finality-anchor hash. A BN254 key has twelve IC points including
+the constant and an exact 38-ABI-word canonical preimage; ten-signal,
+eleven-IC-point, and 36-word representations are invalid. A TON BLS12-381 key
+has the fixed compressed `alpha_g1`, `beta_g2`, `gamma_g2`, `delta_g2`, and
+twelve-IC-point shape, and every point is canonically decoded and subgroup
+checked. The curve-tagged policy therefore establishes that the deployed key
+proves canonical transfer semantics, message inclusion, the complete
+Sumeragi-v2 finality artifact and dual quorum, and continuity from the governed
+checkpoint rather than merely checking a syntactically valid Groth16 equation.
+The bundle commits the complete policy hash.
 
 Production evidence must also carry the actual content-addressed bytes, not
 only their policy digests. For every profile, both auditors independently sign
@@ -638,7 +735,7 @@ Production tooling accepts exactly `sccp-release-trust-policy-v1` with
 - the `release-engineering` and `release-security` signer identities/keys;
 - one distinct destination-state attestor identity/key per production profile;
 - two distinct circuit-auditor identities/keys; and
-- the three audited semantic proof-system records.
+- the four audited semantic proof-system records.
 
 Every identity and Ed25519 key must be distinct and valid in the prime-order
 subgroup. The evidence document cannot introduce or replace a trusted key.
@@ -677,11 +774,12 @@ One canonical `sccp-release-evidence-v1` document contains:
 - release/hub identity and creation time;
 - the external trust-policy id;
 - the validator protocol, crate version, source hash, and build identity;
-- three lanes in canonical profile order;
-- one typed lane-evidence artifact for every lane;
+- exactly four lanes in canonical Ethereum/BSC/TRON/TON-mainnet order;
+- four distinct typed lane-evidence artifacts, one for every lane;
 - one transcript for every required corridor phase;
 - the closed semantic artifact set and two signed canonical audit reports per
-  profile, including one distinct honest witness/proof pair per profile;
+  profile (eight reports total), including one distinct honest witness/proof
+  pair per profile;
 - a sorted, hash- and size-bound artifact inventory; and
 - two detached Ed25519 release signatures.
 
@@ -702,20 +800,22 @@ python3 scripts/sccp_all_lanes_evidence.py path/to/evidence.json \
 The Python layer checks canonical files, external signatures, policy audits,
 inventory, bounds, path safety, hard/symbolic links, credential leakage, exact
 semantic roles, and agreement between both auditors. It invokes the Rust
-validator independently for all three lane artifacts and all three honest
-proofs. Each invocation receives the bytes plus the complete signed policy and
-evidence; Rust re-verifies the signatures, selects the profile-pinned attestor
-and circuit, and binds the result to the signed artifact digest and status.
+validator independently for all four lane artifacts and all four honest
+proofs. Successful validation yields four lane receipts and four
+semantic-proof receipts, in the same canonical profile order. Each invocation
+receives the bytes plus the complete signed policy and evidence; Rust
+re-verifies the signatures, selects the profile-pinned attestor and circuit,
+and binds the result to the signed artifact digest and status.
 
 For an honest proof, Rust additionally canonical-decodes the Norito artifact,
 validates target/backend, derives the exact eleven signals from the governed
-statement and full Taira finality anchor, verifies the BN254 pairing, checks the
-circuit/witness/key/build/toolchain metadata and route revision, and emits a
-canonical receipt. Python requires that receipt to equal the claim signed by
-both auditors exactly. There is no CLI that accepts a Python-projected attestor
-key, verifier hash, revision, signal vector, or runtime hash. Python
-independently recomputes only the two small, fixed policy hashes (semantic
-profile and Taira anchor) and pins their Rust/Solidity golden vectors; lane,
+statement and full Taira finality anchor, verifies the profile-selected BN254
+or BLS12-381 pairing, checks the circuit/witness/key/build/toolchain metadata
+and route revision, and emits a canonical receipt. Python requires that receipt
+to equal the claim signed by both auditors exactly. There is no CLI that accepts
+a Python-projected attestor key, verifier hash, revision, signal vector, or
+runtime hash. Python independently recomputes only the two small, fixed policy
+hashes (semantic profile and Taira anchor) and pins their Rust/Solidity golden vectors; lane,
 message, route, destination, public-signal, and verifying-key preimages remain
 solely in the canonical Rust/data-model implementation.
 
@@ -763,8 +863,9 @@ python3 scripts/sccp_release_readiness_report.py dist/sccp-release-v1 \
 ```
 
 `ready` is derived from the exact required capability matrix. It is never an
-input flag. Every ETH, BSC, and TRON inbound and outbound must be verified for
-`ready: true`; domains 3 and 4 are outside the schema.
+input flag. Every Ethereum, BSC, TRON, and TON-mainnet inbound and outbound must
+be verified for `ready: true`. Solana testnet and TON testnet remain outside the
+production inventory and cannot satisfy or replace those four rows.
 
 ## Production corridor
 
@@ -779,7 +880,9 @@ packaging tests, direct contract smoke tests, and Core admission tests. With
 `--log-dir`, every phase is captured as a separate signed-evidence transcript.
 The evidence phase builds the production validator without fixture features,
 validates the pinned non-production fixture, constructs a deterministic bundle,
-and independently verifies that bundle.
+and independently verifies that bundle. The TON contract phase formats, checks,
+builds, and runs the pinned Acton 1.1.0/Tolk 1.4.1 suite; its current local
+conformance result is 20/20.
 
 Use `--phase NAME` only for focused diagnosis. A release requires every phase.
 The aggregate CI job fails when any phase fails, is cancelled, or is skipped.

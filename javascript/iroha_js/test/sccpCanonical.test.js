@@ -112,7 +112,7 @@ function bundle(overrides = {}) {
   };
 }
 
-test("Solana testnet has one exact first-release identity and no recycled network tags", () => {
+test("Solana and TON profiles have exact first-release identities and no recycled network tags", () => {
   assert.equal(SCCP_DOMAIN_SOLANA, 3);
   assert.equal(SCCP_CODEC_SOLANA_PUBKEY32, 6);
   assert.equal(
@@ -129,7 +129,12 @@ test("Solana testnet has one exact first-release identity and no recycled networ
   const tags = Object.values(SCCP_NETWORK_PROFILES).map(({ tag }) => tag);
   assert.equal(new Set(tags).size, tags.length);
   for (const reserved of [0, 6, 7, 8, 9]) assert.equal(tags.includes(reserved), false);
-  assert.equal(Object.values(SCCP_NETWORK_PROFILES).some(({ domain }) => domain === 4), false);
+  assert.deepEqual(
+    Object.values(SCCP_NETWORK_PROFILES)
+      .filter(({ domain }) => domain === 4)
+      .map(({ tag }) => tag),
+    [14, 15],
+  );
 });
 
 test("Solana canonical transfer, payload, lane identity, commitment, and public inputs match Rust V1 bytes", () => {
@@ -228,10 +233,13 @@ test("Solana pubkeys are raw nonzero 32-byte values and never Base58-on-wire tex
   }
 });
 
-test("canonical helpers reject reserved domains, unknown profiles, and profile-shaped aliases", () => {
-  const reservedDomain = clone(TRANSFER);
-  reservedDomain.dest_domain = 4;
-  assert.throws(() => canonicalSccpTransferPayloadBytes(reservedDomain), /reserved/u);
+test("canonical helpers reject domain/codec mismatches, unknown profiles, and profile-shaped aliases", () => {
+  const mismatchedTonDomain = clone(TRANSFER);
+  mismatchedTonDomain.dest_domain = 4;
+  assert.throws(
+    () => canonicalSccpTransferPayloadBytes(mismatchedTonDomain),
+    /protocol domain/u,
+  );
 
   for (const target of [
     network("solana_mainnet"),

@@ -2370,6 +2370,9 @@ struct AppState {
     mcp: iroha_config::parameters::actual::ToriiMcp,
     mcp_rate_limiter: limits::RateLimiter,
     mcp_tools: Arc<Vec<mcp::ToolSpec>>,
+    mcp_dispatch_inflight: Arc<tokio::sync::Semaphore>,
+    mcp_long_poll_inflight: Arc<tokio::sync::Semaphore>,
+    mcp_allowed_origins: Arc<Vec<HeaderValue>>,
     mcp_dispatch_router: std::sync::RwLock<Option<axum::Router>>,
     fee_policy: FeePolicy,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
@@ -3811,6 +3814,13 @@ async fn enforce_preauth(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     use axum::{extract::ConnectInfo, response::IntoResponse};
+    // MCP subrequests are in-process work admitted by the outer connection's
+    // pre-auth guard. Counting them again lets one valid tool batch exhaust and
+    // ban its own client/NAT address. This extension cannot cross an HTTP
+    // listener boundary, so external callers cannot forge the bypass.
+    if req.extensions().get::<mcp::InternalMcpDispatch>().is_some() {
+        return Ok(next.run(req).await);
+    }
     let transport_ip = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
@@ -5327,7 +5337,7 @@ enum SccpSubmitContentTypeError {
 #[cfg(feature = "app_api")]
 fn sccp_submit_ingress_policy(path: &str) -> Option<SccpSubmitIngressPolicy> {
     let proof_field_max = match path {
-        "/v1/bridge/proofs/submit" => iroha_sccp::SCCP_GROTH16_BN254_MAX_BASE64_ARTIFACT_BYTES_V1,
+        "/v1/bridge/proofs/submit" => iroha_sccp::SCCP_DESTINATION_PROOF_MAX_BASE64_BYTES_V1,
         "/v1/bridge/messages" => iroha_sccp::SCCP_NATIVE_ADMISSION_MAX_BASE64_BYTES_V1,
         _ => return None,
     };
@@ -6550,6 +6560,7 @@ fn canonical_error_response(
     head_only: bool,
 ) -> AxResponse {
     parts.headers.remove("x-iroha-stream-error");
+    parts.headers.remove(MCP_NATIVE_ERROR_HEADER);
     parts.extensions.remove::<ReviewedProtocolNativeError>();
     if parts.status == StatusCode::INTERNAL_SERVER_ERROR {
         envelope = ErrorEnvelope::new(
@@ -6667,6 +6678,57 @@ fn canonical_error_response(
 pub(crate) enum ReviewedProtocolNativeError {
     /// SSE event explaining that this live stream cannot resume from a cursor.
     StreamResumeUnsupported,
+    /// JSON-RPC transport error owned by the native MCP POST handler.
+    McpJsonRpc(ReviewedMcpJsonRpcError),
+}
+/// Closed set of MCP transport errors allowed to retain JSON-RPC framing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReviewedMcpJsonRpcError {
+    /// The request bytes were not valid JSON.
+    ParseError,
+    /// The parsed JSON was not one supported MCP request object.
+    InvalidRequest,
+    /// The MCP protocol version header was missing, duplicated, or unsupported.
+    UnsupportedProtocolVersion,
+    /// The HTTP body stream failed before a complete request was available.
+    RequestBodyReadFailed,
+    /// A browser origin did not exactly match the configured allowlist.
+    OriginForbidden,
+    /// The HTTP body stream exceeded its collection deadline.
+    RequestTimeout,
+    /// The HTTP body exceeded the configured MCP request cap.
+    RequestPayloadTooLarge,
+    /// The MCP-specific token bucket rejected the request.
+    RateLimited,
+}
+const MCP_NATIVE_ERROR_HEADER: &str = "x-iroha-mcp-error";
+impl ReviewedMcpJsonRpcError {
+    /// Exact HTTP status permitted for this reviewed JSON-RPC error.
+    pub(crate) const fn status(self) -> StatusCode {
+        match self {
+            Self::ParseError
+            | Self::InvalidRequest
+            | Self::UnsupportedProtocolVersion
+            | Self::RequestBodyReadFailed => StatusCode::BAD_REQUEST,
+            Self::OriginForbidden => StatusCode::FORBIDDEN,
+            Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
+            Self::RequestPayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+        }
+    }
+    /// Stable public error label shared by the body, marker header, and telemetry.
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::ParseError => "parse_error",
+            Self::InvalidRequest => "invalid_request",
+            Self::UnsupportedProtocolVersion => "unsupported_protocol_version",
+            Self::RequestBodyReadFailed => "request_body_read_failed",
+            Self::OriginForbidden => "origin_forbidden",
+            Self::RequestTimeout => "request_timeout",
+            Self::RequestPayloadTooLarge => "request_payload_too_large",
+            Self::RateLimited => "rate_limited",
+        }
+    }
 }
 fn response_boundary_accept_header(
     headers: &HeaderMap,
@@ -6707,6 +6769,30 @@ fn reviewed_protocol_native_error_code(
                         == route_catalog::streaming::CONTRACT_EVENTS_SSE.stable_route_id()) =>
         {
             Some("stream_resume_unsupported")
+        }
+        ReviewedProtocolNativeError::McpJsonRpc(kind)
+            if response.status() == kind.status()
+                && content_type.eq_ignore_ascii_case("application/json")
+                && response
+                    .headers()
+                    .get(MCP_NATIVE_ERROR_HEADER)
+                    .and_then(|value| value.to_str().ok())
+                    == Some(kind.code())
+                && response
+                    .headers()
+                    .get(axum::http::header::CACHE_CONTROL)
+                    .and_then(|value| value.to_str().ok())
+                    == Some("private, no-store")
+                && (*kind != ReviewedMcpJsonRpcError::RateLimited
+                    || response
+                        .headers()
+                        .get(axum::http::header::RETRY_AFTER)
+                        .and_then(|value| value.to_str().ok())
+                        == Some("1"))
+                && route.stable_route_id()
+                    == route_catalog::mcp_transport::JSON_RPC.stable_route_id() =>
+        {
+            Some(kind.code())
         }
         _ => None,
     }
@@ -6772,6 +6858,7 @@ async fn enforce_typed_error_contract_with_body_timeout(
                     .extensions_mut()
                     .remove::<ReviewedProtocolNativeError>();
                 rejection.headers_mut().remove("x-iroha-stream-error");
+                rejection.headers_mut().remove(MCP_NATIVE_ERROR_HEADER);
                 append_vary_accept(rejection.headers_mut());
                 response = rejection;
             }
@@ -6781,6 +6868,7 @@ async fn enforce_typed_error_contract_with_body_timeout(
         .extensions_mut()
         .remove::<ReviewedProtocolNativeError>();
     response.headers_mut().remove("x-iroha-stream-error");
+    response.headers_mut().remove(MCP_NATIVE_ERROR_HEADER);
     let typed_format = response
         .headers()
         .get(axum::http::header::CONTENT_TYPE)
@@ -6849,6 +6937,7 @@ async fn handler_method_not_allowed() -> Response {
 fn route_timeout_for_path(path: &str) -> Duration {
     match path {
         "/v1/zk/ivm/derive" | "/v1/zk/ivm/prove" => ZK_IVM_ROUTE_TIMEOUT,
+        "/v1/mcp" => mcp::MCP_ROUTE_EXECUTION_TIMEOUT,
         // Keep the outer HTTP timeout at least as large as the internal
         // read-fanout proxy budget so ingress does not emit a bare 408 while a
         // Nexus fanout request is still within its allowed route window.
@@ -9287,6 +9376,12 @@ mod typed_error_contract_tests {
             .insert(ReviewedProtocolNativeError::StreamResumeUnsupported);
         response
     }
+    fn reviewed_mcp_error_response() -> Response {
+        mcp::jsonrpc_transport_error_response(
+            ReviewedMcpJsonRpcError::InvalidRequest,
+            mcp::jsonrpc_invalid_request("reviewed MCP rejection"),
+        )
+    }
     #[tokio::test]
     async fn unmarked_protocol_error_cannot_bypass_typed_boundary() {
         let router = with_error_contract(Router::new().route(
@@ -9369,6 +9464,144 @@ mod typed_error_contract_tests {
         let envelope: ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode native negotiation rejection");
         assert_eq!(envelope.code(), "response_not_acceptable");
+    }
+    #[tokio::test]
+    async fn exact_reviewed_mcp_error_is_preserved_and_accept_checked() {
+        let router = with_error_contract(
+            Router::new().route("/native", get(|| async { reviewed_mcp_error_response() })),
+        );
+        let request = |accept: &'static str| {
+            let mut request = Request::builder()
+                .uri("/native")
+                .header(header::ACCEPT, accept)
+                .body(Body::empty())
+                .expect("request");
+            request
+                .extensions_mut()
+                .insert(MatchedRouteMetadata::from_descriptor(
+                    route_catalog::mcp_transport::JSON_RPC,
+                ));
+            request
+        };
+        let response = router
+            .clone()
+            .oneshot(request("application/json, text/event-stream"))
+            .await
+            .expect("reviewed response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.headers().get(MCP_NATIVE_ERROR_HEADER),
+            Some(&HeaderValue::from_static("invalid_request"))
+        );
+        assert_eq!(
+            response
+                .extensions()
+                .get::<utils::HttpErrorCode>()
+                .map(utils::HttpErrorCode::as_str),
+            Some("invalid_request")
+        );
+        assert!(
+            response
+                .extensions()
+                .get::<ReviewedProtocolNativeError>()
+                .is_none()
+        );
+        let body: Value = norito::json::from_slice(&body_bytes(response).await)
+            .expect("decode preserved JSON-RPC error");
+        assert_eq!(
+            body.get("error")
+                .and_then(|error| error.get("data"))
+                .and_then(|data| data.get("error_code"))
+                .and_then(Value::as_str),
+            Some("invalid_request")
+        );
+
+        let response = router
+            .oneshot(request("image/png"))
+            .await
+            .expect("native negotiation rejection");
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        assert!(response.headers().get(MCP_NATIVE_ERROR_HEADER).is_none());
+        let body = body_bytes(response).await;
+        assert!(!String::from_utf8_lossy(&body).contains("reviewed MCP rejection"));
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode native negotiation rejection");
+        assert_eq!(envelope.code(), "response_not_acceptable");
+    }
+    #[tokio::test]
+    async fn reviewed_mcp_marker_fails_closed_on_route_status_media_or_marker_mismatch() {
+        #[derive(Clone, Copy)]
+        enum Mismatch {
+            Route,
+            Status,
+            Media,
+            Header,
+            Unmarked,
+        }
+        for mismatch in [
+            Mismatch::Route,
+            Mismatch::Status,
+            Mismatch::Media,
+            Mismatch::Header,
+            Mismatch::Unmarked,
+        ] {
+            let router = with_error_contract(Router::new().route(
+                "/native",
+                get(move || async move {
+                    let mut response = reviewed_mcp_error_response();
+                    match mismatch {
+                        Mismatch::Route => {}
+                        Mismatch::Status => {
+                            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                        }
+                        Mismatch::Media => {
+                            response.headers_mut().insert(
+                                header::CONTENT_TYPE,
+                                HeaderValue::from_static("text/plain"),
+                            );
+                        }
+                        Mismatch::Header => {
+                            response.headers_mut().insert(
+                                HeaderName::from_static(MCP_NATIVE_ERROR_HEADER),
+                                HeaderValue::from_static("origin_forbidden"),
+                            );
+                        }
+                        Mismatch::Unmarked => {
+                            response
+                                .extensions_mut()
+                                .remove::<ReviewedProtocolNativeError>();
+                        }
+                    }
+                    response
+                }),
+            ));
+            let mut request = Request::builder()
+                .uri("/native")
+                .header(header::ACCEPT, "application/json")
+                .body(Body::empty())
+                .expect("request");
+            request
+                .extensions_mut()
+                .insert(MatchedRouteMetadata::from_descriptor(
+                    if matches!(mismatch, Mismatch::Route) {
+                        route_catalog::sorafs::CID_ROOT
+                    } else {
+                        route_catalog::mcp_transport::JSON_RPC
+                    },
+                ));
+            let response = router.oneshot(request).await.expect("response");
+            assert!(response.headers().get(MCP_NATIVE_ERROR_HEADER).is_none());
+            let status = response.status();
+            let body = body_bytes(response).await;
+            assert!(!String::from_utf8_lossy(&body).contains("reviewed MCP rejection"));
+            let envelope: ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode canonical error");
+            if status == StatusCode::INTERNAL_SERVER_ERROR {
+                assert_eq!(envelope.code(), "internal_server_error");
+            } else {
+                assert_eq!(envelope.code(), "bad_request");
+            }
+        }
     }
     #[tokio::test]
     async fn reviewed_marker_is_route_bound() {
@@ -10370,6 +10603,23 @@ fn admitted_app_routed_read_body_for_auth(parts: &axum::http::request::Parts) ->
 fn admitted_app_routed_read_body_for_auth(_parts: &axum::http::request::Parts) -> Option<Bytes> {
     None
 }
+fn canonical_account_body_limit_response() -> Response {
+    const REJECT_CODE: &str = "request_payload_too_large";
+    let mut response = utils::respond_with_status_and_format(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        ErrorEnvelope::new(
+            REJECT_CODE,
+            "The request body exceeds the configured route limit.",
+        ),
+        utils::current_response_format(),
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("x-iroha-reject-code"),
+        HeaderValue::from_static(REJECT_CODE),
+    );
+    install_canonical_account_private_cache_headers(&mut response);
+    response
+}
 async fn enforce_canonical_account_body_authentication(
     State(state): State<CanonicalAccountBodyAuthState>,
     request: axum::http::Request<Body>,
@@ -10378,11 +10628,7 @@ async fn enforce_canonical_account_body_authentication(
     let (mut parts, body) = request.into_parts();
     let body = if let Some(admitted) = admitted_app_routed_read_body_for_auth(&parts) {
         if admitted.len() > state.max_body_bytes {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "request body exceeds the route limit",
-            )
-                .into_response();
+            return canonical_account_body_limit_response();
         }
         // Routed-read admission has already drained and retained this exact
         // body under the fanout lease. Reuse its ref-counted bytes instead of
@@ -10394,11 +10640,7 @@ async fn enforce_canonical_account_body_authentication(
             Ok(body) => body,
             Err(error) => {
                 iroha_logger::warn!(%error, "canonical account request body exceeded its route limit");
-                return (
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "request body exceeds the route limit",
-                )
-                    .into_response();
+                return canonical_account_body_limit_response();
             }
         }
     };
@@ -10430,10 +10672,11 @@ async fn enforce_canonical_account_body_authentication(
     response
 }
 async fn proof_body_admission_middleware(
-    State(app): State<SharedAppState>,
+    State(admission): State<ProofBodyAdmissionState>,
     request: axum::http::Request<Body>,
     next: Next,
 ) -> Response {
+    let app = &admission.app;
     let permit = match app.proof_body_inflight.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => {
@@ -10444,10 +10687,9 @@ async fn proof_body_admission_middleware(
             .into_response();
         }
     };
-    let max_bytes = usize::try_from(app.proof_limits.max_body_bytes).unwrap_or(usize::MAX);
-    let request = match collect_proof_body_with_deadline(
+    let mut request = match collect_proof_body_with_deadline(
         request,
-        max_bytes,
+        admission.max_body_bytes,
         app.proof_limits.body_read_timeout,
     )
     .await
@@ -10458,9 +10700,40 @@ async fn proof_body_admission_middleware(
             return response;
         }
     };
+    let lease = ProofBodyAdmissionLease::new(permit);
+    request.extensions_mut().insert(lease.clone());
+    // Keep physical admission until every downstream operation returns. This
+    // bounds concurrent attachment sanitizer blocking tasks and child processes.
+    // The request extension is cloned into detached blocking work so cancelling
+    // the HTTP future cannot release capacity while that work is still running.
     let response = next.run(request).await;
-    drop(permit);
+    drop(lease);
     response
+}
+#[derive(Clone)]
+pub(crate) struct ProofBodyAdmissionLease {
+    _permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+}
+impl ProofBodyAdmissionLease {
+    fn new(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
+        Self {
+            _permit: Arc::new(permit),
+        }
+    }
+}
+#[derive(Clone)]
+struct ProofBodyAdmissionState {
+    app: SharedAppState,
+    /// Exact route cap used before authentication buffers the retained body.
+    max_body_bytes: usize,
+}
+impl ProofBodyAdmissionState {
+    fn new(app: SharedAppState, max_body_bytes: usize) -> Self {
+        Self {
+            app,
+            max_body_bytes,
+        }
+    }
 }
 #[cfg(feature = "app_api")]
 async fn verified_source_body_admission_middleware(
@@ -10503,10 +10776,12 @@ fn proof_post_router_with_body_limits(
     router: Router<SharedAppState>,
     state: SharedAppState,
 ) -> Router<SharedAppState> {
-    let body_limit = DefaultBodyLimit::max(
-        usize::try_from(state.proof_limits.max_body_bytes).unwrap_or(usize::MAX),
+    let max_body_bytes = usize::try_from(state.proof_limits.max_body_bytes).unwrap_or(usize::MAX);
+    let body_limit = DefaultBodyLimit::max(max_body_bytes);
+    let admission = axum::middleware::from_fn_with_state(
+        ProofBodyAdmissionState::new(state, max_body_bytes),
+        proof_body_admission_middleware,
     );
-    let admission = axum::middleware::from_fn_with_state(state, proof_body_admission_middleware);
     // The admission middleware is outermost, so aggregate capacity is acquired
     // before Axum buffers/extracts each request body.
     router.layer(body_limit).layer(admission)
@@ -18453,6 +18728,7 @@ async fn handler_zk_attachments_disabled() -> Response {
 async fn handler_zk_attachments_create(
     State(app): State<SharedAppState>,
     Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    Extension(admission): Extension<ProofBodyAdmissionLease>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -18460,7 +18736,12 @@ async fn handler_zk_attachments_create(
     let remote_ip = remote.ip();
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/attachments", true).await?;
     let tenant = zk_attachments_tenant(&verified);
-    Ok(crate::zk_attachments::handle_post_attachment(tenant, headers, body).await)
+    Ok(
+        crate::zk_attachments::handle_post_attachment_with_admission(
+            tenant, headers, body, admission,
+        )
+        .await,
+    )
 }
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachments_list(
@@ -18511,6 +18792,7 @@ async fn handler_zk_attachments_count(
 async fn handler_zk_attachment_get(
     State(app): State<SharedAppState>,
     Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    Extension(admission): Extension<ProofBodyAdmissionLease>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: axum::extract::Path<String>,
@@ -18525,7 +18807,7 @@ async fn handler_zk_attachment_get(
     )
     .await?;
     let tenant = zk_attachments_tenant(&verified);
-    Ok(crate::zk_attachments::handle_get_attachment(tenant, id).await)
+    Ok(crate::zk_attachments::handle_get_attachment_with_admission(tenant, id, admission).await)
 }
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachment_delete(
@@ -35959,7 +36241,6 @@ async fn handler_get_sorafs_por_report(
 macro_rules! iso_payment_submission_handlers {
     (
         $(($handler:ident, $message_type:literal, $access_context:literal,
-            $message_id_field:literal, $missing_message_id:literal,
             $payload_builder:ident)),+ $(,)?
     ) => {
         $(
@@ -35991,14 +36272,8 @@ macro_rules! iso_payment_submission_handlers {
                 let metadata = runtime
                     .validate_profile_submission(profile, $message_type, &parsed, &body)
                     .map_err(|err| Error::Query(map_iso_error(err)))?;
-                let msg_id = parsed
-                    .field_text($message_id_field)
-                    .ok_or_else(|| {
-                        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
-                            $missing_message_id.into(),
-                        ))
-                    })?
-                    .to_owned();
+                let msg_id = Iso20022BridgeRuntime::payment_message_id($message_type, &parsed)
+                    .map_err(|err| Error::Query(map_iso_error(err)))?;
                 if !runtime.check_and_record_inbound(&msg_id, metadata) {
                     return Err(Error::Query(
                         iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
@@ -36187,16 +36462,12 @@ iso_payment_submission_handlers!(
         handler_iso_pacs008,
         "pacs.008",
         "v1/iso20022/pacs008",
-        "MsgId",
-        "missing MsgId field",
         build_pacs008_payload
     ),
     (
         handler_iso_pacs009,
         "pacs.009",
         "v1/iso20022/pacs009",
-        "BizMsgIdr",
-        "missing BizMsgIdr field",
         build_pacs009_payload
     ),
 );
@@ -36237,16 +36508,14 @@ async fn handler_iso_lifecycle_submit(
             iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
         ));
     }
-    let outcome = match runtime.apply_inbound_lifecycle_message(&msg_id, message_type, &parsed) {
-        Ok(outcome) => outcome,
-        Err(err) => {
-            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-            return Err(Error::Query(map_iso_error(err)));
-        }
-    };
-    let status_snapshot = runtime
-        .message_status(&msg_id)
-        .expect("iso lifecycle status must exist immediately after recording");
+    let (outcome, status_snapshot) =
+        match runtime.apply_inbound_lifecycle_message_with_status(&msg_id, message_type, &parsed) {
+            Ok(result) => result,
+            Err(err) => {
+                runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+                return Err(Error::Query(map_iso_error(err)));
+            }
+        };
     let mut payload = norito::json::native::Map::new();
     payload.insert(
         "message_id".into(),
@@ -45484,11 +45753,22 @@ fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
     let configure = app_services
         .find("crate::zk_prover::configure(")
         .expect("ZK-prover configuration");
-    let start = app_services
-        .find("crate::zk_prover::start_worker()")
-        .expect("ZK-prover worker start");
+    assert!(fast_guard < configure);
+    assert!(
+        !app_services.contains("crate::zk_prover::start_worker()"),
+        "the prover must not start while Torii is still being constructed"
+    );
 
-    assert!(fast_guard < configure && configure < start);
+    let recovery = source
+        .rfind("crate::zk_attachments::init_persistence()")
+        .expect("attachment persistence recovery");
+    let refusal = source
+        .rfind("if !attachment_persistence_ready")
+        .expect("failed-recovery startup refusal");
+    let start = source
+        .rfind("crate::zk_prover::start_worker()")
+        .expect("ZK-prover worker start");
+    assert!(recovery < refusal && refusal < start);
 }
 
 impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
@@ -46279,6 +46559,9 @@ macro_rules! catalog_route_policy {
     };
     (canonical_account_get($handler:path, $state:ident, $auth_limit:expr)) => {
         catalog_get($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
+    };
+    (canonical_account_proof_get($handler:path, $state:ident)) => {
+        catalog_get($handler).authenticated_canonical_account_proof_body($state.clone(), 0)
     };
     (canonical_account_post($handler:path, $state:ident, $auth_limit:expr)) => {
         catalog_post($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
@@ -47444,13 +47727,9 @@ impl Torii {
             catalog_get(handler_proof_retention_status).authenticated_operator(app_state),
         );
     }
-    /// Native MCP capability and JSON-RPC bridge routes.
+    /// Native MCP Streamable HTTP JSON-RPC route.
     fn add_mcp_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
-        mount_catalog_route_rows!(
-            builder, mcp_transport;
-            CAPABILITIES => public_get(handler_mcp_capabilities);
-        );
         builder.route(
             &route_catalog::mcp_transport::JSON_RPC,
             catalog_post(handler_mcp_jsonrpc)
@@ -48154,7 +48433,7 @@ impl Torii {
                 catalog_post(handler_zk_ivm_prove)
                     .layer(DefaultBodyLimit::max(proof_body_limit))
                     .layer(axum::middleware::from_fn_with_state(
-                        app_state.clone(),
+                        ProofBodyAdmissionState::new(app_state.clone(), proof_body_limit),
                         proof_body_admission_middleware,
                     ))
                     .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
@@ -48169,8 +48448,8 @@ impl Torii {
                 mount_local_catalog_route_rows!(
                     builder, routes;
                     ZK_ATTACHMENTS_GET => canonical_account_get(handler_zk_attachments_filtered, app_state, 0);
-                    ZK_ATTACHMENTS_POST => canonical_account_post(handler_zk_attachments_create, app_state, attachment_body_limit);
-                    ZK_ATTACHMENT_GET => canonical_account_get(handler_zk_attachment_get, app_state, 0);
+                    ZK_ATTACHMENTS_POST => canonical_account_proof_post(handler_zk_attachments_create, app_state, attachment_body_limit);
+                    ZK_ATTACHMENT_GET => canonical_account_proof_get(handler_zk_attachment_get, app_state);
                     ZK_ATTACHMENT_DELETE => canonical_account_delete(handler_zk_attachment_delete, app_state, 0);
                     ZK_ATTACHMENTS_COUNT => canonical_account_get(handler_zk_attachments_count, app_state, 0);
                 );
@@ -48178,7 +48457,7 @@ impl Torii {
                 mount_local_catalog_route_rows!(
                     builder, routes;
                     ZK_ATTACHMENTS_GET => canonical_account_get(handler_zk_attachments_disabled, app_state, 0);
-                    ZK_ATTACHMENTS_POST => canonical_account_post(handler_zk_attachments_disabled, app_state, attachment_body_limit);
+                    ZK_ATTACHMENTS_POST => canonical_account_proof_post(handler_zk_attachments_disabled, app_state, attachment_body_limit);
                     ZK_ATTACHMENT_GET => canonical_account_get(handler_zk_attachments_disabled, app_state, 0);
                     ZK_ATTACHMENT_DELETE => canonical_account_delete(handler_zk_attachments_disabled, app_state, 0);
                     ZK_ATTACHMENTS_COUNT => canonical_account_get(handler_zk_attachments_disabled, app_state, 0);
@@ -48620,6 +48899,8 @@ impl Torii {
                     config.attachments_max_bytes,
                     config.attachments_per_tenant_max_count,
                     config.attachments_per_tenant_max_bytes,
+                    config.attachments_global_max_count,
+                    config.attachments_global_max_bytes,
                     config.attachments_allowed_mime_types.clone(),
                     config.attachments_max_expanded_bytes,
                     config.attachments_max_archive_depth,
@@ -48646,7 +48927,6 @@ impl Torii {
                     Some(state.clone()),
                     telemetry.clone(),
                 );
-                crate::zk_prover::start_worker();
             }
         }
         let query_rate = config
@@ -48691,13 +48971,9 @@ impl Torii {
                 .deploy_burst_per_origin
                 .map(std::num::NonZeroU32::get),
         );
-        let mcp_rate_per_sec = config.mcp.rate_per_minute.map(|rate| {
-            let per_minute = rate.get();
-            let per_sec = per_minute.div_ceil(60);
-            per_sec.max(1)
-        });
+        let mcp_rate_per_minute = config.mcp.rate_per_minute.map(std::num::NonZeroU32::get);
         let mcp_burst = config.mcp.burst.map(std::num::NonZeroU32::get);
-        let mcp_rate_limiter = limits::RateLimiter::new(mcp_rate_per_sec, mcp_burst);
+        let mcp_rate_limiter = limits::RateLimiter::new_per_minute(mcp_rate_per_minute, mcp_burst);
         let proof_rate_per_minute = config
             .proof_api
             .rate_per_minute
@@ -50228,6 +50504,17 @@ impl Torii {
         } else {
             Vec::new()
         });
+        let mcp_dispatch_inflight = Arc::new(tokio::sync::Semaphore::new(
+            self.mcp.max_inflight_dispatches.get(),
+        ));
+        let mcp_long_poll_inflight = Arc::new(tokio::sync::Semaphore::new(
+            mcp::long_poll_dispatch_capacity(self.mcp.max_inflight_dispatches.get()),
+        ));
+        let mcp_allowed_origins = Arc::new(if self.cors.enabled {
+            Self::parse_cors_origins(&self.cors.allowed_origins)
+        } else {
+            Vec::new()
+        });
         let app_state: SharedAppState = Arc::new(AppState {
             events: self.events.clone(),
             kura: self.kura.clone(),
@@ -50311,6 +50598,9 @@ impl Torii {
             mcp: self.mcp.clone(),
             mcp_rate_limiter: self.mcp_rate_limiter.clone(),
             mcp_tools: mcp_tools.clone(),
+            mcp_dispatch_inflight,
+            mcp_long_poll_inflight,
+            mcp_allowed_origins,
             mcp_dispatch_router: std::sync::RwLock::new(None),
             fee_policy: self.fee_policy.clone(),
             norito_rpc: self.norito_rpc.clone(),
@@ -50822,10 +51112,23 @@ impl Torii {
                     }
                 });
             }
+            let zk_prover_enabled = !emergency_fast && crate::zk_prover::cfg_enabled();
+            let attachment_persistence_ready = if self.zk_attachments_enabled || zk_prover_enabled {
+                crate::zk_attachments::init_persistence()
+            } else {
+                true
+            };
+            if !attachment_persistence_ready {
+                iroha_logger::error!("refusing to start Torii before attachment quota recovery");
+                return Err(Report::new(Error::StartServer));
+            }
             if self.zk_attachments_enabled {
-                // Initialize attachments store and background GC
-                crate::zk_attachments::init_persistence();
+                // Initialize attachments store and background GC. Every GC pass
+                // retries and fails closed on a pending quota transaction.
                 crate::zk_attachments::start_gc_worker();
+            }
+            if zk_prover_enabled {
+                crate::zk_prover::start_worker();
             }
         }
         #[cfg(feature = "app_api")]
@@ -51040,15 +51343,6 @@ async fn handler_openapi(
     }
     Ok(routing::handler_openapi_spec(axum::extract::State(app)).await)
 }
-/// GET /v1/mcp — expose MCP capabilities and tool-count metadata.
-async fn handler_mcp_capabilities(
-    State(app): State<SharedAppState>,
-) -> (StatusCode, JsonBody<norito::json::Value>) {
-    (
-        StatusCode::OK,
-        JsonBody(mcp::capabilities_payload_for_state(&app)),
-    )
-}
 /// POST /v1/mcp — dispatch bounded MCP JSON-RPC calls through exact cataloged routes.
 async fn handler_mcp_jsonrpc(
     State(app): State<SharedAppState>,
@@ -51056,6 +51350,12 @@ async fn handler_mcp_jsonrpc(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: axum::http::Request<Body>,
 ) -> Response {
+    if !mcp::origin_is_allowed(&headers, &app.mcp_allowed_origins) {
+        return mcp::jsonrpc_transport_error_response(
+            ReviewedMcpJsonRpcError::OriginForbidden,
+            mcp::jsonrpc_origin_forbidden(),
+        );
+    }
     if !app.mcp.enabled {
         return mcp::private_no_store_response(utils::respond_with_status_and_format(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -51064,17 +51364,18 @@ async fn handler_mcp_jsonrpc(
         ));
     }
     let remote_ip = remote.ip();
-    let rate_key = limits::key_from_headers(
+    let rate_key = limits::key_from_validated_headers(
         &headers,
         Some(remote_ip),
         Some("mcp"),
         app.require_api_token,
+        app.api_tokens_set.as_ref(),
     );
     if !app.mcp_rate_limiter.allow(&rate_key).await {
-        return mcp::private_no_store_response((
-            StatusCode::TOO_MANY_REQUESTS,
-            JsonBody(mcp::jsonrpc_rate_limited()),
-        ));
+        return mcp::jsonrpc_transport_error_response(
+            ReviewedMcpJsonRpcError::RateLimited,
+            mcp::jsonrpc_rate_limited(),
+        );
     }
     if let Err(response) = utils::canonical_json_request_content_type(&headers) {
         return mcp::private_no_store_response(response);
@@ -51087,74 +51388,63 @@ async fn handler_mcp_jsonrpc(
     {
         Ok(Ok(bytes)) => bytes,
         Ok(Err(error)) if mcp::body_error_is_length_limit(&error) => {
-            let (status, payload) = mcp::oversized_payload_response(app.mcp.max_request_bytes);
-            return mcp::private_no_store_response((status, JsonBody(payload)));
+            let (_, payload) = mcp::oversized_payload_response(app.mcp.max_request_bytes);
+            return mcp::jsonrpc_transport_error_response(
+                ReviewedMcpJsonRpcError::RequestPayloadTooLarge,
+                payload,
+            );
         }
         Ok(Err(_)) => {
-            return mcp::private_no_store_response((
-                StatusCode::BAD_REQUEST,
-                JsonBody(mcp::jsonrpc_request_body_read_failed()),
-            ));
+            return mcp::jsonrpc_transport_error_response(
+                ReviewedMcpJsonRpcError::RequestBodyReadFailed,
+                mcp::jsonrpc_request_body_read_failed(),
+            );
         }
         Err(_) => {
-            return mcp::private_no_store_response((
-                StatusCode::REQUEST_TIMEOUT,
-                JsonBody(mcp::jsonrpc_request_timeout()),
-            ));
+            return mcp::jsonrpc_transport_error_response(
+                ReviewedMcpJsonRpcError::RequestTimeout,
+                mcp::jsonrpc_request_timeout(),
+            );
         }
     };
     let payload = match norito::json::from_slice::<norito::json::Value>(&request_bytes) {
         Ok(payload) => payload,
         Err(err) => {
-            return mcp::private_no_store_response((
-                StatusCode::BAD_REQUEST,
-                JsonBody(mcp::invalid_json_payload(&err)),
-            ));
+            return mcp::jsonrpc_transport_error_response(
+                ReviewedMcpJsonRpcError::ParseError,
+                mcp::invalid_json_payload(&err),
+            );
         }
     };
-    if mcp::is_initialized_notification(&payload) {
+    if payload.is_array() {
+        return mcp::jsonrpc_transport_error_response(
+            ReviewedMcpJsonRpcError::InvalidRequest,
+            mcp::jsonrpc_invalid_request(
+                "MCP Streamable HTTP accepts exactly one JSON-RPC message per POST",
+            ),
+        );
+    }
+    if !mcp::protocol_version_is_supported(&headers, mcp::is_initialize_request(&payload)) {
+        return mcp::jsonrpc_transport_error_response(
+            ReviewedMcpJsonRpcError::UnsupportedProtocolVersion,
+            mcp::jsonrpc_unsupported_protocol_version(),
+        );
+    }
+    let additional_dispatch_cost = mcp::jsonrpc_dispatch_cost(&payload).saturating_sub(1);
+    if !app
+        .mcp_rate_limiter
+        .allow_repeated(&rate_key, additional_dispatch_cost)
+        .await
+    {
+        return mcp::jsonrpc_transport_error_response(
+            ReviewedMcpJsonRpcError::RateLimited,
+            mcp::jsonrpc_rate_limited(),
+        );
+    }
+    if mcp::is_jsonrpc_notification(&payload) || mcp::is_jsonrpc_response(&payload) {
         return mcp::private_no_store_response(StatusCode::ACCEPTED);
     }
-    let response_payload = match payload {
-        norito::json::Value::Array(batch) if batch.is_empty() => {
-            mcp::jsonrpc_invalid_request("batch request must not be empty")
-        }
-        norito::json::Value::Array(batch) if mcp::jsonrpc_batch_exceeds_dispatch_limit(&batch) => {
-            mcp::jsonrpc_batch_too_large()
-        }
-        norito::json::Value::Array(batch) => {
-            let mut responses =
-                match mcp::BoundedJsonArray::new(batch.len(), app.mcp.max_request_bytes) {
-                    Ok(responses) => responses,
-                    Err(norito::json::BoundedJsonError::BodyTooLarge) => {
-                        return mcp::bounded_jsonrpc_http_response(
-                            mcp::jsonrpc_response_too_large(None, app.mcp.max_request_bytes),
-                            app.mcp.max_request_bytes,
-                        );
-                    }
-                    Err(_) => {
-                        return mcp::private_no_store_response((
-                            StatusCode::OK,
-                            JsonBody(mcp::jsonrpc_allocation_failed(
-                                "failed to reserve MCP batch response storage",
-                            )),
-                        ));
-                    }
-                };
-            for request_value in batch {
-                let response =
-                    mcp::handle_jsonrpc_request(app.clone(), &headers, request_value).await;
-                if responses.try_push(response).is_err() {
-                    return mcp::bounded_jsonrpc_http_response(
-                        mcp::jsonrpc_response_too_large(None, app.mcp.max_request_bytes),
-                        app.mcp.max_request_bytes,
-                    );
-                }
-            }
-            norito::json::Value::Array(responses.into_values())
-        }
-        payload => mcp::handle_jsonrpc_request(app.clone(), &headers, payload).await,
-    };
+    let response_payload = mcp::handle_jsonrpc_request(app.clone(), &headers, payload).await;
     mcp::bounded_jsonrpc_http_response(response_payload, app.mcp.max_request_bytes)
 }
 #[cfg(feature = "app_api")]

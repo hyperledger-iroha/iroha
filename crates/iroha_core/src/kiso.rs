@@ -1061,6 +1061,10 @@ mod tests {
                     iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
                 attachments_per_tenant_max_bytes:
                     iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_BYTES,
+                attachments_global_max_count:
+                    iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT,
+                attachments_global_max_bytes:
+                    iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES,
                 attachments_allowed_mime_types:
                     iroha_config::parameters::defaults::torii::attachments_allowed_mime_types(),
                 attachments_max_expanded_bytes:

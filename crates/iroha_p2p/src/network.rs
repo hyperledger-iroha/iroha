@@ -61,9 +61,24 @@ fn test_network_id(seed: &str) -> NetworkId {
     )))
 }
 #[cfg(test)]
+fn test_soranet_handshake_config() -> ActualSoranetHandshake {
+    static REPLAY_DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    static NEXT_REPLAY_STORE: AtomicU64 = AtomicU64::new(0);
+    let replay_dir =
+        REPLAY_DIR.get_or_init(|| tempfile::tempdir().expect("test SoraNet replay directory"));
+    let store_id = NEXT_REPLAY_STORE.fetch_add(1, Ordering::Relaxed);
+    let mut handshake = ActualSoranetHandshake::default();
+    handshake.pow.revocation_store_path = replay_dir
+        .path()
+        .join(format!("ticket_revocations_{store_id}.norito"))
+        .to_string_lossy()
+        .into_owned()
+        .into();
+    handshake
+}
+#[cfg(test)]
 fn test_soranet_handshake_runtime() -> Arc<SoranetHandshakeRuntime> {
-    runtime_from_handshake(ActualSoranetHandshake::default())
-        .expect("test SoraNet handshake runtime")
+    runtime_from_handshake(test_soranet_handshake_config()).expect("test SoraNet handshake runtime")
 }
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -611,6 +626,8 @@ struct RelayMessage<T> {
     origin: PeerId,
     target: RelayTarget,
     ttl: u8,
+    /// Signature-bound wire metadata retained for protocol compatibility.
+    /// Local queues derive their scheduling class from `payload.topic()`.
     priority: Priority,
     origin_signature: Vec<u8>,
     payload: T,
@@ -1024,7 +1041,7 @@ impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
         self.payload.topic()
     }
     fn priority(&self) -> message::Priority {
-        self.priority
+        self.payload.topic().scheduling_priority()
     }
     fn subscriber_route(&self) -> message::SubscriberRoute {
         self.payload.subscriber_route()
@@ -8024,6 +8041,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             relay_mode,
             relay_hub_addresses,
             relay_hub_peer: None,
+            relay_hub_candidates: HashSet::new(),
             relay_trusted_peers: HashSet::new(),
             relay_ttl,
             trust_gossip_config,
@@ -8139,6 +8157,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             incoming_pending: HashSet::new(),
             incoming_active: HashSet::new(),
             terminating_connections: HashSet::new(),
+            protocol_rejected_connections: HashSet::new(),
             max_incoming: max_incoming.map(core::num::NonZeroUsize::get),
             max_total_connections: Some(max_total_connections),
             accept_params,
@@ -10869,6 +10888,8 @@ mod accept_stream_tests {
         )
         .expect("test transport certificate");
         let max_frame_bytes = 61_111usize;
+        let datagram_max_payload_bytes = 1_200usize;
+        let datagram_buffer_bytes = 64 * 1024;
         let inbound_asks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed_inbound_asks = Arc::clone(&inbound_asks);
         let (service_tx, mut service_rx) =
@@ -10896,13 +10917,13 @@ mod accept_stream_tests {
             soranet_transport_certificate,
             socket_addr!(127.0.0.1:4_321),
             service_tx,
-            Duration::from_secs(1),
-            Duration::from_secs(1),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
             None,
-            false,
-            0,
-            0,
-            0,
+            true,
+            datagram_max_payload_bytes,
+            datagram_buffer_bytes,
+            datagram_buffer_bytes,
             network_id,
             None,
             None,
@@ -10949,7 +10970,11 @@ mod accept_stream_tests {
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
                 .expect("failed to configure rustls for quinn"),
         ));
-        client_config.transport_config(Arc::new(quinn::TransportConfig::default()));
+        let mut transport = quinn::TransportConfig::default();
+        transport
+            .datagram_receive_buffer_size(Some(datagram_buffer_bytes))
+            .datagram_send_buffer_size(datagram_buffer_bytes);
+        client_config.transport_config(Arc::new(transport));
         endpoint.set_default_client_config(client_config);
         let connecting = match endpoint.connect(addr, "iroha-quic") {
             Ok(conn) => conn,
@@ -10965,9 +10990,14 @@ mod accept_stream_tests {
                 return;
             }
         };
-        if connection.open_bi().await.is_err() {
-            return;
-        }
+        let (mut send_hi, _recv_hi) = match connection.open_bi().await {
+            Ok(streams) => streams,
+            Err(_) => return,
+        };
+        send_hi
+            .write_all(b"I")
+            .await
+            .expect("open the server's required high-priority stream");
         let mut observed = false;
         for _ in 0..20 {
             if snapshot()
@@ -10980,7 +11010,19 @@ mod accept_stream_tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        connection.close(0u32.into(), b"done");
+        connection
+            .send_datagram(bytes::Bytes::new())
+            .expect("raw pre-authentication client can send an empty DATAGRAM");
+        let close = tokio::time::timeout(Duration::from_secs(2), connection.closed())
+            .await
+            .expect("production listener must close on an empty pre-authentication DATAGRAM");
+        let quinn::ConnectionError::ApplicationClosed(close) = close else {
+            panic!("expected DATAGRAM protocol close, got {close}");
+        };
+        assert_eq!(
+            close.error_code,
+            quinn::VarInt::from_u32(crate::peer::QUIC_DATAGRAM_PROTOCOL_ERROR_CODE)
+        );
         endpoint.close(0u32.into(), b"done");
         assert!(
             observed,
@@ -11417,6 +11459,14 @@ where
                         return;
                     }
                 };
+                let datagram_ingress = quic_datagrams_enabled.then(|| {
+                    crate::peer::QuicDatagramIngress::spawn(
+                        new_conn.clone(),
+                        quic_datagram_max_payload_bytes
+                            .min(max_frame_bytes)
+                            .min(crate::MAX_ENCRYPTED_FRAME_BYTES),
+                    )
+                });
                 let (send_hi, recv_hi) = match preauth_deadline
                     .run(Some(idle_timeout), new_conn.accept_bi())
                     .await
@@ -11482,6 +11532,7 @@ where
                         recv_hi,
                         send_low,
                         recv_low,
+                        datagram_ingress,
                         Some(remote),
                         transport_binding,
                     ),
@@ -11926,7 +11977,13 @@ struct NetworkBase<T: Pload, E: Enc> {
     relay_hub_addresses: Vec<SocketAddr>,
     /// Hub peer id resolved from topology/address book (spoke mode).
     relay_hub_peer: Option<PeerId>,
-    /// Trusted relay peers derived from `relay_hub_addresses` and peer address mapping.
+    /// Dial candidates whose advertised address matches `relay_hub_addresses`.
+    ///
+    /// Address gossip is sufficient to schedule an exact-id dial, but is not
+    /// authority to relay traffic until that dial authenticates the expected
+    /// identity.
+    relay_hub_candidates: HashSet<PeerId>,
+    /// Authenticated relay hub identities proven by an exact outbound dial.
     ///
     /// Peers in this set are allowed to send frames where `origin != incoming_peer_id`
     /// (i.e., forwarded/relayed frames).
@@ -12137,6 +12194,11 @@ struct NetworkBase<T: Pload, E: Enc> {
     /// These remain part of total-cap accounting because their authenticated
     /// source-reserve ownership can still be alive until task teardown finishes.
     terminating_connections: HashSet<ConnectionId>,
+    /// Exact authenticated connection tenures rejected for a protocol violation.
+    ///
+    /// Entries remain until the tenure's delivery-drain fence completes so
+    /// already queued frames cannot repeat expensive validation work.
+    protocol_rejected_connections: HashSet<ConnectionId>,
     /// Optional cap on number of incoming connections
     max_incoming: Option<usize>,
     /// Optional cap on total number of connections
@@ -12242,7 +12304,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             } => {
                 let remote_ip = canonical_remote_ip(remote_addr.ip());
                 // Apply the same caps and per-IP throttle to TLS and QUIC accepts.
-                let allow = if self.exceeds_caps() {
+                let allow = if self.exceeds_ordinary_connection_cap() {
                     TOTAL_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
                     iroha_logger::warn!(addr=%remote_addr, "Dropping unauthenticated connection due to total connections cap");
                     false
@@ -13242,6 +13304,22 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             let key = peer_id.public_key();
             !self.deny_keys.contains(key) && (!self.allowlist_only || self.allow_keys.contains(key))
         });
+        let deny_keys = &self.deny_keys;
+        let allow_keys = &self.allow_keys;
+        let allowlist_only = self.allowlist_only;
+        let identity_allowed = |peer_id: &PeerId| {
+            let key = peer_id.public_key();
+            !deny_keys.contains(key) && (!allowlist_only || allow_keys.contains(key))
+        };
+        self.relay_trusted_peers.retain(identity_allowed);
+        self.refresh_relay_hub_candidates();
+        if self
+            .relay_hub_peer
+            .as_ref()
+            .is_some_and(|peer_id| !self.relay_trusted_peers.contains(peer_id))
+        {
+            self.relay_hub_peer = None;
+        }
     }
     fn apply_reply_source_consensus_caps(&mut self, consensus_caps: ConsensusCapsSnapshot) {
         let reconnect =
@@ -13418,15 +13496,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             });
             !by_address.is_empty()
         });
-        // Recompute the set of peers allowed to relay frames (origin mismatch).
-        self.relay_trusted_peers.clear();
-        if !self.relay_hub_addresses.is_empty() {
-            for (pid, addr) in &self.current_peers_addresses {
-                if self.configured_hub_matches(addr) {
-                    self.relay_trusted_peers.insert(pid.clone());
-                }
-            }
-        }
+        // Address publication grants dial capability only. Relay authority is
+        // retained solely for identities previously proven by an exact
+        // outbound configured-hub dial.
+        self.refresh_relay_hub_candidates();
         // Apply address updates immediately to reduce startup latency and
         // speed up recovery after gossip/DNS refresh. This keeps connection
         // attempts responsive instead of waiting for the periodic tick.
@@ -13492,11 +13565,11 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             if !self.pending_reply_source_allows(id) {
                 continue;
             }
-            if !self.current_topology.contains(id) && !self.relay_trusted_peers.contains(id) {
+            if !self.current_topology.contains(id) && !self.is_relay_hub_dial_identity(id) {
                 continue;
             }
             // Skip already connected or already connecting for the same address
-            if self.peers.contains_key(id)
+            if (self.peers.contains_key(id) && !self.requires_relay_hub_proof(id))
                 || self
                     .connecting_peers
                     .values()
@@ -13570,6 +13643,21 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 || (addr.port() == hub_addr.port() && addr.host_str() == hub_addr.host_str())
         })
     }
+    fn refresh_relay_hub_candidates(&mut self) {
+        let candidates = if self.relay_hub_addresses.is_empty() {
+            HashSet::new()
+        } else {
+            self.current_peers_addresses
+                .iter()
+                .filter(|(peer_id, address)| {
+                    self.configured_hub_matches(address)
+                        && self.projected_reply_source_acl_allows(peer_id)
+                })
+                .map(|(peer_id, _)| peer_id.clone())
+                .collect()
+        };
+        self.relay_hub_candidates = candidates;
+    }
     fn refresh_relay_hub_peer(&mut self, _now: tokio::time::Instant) {
         let relay_hub_peer = self.verified_relay_hub_peer();
         let topology =
@@ -13581,6 +13669,38 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     }
     fn is_configured_hub_peer(&self, peer: &Peer, relay_role: RelayRole) -> bool {
         matches!(relay_role, RelayRole::Hub) && self.relay_trusted_peers.contains(peer.id())
+    }
+    fn is_relay_hub_dial_identity(&self, peer_id: &PeerId) -> bool {
+        self.relay_hub_candidates.contains(peer_id) || self.relay_trusted_peers.contains(peer_id)
+    }
+    fn requires_relay_hub_proof(&self, peer_id: &PeerId) -> bool {
+        self.relay_hub_candidates.contains(peer_id) && !self.relay_trusted_peers.contains(peer_id)
+    }
+    fn is_exact_relay_hub_dial_target(&self, peer: &Peer) -> bool {
+        matches!(
+            self.relay_mode,
+            iroha_config::parameters::actual::RelayMode::Spoke
+                | iroha_config::parameters::actual::RelayMode::Assist
+        ) && self.is_relay_hub_dial_identity(peer.id())
+            && self.configured_hub_matches(peer.address())
+            && self.is_configured_dial_target(peer)
+    }
+    fn reserves_relay_hub_slot(&self) -> bool {
+        if !matches!(
+            self.relay_mode,
+            iroha_config::parameters::actual::RelayMode::Spoke
+                | iroha_config::parameters::actual::RelayMode::Assist
+        ) || self.relay_hub_addresses.is_empty()
+        {
+            return false;
+        }
+        let authenticated_hub = self.peers.iter().any(|(peer_id, peer)| {
+            matches!(peer.relay_role, RelayRole::Hub) && self.relay_trusted_peers.contains(peer_id)
+        });
+        let exact_hub_dial_inflight = self.connecting_peers.iter().any(|(conn_id, peer)| {
+            self.outbound_connections.contains(conn_id) && self.is_exact_relay_hub_dial_target(peer)
+        });
+        !authenticated_hub && !exact_hub_dial_inflight
     }
     fn hub_handle(&mut self) -> Option<(&PeerId, &RefPeer<WireMessage<T>>)> {
         self.refresh_relay_hub_peer(tokio::time::Instant::now());
@@ -13979,7 +14099,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             Self::record_trust_gossip_skip(peer_id, TrustDirection::Outbound, reason);
             return ReliableWriterAttempt::Retry;
         }
-        let is_high = matches!(frame.priority, Priority::High);
+        let is_high = matches!(message::ClassifyTopic::priority(&frame), Priority::High);
         let is_consensus = is_consensus_topic(topic);
         let conn_id = ref_peer.conn_id;
         let p2p_addr = ref_peer.p2p_addr.clone();
@@ -14053,7 +14173,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             );
             return false;
         }
-        let is_high = matches!(frame.priority, Priority::High);
+        let is_high = matches!(message::ClassifyTopic::priority(&frame), Priority::High);
         let is_consensus = is_consensus_topic(topic);
         let is_progress = is_reliable_progress_route(
             topic,
@@ -14293,7 +14413,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         let id = failed.id();
         if !self.has_configured_dial_identity(id)
             || !self.pending_reply_source_allows(id)
-            || (!self.current_topology.contains(id) && !self.relay_trusted_peers.contains(id))
+            || (!self.current_topology.contains(id) && !self.is_relay_hub_dial_identity(id))
             || self.peers.contains_key(id)
             || self
                 .connecting_peers
@@ -14427,7 +14547,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             if !self.pending_reply_source_allows(&id) {
                 continue;
             }
-            if !self.current_topology.contains(&id) && !self.relay_trusted_peers.contains(&id) {
+            if !self.current_topology.contains(&id) && !self.is_relay_hub_dial_identity(&id) {
                 continue;
             }
             if !self.is_configured_dial_target(&peer) {
@@ -14437,7 +14557,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 self.reset_backoff_addr(&id, &addr);
                 continue;
             }
-            if self.peers.contains_key(&id) {
+            if self.peers.contains_key(&id) && !self.requires_relay_hub_proof(&id) {
                 // A pending standby or Happy-Eyeballs attempt became obsolete
                 // when either direction authenticated. Dropping it here avoids
                 // a permanent 50 ms reschedule loop and leaves future reconnects
@@ -14454,7 +14574,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 self.pending_connects.push((not_before, peer));
                 continue;
             }
-            if self.exceeds_caps() {
+            if self.exceeds_outbound_connection_cap(&peer) {
                 // Outbound handshakes consume the same finite process slot as
                 // accepted inbound and established connections. Keep the due
                 // peer scheduled instead of spawning pre-authentication work
@@ -14509,7 +14629,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
     }
     fn connect_peer(&mut self, peer: &Peer) -> bool {
-        if self.exceeds_caps() {
+        if self.exceeds_outbound_connection_cap(peer) {
             return false;
         }
         let soranet_policy = match self.soranet_handshake.snapshot() {
@@ -14623,12 +14743,46 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     fn finish_reply_route_tenure(&mut self, conn_id: ConnectionId) -> usize {
         let Some(tenure) = self.reply_route_tenures.remove(&conn_id) else {
             self.terminating_connections.remove(&conn_id);
+            self.protocol_rejected_connections.remove(&conn_id);
             return 0;
         };
         tenure.cancel();
         self.terminating_connections.remove(&conn_id);
+        self.protocol_rejected_connections.remove(&conn_id);
         self.network_actor_progress_budget
             .cancel_reply_route(&tenure)
+    }
+    fn reject_protocol_tenure(
+        &mut self,
+        peer_id: &PeerId,
+        connection_id: Option<ConnectionId>,
+        reason: &'static str,
+    ) {
+        let Some(connection_id) = connection_id else {
+            iroha_logger::warn!(peer = %peer_id, reason, "Dropping protocol violation without an exact tenure");
+            return;
+        };
+        let owns_tenure = self
+            .reply_route_tenures
+            .get(&connection_id)
+            .is_some_and(|tenure| &tenure.delivery_peer == peer_id)
+            || self
+                .peers
+                .get(peer_id)
+                .is_some_and(|current| current.conn_id == connection_id);
+        if !owns_tenure {
+            iroha_logger::warn!(peer = %peer_id, connection_id, reason, "Dropping protocol violation with mismatched tenure ownership");
+            return;
+        }
+        self.protocol_rejected_connections.insert(connection_id);
+        if self
+            .peers
+            .get(peer_id)
+            .is_some_and(|current| current.conn_id == connection_id)
+        {
+            iroha_logger::warn!(peer = %peer_id, connection_id, reason, "Disconnecting exact peer tenure after protocol violation");
+            self.disconnect_peer(peer_id);
+        }
     }
     fn disconnect_peer(&mut self, peer_id: &PeerId) {
         let peer = match self.peers.remove(peer_id) {
@@ -14689,9 +14843,14 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             trust_gossip,
         }: Connected<WireMessage<T>>,
     ) {
-        self.connecting_peers.remove(&connection_id);
+        let dial_target = self.connecting_peers.remove(&connection_id);
+        let proven_outbound_hub = matches!(relay_role, RelayRole::Hub)
+            && self.outbound_connections.contains(&connection_id)
+            && dial_target.as_ref().is_some_and(|target| {
+                target.id() == peer.id() && self.configured_hub_matches(target.address())
+            });
         let _ = self.retry_pending_reply_source_authority();
-        let configured_hub = self.is_configured_hub_peer(&peer, relay_role);
+        let configured_hub = self.is_configured_hub_peer(&peer, relay_role) || proven_outbound_hub;
         if configured_hub
             && self
                 .pending_configured_hub_source
@@ -14773,10 +14932,16 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             self.reject_authenticated_tenure(connection_id, ready_peer_handle, peer_message_sender);
             return;
         }
+        if proven_outbound_hub {
+            // Authentication of the exact locally configured dial target pins
+            // hub identity for this process/config generation. Mutable address
+            // gossip cannot revoke or grant this authority.
+            self.relay_trusted_peers.insert(peer.id().clone());
+        }
         if matches!(
             self.relay_mode,
             iroha_config::parameters::actual::RelayMode::Spoke
-        ) && !self.is_configured_hub_peer(&peer, relay_role)
+        ) && !configured_hub
         {
             iroha_logger::warn!(
                 peer=%peer.id(),
@@ -14788,7 +14953,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
         //  Insert peer if peer not in peers yet or replace peer if it's disambiguator value is smaller than new one (simultaneous connections resolution rule)
         match self.peers.get(peer.id()) {
-            Some(peer) if peer.disambiguator > disambiguator => {
+            Some(peer) if peer.disambiguator > disambiguator && !proven_outbound_hub => {
                 iroha_logger::debug!(
                     "Peer is disconnected due to simultaneous connection resolution policy"
                 );
@@ -15075,6 +15240,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             }
         } else {
             self.terminating_connections.remove(&conn_id);
+            self.protocol_rejected_connections.remove(&conn_id);
         }
         // An inbound handshake is still recorded in `incoming_pending` until
         // `peer_connected` accepts it into the active set.  Rejections after
@@ -15104,13 +15270,13 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                         &self.online_peer_capabilities_sender,
                         peer.id(),
                     );
+                    self.clear_low_buckets(peer.id());
                 }
             }
             // A current configured identity remains eligible even when the
             // terminated tenure was inbound. Arbitrary inbound identities are
             // excluded by the current address-authority snapshot.
             self.schedule_retry_for_terminated_peer(&peer);
-            self.clear_low_buckets(peer.id());
         } else if let Some(pending_peer) = pending_connect_peer {
             // Pre-handshake failures are retryable only for locally initiated
             // attempts. The shared helper then revalidates current identity,
@@ -15466,6 +15632,16 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     }
     async fn peer_message(&mut self, msg: PeerMessage<WireMessage<T>>) {
         iroha_logger::trace!(peer=%msg.peer, "Received peer message");
+        if msg.connection_id().is_some_and(|connection_id| {
+            self.protocol_rejected_connections.contains(&connection_id)
+        }) {
+            iroha_logger::debug!(
+                peer = %msg.peer,
+                connection_id = ?msg.connection_id(),
+                "Dropping frame queued by a protocol-rejected connection tenure"
+            );
+            return;
+        }
         let topic = msg.payload.payload.topic();
         let route = msg.payload.payload.subscriber_route();
         let size_bytes = msg.payload_bytes;
@@ -15530,32 +15706,14 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         if size_bytes > cap {
             iroha_logger::warn!(peer=%msg.peer, topic=?topic, size=size_bytes, cap=cap, "Dropping inbound message exceeding topic cap");
             record_inbound_cap_violation(topic);
-            if let Some(ref_peer) = self.peers.remove(&peer_id) {
-                ref_peer.handle.request_termination();
-                self.deferred_send_queue
-                    .release_retired_tenure_binding(&peer_id, ref_peer.conn_id);
-                self.mark_connection_terminating(ref_peer.conn_id);
-                self.peer_reputations.record_disconnected(&peer_id);
-                Self::remove_online_peer(
-                    &self.online_peers_sender,
-                    &self.online_peer_capabilities_sender,
-                    &peer_id,
-                );
-                self.last_active.remove(&peer_id);
-                self.clear_low_buckets(&peer_id);
-            } else {
-                self.last_active.remove(&peer_id);
-                self.clear_low_buckets(&peer_id);
-            }
+            self.reject_protocol_tenure(&peer_id, msg.connection_id(), "topic frame cap exceeded");
             return;
         }
-        self.last_active
-            .insert(peer_id.clone(), tokio::time::Instant::now());
         let incoming_peer = msg.peer.clone();
         let origin = msg.payload.origin.clone();
         let target = msg.payload.target.clone();
-        let ttl = msg.payload.ttl;
-        let priority = msg.payload.priority;
+        let ttl = msg.payload.ttl.min(self.relay_ttl);
+        let priority = topic.scheduling_priority();
         // Most peers must send frames where `origin` matches their peer id. We only accept
         // relayed frames (origin mismatch) from explicitly trusted relay peers.
         let allow_origin_mismatch = match self.relay_mode {
@@ -15575,6 +15733,11 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 origin = %origin,
                 "dropping relay frame with mismatched origin"
             );
+            self.reject_protocol_tenure(
+                &peer_id,
+                msg.connection_id(),
+                "unauthorized relay origin mismatch",
+            );
             return;
         }
         if let Err(error) = msg.payload.verify_origin_signature() {
@@ -15583,6 +15746,11 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 origin = %origin,
                 %error,
                 "dropping relay frame with invalid end-to-end origin signature"
+            );
+            self.reject_protocol_tenure(
+                &peer_id,
+                msg.connection_id(),
+                "invalid relay origin signature",
             );
             return;
         }
@@ -15620,6 +15788,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             iroha_logger::debug!(peer=%incoming_peer, "Dropping relay frame with expired ttl");
             return;
         }
+        self.last_active
+            .insert(peer_id.clone(), tokio::time::Instant::now());
         let deliver_local = matches!(&target, RelayTarget::Broadcast)
             || matches!(&target, RelayTarget::Direct(id) if id == &self.self_id);
         // Forward first (only borrows `payload`) so we can move it into the local-delivery
@@ -16032,6 +16202,28 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             .saturating_add(self.terminating_connections.len());
         total >= max_total
     }
+    /// Whether an ordinary connection would consume the relay-hub proof slot.
+    fn exceeds_ordinary_connection_cap(&self) -> bool {
+        let Some(max_total) = self.max_total_connections else {
+            return false;
+        };
+        let ordinary_limit = max_total.saturating_sub(usize::from(self.reserves_relay_hub_slot()));
+        let total = self
+            .peers
+            .len()
+            .saturating_add(self.connecting_peers.len())
+            .saturating_add(self.incoming_pending.len())
+            .saturating_add(self.terminating_connections.len());
+        total >= ordinary_limit
+    }
+    /// Whether an outbound target has exhausted the capacity available to it.
+    fn exceeds_outbound_connection_cap(&self, peer: &Peer) -> bool {
+        if self.is_exact_relay_hub_dial_target(peer) {
+            self.exceeds_caps()
+        } else {
+            self.exceeds_ordinary_connection_cap()
+        }
+    }
     /// Whether incoming cap is exceeded.
     fn exceeds_incoming_cap(&self) -> bool {
         let Some(max_in) = self.max_incoming else {
@@ -16206,6 +16398,31 @@ mod tests {
                 Self::Lane => message::ProgressReconstruction::Retransmit,
                 Self::Control => message::ProgressReconstruction::Exact,
             }
+        }
+    }
+    #[test]
+    fn semantic_topics_define_local_scheduler_priority() {
+        use message::{Priority, Topic};
+
+        for topic in [
+            Topic::ConsensusSafety,
+            Topic::Consensus,
+            Topic::ConsensusChunk,
+            Topic::ConsensusPayload,
+            Topic::Control,
+        ] {
+            assert_eq!(topic.scheduling_priority(), Priority::High);
+        }
+        for topic in [
+            Topic::BlockSync,
+            Topic::TxGossip,
+            Topic::TxGossipRestricted,
+            Topic::PeerGossip,
+            Topic::TrustGossip,
+            Topic::Health,
+            Topic::Other,
+        ] {
+            assert_eq!(topic.scheduling_priority(), Priority::Low);
         }
     }
     #[test]
@@ -18794,10 +19011,19 @@ mod tests {
             .soranet_handshake
             .snapshot()
             .expect("initial handshake policy");
+        let replay_state_path = network
+            .soranet_handshake
+            .replay_state_path_for_tests()
+            .to_string_lossy()
+            .into_owned();
+        let compatible_config = || {
+            let mut handshake = test_soranet_handshake_config();
+            handshake.pow.revocation_store_path = replay_state_path.clone().into();
+            handshake
+        };
         let initial_capacity = initial.puzzle_work_capacities().0;
         let changed_capacity = if initial_capacity.get() == 1 { 2 } else { 1 };
-        let mut rejected = ActualSoranetHandshake::default();
-        rejected.pow.required = false;
+        let mut rejected = compatible_config();
         rejected.pow.outbound_mint_capacity =
             std::num::NonZeroUsize::new(changed_capacity).expect("non-zero capacity");
         let (rejected_response, rejected_result) = oneshot::channel();
@@ -18821,8 +19047,7 @@ mod tests {
                 .expect("policy after rejection")
         ));
 
-        let mut accepted = ActualSoranetHandshake::default();
-        accepted.pow.required = false;
+        let mut accepted = compatible_config();
         accepted.pow.difficulty = 6;
         let (accepted_response, accepted_result) = oneshot::channel();
         network.handle_soranet_handshake_update(message::UpdateHandshake {
@@ -18894,6 +19119,7 @@ mod tests {
                 relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
                 relay_hub_addresses: Vec::new(),
                 relay_hub_peer: None,
+                relay_hub_candidates: HashSet::new(),
                 relay_trusted_peers: HashSet::new(),
                 relay_ttl: DEFAULT_RELAY_TTL,
                 trust_gossip_config: true,
@@ -19004,6 +19230,7 @@ mod tests {
                 incoming_pending: HashSet::new(),
                 incoming_active: HashSet::new(),
                 terminating_connections: HashSet::new(),
+                protocol_rejected_connections: HashSet::new(),
                 max_incoming: None,
                 max_total_connections: None,
                 accept_params: AcceptThrottleParams::new(
@@ -19767,6 +19994,12 @@ mod tests {
         assert!(!network.incoming_active.contains(&old_conn_id));
         assert!(network.incoming_active.contains(&new_conn_id));
         assert!(network.exceeds_caps());
+        network
+            .low_buckets
+            .insert(peer.id().clone(), TokenBucket::new(1.0, 1.0));
+        network
+            .low_bytes_buckets
+            .insert(peer.id().clone(), TokenBucket::new(1.0, 1.0));
         network.peer_terminated(Terminated {
             peer: Some(peer.clone()),
             conn_id: old_conn_id,
@@ -19792,6 +20025,8 @@ mod tests {
             network.retry_backoff.is_empty(),
             "a retired outbound connection must not reintroduce backoff while its replacement is live"
         );
+        assert!(network.low_buckets.contains_key(peer.id()));
+        assert!(network.low_bytes_buckets.contains_key(peer.id()));
         assert!(!network.exceeds_caps());
         network.peer_terminated(Terminated {
             peer: Some(peer.clone()),
@@ -19806,6 +20041,8 @@ mod tests {
         );
         assert!(!network.reply_route_tenures.contains_key(&new_conn_id));
         assert_eq!(network.peer_reputations.score(peer.id()), 0);
+        assert!(!network.low_buckets.contains_key(peer.id()));
+        assert!(!network.low_bytes_buckets.contains_key(peer.id()));
         drop((old_reply_waiter, old_reply_lease));
     }
     #[tokio::test(flavor = "current_thread")]
@@ -20768,9 +21005,10 @@ mod tests {
         network.relay_trusted_peers = HashSet::from([hub_a.id().clone(), hub_b.id().clone()]);
         network.relay_hub_peer = Some(hub_a.id().clone());
         network.current_topology = HashSet::from([hub_a.id().clone()]);
-        network
-            .current_peers_addresses
-            .push((hub_b.id().clone(), hub_b.address().clone()));
+        network.current_peers_addresses.extend([
+            (hub_a.id().clone(), hub_a.address().clone()),
+            (hub_b.id().clone(), hub_b.address().clone()),
+        ]);
         let hub_a_conn_id = 3_111;
         let (hub_a_handle, _hub_a_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         insert_dummy_ref_peer(
@@ -21037,6 +21275,178 @@ mod tests {
         network.process_pending_connects();
         assert!(network.pending_connects.is_empty());
         assert!(network.connecting_peers.is_empty());
+    }
+    #[tokio::test]
+    async fn reserved_hub_slot_allows_proof_beside_untrusted_inbound_incumbent() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        network.max_total_connections = Some(2);
+        let hub = test_peer(socket_addr!(127.0.0.1:45686));
+        network.relay_hub_addresses.push(hub.address().clone());
+        network
+            .current_peers_addresses
+            .push((hub.id().clone(), hub.address().clone()));
+        network.relay_hub_candidates.insert(hub.id().clone());
+        let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            hub.id().clone(),
+            hub.address().clone(),
+            94,
+            handle,
+        );
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), hub.clone()));
+        assert!(network.reserves_relay_hub_slot());
+
+        network.process_pending_connects();
+
+        assert!(network.pending_connects.is_empty());
+        assert!(network.exceeds_caps());
+        assert!(network.connecting_peers.values().any(|candidate| {
+            candidate.id() == hub.id() && candidate.address() == hub.address()
+        }));
+        assert!(network.outbound_connections.iter().any(|connection_id| {
+            network
+                .connecting_peers
+                .get(connection_id)
+                .is_some_and(|candidate| candidate == &hub)
+        }));
+    }
+    #[test]
+    fn physically_saturated_cap_retains_unproven_hub_proof_for_retry() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        network.max_total_connections = Some(1);
+        let hub = test_peer(socket_addr!(127.0.0.1:45687));
+        network.relay_hub_addresses.push(hub.address().clone());
+        network
+            .current_peers_addresses
+            .push((hub.id().clone(), hub.address().clone()));
+        network.relay_hub_candidates.insert(hub.id().clone());
+        let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            hub.id().clone(),
+            hub.address().clone(),
+            95,
+            handle,
+        );
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), hub.clone()));
+
+        network.process_pending_connects();
+
+        assert!(network.connecting_peers.is_empty());
+        assert!(network.pending_connects.iter().any(|(_, candidate)| {
+            candidate.id() == hub.id() && candidate.address() == hub.address()
+        }));
+    }
+    #[test]
+    fn configured_hub_reserves_single_slot_before_candidate_discovery() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        network.max_total_connections = Some(1);
+        network
+            .relay_hub_addresses
+            .push(socket_addr!(127.0.0.1:45688));
+        assert!(network.reserves_relay_hub_slot());
+        assert!(network.exceeds_ordinary_connection_cap());
+
+        let conn_id = 96;
+        let (reply, mut response) = tokio::sync::oneshot::channel();
+        network.handle_service_message(ServiceMessage::InboundAsk {
+            conn_id,
+            remote_addr: "127.0.0.1:45689".parse().expect("remote address"),
+            reply,
+        });
+        assert!(!response.try_recv().expect("admission response"));
+        assert!(!network.incoming_pending.contains(&conn_id));
+
+        let ordinary = test_peer(socket_addr!(127.0.0.1:45690));
+        network.current_topology.insert(ordinary.id().clone());
+        network
+            .current_peers_addresses
+            .push((ordinary.id().clone(), ordinary.address().clone()));
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), ordinary.clone()));
+        network.process_pending_connects();
+        assert!(network.connecting_peers.is_empty());
+        assert!(network.pending_connects.iter().any(|(_, candidate)| {
+            candidate.id() == ordinary.id() && candidate.address() == ordinary.address()
+        }));
+    }
+    #[tokio::test]
+    async fn exact_hub_dial_spends_reserved_single_slot() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
+        network.max_total_connections = Some(1);
+        let hub = test_peer(socket_addr!(127.0.0.1:45691));
+        network.relay_hub_addresses.push(hub.address().clone());
+        network
+            .current_peers_addresses
+            .push((hub.id().clone(), hub.address().clone()));
+        network.relay_hub_candidates.insert(hub.id().clone());
+        let wrong_address = Peer::new(socket_addr!(127.0.0.1:45692), hub.id().clone());
+        assert!(network.is_exact_relay_hub_dial_target(&hub));
+        assert!(!network.is_exact_relay_hub_dial_target(&wrong_address));
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), hub.clone()));
+
+        network.process_pending_connects();
+
+        assert!(network.exceeds_caps());
+        assert!(!network.reserves_relay_hub_slot());
+        assert!(
+            network
+                .connecting_peers
+                .values()
+                .any(|candidate| candidate == &hub)
+        );
+        assert!(network.outbound_connections.iter().any(|connection_id| {
+            network
+                .connecting_peers
+                .get(connection_id)
+                .is_some_and(|candidate| candidate == &hub)
+        }));
+    }
+    #[test]
+    fn only_authenticated_or_exact_outbound_hub_occupies_reservation() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        let hub = test_peer(socket_addr!(127.0.0.1:45693));
+        network.relay_hub_addresses.push(hub.address().clone());
+        network
+            .current_peers_addresses
+            .push((hub.id().clone(), hub.address().clone()));
+        network.relay_hub_candidates.insert(hub.id().clone());
+        let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            hub.id().clone(),
+            hub.address().clone(),
+            97,
+            handle,
+        );
+        network
+            .peers
+            .get_mut(hub.id())
+            .expect("inserted peer")
+            .relay_role = RelayRole::Hub;
+        assert!(network.reserves_relay_hub_slot());
+
+        network.relay_trusted_peers.insert(hub.id().clone());
+        assert!(!network.reserves_relay_hub_slot());
+        network.relay_trusted_peers.clear();
+        network.peers.clear();
+        network.connecting_peers.insert(98, hub.clone());
+        assert!(network.reserves_relay_hub_slot());
+        network.outbound_connections.insert(98);
+        assert!(!network.reserves_relay_hub_slot());
     }
     #[test]
     fn process_pending_connects_never_exceeds_the_total_inflight_cap() {
@@ -23685,7 +24095,7 @@ mod tests {
             "successful flush should remove the peer queue"
         );
         let received = receivers
-            .try_recv_high_control()
+            .try_recv_other()
             .expect("unbound frame should be sent to the current peer session");
         assert_eq!(received.origin, network.self_id);
         match received.target {
@@ -23849,7 +24259,7 @@ mod tests {
             DeferredFlushOutcome::Backpressured(10)
         );
         assert!(matches!(
-            receivers.try_recv_high_control(),
+            receivers.try_recv_block_sync(),
             Ok(RelayMessage {
                 payload: DeferredProgressMsg::BlockSync(2),
                 ..
@@ -23942,11 +24352,11 @@ mod tests {
         ));
         assert!(network.deferred_send_queue.retry_members.contains(&peer_id));
         let _prefill = receivers
-            .try_recv_high_control()
+            .try_recv_other()
             .expect("draining the peer lane should open capacity");
         network.retry_deferred_frames();
         assert!(
-            receivers.try_recv_high_control().is_ok(),
+            receivers.try_recv_other().is_ok(),
             "the retry clock must deliver retained work without another outbound post"
         );
         assert!(!network.deferred_send_queue.by_peer.contains_key(&peer_id));
@@ -24011,7 +24421,7 @@ mod tests {
             .try_recv_other()
             .expect("queued frame should be posted first");
         let second = receivers
-            .try_recv_high_control()
+            .try_recv_other()
             .expect("current frame should be posted after queued frame");
         assert!(matches!(first.priority, Priority::Low));
         assert!(matches!(second.priority, Priority::High));
@@ -24067,8 +24477,13 @@ mod tests {
             .map(|entry| entry.bound_connection_id)
             .collect();
         let priorities: Vec<Priority> = entries.iter().map(|entry| entry.frame.priority).collect();
-        assert_eq!(connection_bindings, vec![None, Some(93)]);
-        assert_eq!(priorities, vec![Priority::Low, Priority::High]);
+        // `DummyMsg` is semantically `Other`, so the prefilled `Other` lane
+        // blocks both low-signed frames; signed priority is not queue authority.
+        assert_eq!(connection_bindings, vec![None, None, Some(93)]);
+        assert_eq!(
+            priorities,
+            vec![Priority::Low, Priority::Low, Priority::High]
+        );
     }
     #[test]
     fn send_frame_to_peer_defers_current_frame_after_deferred_flush_closes_session() {
@@ -24501,7 +24916,7 @@ mod tests {
             priority: Priority::High,
         });
         let received = hub_receivers
-            .try_recv_high_control()
+            .try_recv_other()
             .expect("unconnected target should be routed through the hub");
         assert_eq!(received.origin, network.self_id);
         assert!(matches!(received.priority, Priority::High));
@@ -24587,10 +25002,10 @@ mod tests {
         });
         for received in [
             receivers_one
-                .try_recv_high_control()
+                .try_recv_other()
                 .expect("first peer should receive broadcast"),
             receivers_two
-                .try_recv_high_control()
+                .try_recv_other()
                 .expect("second peer should receive broadcast"),
         ] {
             assert_eq!(received.origin, network.self_id);
@@ -24599,7 +25014,7 @@ mod tests {
         }
     }
     #[test]
-    fn forward_broadcast_skips_incoming_peer_and_forwards_to_others() {
+    fn forwarded_low_topic_cannot_use_signed_high_priority_for_egress() {
         let_deferred_test_network!(network);
         let incoming_peer = test_peer(socket_addr!(127.0.0.1:45701));
         let other_id = random_peer_id();
@@ -24625,8 +25040,13 @@ mod tests {
             &origin_key_pair,
             RelayTarget::Broadcast,
             DEFAULT_RELAY_TTL,
-            Priority::Low,
+            Priority::High,
             DummyMsg,
+        );
+        assert_eq!(
+            message::ClassifyTopic::priority(&relay),
+            Priority::Low,
+            "signed priority metadata must not become local queue authority"
         );
         network.forward_broadcast(
             &incoming_peer,
@@ -24640,8 +25060,13 @@ mod tests {
         ));
         let received = other_receivers
             .try_recv_other()
-            .expect("broadcast should be forwarded to peers other than the sender");
+            .expect("low-semantic relay should use the low egress lane");
+        assert!(matches!(
+            other_receivers.try_recv_high_control(),
+            Err(TryRecvError::Empty)
+        ));
         assert_eq!(received.origin, origin);
+        assert!(matches!(received.priority, Priority::High));
         assert!(matches!(received.target, RelayTarget::Broadcast));
         assert_eq!(received.ttl, DEFAULT_RELAY_TTL - 1);
         received
@@ -24726,7 +25151,7 @@ mod tests {
         );
     }
     #[test]
-    fn spoke_startup_dials_only_trusted_hub_and_selects_after_authenticated_hub_role() {
+    fn spoke_startup_grants_hub_authority_only_after_exact_outbound_dial() {
         let_test_network!(network);
         network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
         replace_test_authenticated_source_geometry(&mut network, 1, Some(HashSet::new()));
@@ -24739,12 +25164,14 @@ mod tests {
         ]));
         assert!(network.relay_hub_peer.is_none());
         assert!(network.current_topology.is_empty());
+        assert!(network.relay_hub_candidates.contains(hub.id()));
+        assert!(!network.relay_trusted_peers.contains(hub.id()));
         assert!(
             network
                 .pending_connects
                 .iter()
                 .any(|(_, candidate)| candidate == &hub),
-            "address resolution should schedule the configured trusted hub"
+            "address resolution should schedule the configured hub candidate"
         );
         assert!(
             network
@@ -24779,17 +25206,45 @@ mod tests {
             Err(tokio::sync::oneshot::error::TryRecvError::Closed)
         ));
         assert!(network.relay_hub_peer.is_none());
+        let inbound_hub_conn_id = 45_710;
+        reserve_test_incoming(&mut network, inbound_hub_conn_id);
+        connect_test_peer!(network, hub, inbound_hub_conn_id, 1, Hub => inbound_hub_receivers, mut inbound_hub_receiver);
+        assert!(inbound_hub_receivers.termination_requested());
+        assert!(matches!(
+            inbound_hub_receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+        assert!(
+            !network.relay_trusted_peers.contains(hub.id()),
+            "an inbound-first identity must not gain authority from address gossip"
+        );
         let hub_conn_id = 45_710;
-        reserve_test_incoming(&mut network, hub_conn_id);
+        let hub_conn_id = hub_conn_id + 1;
+        network.connecting_peers.insert(hub_conn_id, hub.clone());
+        network.outbound_connections.insert(hub_conn_id);
         connect_test_peer!(network, hub, hub_conn_id, 1, Hub => hub_receivers, mut hub_receiver);
         assert!(hub_receiver.try_recv().is_ok());
         assert!(!hub_receivers.termination_requested());
+        assert!(network.relay_trusted_peers.contains(hub.id()));
         assert_eq!(network.relay_hub_peer, Some(hub.id().clone()));
         assert_eq!(network.current_topology, HashSet::from([hub.id().clone()]));
         assert_eq!(
             network.inbound_frame_byte_budgets.protected_sources(),
             Some(HashSet::from([hub.id().clone()]))
         );
+
+        let refreshed_address = socket_addr!(127.0.0.1:45709);
+        network
+            .set_current_peers_addresses(UpdatePeers(vec![(hub.id().clone(), refreshed_address)]));
+        assert!(
+            !network.relay_hub_candidates.contains(hub.id()),
+            "a refreshed non-hub address must not remain an unproven dial candidate"
+        );
+        assert!(
+            network.relay_trusted_peers.contains(hub.id()),
+            "address gossip must not revoke authority established by an exact authenticated dial"
+        );
+        assert_eq!(network.relay_hub_peer, Some(hub.id().clone()));
     }
     #[test]
     fn configured_hub_detection_prefers_trusted_peer_allowlist() {
@@ -24809,10 +25264,43 @@ mod tests {
             "non-hub relay roles should not be treated as configured hubs"
         );
     }
+    #[test]
+    fn acl_revoked_hub_address_cannot_recreate_a_dial_candidate() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        let hub = test_peer(socket_addr!(127.0.0.1:45710));
+        network.relay_hub_addresses.push(hub.address().clone());
+        network.apply_reply_source_acl(message::UpdateAcl {
+            deny_keys: vec![hub.id().public_key().clone()],
+            ..message::UpdateAcl::default()
+        });
+
+        network.set_current_peers_addresses(UpdatePeers(vec![(
+            hub.id().clone(),
+            hub.address().clone(),
+        )]));
+
+        assert!(!network.relay_hub_candidates.contains(hub.id()));
+        assert!(!network.relay_trusted_peers.contains(hub.id()));
+        assert!(
+            network
+                .pending_connects
+                .iter()
+                .all(|(_, candidate)| candidate.id() != hub.id())
+        );
+
+        network.apply_reply_source_acl(message::UpdateAcl::default());
+
+        assert!(
+            network.relay_hub_candidates.contains(hub.id()),
+            "broadening the ACL should immediately restore the configured hub dial identity"
+        );
+    }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn peer_message_hub_forwards_direct_frame_with_decremented_ttl() {
         let_test_network!(network, DummyMsg);
         network.relay_role = RelayRole::Hub;
+        network.relay_ttl = 3;
         let incoming_key_pair = random_node_key_pair();
         let incoming_peer = Peer::new(
             socket_addr!(127.0.0.1:45707),
@@ -24833,7 +25321,7 @@ mod tests {
                 RelayMessage::new_signed(
                     &incoming_key_pair,
                     RelayTarget::Direct(target_id.clone()),
-                    3,
+                    u8::MAX,
                     Priority::High,
                     DummyMsg,
                 ),
@@ -24841,10 +25329,17 @@ mod tests {
             ))
             .await;
         let forwarded = target_receivers
-            .try_recv_high_control()
+            .try_recv_other()
             .expect("hub should forward direct relay frame to target");
+        assert!(matches!(
+            target_receivers.try_recv_high_control(),
+            Err(TryRecvError::Empty)
+        ));
         assert_eq!(forwarded.origin, *incoming_peer.id());
-        assert_eq!(forwarded.ttl, 2);
+        assert_eq!(
+            forwarded.ttl, 2,
+            "inbound hop metadata must be clamped to the local relay limit before forwarding"
+        );
         assert!(matches!(forwarded.priority, Priority::High));
         match forwarded.target {
             RelayTarget::Direct(target) => assert_eq!(target, target_id),
@@ -25332,13 +25827,66 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(1);
         network.subscribe_to_peers_messages(Subscriber::new(tx, SubscriberFilter::All, 1));
         let incoming_peer = test_peer(socket_addr!(127.0.0.1:202));
+        let connection_id = 20_200;
+        let (handle, receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            incoming_peer.id().clone(),
+            incoming_peer.address().clone(),
+            connection_id,
+            handle,
+        );
         let origin = random_peer_id();
         let payload = direct_frame!(origin, network.self_id, Priority::Low, DummyMsg,);
-        let msg = PeerMessage::new(incoming_peer, payload, 1);
+        let msg = PeerMessage::new(incoming_peer.clone(), payload, 1);
         network.peer_message(msg).await;
         assert!(
             matches!(rx.try_recv(), Err(TryRecvError::Empty)),
             "mismatched origin should be dropped when not relaying from the hub"
+        );
+        assert!(network.peers.contains_key(incoming_peer.id()));
+        assert!(
+            !receivers.termination_requested(),
+            "a legacy message without exact tenure must not evict a healthy connection"
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn peer_message_quarantines_exact_tenure_on_mismatched_origin() {
+        let_test_network!(network, DummyMsg);
+        let incoming_peer = test_peer(socket_addr!(127.0.0.1:20_201));
+        let connection_id = 20_201;
+        let (handle, receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            incoming_peer.id().clone(),
+            incoming_peer.address().clone(),
+            connection_id,
+            handle,
+        );
+        network.reply_route_tenures.insert(
+            connection_id,
+            test_reply_tenure(
+                &network.reply_route_owner,
+                incoming_peer.id().clone(),
+                connection_id,
+                0,
+            ),
+        );
+        let payload = direct_frame!(random_peer_id(), network.self_id, Priority::High, DummyMsg,);
+        network
+            .peer_message(PeerMessage::new_for_connection(
+                incoming_peer.clone(),
+                payload,
+                1,
+                connection_id,
+            ))
+            .await;
+        assert!(receivers.termination_requested());
+        assert!(!network.peers.contains_key(incoming_peer.id()));
+        assert!(
+            network
+                .protocol_rejected_connections
+                .contains(&connection_id)
         );
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -25399,6 +25947,144 @@ mod tests {
             matches!(rx.try_recv(), Err(TryRecvError::Empty)),
             "a selected hub must not acquire semantic-origin signing authority"
         );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn invalid_origin_signature_quarantines_and_disconnects_exact_tenure() {
+        let_test_network!(network, SafetyMsg);
+        let signer = random_node_key_pair();
+        let peer = Peer::new(socket_addr!(127.0.0.1:20_301), signer.public_key().clone());
+        let connection_id = 20_301;
+        let (handle, receivers) = test_wire_peer_handle::<SafetyMsg>(4);
+        insert_ref_peer(
+            &mut network,
+            peer.id().clone(),
+            peer.address().clone(),
+            connection_id,
+            handle,
+            true,
+        );
+        network.reply_route_tenures.insert(
+            connection_id,
+            test_reply_tenure(
+                &network.reply_route_owner,
+                peer.id().clone(),
+                connection_id,
+                0,
+            ),
+        );
+        network
+            .last_active
+            .insert(peer.id().clone(), tokio::time::Instant::now());
+        let (tx, mut rx) = mpsc::channel(2);
+        network.subscribe_to_peers_messages(Subscriber::new(tx, SubscriberFilter::All, 2));
+
+        let mut forged = RelayMessage::new_signed(
+            &signer,
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::High,
+            SafetyMsg(7),
+        );
+        forged.payload = SafetyMsg(8);
+        network
+            .peer_message(PeerMessage::new_for_connection(
+                peer.clone(),
+                forged,
+                1,
+                connection_id,
+            ))
+            .await;
+
+        assert!(receivers.termination_requested());
+        assert!(!network.peers.contains_key(peer.id()));
+        assert!(!network.last_active.contains_key(peer.id()));
+        assert!(
+            network
+                .protocol_rejected_connections
+                .contains(&connection_id)
+        );
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+
+        let valid = RelayMessage::new_signed(
+            &signer,
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::High,
+            SafetyMsg(9),
+        );
+        network
+            .peer_message(PeerMessage::new_for_connection(
+                peer,
+                valid,
+                1,
+                connection_id,
+            ))
+            .await;
+        assert!(
+            matches!(rx.try_recv(), Err(TryRecvError::Empty)),
+            "queued frames from the rejected tenure must bypass validation and delivery"
+        );
+
+        network.finish_reply_route_tenure(connection_id);
+        assert!(
+            !network
+                .protocol_rejected_connections
+                .contains(&connection_id)
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn invalid_signature_from_replaced_tenure_does_not_disconnect_replacement() {
+        let_test_network!(network, SafetyMsg);
+        let signer = random_node_key_pair();
+        let peer = Peer::new(socket_addr!(127.0.0.1:20_302), signer.public_key().clone());
+        let old_connection_id = 20_302;
+        let replacement_connection_id = 20_303;
+        let (replacement_handle, replacement_receivers) = test_wire_peer_handle::<SafetyMsg>(4);
+        insert_ref_peer(
+            &mut network,
+            peer.id().clone(),
+            peer.address().clone(),
+            replacement_connection_id,
+            replacement_handle,
+            true,
+        );
+        network.reply_route_tenures.insert(
+            old_connection_id,
+            test_reply_tenure(
+                &network.reply_route_owner,
+                peer.id().clone(),
+                old_connection_id,
+                0,
+            ),
+        );
+
+        let mut forged = RelayMessage::new_signed(
+            &signer,
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::High,
+            SafetyMsg(7),
+        );
+        forged.payload = SafetyMsg(8);
+        network
+            .peer_message(PeerMessage::new_for_connection(
+                peer.clone(),
+                forged,
+                1,
+                old_connection_id,
+            ))
+            .await;
+
+        assert!(
+            network
+                .protocol_rejected_connections
+                .contains(&old_connection_id)
+        );
+        assert_eq!(
+            network.peers.get(peer.id()).map(|current| current.conn_id),
+            Some(replacement_connection_id)
+        );
+        assert!(!replacement_receivers.termination_requested());
     }
     #[test]
     fn relay_origin_signature_binds_payload_target_and_priority_but_not_ttl() {
@@ -25982,6 +26668,28 @@ pub mod message {
         Other,
     }
     impl Topic {
+        /// Return the local scheduler class for this semantic topic.
+        ///
+        /// This mapping is deliberately independent of priority metadata carried
+        /// by a remote relay envelope, so authenticated peers cannot promote
+        /// gossip or other bulk traffic into the consensus/control queues.
+        pub(crate) const fn scheduling_priority(self) -> Priority {
+            match self {
+                Topic::ConsensusSafety
+                | Topic::Consensus
+                | Topic::ConsensusChunk
+                | Topic::ConsensusPayload
+                | Topic::Control => Priority::High,
+                Topic::BlockSync
+                | Topic::TxGossip
+                | Topic::TxGossipRestricted
+                | Topic::PeerGossip
+                | Topic::TrustGossip
+                | Topic::Health
+                | Topic::Other => Priority::Low,
+            }
+        }
+
         /// Whether this topic may be delivered as best-effort traffic.
         ///
         /// Best-effort topics may use QUIC DATAGRAM when available; reliable topics
@@ -26014,7 +26722,11 @@ pub mod message {
         fn topic(&self) -> Topic {
             Topic::Other
         }
-        /// Return the explicit delivery priority carried by the message.
+        /// Return the locally trusted delivery priority for scheduling.
+        ///
+        /// Envelope implementations must derive this from authenticated
+        /// semantics rather than accepting remote priority metadata as queue
+        /// authority.
         fn priority(&self) -> Priority {
             Priority::Low
         }

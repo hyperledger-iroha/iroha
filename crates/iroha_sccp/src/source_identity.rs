@@ -87,7 +87,7 @@ pub fn sccp_lane_source_event_digest_v1(
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
-    const NETWORKS: [SccpNetworkV1; 9] = [
+    const NETWORKS: [SccpNetworkV1; 11] = [
         SccpNetworkV1::SoraTaira,
         SccpNetworkV1::EthereumMainnet,
         SccpNetworkV1::EthereumSepolia,
@@ -97,6 +97,8 @@ mod tests {
         SccpNetworkV1::TronNile,
         SccpNetworkV1::TronShasta,
         SccpNetworkV1::SolanaTestnet,
+        SccpNetworkV1::TonMainnet,
+        SccpNetworkV1::TonTestnet,
     ];
     fn sample_identity() -> SccpSourceIdentityV1 {
         SccpSourceIdentityV1 {

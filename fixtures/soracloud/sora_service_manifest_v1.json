@@ -11,6 +11,7 @@
     "expected_schema_version": 1
   },
   "replicas": 3,
+  "placement_targets": [],
   "route": {
     "host": "portal.sora",
     "path_prefix": "/app",

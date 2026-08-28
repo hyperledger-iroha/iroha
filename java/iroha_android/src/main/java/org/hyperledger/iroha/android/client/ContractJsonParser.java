@@ -96,9 +96,22 @@ public final class ContractJsonParser {
         asOptionalNonNegativeLong(receipt.get("gas_used"), path + ".gas_used"),
         receipt.get("fee_payment") == null
             ? null : FeePaymentJson.parse(receipt.get("fee_payment"), path + ".fee_payment"),
-        HttpClientTransport.normalizeHex32(
-            requiredString(receipt.get("payload_digest_hex"), path + ".payload_digest_hex"),
-            "payloadDigestHex"));
+        exactLowerHex32(receipt.get("payload_digest_hex"), path + ".payload_digest_hex"));
+  }
+
+  private static String exactLowerHex32(final Object value, final String path) {
+    final String literal = requiredString(value, path);
+    if (literal.length() != 64) {
+      throw new IllegalStateException(path + " must be canonical lowercase 32-byte hex");
+    }
+    for (int index = 0; index < literal.length(); index++) {
+      final char character = literal.charAt(index);
+      if (!((character >= '0' && character <= '9')
+          || (character >= 'a' && character <= 'f'))) {
+        throw new IllegalStateException(path + " must be canonical lowercase 32-byte hex");
+      }
+    }
+    return literal;
   }
 
   public static MultisigResponse parseMultisigResponse(final byte[] payload) {

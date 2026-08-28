@@ -1580,9 +1580,13 @@ impl PreparedLifecycleIngressSelector {
         coordinator: &LifecycleCoordinator,
         registry: &mut LifecycleWorkRegistryHolder,
     ) -> Result<LifecycleIngressSchedulerFetchSeal, LifecycleIngressSchedulerCarrierError> {
+        // Capacity capture has already moved the exact I/O target into its
+        // live reservation.  The selector must therefore retain only the
+        // consumed marker here; accepting the pre-capture state would attest
+        // scheduler work without proving that physical capacity is held.
         if !matches!(
             self.io_target,
-            PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
+            PreparedLifecycleIngressIoTarget::Unsupported
         ) {
             return Err(LifecycleIngressSchedulerCarrierError::UnsupportedCarrier);
         }

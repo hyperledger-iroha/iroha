@@ -12,6 +12,7 @@ fn zk_padding_extends_trace_to_max_cycles() {
     let start_gas = 1_000;
     let mut vm = IVM::new(start_gas);
     vm.load_program(&prog).unwrap();
+    vm.set_zk_trace_enabled(true);
     vm.run().unwrap();
     let trace = vm.register_trace();
     assert_eq!(

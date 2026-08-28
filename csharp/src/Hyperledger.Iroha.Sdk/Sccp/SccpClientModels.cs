@@ -456,9 +456,14 @@ public sealed record SccpBridgeSubmitResponse(
 internal static class SccpSubmitValidation
 {
     internal const string DestinationArtifactSchemaName =
-        "iroha_sccp::SccpGroth16Bn254ProofArtifactV1";
+        "iroha_data_model::bridge::BridgeSccpDestinationProofV1";
     internal const string NativeInboundProofSchemaName =
         "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
+    internal static readonly string[] ProofRequestSchemaNames =
+    [
+        "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
+        "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",
+    ];
     private const string SubmitBridgeProofWireId =
         "iroha.instruction.v1::bridge::SubmitBridgeProof";
     private const string SubmitBridgeProofSchemaName =
@@ -466,7 +471,9 @@ internal static class SccpSubmitValidation
     private const string TairaChainId = "fc56984b-2be7-431d-840e-21514d1883f0";
     private const ulong DefaultTransactionTimeToLiveMilliseconds = 100_000;
     internal const int MaximumNativeArtifactBytes = 16 * 1024 * 1024;
-    internal const int MaximumDestinationArtifactBytes = MaximumNativeArtifactBytes + 64 * 1024;
+    internal const int MaximumGroth16ArtifactBytes = MaximumNativeArtifactBytes + 64 * 1024;
+    internal const int MaximumDestinationArtifactBytes = MaximumGroth16ArtifactBytes + 64 * 1024;
+    internal const int MaximumDestinationArtifactBase64Bytes = 22_544_384;
     internal const int MaximumArtifactBytes = MaximumDestinationArtifactBytes;
     internal const int MaximumTransactionPayloadBytes = MaximumArtifactBytes + 1024 * 1024;
     internal const int MaximumJsonBytes = MaximumArtifactBytes * 2 + 1024 * 1024;
@@ -911,6 +918,29 @@ internal static class SccpSubmitValidation
         var archive = CanonicalBase64(value, field, maximumBytes: maximumBytes);
         RequireCanonicalNoritoArchive(archive, field, maximumBytes, expectedSchemaName);
         return archive;
+    }
+
+    internal static byte[] CanonicalProofRequestNorito(byte[] archive, string field)
+    {
+        RequireCanonicalNoritoArchive(
+            archive,
+            field,
+            MaximumGroth16ArtifactBytes);
+        var schema = archive.AsSpan(6, 16);
+        var matchesClosedType = false;
+        foreach (var typeName in ProofRequestSchemaNames)
+        {
+            if (schema.SequenceEqual(NoritoCodec.SchemaHash(typeName)))
+            {
+                matchesClosedType = true;
+                break;
+            }
+        }
+        if (!matchesClosedType)
+        {
+            throw new ArgumentException($"{field} schema hash does not match the closed SCCP type set.");
+        }
+        return archive.ToArray();
     }
 
     private static void RequireCanonicalNoritoArchive(

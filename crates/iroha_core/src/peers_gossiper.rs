@@ -239,7 +239,10 @@ impl PeersGossiperHandle {
             }
         }
     }
-    /// Send [`UpdateTopology`] message on network actor.
+    /// Send the complete active validator roster to the gossiper actor.
+    ///
+    /// The roster includes this node exactly when it is an active validator;
+    /// observers must not be inserted merely because they run the actor.
     pub fn update_topology(&self, topology: UpdateTopology) {
         if let Err(err) = self.update_topology_sender.send(topology) {
             iroha_logger::warn!(?err, "Peers gossiper dropped topology update");
@@ -283,6 +286,8 @@ pub struct PeersGossiper {
     gossip_peers: BTreeMap<PeerId, BTreeMap<PeerId, SocketAddr>>,
     /// Transport capabilities known for peers in topology.
     peer_capabilities: BTreeMap<PeerId, PeerTransportCapabilities>,
+    /// Consensus validators whose matching reports can authorize a gossiped dial address.
+    validator_topology: BTreeSet<PeerId>,
     current_topology: BTreeSet<PeerId>,
     key_pair: KeyPair,
     gossip_period: Duration,
@@ -304,12 +309,13 @@ struct TrustGossipOutcome {
 /// * Topology - public keys of current network derived from blockchain (Register/Unregister Peer Isi)
 /// * Peers addresses - currently known addresses for peers in topology. Might be unknown for some peer.
 ///
-/// There are three sources of peers addresses:
-/// 1. Provided at iroha startup (`TRUSTED_PEERS` env var)
-/// 2. Currently connected online peers.
-///    Some peer might change address and connect to our peer,
-///    such connection will be accepted if peer public key is in topology.
-/// 3. Received via gossiping from other peers.
+/// There are two authoritative sources of peer addresses:
+/// 1. The startup peer configuration.
+/// 2. A matching address claim from at least `f + 1` distinct active validators
+///    in the exact `3f + 1` roster.
+///
+/// Honest gossip republishes only operator-provided mappings. A peer's
+/// self-asserted handshake address is not an address authority.
 impl PeersGossiper {
     /// Determine the gossip interval using the configured value.
     fn gossip_interval(configured: Duration) -> Duration {
@@ -396,6 +402,8 @@ impl PeersGossiper {
         trusted_set.insert(peer_id.clone());
         let static_trusted_peers = trusted_set.clone();
         configured_validator_peers.retain(|peer_id| static_trusted_peers.contains(peer_id));
+        let validator_topology =
+            Self::validator_reporter_topology(configured_validator_peers.iter().cloned());
         let initial_topology: BTreeSet<_> = trusted_set.clone();
         let trust_candidates = trusted_set.clone();
         let gossip_max_period = gossip_max_period.max(gossip_period);
@@ -411,6 +419,7 @@ impl PeersGossiper {
             trust_candidates,
             gossip_peers: BTreeMap::new(),
             peer_capabilities: BTreeMap::new(),
+            validator_topology,
             current_topology: initial_topology.clone(),
             key_pair,
             gossip_period,
@@ -527,6 +536,11 @@ impl PeersGossiper {
     }
     fn set_current_topology(&mut self, UpdateTopology(topology): UpdateTopology) -> bool {
         let force_disconnect = topology.is_empty();
+        // `UpdateTopology` is the authoritative complete validator roster.
+        // Do not infer local membership from the immutable startup set: a
+        // demoted validator and a newly promoted validator must both use the
+        // current roster's exact 3f + 1 geometry.
+        let validator_topology = Self::validator_reporter_topology(topology.iter().cloned());
         let validator_dial_roster: HashSet<_> = topology
             .iter()
             .filter(|peer_id| self.configured_validator_peers.contains(*peer_id))
@@ -536,13 +550,11 @@ impl PeersGossiper {
         if !force_disconnect {
             new_topology.extend(self.static_trusted_peers.iter().cloned());
         }
-        self.gossip_peers.retain(|peer, map| {
-            if !new_topology.contains(peer) {
-                return false;
-            }
-            map.retain(|peer, _| new_topology.contains(peer));
-            !map.is_empty()
-        });
+        Self::retain_authorized_address_votes(
+            &mut self.gossip_peers,
+            &new_topology,
+            &validator_topology,
+        );
         let removed: Vec<_> = self
             .current_topology
             .difference(&new_topology)
@@ -582,6 +594,7 @@ impl PeersGossiper {
         if trust_changed {
             self.update_trusted_peers_on_network();
         }
+        self.validator_topology = validator_topology;
         self.current_topology.clone_from(&new_topology);
         let mut capabilities_changed = false;
         self.peer_capabilities.retain(|peer_id, _| {
@@ -610,6 +623,19 @@ impl PeersGossiper {
         }
         !unchanged || capabilities_changed
     }
+    fn retain_authorized_address_votes(
+        gossip_peers: &mut BTreeMap<PeerId, BTreeMap<PeerId, SocketAddr>>,
+        current_topology: &BTreeSet<PeerId>,
+        validator_topology: &BTreeSet<PeerId>,
+    ) {
+        gossip_peers.retain(|peer, map| {
+            if !current_topology.contains(peer) {
+                return false;
+            }
+            map.retain(|reporter, _| validator_topology.contains(reporter));
+            !map.is_empty()
+        });
+    }
     fn sorted_online_peers<I>(peers: I) -> UniqueVec<Peer>
     where
         I: IntoIterator<Item = Peer>,
@@ -617,6 +643,28 @@ impl PeersGossiper {
         let mut peers: Vec<_> = peers.into_iter().collect();
         peers.sort();
         UniqueVec::from_iter(peers)
+    }
+    fn validator_reporter_topology<I>(topology: I) -> BTreeSet<PeerId>
+    where
+        I: IntoIterator<Item = PeerId>,
+    {
+        topology.into_iter().collect()
+    }
+    fn locally_configured_online_peers<I>(
+        peers: I,
+        initial_peers: &BTreeMap<PeerId, SocketAddr>,
+    ) -> Vec<Peer>
+    where
+        I: IntoIterator<Item = Peer>,
+    {
+        peers
+            .into_iter()
+            .filter_map(|peer| {
+                initial_peers
+                    .get(peer.id())
+                    .map(|address| Peer::new(address.clone(), peer.id().public_key().clone()))
+            })
+            .collect()
     }
     fn gossip_fingerprint(
         peers: &UniqueVec<Peer>,
@@ -658,6 +706,11 @@ impl PeersGossiper {
         if self.refresh_online_peer_capabilities() {
             self.network_update_peer_capabilities();
         }
+        // Only operator-provided addresses are third-party gossip authority.
+        // A peer's signed handshake address is still self-asserted: echoing it
+        // through honest validators would make one Byzantine peer appear to
+        // have independent address endorsements.
+        let online_peers = Self::locally_configured_online_peers(online_peers, &self.initial_peers);
         let online_peers = Self::sorted_online_peers(online_peers);
         let now = std::time::Instant::now();
         let trust_infos = self.trust_infos(now);
@@ -764,12 +817,11 @@ impl PeersGossiper {
         }: PeersGossip,
         from_peer: &Peer,
     ) -> bool {
-        let is_trusted = self.trusted_peers.contains(from_peer.id());
-        let allow_public = matches!(
-            self.consensus_mode,
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos
-        );
-        if !allow_public && !self.current_topology.contains(from_peer.id()) && !is_trusted {
+        if !Self::is_authorized_peer_gossip_sender(
+            from_peer.id(),
+            &self.current_topology,
+            &self.static_trusted_peers,
+        ) {
             return false;
         }
         let now = std::time::Instant::now();
@@ -779,12 +831,14 @@ impl PeersGossiper {
         self.restore_if_recovered(from_peer.id(), now);
         let mut addresses_changed = false;
         let mut capabilities_changed = false;
+        let can_report_addresses =
+            Self::is_authorized_address_reporter(from_peer.id(), &self.validator_topology);
         for peer in peers {
-            let peer_allowed = self.current_topology.contains(peer.id())
-                || allow_public
-                || self.trusted_peers.contains(peer.id());
-            if !peer_allowed {
-                // Ignore gossip about peers outside the active topology.
+            let peer_allowed =
+                self.current_topology.contains(peer.id()) || self.trusted_peers.contains(peer.id());
+            if !can_report_addresses || !peer_allowed {
+                // Only active validators can vote on addresses, and only for
+                // peers in the active topology.
                 continue;
             }
             let map = self.gossip_peers.entry(peer.id().clone()).or_default();
@@ -795,9 +849,14 @@ impl PeersGossiper {
             }
         }
         for (peer_id, capabilities) in peer_capabilities {
-            let peer_allowed = self.current_topology.contains(&peer_id)
-                || allow_public
-                || self.trusted_peers.contains(&peer_id);
+            if !Self::is_authorized_capability_reporter(from_peer.id(), &peer_id) {
+                // Third-party capability hints are not scheduling authority.
+                // They are not signed by the subject and otherwise let one
+                // reporter force an extra preferred-transport dial attempt.
+                continue;
+            }
+            let peer_allowed =
+                self.current_topology.contains(&peer_id) || self.trusted_peers.contains(&peer_id);
             if !peer_allowed || peer_id == self.peer_id {
                 continue;
             }
@@ -812,6 +871,25 @@ impl PeersGossiper {
             self.network_update_peer_capabilities();
         }
         addresses_changed || capabilities_changed
+    }
+    fn is_authorized_peer_gossip_sender(
+        reporter: &PeerId,
+        current_topology: &BTreeSet<PeerId>,
+        static_trusted_peers: &BTreeSet<PeerId>,
+    ) -> bool {
+        // Runtime trust gossip cannot promote a public observer into a peer
+        // metadata authority. Locally configured peers may still contribute
+        // capability metadata, while address votes are restricted below.
+        current_topology.contains(reporter) || static_trusted_peers.contains(reporter)
+    }
+    fn is_authorized_address_reporter(
+        reporter: &PeerId,
+        validator_topology: &BTreeSet<PeerId>,
+    ) -> bool {
+        validator_topology.contains(reporter)
+    }
+    fn is_authorized_capability_reporter(reporter: &PeerId, subject: &PeerId) -> bool {
+        reporter == subject
     }
     fn handle_trust_gossip(
         &mut self,
@@ -866,14 +944,30 @@ impl PeersGossiper {
         }
         trust_changed
     }
+    fn selected_peer_addresses(
+        initial_peers: &BTreeMap<PeerId, SocketAddr>,
+        gossip_peers: &BTreeMap<PeerId, BTreeMap<PeerId, SocketAddr>>,
+        validator_count: usize,
+    ) -> BTreeMap<PeerId, SocketAddr> {
+        let mut peers = initial_peers.clone();
+        if let Some(required_reports) = required_address_reports(validator_count) {
+            for (id, addresses) in gossip_peers {
+                if peers.contains_key(id) {
+                    continue;
+                }
+                if let Some(address) = choose_address_with_quorum(addresses, required_reports) {
+                    peers.insert(id.clone(), address);
+                }
+            }
+        }
+        peers
+    }
     fn network_update_peers_addresses(&self) {
-        let mut peers = Vec::new();
-        for (id, address) in &self.initial_peers {
-            peers.push((id.clone(), address.clone()));
-        }
-        for (id, addresses) in &self.gossip_peers {
-            peers.push((id.clone(), choose_address_majority_rule(addresses)));
-        }
+        let peers = Self::selected_peer_addresses(
+            &self.initial_peers,
+            &self.gossip_peers,
+            self.validator_topology.len(),
+        );
         // Always send the full set of known addresses; the network layer will
         // avoid redundant dials to already-connected peers.
         let update = UpdatePeers(
@@ -994,17 +1088,31 @@ fn process_trust_records(
         drop_sender: false,
     }
 }
-fn choose_address_majority_rule(addresses: &BTreeMap<PeerId, SocketAddr>) -> SocketAddr {
+fn required_address_reports(validator_count: usize) -> Option<usize> {
+    (validator_count > 0 && validator_count % 3 == 1)
+        .then_some(validator_count.saturating_sub(1) / 3 + 1)
+}
+fn choose_address_with_quorum(
+    addresses: &BTreeMap<PeerId, SocketAddr>,
+    required_reports: usize,
+) -> Option<SocketAddr> {
     let mut count_map = BTreeMap::new();
     for address in addresses.values() {
         *count_map.entry(address).or_insert(0) += 1;
     }
+    let max_count = count_map.values().copied().max()?;
+    if max_count < required_reports
+        || count_map
+            .values()
+            .filter(|count| **count == max_count)
+            .count()
+            != 1
+    {
+        return None;
+    }
     count_map
         .into_iter()
-        .max_by_key(|(_, count)| *count)
-        .map(|(address, _)| address)
-        .expect("There must be no empty inner map in addresses")
-        .clone()
+        .find_map(|(address, count)| (count == max_count).then(|| address.clone()))
 }
 /// Message for gossiping peers addresses.
 #[derive(Debug, Clone)]
@@ -1131,6 +1239,185 @@ mod tests {
     fn trust_test_network_id() -> NetworkId {
         test_network_id(0x51)
     }
+    #[test]
+    fn public_observer_is_not_an_address_authority() {
+        let validator = PeerId::from(checked_seed_keypair(&[1, 2, 3, 4]).public_key().clone());
+        let configured_observer =
+            PeerId::from(checked_seed_keypair(&[5, 6, 7, 8]).public_key().clone());
+        let public_observer =
+            PeerId::from(checked_seed_keypair(&[9, 10, 11, 12]).public_key().clone());
+        let topology = BTreeSet::from([validator.clone()]);
+        let trusted = BTreeSet::from([configured_observer.clone()]);
+        assert!(PeersGossiper::is_authorized_address_reporter(
+            &validator, &topology
+        ));
+        assert!(!PeersGossiper::is_authorized_address_reporter(
+            &configured_observer,
+            &topology
+        ));
+        assert!(!PeersGossiper::is_authorized_address_reporter(
+            &public_observer,
+            &topology
+        ));
+        assert!(PeersGossiper::is_authorized_peer_gossip_sender(
+            &configured_observer,
+            &topology,
+            &trusted
+        ));
+        assert!(!PeersGossiper::is_authorized_peer_gossip_sender(
+            &public_observer,
+            &topology,
+            &trusted
+        ));
+        assert!(PeersGossiper::is_authorized_capability_reporter(
+            &validator, &validator
+        ));
+        assert!(!PeersGossiper::is_authorized_capability_reporter(
+            &validator,
+            &configured_observer
+        ));
+
+        let full_validator_roster: BTreeSet<_> = (20_u8..24)
+            .map(|seed| {
+                PeerId::from(
+                    checked_seed_keypair(&[seed, seed + 1, seed + 2, seed + 3])
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect();
+        let reporter_topology =
+            PeersGossiper::validator_reporter_topology(full_validator_roster.clone());
+        assert_eq!(reporter_topology, full_validator_roster);
+        assert!(!reporter_topology.contains(&public_observer));
+        assert_eq!(required_address_reports(reporter_topology.len()), Some(2));
+    }
+    #[test]
+    fn address_gossip_requires_f_plus_one_matching_validator_reports() {
+        let reporters: Vec<_> = (0_u8..4)
+            .map(|seed| {
+                PeerId::from(
+                    checked_seed_keypair(&[seed, seed + 1, seed + 2, seed + 3])
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect();
+        let first: SocketAddr = "192.0.2.10:1337".parse().expect("first address");
+        let second: SocketAddr = "192.0.2.11:1337".parse().expect("second address");
+        assert_eq!(required_address_reports(4), Some(2));
+        assert_eq!(required_address_reports(7), Some(3));
+        assert_eq!(required_address_reports(3), None);
+
+        let mut reports = BTreeMap::from([(reporters[0].clone(), first.clone())]);
+        assert_eq!(choose_address_with_quorum(&reports, 2), None);
+        reports.insert(reporters[1].clone(), first.clone());
+        assert_eq!(choose_address_with_quorum(&reports, 2), Some(first.clone()));
+        reports.insert(reporters[2].clone(), second.clone());
+        reports.insert(reporters[3].clone(), second);
+        assert_eq!(
+            choose_address_with_quorum(&reports, 2),
+            None,
+            "conflicting quorum-sized reports must fail closed"
+        );
+    }
+    #[test]
+    fn validator_rotation_purges_removed_reporter_address_votes() {
+        let validators: Vec<_> = (70_u8..74)
+            .map(|seed| {
+                PeerId::from(
+                    checked_seed_keypair(&[seed, seed + 1, seed + 2, seed + 3])
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect();
+        let replacement =
+            PeerId::from(checked_seed_keypair(&[80, 81, 82, 83]).public_key().clone());
+        let target = validators[3].clone();
+        let address: SocketAddr = "192.0.2.44:1337".parse().expect("test address");
+        let mut votes = BTreeMap::from([(
+            target.clone(),
+            BTreeMap::from([
+                (validators[0].clone(), address.clone()),
+                (validators[1].clone(), address.clone()),
+                (validators[2].clone(), address),
+            ]),
+        )]);
+        let rotated = BTreeSet::from([
+            validators[0].clone(),
+            validators[2].clone(),
+            target.clone(),
+            replacement,
+        ]);
+
+        PeersGossiper::retain_authorized_address_votes(&mut votes, &rotated, &rotated);
+
+        let retained = votes.get(&target).expect("target remains active");
+        assert_eq!(retained.len(), 2);
+        assert!(!retained.contains_key(&validators[1]));
+
+        let without_target = rotated
+            .into_iter()
+            .filter(|peer_id| peer_id != &target)
+            .collect();
+        PeersGossiper::retain_authorized_address_votes(
+            &mut votes,
+            &without_target,
+            &without_target,
+        );
+        assert!(votes.is_empty());
+    }
+    #[test]
+    fn configured_address_cannot_be_replaced_by_gossip_quorum() {
+        let target = PeerId::from(checked_seed_keypair(&[40, 41, 42, 43]).public_key().clone());
+        let configured: SocketAddr = "198.51.100.20:1337".parse().expect("configured address");
+        let attacker_chosen: SocketAddr = "127.0.0.1:22".parse().expect("gossip address");
+        let reporters: Vec<_> = (44_u8..46)
+            .map(|seed| {
+                PeerId::from(
+                    checked_seed_keypair(&[seed, seed + 1, seed + 2, seed + 3])
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect();
+        let initial_peers = BTreeMap::from([(target.clone(), configured.clone())]);
+        let gossip_peers = BTreeMap::from([(
+            target.clone(),
+            BTreeMap::from([
+                (reporters[0].clone(), attacker_chosen.clone()),
+                (reporters[1].clone(), attacker_chosen),
+            ]),
+        )]);
+
+        let selected = PeersGossiper::selected_peer_addresses(&initial_peers, &gossip_peers, 4);
+
+        assert_eq!(selected.get(&target), Some(&configured));
+    }
+    #[test]
+    fn peer_gossip_never_echoes_a_self_asserted_handshake_address() {
+        let configured_key = checked_seed_keypair(&[20, 21, 22, 23]);
+        let unknown_key = checked_seed_keypair(&[24, 25, 26, 27]);
+        let configured_id = PeerId::from(configured_key.public_key().clone());
+        let configured_address: SocketAddr =
+            "198.51.100.10:1337".parse().expect("configured address");
+        let attacker_chosen_address: SocketAddr =
+            "127.0.0.1:22".parse().expect("self-asserted address");
+        let initial_peers = BTreeMap::from([(configured_id.clone(), configured_address.clone())]);
+        let online = vec![
+            Peer::new(
+                attacker_chosen_address.clone(),
+                configured_key.public_key().clone(),
+            ),
+            Peer::new(attacker_chosen_address, unknown_key.public_key().clone()),
+        ];
+
+        let advertised = PeersGossiper::locally_configured_online_peers(online, &initial_peers);
+        assert_eq!(advertised.len(), 1);
+        assert_eq!(advertised[0].id(), &configured_id);
+        assert_eq!(advertised[0].address(), &configured_address);
+    }
     fn signed_trust_payload_for_network(
         signer: &KeyPair,
         network_id: &NetworkId,
@@ -1236,6 +1523,7 @@ mod tests {
             trust_candidates: topology.clone(),
             gossip_peers: BTreeMap::new(),
             peer_capabilities: BTreeMap::new(),
+            validator_topology: topology.clone(),
             current_topology: topology,
             key_pair: signer.clone(),
             gossip_period: Duration::from_secs(1),
@@ -1597,6 +1885,7 @@ mod tests {
             trust_candidates,
             gossip_peers: BTreeMap::new(),
             peer_capabilities: BTreeMap::new(),
+            validator_topology: current_topology.clone(),
             current_topology,
             key_pair: key_pair.clone(),
             gossip_period: network_cfg.peer_gossip_period,
@@ -1698,6 +1987,7 @@ mod tests {
             trust_candidates,
             gossip_peers: BTreeMap::new(),
             peer_capabilities: BTreeMap::new(),
+            validator_topology: current_topology.clone(),
             current_topology,
             key_pair,
             gossip_period: std::time::Duration::from_secs(1),

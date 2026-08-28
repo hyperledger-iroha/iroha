@@ -266,7 +266,7 @@ def test_algorithm_aliases_normalize_to_canonical_labels() -> None:
         "ed-25519": ED25519_ALGORITHM,
         "ECDSA-SECP256K1-SHA256": SECP256K1_ALGORITHM,
         "mldsa65": ML_DSA_ALGORITHM,
-        "dilithium3": ML_DSA_ALGORITHM,
+        "ML-DSA-65": ML_DSA_ALGORITHM,
         "gost-3410-2012-256-paramset-a": GOST_3410_2012_256_PARAMSET_A_ALGORITHM,
         "gost3410_2012_512_paramset_b": GOST_3410_2012_512_PARAMSET_B_ALGORITHM,
         "bls-normal": BLS_NORMAL_ALGORITHM,
@@ -412,6 +412,8 @@ def test_algorithm_labels_reject_control_and_confusable_native_inputs(label: str
         "\u212ad25519",
         "ML-DSA-44",
         "ML_DSA_87",
+        "dilithium",
+        "dilithium3",
     ],
 )
 def test_algorithm_labels_reject_punctuation_confusables_and_other_mldsa_suites(

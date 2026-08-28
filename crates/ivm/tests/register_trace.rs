@@ -8,6 +8,7 @@ fn test_register_trace_length() {
     let prog = assemble_zk(&prog_bytes, 8);
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&prog).unwrap();
+    vm.set_zk_trace_enabled(true);
     vm.run().unwrap();
     // cycles should equal max_cycles (8)
     assert_eq!(vm.get_cycle_count(), 8);

@@ -37,8 +37,9 @@ MOBILE_SDK_ALLOW_DIRTY_SOURCE=1) permits a local integration artifact only when
 its manifest dirty bit and exact dependency-closure fingerprint match.
 MOBILE_SDK_APPLE_ARTIFACT_DIR may point Apple validation at a staged artifact
 directory; it defaults to <root>/dist.
-Apple source authentication always binds <root>/Cargo.lock. Alternate lockfiles
-are not part of the first-release artifact contract.
+Apple source authentication binds <root>/Cargo.lock by default. Privacy release
+lanes may select the exact authenticated external release lock through
+IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH.
 Source authentication requires Python 3.12, exact Rust 1.93.1 RUSTC/RUSTDOC,
 and an explicit canonical writable CARGO_TARGET_DIR outside the Iroha source
 tree. The reviewed envelope uses CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0,
@@ -124,7 +125,7 @@ if [[ -n "${MOBILE_SDK_APPLE_CARGO_LOCK_PATH+x}" ]]; then
   echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_APPLE_CARGO_LOCK_PATH is not part of the first-release artifact contract" >&2
   exit 64
 fi
-APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+APPLE_CARGO_LOCKFILE="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-$ROOT_DIR/Cargo.lock}"
 
 resolve_trusted_python312() {
   local candidate canonical
@@ -586,6 +587,8 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_sorafs_reference_validate_governance_dag_head_chain_json
   connect_norito_validation_fee_current_policy_proof_request_v1
   connect_norito_validation_fee_current_policy_proof_verify_v1
+  connect_norito_validation_fee_hijiri_quote_request_v1
+  connect_norito_validation_fee_hijiri_quote_response_verify_v1
   "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}"
   "${KAGEMUSHA_C_SYMBOLS[@]}"
 )
@@ -669,6 +672,12 @@ VALIDATION_FEE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1
 )
 
 PARLIAMENT_TIMED_OVN_JNI_SYMBOLS=(

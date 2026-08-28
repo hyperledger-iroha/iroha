@@ -9254,6 +9254,25 @@ pub mod tests {
         }
     }
     #[test]
+    fn validate_ivm_cache_retention_limit_does_not_change_admission() {
+        let baseline = ivm::ivm_cache::cache_limits();
+        let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(baseline);
+        let mut fixture = IvmAdmissionFixture::new();
+        let mut pipeline = fixture.state.pipeline.clone();
+        pipeline.ivm_cache_max_decoded_ops = 1;
+        pipeline.ivm_max_decoded_instructions = 4;
+        pipeline.ivm_max_decoded_bytes =
+            iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES;
+        fixture.state.set_pipeline(pipeline);
+
+        let result =
+            fixture.validate_program(minimal_ivm_program_with_instruction_count(1, 1_000, 4));
+        assert!(
+            result.is_ok(),
+            "a process-local cache retention ceiling must not reject valid bytecode: {result:?}"
+        );
+    }
+    #[test]
     fn validate_ivm_decoded_byte_limit_enforced() {
         let mut fixture = IvmAdmissionFixture::new();
         let mut pipeline = fixture.state.pipeline.clone();

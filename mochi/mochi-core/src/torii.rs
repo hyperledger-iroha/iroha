@@ -777,17 +777,7 @@ pub struct LocalMcpProbeResult {
     pub tool_names: Vec<String>,
 }
 impl LocalMcpProbeResult {
-    fn from_documents(
-        capabilities: &json::Value,
-        initialize: &json::Value,
-        tools_list: &json::Value,
-    ) -> ToriiResult<Self> {
-        if !capabilities.is_object() {
-            return Err(decode_error(
-                "mcp capabilities",
-                "GET /v1/mcp must return a JSON object",
-            ));
-        }
+    fn from_documents(initialize: &json::Value, tools_list: &json::Value) -> ToriiResult<Self> {
         let init_result = initialize
             .as_object()
             .and_then(|doc| doc.get("result"))
@@ -833,7 +823,11 @@ impl LocalMcpProbeResult {
         Ok(Self {
             protocol_version,
             toolset_version: tools_result
-                .get("toolsetVersion")
+                .get("_meta")
+                .and_then(json::Value::as_object)
+                .and_then(|meta| meta.get("iroha"))
+                .and_then(json::Value::as_object)
+                .and_then(|iroha| iroha.get("toolsetVersion"))
                 .and_then(json::Value::as_str)
                 .map(str::to_owned),
             tool_count: tool_names.len(),
@@ -841,6 +835,7 @@ impl LocalMcpProbeResult {
         })
     }
 }
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const SMOKE_TTL: Duration = Duration::from_secs(30);
 const SMOKE_SUBMISSION_MARGIN: Duration = Duration::from_secs(5);
 const SMOKE_EXACT_RESUBMIT_DELAY: Duration = Duration::from_millis(250);
@@ -3610,18 +3605,12 @@ impl ToriiClient {
         let url = self.configuration_endpoint()?;
         self.fetch_json(url).await
     }
-    /// Fetch the native MCP capabilities payload.
-    pub async fn fetch_mcp_capabilities(&self) -> ToriiResult<json::Value> {
-        let url = self.mcp_endpoint()?;
-        self.fetch_json(url).await
-    }
     /// Run the local Mochi MCP smoke sequence against `/v1/mcp`.
     pub async fn validate_local_mcp(&self) -> ToriiResult<LocalMcpProbeResult> {
-        let capabilities = self.fetch_mcp_capabilities().await?;
         let initialize = self.mcp_initialize().await?;
         self.mcp_initialized().await?;
         let tools = self.mcp_tools_list().await?;
-        LocalMcpProbeResult::from_documents(&capabilities, &initialize, &tools)
+        LocalMcpProbeResult::from_documents(&initialize, &tools)
     }
     /// Fetch and validate the exact current Nexus lane catalog commitment.
     pub async fn fetch_lane_lifecycle_status(&self) -> ToriiResult<LaneLifecycleStatusV1> {
@@ -4180,12 +4169,13 @@ impl ToriiClient {
         }
         read_bounded_json_response(response, "JSON API").await
     }
-    async fn post_json(&self, url: Url, payload: &json::Value) -> ToriiResult<json::Value> {
+    async fn post_mcp_json(&self, url: Url, payload: &json::Value) -> ToriiResult<json::Value> {
         let body = json::to_vec(payload).map_err(|err| ToriiError::Decode(err.to_string()))?;
         let response = self
             .http
             .post(url)
             .header("Content-Type", "application/json")
+            .header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION)
             .body(body)
             .send()
             .await?;
@@ -4200,6 +4190,7 @@ impl ToriiClient {
             .http
             .post(url)
             .header("Content-Type", "application/json")
+            .header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION)
             .body(body)
             .send()
             .await?;
@@ -4222,7 +4213,7 @@ impl ToriiClient {
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2025-06-18",
+                "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {
                     "name": "mochi-local-sandbox",
@@ -4230,7 +4221,7 @@ impl ToriiClient {
                 }
             }
         });
-        self.post_json(url, &payload).await
+        self.post_mcp_json(url, &payload).await
     }
     async fn mcp_initialized(&self) -> ToriiResult<()> {
         let url = self.mcp_endpoint()?;
@@ -4248,7 +4239,7 @@ impl ToriiClient {
             "method": "tools/list",
             "params": {}
         });
-        self.post_json(url, &payload).await
+        self.post_mcp_json(url, &payload).await
     }
     async fn connect_ws(&self, url: Url) -> ToriiResult<ToriiWebSocket> {
         let mut request = url

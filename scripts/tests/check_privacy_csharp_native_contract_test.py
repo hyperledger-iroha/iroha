@@ -7,7 +7,7 @@ import re
 import unittest
 from pathlib import Path
 
-from scripts import check_native_sdk_abi22_artifact as checker
+from scripts import check_native_sdk_abi23_artifact as checker
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -91,8 +91,8 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
             '"${IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE:-}" != "1"',
             "PRIVACY_CSHARP_NATIVE_ARTIFACT",
             "PRIVACY_CSHARP_NATIVE_MANIFEST",
-            "scripts/check_native_sdk_abi22_artifact.py",
-            '"${PYTHON_BIN}" -I -B "${ABI22_ARTIFACT_CHECKER}" verify',
+            "scripts/check_native_sdk_abi23_artifact.py",
+            '"${PYTHON_BIN}" -I -B "${ABI23_ARTIFACT_CHECKER}" verify',
             '--artifact "${PRIVACY_CSHARP_NATIVE_ARTIFACT}"',
             '--manifest "${PRIVACY_CSHARP_NATIVE_MANIFEST}"',
             '--source-root "${ROOT_DIR}"',
@@ -118,29 +118,29 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
         test_step = csharp[test_step_start:test_step_end]
 
         for path in (
-            '      - "scripts/check_native_sdk_abi22_artifact.py"',
+            '      - "scripts/check_native_sdk_abi23_artifact.py"',
             '      - "scripts/tests/check_privacy_csharp_native_contract_test.py"',
         ):
             self.assertIn(path, source)
         for marker in (
             "needs: privacy_jvm_sdk_tests",
             "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
-            "privacy-jvm-native-abi22-${{ github.sha }}",
+            "privacy-jvm-native-abi23-${{ github.sha }}",
             "Authenticate exact ABI23 C# privacy input",
-            "scripts/check_native_sdk_abi22_artifact.py verify",
+            "scripts/check_native_sdk_abi23_artifact.py verify",
             'IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE: "1"',
-            "LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi22",
+            "LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi23",
             "PRIVACY_CSHARP_NATIVE_ARTIFACT: ${{ runner.temp }}/"
-            "privacy-jvm-native-abi22/libconnect_norito_bridge.so",
+            "privacy-jvm-native-abi23/libconnect_norito_bridge.so",
             "PRIVACY_CSHARP_NATIVE_MANIFEST: ${{ runner.temp }}/"
-            "privacy-jvm-native-abi22/native-sdk-abi22-csharp.json",
+            "privacy-jvm-native-abi23/native-sdk-abi23-csharp.json",
             "run: ci/check_privacy_csharp_sdk.sh",
         ):
             self.assertIn(marker, csharp)
 
         self.assertNotIn("${{ runner.temp }}", job_header)
         self.assertIn(
-            "LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi22",
+            "LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi23",
             test_step,
         )
 

@@ -914,6 +914,64 @@ impl PendingExactOutput {
             "certified merge-sidecar request cancellation",
         )
     }
+    fn cancel_obsolete_certified_merge_sidecar_generation_hints(
+        &mut self,
+        hints: &[CertifiedMergeSidecarGenerationHintV1],
+    ) -> Result<usize, String> {
+        if hints.is_empty() {
+            return Ok(0);
+        }
+        if hints.iter().any(|hint| {
+            hint.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                || hint.current_generation <= hint.observed_generation
+                || hint.hint_id != hint.canonical_hint_id()
+        }) {
+            return Err(
+                "Sumeragi v2 generation-fence cancellation has an invalid authenticated hint"
+                    .to_owned(),
+            );
+        }
+        self.remove_fanouts_matching(
+            |fanout| {
+                let [NetworkMessage::CertifiedMergeSidecar(message)] = fanout.messages.as_slice()
+                else {
+                    return false;
+                };
+                hints
+                    .iter()
+                    .any(|hint| match (&fanout.rollover_claim, message.as_ref()) {
+                        (
+                            ExactOutputRolloverClaim::CertifiedSidecarRequest { .. },
+                            CertifiedMergeSidecarMessage::Request(request),
+                        ) => {
+                            request.version == hint.version
+                                && request.request_id == request.canonical_request_id()
+                                && request.requester == hint.requester
+                                && request.responder == hint.responder
+                                && request.service_generation < hint.current_generation
+                        }
+                        (
+                            ExactOutputRolloverClaim::CertifiedSidecarControl { .. },
+                            CertifiedMergeSidecarMessage::Close(close),
+                        ) => {
+                            close.version == hint.version
+                                && close.closed_through != 0
+                                && close.close_id == close.canonical_close_id()
+                                && close.requester == hint.requester
+                                && close.responder == hint.responder
+                                && close.service_generation < hint.current_generation
+                        }
+                        _ => false,
+                    })
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "certified merge-sidecar generation-fence cancellation",
+        )
+    }
     fn cancel_acknowledged_certified_merge_sidecar_closes(
         &mut self,
         acknowledgements: &[CertifiedMergeSidecarCloseAckV1],
@@ -3092,23 +3150,27 @@ impl PendingExactOutput {
                             "Sumeragi v2 network actor changed an exact output target".to_owned()
                         );
                     }
-                    let release_to_discovery = ticket.is_none()
+                    let release_to_reconstruction_source = ticket.is_none()
                         && matches!(&route, ExactTargetRoute::Topology)
-                        && self.fanouts.get(fanout_index).is_some_and(
-                            PendingExactFanout::is_commit_certificate_acquisition_topology_fanout,
-                        );
-                    if release_to_discovery {
+                        && self
+                            .fanouts
+                            .get(fanout_index)
+                            .is_some_and(PendingExactFanout::is_reconstructible_topology_fanout);
+                    if release_to_reconstruction_source {
                         // No actor ticket means this target owns no FIFO rank:
                         // its live-topology membership may have disappeared, or
-                        // the bounded waiter table may be full. The discovery
-                        // tracker still owns the immutable request and retries
-                        // it on a rotating archive batch. Retaining this
-                        // ticketless worker copy would reject every rotated
-                        // batch as SourceRetained forever.
+                        // the bounded waiter table may be full. The fetch,
+                        // discovery, autonomous/historical lane, or certified-
+                        // sidecar owner can reconstruct the occurrence;
+                        // historical responses are rebuilt when the requester
+                        // retries and the durable sidecar stream retries
+                        // cumulative Close.
+                        // Retaining this ticketless worker copy could consume
+                        // the only shared non-roster slot forever.
                         drop(message);
                         self.fanouts
                             .get_mut(fanout_index)
-                            .expect("released discovery fanout must remain present")
+                            .expect("released reconstructible fanout must remain present")
                             .mark_admitted(target_index)?;
                         self.advance_after_attempt(
                             fanout_index,

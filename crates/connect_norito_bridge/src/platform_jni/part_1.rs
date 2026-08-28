@@ -239,6 +239,149 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Valid
         trusted_checkpoint_context_id,
     )
 }
+pub(super) fn java_validation_fee_hijiri_quote_result(
+    env: &mut jni::JNIEnv<'_>,
+    body: impl FnOnce(&mut jni::JNIEnv<'_>) -> Result<Vec<u8>, String>,
+) -> jni::sys::jbyteArray {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        body(env).and_then(|bytes| {
+            env.byte_array_from_slice(&bytes)
+                .map(jni::objects::JByteArray::into_raw)
+                .map_err(|error| error.to_string())
+        })
+    }));
+    match result {
+        Ok(Ok(array)) => array,
+        Ok(Err(message)) => {
+            throw_java_illegal_argument(env, format!("Hijiri validation-fee quote: {message}"));
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            throw_java_illegal_state(env, "Hijiri validation-fee quote panicked".to_owned());
+            std::ptr::null_mut()
+        }
+    }
+}
+pub(super) fn java_native_validation_fee_hijiri_quote_request_v1(
+    env: &mut jni::JNIEnv<'_>,
+    account_id_utf8: jni::objects::JByteArray<'_>,
+    qualifying_transfer_count: jni::sys::jint,
+) -> jni::sys::jbyteArray {
+    java_validation_fee_hijiri_quote_result(env, |env| {
+        let account_id_bytes = read_java_byte_array_bounded(
+            env,
+            &account_id_utf8,
+            "accountIdUtf8",
+            VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
+        )
+        .ok_or_else(|| {
+            "accountIdUtf8 must contain one bounded canonical I105 literal".to_owned()
+        })?;
+        let account_id = std::str::from_utf8(&account_id_bytes)
+            .map_err(|_| "accountIdUtf8 must be valid UTF-8".to_owned())?;
+        let qualifying_transfer_count = u32::try_from(qualifying_transfer_count)
+            .map_err(|_| "qualifyingTransferCount must be in 1..100000".to_owned())?;
+        validation_fee_hijiri_quote_request_v1(account_id, qualifying_transfer_count)
+            .map_err(|_| "request account or transfer count was rejected".to_owned())
+    })
+}
+pub(super) fn java_native_validation_fee_hijiri_quote_response_verify_v1(
+    env: &mut jni::JNIEnv<'_>,
+    response_norito: jni::objects::JByteArray<'_>,
+    request_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_validation_fee_hijiri_quote_result(env, |env| {
+        let response = read_java_byte_array_bounded(
+            env,
+            &response_norito,
+            "responseNorito",
+            VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1,
+        )
+        .ok_or_else(|| "responseNorito must be one bounded nonempty archive".to_owned())?;
+        let request = read_java_byte_array_bounded(
+            env,
+            &request_norito,
+            "requestNorito",
+            VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
+        )
+        .ok_or_else(|| "requestNorito must be one bounded nonempty archive".to_owned())?;
+        validation_fee_hijiri_quote_response_verify_v1(&response, &request).map_err(|_| {
+            "response archive, request archive, or exact request binding was rejected".to_owned()
+        })
+    })
+}
+/// Report the exact native ABI required by the Kotlin Hijiri quote bridge.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+/// JNI projection of [`connect_norito_validation_fee_hijiri_quote_request_v1`].
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    account_id_utf8: jni::objects::JByteArray<'_>,
+    qualifying_transfer_count: jni::sys::jint,
+) -> jni::sys::jbyteArray {
+    java_native_validation_fee_hijiri_quote_request_v1(
+        &mut env,
+        account_id_utf8,
+        qualifying_transfer_count,
+    )
+}
+/// JNI projection of [`connect_norito_validation_fee_hijiri_quote_response_verify_v1`].
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    response_norito: jni::objects::JByteArray<'_>,
+    request_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_validation_fee_hijiri_quote_response_verify_v1(
+        &mut env,
+        response_norito,
+        request_norito,
+    )
+}
+/// Report the exact native ABI required by the Java Hijiri quote bridge.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+/// Java SDK projection of [`connect_norito_validation_fee_hijiri_quote_request_v1`].
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    account_id_utf8: jni::objects::JByteArray<'_>,
+    qualifying_transfer_count: jni::sys::jint,
+) -> jni::sys::jbyteArray {
+    java_native_validation_fee_hijiri_quote_request_v1(
+        &mut env,
+        account_id_utf8,
+        qualifying_transfer_count,
+    )
+}
+/// Java SDK projection of [`connect_norito_validation_fee_hijiri_quote_response_verify_v1`].
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    response_norito: jni::objects::JByteArray<'_>,
+    request_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_validation_fee_hijiri_quote_response_verify_v1(
+        &mut env,
+        response_norito,
+        request_norito,
+    )
+}
 pub(super) fn java_sorafs_reference_generated_at(
     generated_at: jni::sys::jlong,
 ) -> Result<u64, String> {

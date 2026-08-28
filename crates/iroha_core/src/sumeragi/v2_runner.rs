@@ -1617,6 +1617,24 @@ fn submit_encoded_body(
     executor.admit_local_proposal(owner.tag, manifest, canonical_wire, services)?;
     Ok(())
 }
+/// Periodically recreate one exact WAL-recovered Decision Fetch occurrence
+/// from its executor owner until an authenticated response claims it.
+pub(in crate::sumeragi) fn retry_recovered_decision_fetch_if_due(
+    now: Instant,
+    next_attempt: &mut Instant,
+    retransmit_interval: Duration,
+    executor: &V2EffectExecutor<SerializedV2Runtime>,
+    services: &ProductionV2Services,
+) -> Result<bool, V2RunnerError> {
+    if now < *next_attempt {
+        return Ok(false);
+    }
+    let attempted = services
+        .retry_recovered_decision_fetch(executor)
+        .map_err(V2RunnerError::Service)?;
+    *next_attempt = deadline_after(now, retransmit_interval);
+    Ok(attempted)
+}
 fn drive_block_sync(
     now: Instant,
     next_attempt: &mut Instant,
@@ -2583,12 +2601,13 @@ fn retry_exact_output_and_apply_sidecar_admissions(
     let _ = apply_native_amx_output_retention(lane_work, services)?;
     let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
     let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+    let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
     let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
     apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
+    apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     let pending = services
         .retry_pending_exact_output()
         .map_err(V2RunnerError::Service)?;
-    apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     Ok(pending)
 }
 fn apply_native_amx_output_retention(
@@ -2637,6 +2656,24 @@ pub(in crate::sumeragi) fn apply_retired_merge_sidecar_requests(
         Ok(cancelled) => Ok(cancelled),
         Err(error) => {
             lane_work.requeue_retired_merge_sidecar_request_hashes(request_hashes)?;
+            Err(V2RunnerError::Service(error))
+        }
+    }
+}
+/// Cancel canonical old-generation Request/Close output for each exact endpoint
+/// whose authenticated responder generation was durably fenced.
+pub(in crate::sumeragi) fn apply_obsolete_merge_sidecar_generation_hints(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+) -> Result<usize, V2RunnerError> {
+    let hints = lane_work.drain_obsolete_merge_sidecar_generation_hints();
+    if hints.is_empty() {
+        return Ok(0);
+    }
+    match services.cancel_obsolete_certified_merge_sidecar_generation_hints(&hints) {
+        Ok(cancelled) => Ok(cancelled),
+        Err(error) => {
+            lane_work.requeue_obsolete_merge_sidecar_generation_hints(hints)?;
             Err(V2RunnerError::Service(error))
         }
     }
@@ -2714,6 +2751,7 @@ fn dispatch_lane_work_effects_with_progress(
     let _ = apply_native_amx_output_retention(lane_work, services)?;
     let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
     let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+    let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
     let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
     apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
     apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
@@ -2927,12 +2965,12 @@ fn dispatch_lane_work_effect_from_snapshot(
     Ok(LaneWorkEffectDispatch::Complete)
 }
 include!("v2_runner/merge_sidecar_recovery.rs");
-fn drain_lane_relay_ingress(
+fn drain_lane_relay_prefix(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     lane_work: &mut V2LaneWorkAdapter,
     active_view: wire::View,
     limit: usize,
-) -> std::result::Result<(), V2LaneWorkError> {
+) -> bool {
     let mut drained_any = false;
     for _ in 0..limit.max(1) {
         let mut drained = false;
@@ -2945,10 +2983,43 @@ fn drain_lane_relay_ingress(
             break;
         }
     }
+    drained_any
+}
+fn drain_lane_relay_ingress(
+    lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
+    lane_work: &mut V2LaneWorkAdapter,
+    active_view: wire::View,
+    limit: usize,
+) -> std::result::Result<bool, V2LaneWorkError> {
+    let drained_any = drain_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit);
     if drained_any {
         let _ = lane_work.service_next_historical_recovery()?;
     }
-    Ok(())
+    Ok(drained_any)
+}
+/// Drain the already-admitted relay prefix after shared runner ingress closes.
+///
+/// Decision-pending lane admission rejects ordinary relay work. Unlike the
+/// open-height drain, this terminal helper never starts a historical recovery
+/// tick; it only lets the finite serialized prefix publish its monotonic
+/// sidecar cancellation/admission handoffs.
+fn drain_finalized_lane_relay_prefix(
+    lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
+    lane_work: &mut V2LaneWorkAdapter,
+    active_view: wire::View,
+    limit: usize,
+) -> bool {
+    drain_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit)
+}
+#[cfg(test)]
+/// Exercise the terminal relay-prefix drain from sibling stateful regressions.
+pub(in crate::sumeragi) fn drain_finalized_lane_relay_prefix_for_test(
+    lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
+    lane_work: &mut V2LaneWorkAdapter,
+    active_view: wire::View,
+    limit: usize,
+) -> bool {
+    drain_finalized_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit)
 }
 /// Fail-closed live-runner error.
 #[derive(Debug, Error)]

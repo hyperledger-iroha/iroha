@@ -434,3 +434,47 @@
             "zero retries must return before invoking platform-dependent seq"
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn lifecycle_scripts_enforce_exact_peer_selector_grammar() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        write_scripts(
+            temp.path(),
+            4,
+            false,
+            false,
+            &localnet_client_account_literal(None),
+            &localnet_fee_asset_literal(),
+        )
+        .expect("write scripts");
+
+        for name in ["start.sh", "stop.sh"] {
+            let path = temp.path().join(name);
+            let contents = fs::read_to_string(&path).expect("read lifecycle script");
+            assert!(contents.contains("PEER_COUNT=4"));
+            assert!(contents.contains("SELECTED_PEERS="));
+            assert!(contents.contains("usage: $0 [--peer-index INDEX]"));
+            assert!(contents.contains("for i in $SELECTED_PEERS; do"));
+            for arguments in [
+                vec!["--peer-index"],
+                vec!["--peer-index", "04"],
+                vec!["--peer-index", "4"],
+                vec!["--other", "0"],
+            ] {
+                let status = std::process::Command::new("/bin/bash")
+                    .arg(&path)
+                    .args(arguments)
+                    .status()
+                    .expect("run lifecycle script with invalid selector");
+                assert_eq!(status.code(), Some(2), "{name} must reject invalid selectors");
+            }
+        }
+
+        let status = std::process::Command::new("/bin/bash")
+            .arg(temp.path().join("stop.sh"))
+            .args(["--peer-index", "3"])
+            .status()
+            .expect("run harmless exact selected stop");
+        assert!(status.success());
+    }

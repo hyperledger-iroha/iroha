@@ -1854,6 +1854,11 @@ pub trait IVMHost {
     /// Whether this host is safe to share across worker threads during block execution.
     /// Hosts with internal mutable state should override and return `false` so the VM
     /// falls back to sequential execution.
+    ///
+    /// A host returning `true` must also make each transaction's side effects
+    /// atomic internally. Parallel execution cannot take isolated shared-host
+    /// checkpoints, so it does not invoke [`Self::checkpoint`] or
+    /// [`Self::restore`] for failed transactions.
     fn supports_concurrent_blocks(&self) -> bool {
         false
     }
@@ -1875,12 +1880,18 @@ pub trait IVMHost {
     }
     /// Optional transactional checkpoint. When provided, the VM will restore this snapshot
     /// if a transaction fails during block execution to avoid leaking side effects.
+    /// A sequential host that returns `None` is detached and poisons block execution if a
+    /// transaction fails or panics because the VM cannot prove that host side effects rolled back.
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         None
     }
-    /// Attempt to restore from a previously taken checkpoint.
-    fn restore(&mut self, _snapshot: &dyn Any) -> bool {
-        false
+    /// Restore a previously taken checkpoint.
+    ///
+    /// An error means rollback could not be completed durably. Block execution
+    /// treats that outcome as fatal and must not execute another transaction
+    /// with the affected host.
+    fn restore(&mut self, _snapshot: &dyn Any) -> Result<(), VMError> {
+        Err(VMError::HostUnavailable)
     }
     /// Indicate whether this host reports logical state accesses via `finish_tx`.
     fn access_logging_supported(&self) -> bool {
@@ -1895,6 +1906,8 @@ type AllowsSyscallSignatureGuard = for<'a> fn(&'a dyn IVMHost, SyscallPolicy, u3
 type BeginTxSignatureGuard =
     for<'a, 'b> fn(&'a mut dyn IVMHost, &'b StateAccessSet) -> Result<(), VMError>;
 type FinishTxSignatureGuard = for<'a> fn(&'a mut dyn IVMHost) -> Result<AccessLog, VMError>;
+type RestoreSignatureGuard =
+    for<'a, 'b> fn(&'a mut dyn IVMHost, &'b dyn Any) -> Result<(), VMError>;
 fn prepare_syscall_signature_guard(
     host: &dyn IVMHost,
     number: u32,
@@ -1914,10 +1927,14 @@ fn begin_tx_signature_guard(
 fn finish_tx_signature_guard(host: &mut dyn IVMHost) -> Result<AccessLog, VMError> {
     IVMHost::finish_tx(host)
 }
+fn restore_signature_guard(host: &mut dyn IVMHost, snapshot: &dyn Any) -> Result<(), VMError> {
+    IVMHost::restore(host, snapshot)
+}
 const _: PrepareSyscallSignatureGuard = prepare_syscall_signature_guard;
 const _: AllowsSyscallSignatureGuard = allows_syscall_signature_guard;
 const _: BeginTxSignatureGuard = begin_tx_signature_guard;
 const _: FinishTxSignatureGuard = finish_tx_signature_guard;
+const _: RestoreSignatureGuard = restore_signature_guard;
 /// A basic host implementation used in tests. It supports heap allocation and
 /// reading private inputs.
 #[derive(Clone, Default)]
@@ -4798,12 +4815,12 @@ impl IVMHost for DefaultHost {
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         Some(Box::new(self.clone()))
     }
-    fn restore(&mut self, snapshot: &dyn Any) -> bool {
+    fn restore(&mut self, snapshot: &dyn Any) -> Result<(), VMError> {
         if let Some(saved) = snapshot.downcast_ref::<DefaultHost>() {
             *self = saved.clone();
-            true
+            Ok(())
         } else {
-            false
+            Err(VMError::HostUnavailable)
         }
     }
     fn access_logging_supported(&self) -> bool {

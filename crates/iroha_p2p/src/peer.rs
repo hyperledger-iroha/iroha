@@ -102,6 +102,11 @@ const SOURCE_RETENTION_MAX_LEASES: usize = 2;
 const DEFAULT_MESSAGE_PREALLOC_CAP: usize = 512 * 1024;
 /// Largest idle per-connection message buffer retained after a large frame.
 const MAX_RETAINED_MESSAGE_BUFFER_CAP: usize = DEFAULT_MESSAGE_PREALLOC_CAP;
+#[cfg(feature = "quic")]
+const QUIC_DATAGRAM_INBOX_CAPACITY: usize = 256;
+#[cfg(feature = "quic")]
+/// QUIC application error used for malformed production P2P DATAGRAMs.
+pub(crate) const QUIC_DATAGRAM_PROTOCOL_ERROR_CODE: u32 = 0x4952_4f44;
 /// Prefix byte used to indicate a versioned handshake hello payload.
 const HANDSHAKE_HELLO_VERSION_PREFIX: u8 = 0xFF;
 /// Single supported handshake hello payload version.
@@ -3288,6 +3293,10 @@ pub mod handles {
             proxy_tls_pinned_cert_der,
             proxy_policy,
             quic_dialer,
+            quic_datagrams_enabled,
+            quic_datagram_max_payload_bytes: quic_datagram_max_payload_bytes
+                .min(max_frame_bytes)
+                .min(crate::MAX_ENCRYPTED_FRAME_BYTES),
         };
         let peer = RunPeerArgs {
             peer,
@@ -3607,6 +3616,12 @@ pub mod handles {
             self.hi_consensus
                 .try_recv()
                 .map(RetainedPost::into_inner_and_acknowledge_flush)
+        }
+        /// Receive the next block-sync message, if any.
+        pub(crate) fn try_recv_block_sync(
+            &mut self,
+        ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
+            self.lo_block_sync.try_recv().map(RetainedPost::into_inner)
         }
         /// Receive the next high-priority control-lane message, if any.
         pub(crate) fn try_recv_high_control(
@@ -4216,7 +4231,7 @@ mod run {
     }
     #[cfg(feature = "quic")]
     struct QuicDatagramReceiver<E: Enc, T: Pload + ClassifyTopic> {
-        connection: quinn::Connection,
+        ingress: QuicDatagramIngress,
         cryptographer: Cryptographer<E>,
         decrypted: Vec<u8>,
         framed_schema: [u8; 16],
@@ -4227,12 +4242,13 @@ mod run {
     }
     #[cfg(feature = "quic")]
     impl<E: Enc, T: Pload + ClassifyTopic> QuicDatagramReceiver<E, T> {
-        fn new(
-            connection: quinn::Connection,
+        async fn new(
+            mut ingress: QuicDatagramIngress,
             cryptographer: Cryptographer<E>,
             max_frame_bytes: usize,
             topic_frame_caps: crate::network::TopicFrameCaps,
-        ) -> Self {
+            byte_budget: InboundSourceByteBudget,
+        ) -> Result<Self, Error> {
             let framed_schema = <T as ncore::NoritoSerialize>::schema_hash();
             let align = ncore::archived_payload_align::<T>();
             let framed_padding = if align <= 1 {
@@ -4241,8 +4257,9 @@ mod run {
                 let rem = ncore::Header::SIZE % align;
                 if rem == 0 { 0 } else { align - rem }
             };
-            Self {
-                connection,
+            ingress.authenticate(byte_budget).await?;
+            Ok(Self {
+                ingress,
                 cryptographer,
                 decrypted: Vec::new(),
                 framed_schema,
@@ -4250,13 +4267,11 @@ mod run {
                 max_frame_bytes,
                 topic_frame_caps,
                 _payload: std::marker::PhantomData,
-            }
+            })
         }
         async fn recv(&mut self) -> Result<(T, usize), Error> {
-            let datagram =
-                self.connection.read_datagram().await.map_err(|e| {
-                    std::io::Error::other(format!("quic datagram recv failed: {e}"))
-                })?;
+            let retained = self.ingress.recv().await?;
+            let datagram = &retained.payload;
             if datagram.len() > self.max_frame_bytes {
                 return Err(Error::FrameTooLarge);
             }
@@ -4888,27 +4903,13 @@ mod run {
             .expect("LOW_TOPIC_COUNT must fit in u8");
     }
     fn inbound_priority_from_topic(topic: Topic) -> Priority {
-        match topic {
-            Topic::ConsensusSafety
-            | Topic::Consensus
-            | Topic::ConsensusPayload
-            | Topic::ConsensusChunk
-            | Topic::Control => Priority::High,
-            Topic::BlockSync
-            | Topic::TxGossip
-            | Topic::TxGossipRestricted
-            | Topic::PeerGossip
-            | Topic::TrustGossip
-            | Topic::Health
-            | Topic::Other => Priority::Low,
-        }
+        topic.scheduling_priority()
     }
     fn inbound_priority_from_message<T: ClassifyTopic>(message: &T) -> Priority {
-        if matches!(message.priority(), Priority::High) {
-            Priority::High
-        } else {
-            inbound_priority_from_topic(message.topic())
-        }
+        // Remote peers must not be able to promote arbitrary traffic into the
+        // actor's high-priority queues. Local actor admission can still honor
+        // an API-requested priority before the message reaches this boundary.
+        inbound_priority_from_topic(message.topic())
     }
     fn try_recv_low_rr<T>(
         low_rr: &mut u8,
@@ -5169,6 +5170,8 @@ mod run {
                         read_low,
                         write_low,
                         quic,
+                        #[cfg(feature = "quic")]
+                        quic_datagrams,
                         id: connection_id,
                         ..
                     },
@@ -5341,14 +5344,25 @@ mod run {
             let mut datagram_receiver: Option<DatagramReceiver<E, T>> = None;
             #[cfg(feature = "quic")]
             if quic_datagrams_enabled {
-                    if let Some(conn) = quic.clone() {
-                        // Receiver is always safe to enable when datagrams are configured locally.
-                        datagram_receiver = Some(QuicDatagramReceiver::<E, T>::new(
-                            conn.clone(),
+                if let Some(conn) = quic.clone() {
+                    if let Some(ingress) = quic_datagrams {
+                        let receiver = QuicDatagramReceiver::<E, T>::new(
+                            ingress,
                             cryptographer.clone(),
                             max_frame_bytes,
                             peer_message_senders.topic_frame_caps,
-                        ));
+                            inbound_frame_byte_budgets.low(),
+                        )
+                        .await;
+                        let Ok(receiver) = receiver else {
+                            iroha_logger::warn!(
+                                conn_id,
+                                "QUIC DATAGRAM ingress failed during authentication"
+                            );
+                            return;
+                        };
+                        datagram_receiver = Some(receiver);
+                    }
                     // Sender requires that the peer negotiated datagram support.
                     if conn.max_datagram_size().is_some() && quic_datagram_max_payload_bytes > 0 {
                         datagram_sender = Some(QuicDatagramSender::new(
@@ -12302,6 +12316,17 @@ mod run {
         }
         #[test]
         fn inbound_priority_marks_control_planes_high() {
+            struct RemoteHighTxGossip;
+            impl ClassifyTopic for RemoteHighTxGossip {
+                fn topic(&self) -> crate::network::message::Topic {
+                    crate::network::message::Topic::TxGossip
+                }
+
+                fn priority(&self) -> Priority {
+                    Priority::High
+                }
+            }
+
             assert_eq!(
                 super::inbound_priority_from_topic(crate::network::message::Topic::ConsensusSafety),
                 Priority::High
@@ -12327,6 +12352,11 @@ mod run {
             assert_eq!(
                 super::inbound_priority_from_topic(crate::network::message::Topic::TxGossip),
                 Priority::Low
+            );
+            assert_eq!(
+                super::inbound_priority_from_message(&RemoteHighTxGossip),
+                Priority::Low,
+                "a remote message cannot self-promote a low topic"
             );
         }
         fn framed_message<T: Encode>(value: &T) -> Vec<u8> {
@@ -13541,6 +13571,8 @@ mod state {
         pub proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
         pub proxy_policy: crate::transport::ProxyPolicy,
         pub quic_dialer: Option<crate::transport::QuicDialer>,
+        pub quic_datagrams_enabled: bool,
+        pub quic_datagram_max_payload_bytes: usize,
     }
     impl Connecting {
         #[cfg(any(feature = "quic", test))]
@@ -13581,6 +13613,8 @@ mod state {
                 proxy_tls_pinned_cert_der,
                 proxy_policy,
                 quic_dialer,
+                quic_datagrams_enabled,
+                quic_datagram_max_payload_bytes,
             }: Self,
         ) -> Result<ConnectedTo, crate::Error> {
             async fn dial_tls(
@@ -13640,6 +13674,8 @@ mod state {
                 dialer: &crate::transport::QuicDialer,
                 dial_timeout: Duration,
                 connection_id: ConnectionId,
+                quic_datagrams_enabled: bool,
+                quic_datagram_max_payload_bytes: usize,
             ) -> Result<Connection, crate::Error> {
                 use tokio::time::Instant;
                 const QUIC_SERVER_NAME: &str = "iroha-quic";
@@ -13679,6 +13715,12 @@ mod state {
                     let remaining = deadline - now;
                     let res = tokio::time::timeout(remaining, async {
                         let conn = dialer.connect(target, QUIC_SERVER_NAME).await?;
+                        let datagram_ingress = quic_datagrams_enabled.then(|| {
+                            QuicDatagramIngress::spawn(
+                                conn.clone(),
+                                quic_datagram_max_payload_bytes,
+                            )
+                        });
                         let transport_binding =
                             crate::transport::quic_peer_certificate_fingerprint(&conn)?;
                         let remote = conn.remote_address();
@@ -13702,6 +13744,7 @@ mod state {
                             recv_hi,
                             send_low,
                             recv_low,
+                            datagram_ingress,
                             Some(remote),
                             transport_binding,
                         ))
@@ -13734,7 +13777,16 @@ mod state {
             if prefer_scion {
                 #[cfg(feature = "quic")]
                 if let Some(dialer) = &quic_dialer {
-                    match dial_quic_like(&peer_addr, dialer, dial_timeout, connection_id).await {
+                    match dial_quic_like(
+                        &peer_addr,
+                        dialer,
+                        dial_timeout,
+                        connection_id,
+                        quic_datagrams_enabled,
+                        quic_datagram_max_payload_bytes,
+                    )
+                    .await
+                    {
                         Ok(connection) => {
                             crate::network::inc_scion_outbound();
                             return Ok(ConnectedTo {
@@ -13769,8 +13821,14 @@ mod state {
                 {
                     if quic_enabled {
                         if let Some(dialer) = &quic_dialer {
-                            let quic_fut =
-                                dial_quic_like(&peer_addr, dialer, dial_timeout, connection_id);
+                            let quic_fut = dial_quic_like(
+                                &peer_addr,
+                                dialer,
+                                dial_timeout,
+                                connection_id,
+                                quic_datagrams_enabled,
+                                quic_datagram_max_payload_bytes,
+                            );
                             tokio::pin!(quic_fut);
                             // Phase 1: give QUIC a head start, but don't stall on blocked UDP.
                             let stagger = tokio::time::sleep(happy_eyeballs_stagger);
@@ -13890,6 +13948,8 @@ mod state {
                 proxy_tls_pinned_cert_der: None,
                 proxy_policy: crate::transport::ProxyPolicy::disabled(),
                 quic_dialer: None,
+                quic_datagrams_enabled: false,
+                quic_datagram_max_payload_bytes: 0,
             }
         }
         fn io_error(kind: std::io::ErrorKind, label: &'static str) -> crate::Error {
@@ -15404,6 +15464,357 @@ mod cryptographer {
 pub type ConnectionId = u64;
 /// Hash-sized binding for authenticated transport sessions.
 pub type TransportBinding = [u8; iroha_crypto::Hash::LENGTH];
+#[cfg(feature = "quic")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuicDatagramDisposition {
+    DropPreauth,
+    Queue,
+    Reject(&'static str),
+}
+#[cfg(feature = "quic")]
+fn classify_quic_datagram(
+    payload_len: usize,
+    authenticated: bool,
+    max_payload_bytes: usize,
+) -> QuicDatagramDisposition {
+    if payload_len == 0 {
+        return QuicDatagramDisposition::Reject("zero-length QUIC DATAGRAM");
+    }
+    if payload_len > max_payload_bytes {
+        return QuicDatagramDisposition::Reject("oversized QUIC DATAGRAM");
+    }
+    if authenticated {
+        QuicDatagramDisposition::Queue
+    } else {
+        QuicDatagramDisposition::DropPreauth
+    }
+}
+#[cfg(feature = "quic")]
+fn quic_datagram_queue_charge(payload_len: usize) -> Option<usize> {
+    payload_len.checked_add(core::mem::size_of::<RetainedQuicDatagram>())
+}
+#[cfg(feature = "quic")]
+#[derive(Debug)]
+struct RetainedQuicDatagram {
+    payload: bytes::Bytes,
+    _lease: SharedByteLease,
+}
+#[cfg(feature = "quic")]
+struct QuicDatagramActivation {
+    byte_budget: InboundSourceByteBudget,
+    acknowledged: oneshot::Sender<()>,
+}
+/// Eager, bounded QUIC DATAGRAM drain retained across application authentication.
+///
+/// Unauthenticated payloads are discarded, while authenticated payloads enter
+/// a fixed-count inbox whose per-entry size is capped by configuration.
+#[cfg(feature = "quic")]
+pub(crate) struct QuicDatagramIngress {
+    inbox: mpsc::Receiver<RetainedQuicDatagram>,
+    terminal: watch::Receiver<Option<Arc<str>>>,
+    activation: Option<oneshot::Sender<QuicDatagramActivation>>,
+    task: tokio::task::JoinHandle<()>,
+}
+#[cfg(feature = "quic")]
+impl QuicDatagramIngress {
+    /// Start draining Quinn immediately after transport establishment.
+    pub(crate) fn spawn(connection: quinn::Connection, max_payload_bytes: usize) -> Self {
+        let (inbox_tx, inbox) = mpsc::channel(QUIC_DATAGRAM_INBOX_CAPACITY);
+        let (terminal_tx, terminal) = watch::channel(None::<Arc<str>>);
+        let (activation_tx, mut activation_rx) = oneshot::channel::<QuicDatagramActivation>();
+        let task_connection = connection.clone();
+        // TODO: Patch or update Quinn so dependency-owned queued DATAGRAMs carry
+        // a fixed per-entry charge before this eager pump is first scheduled.
+        let task = tokio::spawn(async move {
+            let mut frames_since_yield = 0_u8;
+            let mut byte_budget: Option<InboundSourceByteBudget> = None;
+            loop {
+                tokio::select! {
+                    biased;
+                    activation = &mut activation_rx, if byte_budget.is_none() => {
+                        let Ok(activation) = activation else {
+                            return;
+                        };
+                        byte_budget = Some(activation.byte_budget);
+                        if activation.acknowledged.send(()).is_err() {
+                            return;
+                        }
+                    }
+                    datagram = task_connection.read_datagram() => {
+                        let datagram = match datagram {
+                            Ok(datagram) => datagram,
+                            Err(error) => {
+                                terminal_tx.send_replace(Some(
+                                    format!("QUIC DATAGRAM receive failed: {error}").into(),
+                                ));
+                                return;
+                            }
+                        };
+                        let mut rejection = None;
+                        match classify_quic_datagram(
+                            datagram.len(),
+                            byte_budget.is_some(),
+                            max_payload_bytes,
+                        ) {
+                            QuicDatagramDisposition::DropPreauth => {}
+                            QuicDatagramDisposition::Queue => {
+                                if let Some(charge) = quic_datagram_queue_charge(datagram.len()) {
+                                    if let Some(lease) = byte_budget
+                                        .as_ref()
+                                        .and_then(|budget| budget.try_reserve(charge))
+                                    {
+                                        let retained = RetainedQuicDatagram {
+                                            payload: datagram,
+                                            _lease: lease,
+                                        };
+                                        match inbox_tx.try_send(retained) {
+                                            Ok(())
+                                            | Err(mpsc::error::TrySendError::Full(_)) => {}
+                                            Err(mpsc::error::TrySendError::Closed(_)) => return,
+                                        }
+                                    }
+                                } else {
+                                    rejection = Some("QUIC DATAGRAM queue charge overflow");
+                                }
+                            }
+                            QuicDatagramDisposition::Reject(reason) => rejection = Some(reason),
+                        }
+                        if let Some(reason) = rejection {
+                            terminal_tx.send_replace(Some(Arc::from(reason)));
+                            task_connection.close(
+                                quinn::VarInt::from_u32(QUIC_DATAGRAM_PROTOCOL_ERROR_CODE),
+                                b"invalid DATAGRAM",
+                            );
+                            while task_connection.read_datagram().await.is_ok() {
+                                tokio::task::yield_now().await;
+                            }
+                            return;
+                        }
+                        frames_since_yield = frames_since_yield.wrapping_add(1);
+                        if frames_since_yield == 0 {
+                            tokio::task::yield_now().await;
+                        }
+                    }
+                }
+            }
+        });
+        Self {
+            inbox,
+            terminal,
+            activation: Some(activation_tx),
+            task,
+        }
+    }
+    /// Serialize application authentication with the drain's observation order.
+    async fn authenticate(&mut self, byte_budget: InboundSourceByteBudget) -> Result<(), Error> {
+        let Some(activation) = self.activation.take() else {
+            return Err(std::io::Error::other("QUIC DATAGRAM ingress activated twice").into());
+        };
+        let (acknowledged, acknowledgement) = oneshot::channel();
+        activation
+            .send(QuicDatagramActivation {
+                byte_budget,
+                acknowledged,
+            })
+            .map_err(|_| std::io::Error::other("QUIC DATAGRAM drain stopped before activation"))?;
+        acknowledgement
+            .await
+            .map_err(|_| std::io::Error::other("QUIC DATAGRAM activation was not acknowledged"))?;
+        Ok(())
+    }
+    async fn recv(&mut self) -> Result<RetainedQuicDatagram, Error> {
+        loop {
+            if let Some(reason) = self.terminal.borrow().clone() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    reason.to_string(),
+                )
+                .into());
+            }
+            tokio::select! {
+                biased;
+                changed = self.terminal.changed() => {
+                    if changed.is_err() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionAborted,
+                            "QUIC DATAGRAM drain stopped",
+                        ).into());
+                    }
+                }
+                datagram = self.inbox.recv() => {
+                    return datagram.ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::ConnectionAborted,
+                            "QUIC DATAGRAM inbox closed",
+                        ).into()
+                    });
+                }
+            }
+        }
+    }
+}
+#[cfg(feature = "quic")]
+impl Drop for QuicDatagramIngress {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+#[cfg(all(test, feature = "quic"))]
+mod quic_datagram_ingress_tests {
+    use super::*;
+    use quinn::{Endpoint, ServerConfig, TransportConfig};
+    use rustls::pki_types::PrivatePkcs8KeyDer;
+
+    async fn connection_pair() -> std::io::Result<(
+        Endpoint,
+        crate::transport::QuicDialer,
+        quinn::Connection,
+        quinn::Connection,
+    )> {
+        use quinn::crypto::rustls::QuicServerConfig;
+
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(["iroha-quic".to_owned()])
+                .map_err(std::io::Error::other)?;
+        let private_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
+        let mut tls =
+            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_no_client_auth()
+                .with_single_cert(vec![cert.der().clone().into_owned()], private_key.into())
+                .map_err(std::io::Error::other)?;
+        tls.max_early_data_size = 0;
+        tls.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
+        let crypto = QuicServerConfig::try_from(Arc::new(tls)).map_err(std::io::Error::other)?;
+        let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
+        let mut server_transport = TransportConfig::default();
+        server_transport
+            .datagram_receive_buffer_size(Some(64 * 1024))
+            .datagram_send_buffer_size(64 * 1024);
+        server_config.transport_config(Arc::new(server_transport));
+        let endpoint =
+            Endpoint::server(server_config, "127.0.0.1:0".parse().expect("test address"))?;
+        let server_addr = endpoint.local_addr()?;
+        let dialer = crate::transport::QuicDialer::bind(
+            "127.0.0.1:0".parse().expect("test address"),
+            crate::transport::quic::DialerConfig {
+                datagram_receive_buffer: Some(64 * 1024),
+                datagram_send_buffer: 64 * 1024,
+                ..crate::transport::quic::DialerConfig::default()
+            },
+        )?;
+        let accepted = async {
+            let incoming = endpoint
+                .accept()
+                .await
+                .ok_or_else(|| std::io::Error::other("test endpoint closed"))?;
+            let connecting = incoming.accept().map_err(std::io::Error::other)?;
+            connecting.await.map_err(std::io::Error::other)
+        };
+        let connected = dialer.connect(server_addr, "iroha-quic");
+        let (server, client) = tokio::try_join!(accepted, connected)?;
+        Ok((endpoint, dialer, server, client))
+    }
+
+    #[test]
+    fn datagram_policy_drops_preauth_and_rejects_unbudgeted_shapes() {
+        assert_eq!(
+            classify_quic_datagram(1, false, 32),
+            QuicDatagramDisposition::DropPreauth
+        );
+        assert_eq!(
+            classify_quic_datagram(1, true, 32),
+            QuicDatagramDisposition::Queue
+        );
+        assert!(matches!(
+            classify_quic_datagram(0, false, 32),
+            QuicDatagramDisposition::Reject(_)
+        ));
+        assert!(matches!(
+            classify_quic_datagram(33, true, 32),
+            QuicDatagramDisposition::Reject(_)
+        ));
+        assert_eq!(
+            quic_datagram_queue_charge(32),
+            Some(32 + core::mem::size_of::<RetainedQuicDatagram>())
+        );
+        assert_eq!(quic_datagram_queue_charge(usize::MAX), None);
+    }
+
+    #[tokio::test]
+    async fn ingress_terminal_preempts_buffered_frames_and_drop_aborts_task() {
+        let (inbox_tx, inbox) = mpsc::channel(1);
+        let (terminal_tx, terminal) = watch::channel(None::<Arc<str>>);
+        let (activation_tx, activation_rx) = oneshot::channel::<QuicDatagramActivation>();
+        let task = tokio::spawn(async move {
+            let activation = activation_rx.await.expect("activation request");
+            activation
+                .acknowledged
+                .send(())
+                .expect("activation caller remains alive");
+            std::future::pending::<()>().await;
+        });
+        let abort_handle = task.abort_handle();
+        let mut ingress = QuicDatagramIngress {
+            inbox,
+            terminal,
+            activation: Some(activation_tx),
+            task,
+        };
+        let budget = SharedByteBudget::new(1024, 0).expect("test byte budget");
+        ingress
+            .authenticate(InboundSourceByteBudget::shared_only(Arc::clone(&budget)))
+            .await
+            .expect("activate ingress");
+        let charge = quic_datagram_queue_charge(6).expect("small charge");
+        let lease = budget.try_reserve(charge, false).expect("test byte lease");
+        inbox_tx
+            .send(RetainedQuicDatagram {
+                payload: bytes::Bytes::from_static(b"queued"),
+                _lease: lease,
+            })
+            .await
+            .expect("test inbox open");
+        terminal_tx.send_replace(Some(Arc::from("terminal violation")));
+        let error = ingress
+            .recv()
+            .await
+            .expect_err("terminal state must beat buffered frames");
+        assert!(matches!(error, Error::Io(_)));
+        drop(ingress);
+        tokio::task::yield_now().await;
+        assert!(abort_handle.is_finished());
+        assert_eq!(budget.retained_total(), 0);
+    }
+
+    #[tokio::test]
+    async fn empty_datagram_is_rejected_before_application_authentication() {
+        let pair = tokio::time::timeout(Duration::from_secs(5), connection_pair()).await;
+        let (_endpoint, _dialer, server, client) = match pair {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("QUIC test skipped: {error}");
+                return;
+            }
+            Ok(Err(error)) => panic!("QUIC pair failed: {error}"),
+            Err(_) => panic!("QUIC pair timed out"),
+        };
+        let mut ingress = QuicDatagramIngress::spawn(server, 32);
+        client
+            .send_datagram(bytes::Bytes::new())
+            .expect("empty DATAGRAM reaches the peer transport");
+        let error = tokio::time::timeout(Duration::from_secs(2), ingress.recv())
+            .await
+            .expect("eager drain must observe the DATAGRAM")
+            .expect_err("empty DATAGRAM must be terminal before authentication");
+        let Error::Io(error) = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert!(error.to_string().contains("zero-length"));
+        tokio::time::timeout(Duration::from_secs(2), client.closed())
+            .await
+            .expect("protocol close must reach the sender");
+    }
+}
 /// Authenticated P2P connection assembled by the crate's TLS or QUIC transports.
 pub(crate) struct Connection {
     /// A unique connection id
@@ -15418,6 +15829,9 @@ pub(crate) struct Connection {
     pub(crate) write_low: Option<Box<dyn AsyncWrite + Send + Unpin>>,
     /// QUIC connection handle (only set when the underlying transport is QUIC).
     pub(crate) quic: Option<crate::transport::QuicConnection>,
+    /// Eager DATAGRAM drain started before application authentication.
+    #[cfg(feature = "quic")]
+    pub(crate) quic_datagrams: Option<QuicDatagramIngress>,
     /// Remote addr, for logging purpose.
     pub(crate) remote_addr: Option<SocketAddr>,
     /// Listener-observed TLS/QUIC channel binding; mandatory outside negative-path tests.
@@ -15438,6 +15852,8 @@ impl Connection {
             read_low: None,
             write_low: None,
             quic: None,
+            #[cfg(feature = "quic")]
+            quic_datagrams: None,
             remote_addr: None,
             transport_binding: None,
         }
@@ -15460,6 +15876,8 @@ impl Connection {
             read_low: None,
             write_low: None,
             quic: None,
+            #[cfg(feature = "quic")]
+            quic_datagrams: None,
             remote_addr: None,
             transport_binding: Some(transport_binding),
         }
@@ -15485,6 +15903,7 @@ impl Connection {
         recv_hi: quinn::RecvStream,
         send_low: Option<quinn::SendStream>,
         recv_low: Option<quinn::RecvStream>,
+        quic_datagrams: Option<QuicDatagramIngress>,
         remote_addr: Option<SocketAddr>,
         transport_binding: TransportBinding,
     ) -> Self {
@@ -15501,6 +15920,7 @@ impl Connection {
                 boxed
             }),
             quic: Some(quic),
+            quic_datagrams,
             remote_addr,
             transport_binding: Some(transport_binding),
         }

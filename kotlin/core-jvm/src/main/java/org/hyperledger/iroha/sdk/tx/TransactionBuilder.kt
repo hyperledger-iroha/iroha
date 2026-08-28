@@ -2,6 +2,8 @@ package org.hyperledger.iroha.sdk.tx
 
 import org.hyperledger.iroha.sdk.crypto.SigningException
 import org.hyperledger.iroha.sdk.crypto.Signer
+import org.hyperledger.iroha.sdk.crypto.SignatureAdmission
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.tx.norito.NoritoCodecAdapter
@@ -34,8 +36,23 @@ class TransactionBuilder(
         signer: Signer,
         alias: String?,
     ): SignedTransaction {
+        val algorithm = try {
+            SigningAlgorithm.fromAlgorithmName(signer.algorithm())
+        } catch (error: IllegalArgumentException) {
+            throw SigningException("Unsupported signer algorithm", error)
+        }
         val encoded = codecAdapter.encodeTransaction(payload)
         val signature = signer.sign(encoded)
+        if (!SignatureAdmission.isValid(algorithm, signature)) {
+            val expectedLength = when (algorithm) {
+                SigningAlgorithm.ED25519 -> SignatureAdmission.ED25519_SIGNATURE_LENGTH
+                SigningAlgorithm.ML_DSA -> SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH
+                else -> throw SigningException("${algorithm.providerName} signer returned no signature")
+            }
+            throw SigningException(
+                "${algorithm.providerName} signer returned a malformed signature; expected $expectedLength nonzero bytes",
+            )
+        }
         return SignedTransaction.builder()
             .setEncodedPayload(encoded)
             .setSignature(signature)

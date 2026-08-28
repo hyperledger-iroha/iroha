@@ -1296,8 +1296,10 @@ fn http_connect_authority(target: &SocketAddr) -> Result<String> {
         SocketAddr::Ipv4(addr) => Ok(format!("{}:{}", addr.ip, addr.port)),
         SocketAddr::Ipv6(addr) => Ok(format!("[{}]:{}", addr.ip, addr.port)),
         SocketAddr::Host(addr) => {
+            let rooted = addr.host.ends_with('.');
             let host = normalize_dns_name(addr.host.as_ref())?;
-            Ok(format!("{host}:{}", addr.port))
+            let root = if rooted { "." } else { "" };
+            Ok(format!("{host}{root}:{}", addr.port))
         }
     }
 }
@@ -1816,18 +1818,22 @@ mod tests {
     }
     #[test]
     fn connect_request_includes_basic_auth_when_present() {
+        use iroha_primitives::addr::socket_addr;
+
         let proxy = Proxy {
             kind: ProxyKind::HttpConnectTls,
             host: "example.com".into(),
             port: 8443,
             auth: Some(Arc::new(ProxyCredentials::new("user", "pass"))),
         };
-        let mut req = build_connect_request("dest:443", &proxy);
-        assert!(
-            std::str::from_utf8(req.as_slice())
-                .expect("ASCII request")
-                .contains("Proxy-Authorization: Basic dXNlcjpwYXNz")
-        );
+        let target = SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
+            host: "DEST.example.".into(),
+            port: 443,
+        });
+        let mut req = build_connect_request(&target, &proxy).expect("valid CONNECT authority");
+        let request = std::str::from_utf8(req.as_slice()).expect("ASCII request");
+        assert!(request.starts_with("CONNECT dest.example.:443 HTTP/1.1\r\n"));
+        assert!(request.contains("Proxy-Authorization: Basic dXNlcjpwYXNz"));
         req.clear();
         assert!(req.as_slice().is_empty());
         let proxy_no_auth = Proxy {
@@ -1836,12 +1842,82 @@ mod tests {
             port: 8080,
             auth: None,
         };
-        let req = build_connect_request("dest:443", &proxy_no_auth);
+        let req = build_connect_request(&socket_addr!(192.0.2.1:443), &proxy_no_auth)
+            .expect("valid IPv4 CONNECT authority");
         assert!(
             !std::str::from_utf8(req.as_slice())
                 .expect("ASCII request")
                 .contains("Proxy-Authorization")
         );
+    }
+    #[test]
+    fn connect_authority_formats_ipv6_and_rejects_host_syntax_injection() {
+        use iroha_primitives::addr::{SocketAddrHost, SocketAddrV6};
+
+        let ipv6 = SocketAddr::Ipv6(SocketAddrV6 {
+            ip: "2001:db8::1".parse().expect("IPv6 address"),
+            port: 443,
+        });
+        assert_eq!(
+            http_connect_authority(&ipv6).expect("valid IPv6 authority"),
+            "[2001:db8::1]:443"
+        );
+
+        for host in [
+            "good.example\r\nX-Injected: yes",
+            "good.example\rX-Injected: yes",
+            "good.example\nX-Injected: yes",
+            "good.example\tX-Injected",
+            "good.example\0X-Injected",
+            "good.example:80",
+            "good.example/extra",
+            "münchen.example",
+            "good_example",
+            "-bad.example",
+            "bad-.example",
+            "bad..example",
+        ] {
+            let target = SocketAddr::Host(SocketAddrHost {
+                host: host.into(),
+                port: 443,
+            });
+            assert!(
+                http_connect_authority(&target).is_err(),
+                "host {host:?} must be rejected"
+            );
+        }
+
+        let target = SocketAddr::Host(SocketAddrHost {
+            host: format!("{}.example", "a".repeat(254)).into(),
+            port: 443,
+        });
+        assert!(http_connect_authority(&target).is_err());
+    }
+    #[tokio::test]
+    async fn invalid_connect_authority_is_rejected_before_any_proxy_bytes() {
+        use iroha_primitives::addr::SocketAddrHost;
+
+        let proxy = Proxy {
+            kind: ProxyKind::HttpConnect,
+            host: "proxy.example".to_owned(),
+            port: 8080,
+            auth: Some(Arc::new(ProxyCredentials::new("user", "pass"))),
+        };
+        let target = SocketAddr::Host(SocketAddrHost {
+            host: "victim.example\r\nX-Injected: yes".into(),
+            port: 443,
+        });
+        let (mut client, mut server) = tokio::io::duplex(256);
+        http_connect_tunnel(&mut client, &proxy, &target, "proxy.example:8080")
+            .await
+            .expect_err("invalid authority must fail");
+        drop(client);
+        let mut written = Vec::new();
+        server
+            .read_to_end(&mut written)
+            .await
+            .expect("read proxy bytes");
+        assert!(written.is_empty());
     }
     #[test]
     fn proxy_credentials_clear_and_debug_are_redacted() {

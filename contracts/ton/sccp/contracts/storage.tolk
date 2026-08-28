@@ -1,4 +1,5 @@
 import "@stdlib/strings"
+import "constants"
 
 /// Immutable route hashes. Every role must be nonzero and distinct.
 struct RouteHashes {
@@ -85,6 +86,8 @@ struct BridgeStorage {
     nonces: map<address, uint64>
     replay: Cell<BridgeReplayState>
     pending: Cell<BridgePendingState>
+    /// Monotonic identity allocated before each rejected-deposit refund.
+    refundSequence: uint64
 }
 
 struct MasterMintRecord {
@@ -119,10 +122,29 @@ struct MasterStorage {
     replay: Cell<MasterReplayState>
 }
 
+/// Exact debit record retained by a wallet while an SCCP burn can be retried.
+struct WalletBurnRecord {
+    status: uint8
+    queryId: uint64
+    bridgeAddress: address
+    jettonAmount: coins
+    payloadHash: uint256
+    sourceEventDigest: uint256
+}
+
+/// Exact source/destination tuple retained for an SCCP refund replay.
+struct WalletRefundRecord {
+    status: uint8
+    queryId: uint64
+    bridgeAddress: address
+    recipientOwner: address
+    jettonAmount: coins
+}
+
 struct WalletReplayState {
     mints: map<uint256, uint8>
-    burns: map<uint256, uint8>
-    refunds: map<uint256, uint8>
+    burns: map<uint256, Cell<WalletBurnRecord>>
+    refunds: map<uint256, Cell<WalletRefundRecord>>
 }
 
 struct WalletStorage {
@@ -149,6 +171,73 @@ struct JettonDataReply {
 
 struct (0x00) OnchainMetadataReply {
     contentDict: map<uint256, string_prefixed0x>
+}
+
+/// Empty bridge replay state used by the only canonical V1 deployment data.
+fun emptyBridgeReplayState(): Cell<BridgeReplayState> {
+    return BridgeReplayState {
+        inbound: [],
+        outbound: [],
+    }.toCell();
+}
+
+/// Empty bridge operation state used by the only canonical V1 deployment data.
+fun emptyBridgePendingState(): Cell<BridgePendingState> {
+    return BridgePendingState {
+        mints: [],
+        burns: [],
+        refunds: [],
+    }.toCell();
+}
+
+/// Empty Jetton-master replay state used by the only canonical V1 deployment data.
+fun emptyMasterReplayState(): Cell<MasterReplayState> {
+    return MasterReplayState {
+        mints: [],
+        burns: [],
+    }.toCell();
+}
+
+/// Build the canonical bridge StateInit data for a governed route.
+///
+/// Governance commits the resulting data-cell hash. Keeping every mutable
+/// counter and dictionary fixed at zero/empty prevents a deployment from
+/// preoccupying replay slots, skipping outbound nonces, or exhausting refund
+/// identities before the first authenticated message.
+fun canonicalBridgeInitialStorage(
+    config: Cell<BridgeConfig>,
+    masterAddress: address,
+): BridgeStorage {
+    val routeConfigurationHash = config.load().routeHashes.load().routeConfigurationHash;
+    return {
+        storageVersion: SCCP_STORAGE_VERSION,
+        routeConfigurationHash,
+        config,
+        masterAddress,
+        nonces: [],
+        replay: emptyBridgeReplayState(),
+        pending: emptyBridgePendingState(),
+        refundSequence: 0,
+    };
+}
+
+/// Build the canonical Jetton-master StateInit data for a governed route.
+///
+/// Governance commits the resulting data-cell hash. Supply and all replay
+/// dictionaries therefore start from a unique zero state.
+fun canonicalMasterInitialStorage(
+    metadata: cell,
+    bridgeConfig: Cell<BridgeConfig>,
+): MasterStorage {
+    val routeConfigurationHash = bridgeConfig.load().routeHashes.load().routeConfigurationHash;
+    return {
+        storageVersion: SCCP_STORAGE_VERSION,
+        routeConfigurationHash,
+        totalSupply: 0,
+        metadata,
+        bridgeConfig,
+        replay: emptyMasterReplayState(),
+    };
 }
 
 fun BridgeStorage.load(): BridgeStorage {

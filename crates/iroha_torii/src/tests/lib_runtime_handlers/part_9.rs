@@ -18,7 +18,7 @@ fn sccp_submit_ingress_has_closed_endpoint_specific_limits() {
         + super::SCCP_SUBMIT_JSON_ENVELOPE_ALLOWANCE_BYTES_V1;
     assert_eq!(
         destination.max_body_bytes,
-        iroha_sccp::SCCP_GROTH16_BN254_MAX_BASE64_ARTIFACT_BYTES_V1 + shared_fields
+        iroha_sccp::SCCP_DESTINATION_PROOF_MAX_BASE64_BYTES_V1 + shared_fields
     );
     assert_eq!(
         native.max_body_bytes,

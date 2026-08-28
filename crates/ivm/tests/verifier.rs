@@ -13,6 +13,7 @@ fn test_verify_trace_pass() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(1, 0);
     vm.load_program(&prog).unwrap();
+    vm.set_zk_trace_enabled(true);
     let res = vm.run();
     assert!(res.is_ok());
     let trace = vm.register_trace();
@@ -36,6 +37,7 @@ fn test_verify_trace_fail() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(1, 1); // will trigger assertion
     vm.load_program(&prog).unwrap();
+    vm.set_zk_trace_enabled(true);
     let res = vm.run();
     assert!(res.is_err());
     let trace = vm.register_trace();

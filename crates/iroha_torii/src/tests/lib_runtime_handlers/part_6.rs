@@ -1378,6 +1378,7 @@ fn seed_public_soracloud_world() -> World {
                     iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
             },
             replicas: std::num::NonZeroU16::new(1).expect("replicas"),
+            placement_targets: BTreeSet::new(),
             route: Some(iroha_data_model::soracloud::SoraRouteTargetV1 {
                 host: "portal.sora".to_owned(),
                 path_prefix: "/app".to_owned(),

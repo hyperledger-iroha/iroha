@@ -62,7 +62,7 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         self.inner.checkpoint()
     }
-    fn restore(&mut self, snapshot: &dyn Any) -> bool {
+    fn restore(&mut self, snapshot: &dyn Any) -> Result<(), VMError> {
         self.inner.restore(snapshot)
     }
     fn begin_tx(&mut self, declared: &crate::parallel::StateAccessSet) -> Result<(), VMError> {
@@ -123,9 +123,12 @@ impl IVMHost for SharedHost {
         let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard.as_ref().and_then(|h| h.checkpoint())
     }
-    fn restore(&mut self, snapshot: &dyn Any) -> bool {
+    fn restore(&mut self, snapshot: &dyn Any) -> Result<(), VMError> {
         let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
-        guard.as_mut().map(|h| h.restore(snapshot)).unwrap_or(false)
+        guard
+            .as_mut()
+            .ok_or(VMError::HostUnavailable)?
+            .restore(snapshot)
     }
     fn begin_tx(&mut self, declared: &crate::parallel::StateAccessSet) -> Result<(), VMError> {
         let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());

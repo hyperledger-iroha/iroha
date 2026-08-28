@@ -214,6 +214,139 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
 }
 
 #[test]
+fn future_prepare_qc_remains_owned_until_matching_tc_enters_view() {
+    let directory = TempDir::new().expect("temporary future-PrepareQC runtime directory");
+    let (mut runtime, context, keys) =
+        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+    let timeout_certificate = signed_runtime_timeout_certificate(&context, &keys);
+    let certificate = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0xC0,
+        wire::GlobalPhase::Prepare,
+        1,
+    );
+    let certificate_message = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone()),
+    );
+    let semantic_origin = context.roster[0].validator.clone();
+    let (_ingress_directory, ingress, mut ownerships) = preowned_leader_wire_ownerships(
+        &context,
+        &[(certificate_message.clone(), semantic_origin.clone())],
+        runtime.ingress.lifecycle_ordinals.clone(),
+    );
+    let certificate_ownership = ownerships
+        .pop()
+        .expect("future PrepareQC owns one fair-ingress carrier");
+    let certificate_receipt = certificate_ownership
+        .leader_wire_runtime_receipt()
+        .expect("future PrepareQC owns one runtime receipt")
+        .clone();
+    runtime
+        .enqueue_network_with_ingress_ownership(certificate_message.clone(), certificate_ownership)
+        .expect("enqueue authenticated future PrepareQC");
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm future-PrepareQC runtime");
+
+    assert!(matches!(
+        runtime.step(now),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+    ));
+    let retained = runtime
+        .take_last_scheduler_ownership()
+        .expect("future PrepareQC retry retains scheduler ownership");
+    assert_eq!(
+        retained.selected,
+        RuntimeSelectedOwnerKind::FifoRetryRetained
+    );
+    assert_eq!(retained.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+    assert_eq!(runtime.queued_commands(), 1);
+    assert!(runtime.pending_leader_wire_terminals.is_empty());
+    assert_eq!(
+        runtime
+            .leader_wire_runtime_receipts
+            .get(&certificate_receipt.owner().admission_ordinal()),
+        Some(&certificate_receipt)
+    );
+
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+        ))
+        .expect("enqueue the matching timeout certificate");
+    let entered = runtime
+        .try_step_pacemaker_escape(now)
+        .expect("matching TC remains a valid pacemaker escape")
+        .expect("matching TC bypasses the retained normal PrepareQC");
+    let RuntimeStep::Advanced(enter_view_effects) = entered else {
+        panic!("matching TC unexpectedly idled")
+    };
+    assert!(enter_view_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::EnterView { tag, .. } if tag.view() == certificate.round.view
+    )));
+    let tc_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("matching TC retains scheduler ownership");
+    assert_eq!(
+        tc_scheduler.selected,
+        RuntimeSelectedOwnerKind::PacemakerProgress
+    );
+    assert_eq!(tc_scheduler.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(enter_view_effects.len())
+        .expect("consume matching TC effect ownership");
+    assert_eq!(runtime.round_tag().view(), certificate.round.view);
+    assert_eq!(runtime.queued_commands(), 1);
+
+    let retried = runtime
+        .step(now)
+        .expect("retry the exact PrepareQC after entering its view");
+    let RuntimeStep::Advanced(certificate_effects) = retried else {
+        panic!("matching-view PrepareQC unexpectedly idled")
+    };
+    assert!(certificate_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::FetchBody {
+            tag,
+            certificate: Some(fetch_certificate),
+            ..
+        } if tag.view() == certificate.round.view && fetch_certificate == &certificate
+    )));
+    let certificate_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("matching-view PrepareQC retains scheduler ownership");
+    assert_eq!(
+        certificate_scheduler.selected,
+        RuntimeSelectedOwnerKind::Fifo
+    );
+    assert_eq!(certificate_scheduler.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(certificate_effects.len())
+        .expect("consume matching-view PrepareQC effect ownership");
+    assert_eq!(runtime.queued_commands(), 0);
+    let terminals = runtime.take_leader_wire_runtime_terminals();
+    let [LeaderWireRuntimeTerminal::Volatile(retired)] = terminals.as_slice() else {
+        panic!("matching-view PrepareQC must emit one volatile runtime terminal")
+    };
+    assert_eq!(retired, &certificate_receipt);
+    ingress
+        .mark_leader_wire_volatile_terminal(retired)
+        .expect("publish the consumed PrepareQC's volatile terminal");
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(certificate_message),
+            semantic_origin,
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+    ));
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
 fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
     let directory = TempDir::new().expect("temporary leader-wire lock directory");
     let (mut runtime, context, keys) =

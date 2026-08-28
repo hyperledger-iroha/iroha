@@ -69,8 +69,8 @@ cargo test --locked -p irohad --bin iroha3d build_inrou_user_data_projects_isola
 echo "+ cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_root_disk_is_a_standalone_authenticated_copy -- --nocapture"
 cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_root_disk_is_a_standalone_authenticated_copy -- --nocapture
 
-echo "+ cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_lease_disks_format_before_publish_and_reuse_ext4 -- --nocapture"
-cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_lease_disks_format_before_publish_and_reuse_ext4 -- --nocapture
+echo "+ cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_lease_disks_create_reusable_raw_images -- --nocapture"
+cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_lease_disks_create_reusable_raw_images -- --nocapture
 
 echo "+ cargo test --locked -p irohad --bin iroha3d inrou_portable_smoke_boots_debian_guest_and_serves_healthcheck -- --ignored --nocapture"
 cargo test --locked -p irohad --bin iroha3d inrou_portable_smoke_boots_debian_guest_and_serves_healthcheck -- --ignored --nocapture

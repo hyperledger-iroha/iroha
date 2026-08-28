@@ -23,6 +23,9 @@ mod kagemusha_validator_qualification_command;
 pub mod musubi_publication_service;
 /// Asynchronous Nexus DPN fee settlement relay.
 mod nexus_fee_relay_worker;
+/// Synchronizes peer-gossip voter authority with the committed validator roster.
+#[path = "main/peers_gossiper_topology_sync.rs"]
+mod peers_gossiper_topology_sync;
 /// Root-custodied immutable no-replace artifact publication.
 #[path = "main/root_owned_artifact_publication.rs"]
 mod root_owned_artifact_publication;
@@ -8791,6 +8794,7 @@ impl Iroha {
             supervisor.monitor(child);
             telemetry
         };
+        let peers_gossiper_topology_events = events_sender.subscribe();
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
             expected_network_id,
@@ -8808,6 +8812,18 @@ impl Iroha {
             supervisor.shutdown_signal(),
         );
         supervisor.monitor(child);
+        let peers_gossiper_topology_state = Arc::clone(&state);
+        let peers_gossiper_topology_handle = peers_gossiper.clone();
+        let peers_gossiper_topology_shutdown = supervisor.shutdown_signal();
+        supervisor.monitor(tokio::spawn(async move {
+            peers_gossiper_topology_sync::run(
+                peers_gossiper_topology_state,
+                peers_gossiper_topology_handle,
+                peers_gossiper_topology_events,
+                peers_gossiper_topology_shutdown,
+            )
+            .await;
+        }));
         log_startup_trace("irohad.peers_gossiper.ready", startup_trace_started_at);
         #[cfg(feature = "telemetry")]
         let torii_telemetry =
@@ -9161,22 +9177,6 @@ impl Iroha {
         } else {
             sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage)
         };
-        let soracloud_operator_preseed_store = if !emergency_fast
-            && config.soracloud_runtime.inrou.enabled
-            && !sorafs_storage_config.enabled()
-        {
-            Some(Arc::new(
-                sorafs_node::store::StorageBackend::new(sorafs_storage_config.clone()).map_err(
-                    |error| {
-                        Report::new(StartError::StartTorii).attach(format!(
-                            "failed to open the local operator-preseed SoraFS store for Inrou hydration: {error}"
-                        ))
-                    },
-                )?,
-            ))
-        } else {
-            None
-        };
         let sorafs_repair_config = if emergency_fast {
             sorafs_node::config::RepairConfig::default()
         } else {
@@ -9221,6 +9221,52 @@ impl Iroha {
             runtime_deps.sorafs_orderbook_transaction_signer.clone();
         let soracloud_runtime_mutation_signer =
             runtime_deps.soracloud_runtime_mutation_signer.clone();
+        let soracloud_local_validator_account_id =
+            soracloud_runtime_mutation_signer.as_ref().map_or_else(
+                || {
+                    AccountId::new(
+                        config
+                            .common
+                            .trusted_peers
+                            .value()
+                            .myself
+                            .id()
+                            .public_key()
+                            .clone(),
+                    )
+                },
+                |signer| signer.authority(),
+            );
+        let soracloud_local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
+        let soracloud_operator_preseed_store = if !emergency_fast
+            && config.soracloud_runtime.inrou.enabled
+            && !sorafs_storage_config.enabled()
+        {
+            let store = Arc::new(
+                sorafs_node::store::StorageBackend::new(sorafs_storage_config.clone()).map_err(
+                    |error| {
+                        Report::new(StartError::StartTorii).attach(format!(
+                            "failed to open the local operator-preseed SoraFS store for Inrou hydration: {error}"
+                        ))
+                    },
+                )?,
+            );
+            let qualified_manifest_digests =
+                sorafs_node::operator_preseed::validate_operator_preseed_store_receipts(
+                &store,
+                sorafs_storage_config.max_capacity_bytes().0,
+                &soracloud_local_validator_account_id.to_string(),
+                &soracloud_local_peer_id,
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to validate durable local Inrou operator-preseed qualifications: {error}"
+                ))
+            })?;
+            Some((store, qualified_manifest_digests))
+        } else {
+            None
+        };
         let sorafs_moderation_transaction_signer =
             runtime_deps.sorafs_moderation_transaction_signer.clone();
         let sorafs_moderation_settlement_handoff =
@@ -9834,23 +9880,8 @@ impl Iroha {
             );
             None
         } else {
-            let local_validator_account_id =
-                soracloud_runtime_mutation_signer.as_ref().map_or_else(
-                    || {
-                        AccountId::new(
-                            config
-                                .common
-                                .trusted_peers
-                                .value()
-                                .myself
-                                .id()
-                                .public_key()
-                                .clone(),
-                        )
-                    },
-                    |signer| signer.authority(),
-                );
-            let local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
+            let local_validator_account_id = soracloud_local_validator_account_id;
+            let local_peer_id = soracloud_local_peer_id;
             let runtime_manager = SoracloudRuntimeManager::new(
                 soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
                     &config.soracloud_runtime,
@@ -9864,8 +9895,16 @@ impl Iroha {
                     .expect("Soracloud is disabled during emergency Fast startup"),
             ))
             .with_remote_stream_token_operator_from_config(&config);
-            let runtime_manager = if let Some(store) = soracloud_operator_preseed_store {
-                runtime_manager.with_operator_preseed_store(store)
+            let runtime_manager = if let Some((store, qualified_manifest_digests)) =
+                soracloud_operator_preseed_store
+            {
+                runtime_manager
+                    .with_operator_preseed_store(store, qualified_manifest_digests)
+                    .map_err(|error| {
+                        Report::new(StartError::StartTorii).attach(format!(
+                            "failed to attach qualified Inrou operator-preseed store: {error:#}"
+                        ))
+                    })?
             } else {
                 runtime_manager
             };

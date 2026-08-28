@@ -68,6 +68,42 @@ def test_release_evidence_requires_every_production_corridor_phase() -> None:
     assert common.REQUIRED_PHASES == CORRIDOR_PHASES
 
 
+def test_production_profile_inventory_requires_ton_mainnet_on_bls12381() -> None:
+    assert common.PROFILE_ORDER == (
+        "ethereum-mainnet",
+        "bsc-mainnet",
+        "tron-mainnet",
+        "ton-mainnet",
+    )
+    assert common.PROOF_CURVE_BY_PROFILE == {
+        "ethereum-mainnet": "bn254",
+        "bsc-mainnet": "bn254",
+        "tron-mainnet": "bn254",
+        "ton-mainnet": "bls12-381",
+    }
+    assert common.PROFILE_DOMAINS["ton-mainnet"] == 4
+    assert "ton-testnet" not in common.PROFILE_ORDER
+
+
+def test_legacy_three_lane_evidence_cannot_report_global_readiness() -> None:
+    evidence = {
+        "release_id": "legacy-three-lane-evidence",
+        "lanes": [
+            {
+                "counterparty_profile": profile,
+                "inbound_status": "verified",
+                "outbound_status": "verified",
+            }
+            for profile in common.PROFILE_ORDER[:-1]
+        ],
+    }
+    summary = common.readiness_summary(evidence, bundle_root_hash=None)
+    assert summary["ready"] is False
+    assert summary["lanes"][-1]["counterparty_profile"] == "ton-mainnet"
+    assert summary["lanes"][-1]["inbound_status"] == "missing"
+    assert "ton-mainnet:missing:requires:present" in summary["blocking_capabilities"]
+
+
 def validator_path() -> Path:
     """Return the corridor-built production validator or skip integration checks."""
 
@@ -202,9 +238,14 @@ def unit_v4_policy() -> tuple[
         )
         proof_systems: list[dict[str, object]] = []
         for index, profile in enumerate(common.PROFILE_ORDER):
+            proof_curve = common.PROOF_CURVE_BY_PROFILE[profile]
             circuit_artifact = bytes.fromhex(_unit_v4_hash(profile, "circuit-artifact"))
             witness_generator = bytes.fromhex(_unit_v4_hash(profile, "witness-generator"))
-            public_signal_schema = bytes.fromhex(common.PUBLIC_SIGNAL_SCHEMA_HASH_HEX)
+            public_signal_schema = bytes.fromhex(
+                common.BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH_HEX
+                if proof_curve == "bls12-381"
+                else common.PUBLIC_SIGNAL_SCHEMA_HASH_HEX
+            )
             anchor: dict[str, object] = {
                 "version": 1,
                 "source_profile": "sora-taira",
@@ -220,6 +261,7 @@ def unit_v4_policy() -> tuple[
             proof: dict[str, object] = {
                 "counterparty_profile": profile,
                 "circuit_id": common.RELEASE_CIRCUIT_IDS[index],
+                "proof_curve": proof_curve,
                 "semantics": list(common.REQUIRED_SEMANTICS),
                 "circuit_artifact_sha256_hex": circuit_artifact.hex(),
                 "witness_generator_sha256_hex": witness_generator.hex(),
@@ -228,6 +270,7 @@ def unit_v4_policy() -> tuple[
                     circuit_artifact,
                     witness_generator,
                     public_signal_schema,
+                    proof_curve,
                 ).hex(),
                 "sora_finality_anchor": anchor,
                 "sora_finality_anchor_hash_hex": common.sora_finality_anchor_hash(
@@ -782,7 +825,7 @@ def test_production_clis_cannot_accept_fixture_policy(script: Path, tmp_path: Pa
             counterparty_profile="solana-mainnet-beta"
         ),
         lambda value: value["destination_attestors"][0].update(
-            counterparty_profile="ton-mainnet"
+            counterparty_profile="ton-testnet"
         ),
         lambda value: value["roles"][1].update(
             public_key_hex=value["roles"][0]["public_key_hex"]
@@ -800,6 +843,7 @@ def test_production_clis_cannot_accept_fixture_policy(script: Path, tmp_path: Pa
             semantics=["pairing-valid-v1", "sccp-exact-statement-v1"]
         ),
         lambda value: value["proof_systems"][0].update(circuit_id="smoke-circuit-v1"),
+        lambda value: value["proof_systems"][0].update(proof_curve="bls12-381"),
         lambda value: value["proof_systems"][0].update(
             circuit_id="sccp-sora-taira-generic-groth16-bn254-v1"
         ),
@@ -980,16 +1024,15 @@ def test_production_loader_rejects_test_policy_without_override() -> None:
 
 
 def test_production_loader_rejects_relabelled_public_fixture_keys(tmp_path: Path) -> None:
-    policy = json.loads(FIXTURE_POLICY.read_text(encoding="utf-8"))
+    published_fixture = json.loads(FIXTURE_POLICY.read_text(encoding="utf-8"))
+    policy, _, _ = unit_v4_policy()
     policy["schema"] = common.TRUST_POLICY_SCHEMA
     policy["environment"] = "production"
     policy["policy_id"] = "forged-production-policy-v1"
-    for index, role in enumerate(policy["roles"]):
-        role["signer_id"] = f"forged-release-role-{index}"
-    for index, attestor in enumerate(policy["destination_attestors"]):
-        attestor["attestor_id"] = f"forged-attestor-{index}"
-    for index, auditor in enumerate(policy["circuit_auditors"]):
-        auditor["auditor_id"] = f"forged-auditor-{index}"
+    policy["roles"][0]["signer_id"] = "forged-release-role"
+    policy["roles"][0]["public_key_hex"] = published_fixture["roles"][0][
+        "public_key_hex"
+    ]
     path = tmp_path / "forged-production-policy.json"
     write_json(path, policy)
     with pytest.raises(common.SccpReleaseError, match="fixture-only"):
@@ -1689,6 +1732,16 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
     assert profile_hash.hex() == (
         "ce5a1e17aca3cafe47a403fd66479f0a36339eb56092dafa67c8d97bdeeb60ef"
     )
+    ton_profile_hash = common.semantic_proof_profile_hash(
+        bytes([0x71]) * 32,
+        bytes([0x72]) * 32,
+        bytes.fromhex(common.BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH_HEX),
+        "bls12-381",
+    )
+    assert ton_profile_hash.hex() == (
+        "311a6f92ff2bd8e50c5ba7d457bbf66122fc451f92275ba99a2d71835a568cfb"
+    )
+    assert ton_profile_hash != profile_hash
     anchor_hash = common.sora_finality_anchor_hash(
         {
             "version": 1,
@@ -1921,6 +1974,16 @@ def test_semantic_profile_hash_rejects_malformed_and_aliased_roles(
         common.semantic_proof_profile_hash(*commitments)
 
 
+def test_semantic_profile_hash_rejects_an_open_ended_curve_label() -> None:
+    with pytest.raises(common.SccpReleaseError, match="curve"):
+        common.semantic_proof_profile_hash(
+            bytes([1]) * 32,
+            bytes([2]) * 32,
+            bytes([3]) * 32,
+            "caller-selected-curve",
+        )
+
+
 def _semantic_hash(label: str) -> str:
     return hashlib.sha256(label.encode("ascii")).hexdigest()
 
@@ -1947,6 +2010,12 @@ def synthetic_production_semantic_inventory() -> tuple[
     contents: dict[str, bytes] = {}
     artifact_by_path: dict[str, dict[str, object]] = {}
     for profile_index, profile in enumerate(common.PROFILE_ORDER):
+        proof_curve = common.PROOF_CURVE_BY_PROFILE[profile]
+        public_signal_schema_hash = (
+            common.BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH_HEX
+            if proof_curve == "bls12-381"
+            else common.PUBLIC_SIGNAL_SCHEMA_HASH_HEX
+        )
         artifact_rows: list[dict[str, object]] = []
         role_digests: dict[str, str] = {}
         for role, kind, filename in common.SEMANTIC_ARTIFACT_ROLES:
@@ -1973,7 +2042,8 @@ def synthetic_production_semantic_inventory() -> tuple[
         semantic_profile_hash = common.semantic_proof_profile_hash(
             bytes.fromhex(role_digests["circuit-artifact"]),
             bytes.fromhex(role_digests["witness-generator"]),
-            bytes.fromhex(common.PUBLIC_SIGNAL_SCHEMA_HASH_HEX),
+            bytes.fromhex(public_signal_schema_hash),
+            proof_curve,
         ).hex()
         anchor = {
             "version": 1,
@@ -1994,11 +2064,12 @@ def synthetic_production_semantic_inventory() -> tuple[
         anchor_hash = common.sora_finality_anchor_hash(anchor).hex()
         proof_system: dict[str, object] = {
             "counterparty_profile": profile,
-            "circuit_id": f"sccp-sora-taira-to-{profile}-groth16-bn254-v1",
+            "circuit_id": common.RELEASE_CIRCUIT_IDS[profile_index],
+            "proof_curve": proof_curve,
             "semantics": list(common.REQUIRED_SEMANTICS),
             "circuit_artifact_sha256_hex": role_digests["circuit-artifact"],
             "witness_generator_sha256_hex": role_digests["witness-generator"],
-            "public_signal_schema_hash_hex": common.PUBLIC_SIGNAL_SCHEMA_HASH_HEX,
+            "public_signal_schema_hash_hex": public_signal_schema_hash,
             "semantic_proof_profile_hash_hex": semantic_profile_hash,
             "sora_finality_anchor": anchor,
             "sora_finality_anchor_hash_hex": anchor_hash,
@@ -2013,6 +2084,7 @@ def synthetic_production_semantic_inventory() -> tuple[
             "source_profile": "sora-taira",
             "target_profile": profile,
             "target_domain": common.PROFILE_DOMAINS[profile],
+            "proof_curve": proof_curve,
             "route_revision": profile_index + 1,
             "message_id_hex": _semantic_hash(f"{profile}:message"),
             "payload_hash_hex": _semantic_hash(f"{profile}:payload"),
@@ -2038,6 +2110,7 @@ def synthetic_production_semantic_inventory() -> tuple[
                 "auditor_id": auditors[auditor_index]["auditor_id"],
                 "counterparty_profile": profile,
                 "circuit_id": proof_system["circuit_id"],
+                "proof_curve": proof_curve,
                 "semantics": list(common.REQUIRED_SEMANTICS),
                 "artifacts": artifact_rows,
                 "honest_proof_claim": claim,
@@ -2060,7 +2133,7 @@ def synthetic_production_semantic_inventory() -> tuple[
     return policy, evidence, contents
 
 
-def test_production_semantic_inventory_closes_two_audits_and_three_honest_proofs() -> None:
+def test_production_semantic_inventory_closes_two_audits_and_four_honest_proofs() -> None:
     policy, evidence, contents = synthetic_production_semantic_inventory()
     records = common.verify_production_semantic_artifacts(evidence, contents, policy)
     assert tuple(record[0] for record in records) == common.PROFILE_ORDER
@@ -2178,6 +2251,7 @@ def _mock_semantic_receipt(
         "evidence_sha256_hex": hashlib.sha256(evidence_bytes).hexdigest(),
         "proof_artifact_path": proof_path,
         "proof_artifact_sha256_hex": metadata["sha256_hex"],
+        "proof_curve": common.PROOF_CURVE_BY_PROFILE[profile],
         "canonical_norito_verified": True,
         "pairing_verified": True,
         "claim": claim,
@@ -2233,6 +2307,7 @@ def test_authenticated_rust_semantic_receipts_must_equal_both_auditors_claims(
     (
         lambda receipt: receipt.update(pairing_verified=False),
         lambda receipt: receipt.update(canonical_norito_verified=1),
+        lambda receipt: receipt.update(proof_curve="bn254" if receipt["proof_curve"] == "bls12-381" else "bls12-381"),
         lambda receipt: receipt["claim"]["public_signal_words_hex"].__setitem__(
             0, "ff" * 32
         ),

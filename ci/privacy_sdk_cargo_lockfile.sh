@@ -13,7 +13,7 @@
 readonly PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=\
 "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
 readonly PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=\
-"c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+"d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
 
 privacy_sdk_resolve_cargo_lockfile() {
   local repository_root="$1"

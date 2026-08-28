@@ -14,6 +14,9 @@ import java.util.concurrent.CompletableFuture
  * underlying network dispatch only: redirects, authentication follow-ups, connection retries, and
  * application retries are forbidden even when no response was received. The original failure must
  * be surfaced so the caller can reconcile by transaction hash or create a freshly signed request.
+ * Executors handling exact signed-response paths must also populate the returned
+ * [TransportResponse.finalUri] and [TransportResponse.redirected] provenance; those callers reject
+ * responses with missing, redirected, or mismatched provenance.
  */
 interface HttpTransportExecutor : TransportExecutor {
 

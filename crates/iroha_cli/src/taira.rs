@@ -39,7 +39,7 @@ use reqwest::blocking::Client as HttpClient;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{Read as _, Write as _},
     num::NonZeroU64,
@@ -66,6 +66,12 @@ const PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1: &str =
 const PREPARED_ENVELOPE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const PREPARED_TRANSACTION_MAX_BYTES: usize = 1024 * 1024;
 const PREPARED_TRANSACTION_CLOCK_SKEW_MS: u64 = 30_000;
+const INROU_CANARY_HEALTH_RESPONSE_MAX_BYTES: u64 = 4 * 1024;
+const INROU_PUBLIC_DISCOVERY_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
+const INROU_PUBLIC_DISCOVERY_CONTENT_TYPE: &str = "application/json";
+const INROU_PUBLIC_DISCOVERY_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+const INROU_PUBLIC_DISCOVERY_CONTENT_CID_HEADER: &str = "sora-content-cid";
+const INROU_CANARY_SERVICE_PORT_V1: u64 = 8_787;
 const WRITE_CANARY_MUTATION_KIND: &str = "write_canary";
 const WRITE_CANARY_OPERATION: &str = "final_canary";
 const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v1";
@@ -728,6 +734,14 @@ pub struct InrouStage {
     /// Canonical service bundle bytes to preseed.
     #[arg(long, value_name = "PATH")]
     pub bundle_file: PathBuf,
+    /// Exact Unix-second SoraFS retention boundary embedded in both staged manifests.
+    /// Retain and reuse this value when reproducing the same release stage.
+    #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
+    pub sorafs_retention_epoch: NonZeroU64,
+    /// Exact validator account and peer identity eligible for one staged replica.
+    /// Supply exactly four `VALIDATOR,PEER` values matching the public-reset inventory.
+    #[arg(long = "placement-target", value_name = "VALIDATOR,PEER")]
+    pub placement_targets: Vec<String>,
     /// Fresh owner-only directory that will contain exact manifests and payloads.
     #[arg(long, value_name = "PATH")]
     pub stage_dir: PathBuf,
@@ -739,6 +753,17 @@ impl Run for InrouStage {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         ensure_canonical_taira_client_identity(context.config())?;
         let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let placement_targets = self
+            .placement_targets
+            .iter()
+            .map(|target| crate::soracloud::parse_inrou_placement_target_identity(target))
+            .collect::<std::result::Result<BTreeSet<_>, _>>()
+            .map_err(|error| eyre!("invalid --placement-target: {error}"))?;
+        if placement_targets.len() != 4 {
+            return Err(eyre!(
+                "Taira Inrou staging requires exactly four distinct --placement-target validator/peer identities"
+            ));
+        }
         let receipt = crate::soracloud::stage_taira_inrou_canary_deployment(
             self.mode,
             &self.container,
@@ -746,6 +771,8 @@ impl Run for InrouStage {
             &self.bundle_file,
             &self.stage_dir,
             &context.config().key_pair,
+            self.sorafs_retention_epoch,
+            placement_targets,
         )?;
         let mut extra = Map::new();
         extra.insert(
@@ -774,7 +801,9 @@ pub enum InrouCanaryOperation {
     BundlePin,
     /// Register the canonical AArch64 guest-image manifest.
     GuestPin,
-    /// Deploy or upgrade the service after both manifests are Applied.
+    /// Register the canonical public-discovery manifest.
+    DiscoveryPin,
+    /// Deploy or upgrade the service after all three manifests are Approved.
     ServiceMutation,
 }
 
@@ -783,6 +812,7 @@ impl InrouCanaryOperation {
         match self {
             Self::BundlePin => "bundle_pin",
             Self::GuestPin => "guest_pin",
+            Self::DiscoveryPin => "discovery_pin",
             Self::ServiceMutation => "service_mutation",
         }
     }
@@ -791,6 +821,7 @@ impl InrouCanaryOperation {
         match self {
             Self::BundlePin => "inrou_bundle_pin",
             Self::GuestPin => "inrou_guest_pin",
+            Self::DiscoveryPin => "inrou_discovery_pin",
             Self::ServiceMutation => "inrou_canary",
         }
     }
@@ -799,6 +830,7 @@ impl InrouCanaryOperation {
         match self {
             Self::BundlePin => "inrou_bundle_pin",
             Self::GuestPin => "inrou_guest_pin",
+            Self::DiscoveryPin => "inrou_discovery_pin",
             Self::ServiceMutation => "inrou_canary",
         }
     }
@@ -807,6 +839,9 @@ impl InrouCanaryOperation {
         match self {
             Self::BundlePin => crate::soracloud::TairaInrouCanaryPreparedOperationV1::BundlePin,
             Self::GuestPin => crate::soracloud::TairaInrouCanaryPreparedOperationV1::GuestPin,
+            Self::DiscoveryPin => {
+                crate::soracloud::TairaInrouCanaryPreparedOperationV1::DiscoveryPin
+            }
             Self::ServiceMutation => {
                 crate::soracloud::TairaInrouCanaryPreparedOperationV1::ServiceMutation
             }
@@ -817,7 +852,8 @@ impl InrouCanaryOperation {
         match self {
             Self::BundlePin => ("write_canary", "final_canary"),
             Self::GuestPin => ("inrou_bundle_pin", "bundle_pin"),
-            Self::ServiceMutation => ("inrou_guest_pin", "guest_pin"),
+            Self::DiscoveryPin => ("inrou_guest_pin", "guest_pin"),
+            Self::ServiceMutation => ("inrou_discovery_pin", "discovery_pin"),
         }
     }
 }
@@ -845,15 +881,17 @@ struct PreparedInrouTransactionV1 {
 enum PreparedInrouOperationV1 {
     InrouBundlePin(PreparedInrouTransactionV1),
     InrouGuestPin(PreparedInrouTransactionV1),
+    InrouDiscoveryPin(PreparedInrouTransactionV1),
     InrouCanary(PreparedInrouTransactionV1),
 }
 
 impl PreparedInrouOperationV1 {
     fn transaction(&self) -> &PreparedInrouTransactionV1 {
         match self {
-            Self::InrouBundlePin(value) | Self::InrouGuestPin(value) | Self::InrouCanary(value) => {
-                value
-            }
+            Self::InrouBundlePin(value)
+            | Self::InrouGuestPin(value)
+            | Self::InrouDiscoveryPin(value)
+            | Self::InrouCanary(value) => value,
         }
     }
 
@@ -861,6 +899,7 @@ impl PreparedInrouOperationV1 {
         match self {
             Self::InrouBundlePin(_) => "inrou_bundle_pin",
             Self::InrouGuestPin(_) => "inrou_guest_pin",
+            Self::InrouDiscoveryPin(_) => "inrou_discovery_pin",
             Self::InrouCanary(_) => "inrou_canary",
         }
     }
@@ -880,8 +919,16 @@ struct PreparedInrouStageIdentityV1 {
     bundle_manifest_digest_hex: String,
     guest_content_cid: String,
     guest_manifest_digest_hex: String,
+    discovery_payload_dir: String,
+    discovery_document_hash: String,
+    discovery_content_cid: String,
+    discovery_manifest_digest_hex: String,
+    public_discovery_url: String,
+    public_discovery_cid_host_url: String,
+    deployment_bundle_hash: String,
     container_manifest_hash: String,
     service_manifest_hash: String,
+    placement_targets: BTreeSet<iroha::data_model::soracloud::SoraInrouPlacementTargetV1>,
 }
 
 impl From<&crate::soracloud::TairaInrouStageIdentity> for PreparedInrouStageIdentityV1 {
@@ -898,8 +945,16 @@ impl From<&crate::soracloud::TairaInrouStageIdentity> for PreparedInrouStageIden
             bundle_manifest_digest_hex: value.bundle_manifest_digest_hex.clone(),
             guest_content_cid: value.guest_content_cid.clone(),
             guest_manifest_digest_hex: value.guest_manifest_digest_hex.clone(),
+            discovery_payload_dir: value.discovery_payload_dir.clone(),
+            discovery_document_hash: value.discovery_document_hash.clone(),
+            discovery_content_cid: value.discovery_content_cid.clone(),
+            discovery_manifest_digest_hex: value.discovery_manifest_digest_hex.clone(),
+            public_discovery_url: value.public_discovery_url.clone(),
+            public_discovery_cid_host_url: value.public_discovery_cid_host_url.clone(),
+            deployment_bundle_hash: value.deployment_bundle_hash.clone(),
             container_manifest_hash: value.container_manifest_hash.clone(),
             service_manifest_hash: value.service_manifest_hash.clone(),
+            placement_targets: value.placement_targets.clone(),
         }
     }
 }
@@ -1223,6 +1278,9 @@ fn make_prepared_inrou_envelope(
         InrouCanaryOperation::GuestPin => {
             PreparedInrouOperationV1::InrouGuestPin(transaction_envelope)
         }
+        InrouCanaryOperation::DiscoveryPin => {
+            PreparedInrouOperationV1::InrouDiscoveryPin(transaction_envelope)
+        }
         InrouCanaryOperation::ServiceMutation => {
             PreparedInrouOperationV1::InrouCanary(transaction_envelope)
         }
@@ -1406,7 +1464,7 @@ fn submit_prepared_inrou_until(
     loop {
         let outcome = recover_prepared_inrou(config, public_root, timeout_secs, prepared);
         if !matches!(
-            outcome,
+            &outcome,
             crate::soracloud::PreparedSoracloudRecoveryV1::Absent
                 | crate::soracloud::PreparedSoracloudRecoveryV1::Pending { .. }
         ) || Instant::now() >= deadline
@@ -1443,6 +1501,7 @@ fn report_prepared_inrou_outcome(
     validated: &ValidatedPreparedInrouV1,
     outcome: crate::soracloud::PreparedSoracloudRecoveryV1,
 ) -> Result<Value> {
+    let outcome = qualify_applied_inrou_pin_outcome(config, public_root, args, outcome);
     match outcome {
         crate::soracloud::PreparedSoracloudRecoveryV1::Absent => prepared_inrou_report(
             config,
@@ -1499,6 +1558,52 @@ fn report_prepared_inrou_outcome(
                 None,
             )
         }
+    }
+}
+
+fn qualify_applied_inrou_pin_outcome(
+    config: &Config,
+    public_root: &str,
+    args: &InrouCanary,
+    outcome: crate::soracloud::PreparedSoracloudRecoveryV1,
+) -> crate::soracloud::PreparedSoracloudRecoveryV1 {
+    if args.operation == InrouCanaryOperation::ServiceMutation
+        || !matches!(
+            &outcome,
+            crate::soracloud::PreparedSoracloudRecoveryV1::Applied { .. }
+        )
+    {
+        return outcome;
+    }
+    match crate::soracloud::taira_inrou_canary_pin_readiness_v1(
+        config,
+        &args.stage_dir,
+        public_root,
+        args.timeout_secs,
+        args.mode,
+        args.operation.prepared_operation(),
+    ) {
+        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(epoch)) if epoch > 0 => {
+            outcome
+        }
+        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(_)) => {
+            crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
+                terminal_kind: "InvalidApprovalEpoch".to_owned(),
+            }
+        }
+        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Pending) => {
+            crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                terminal_kind: "PinApprovalPending".to_owned(),
+            }
+        }
+        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Missing) => {
+            crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                terminal_kind: "PinObservationMissing".to_owned(),
+            }
+        }
+        Err(_) => crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+            terminal_kind: "ObservationUnavailable".to_owned(),
+        },
     }
 }
 
@@ -1687,6 +1792,7 @@ fn prove_inrou_predecessor_applied(
         "write_canary" => "final_canary",
         "inrou_bundle_pin" => "inrou_bundle_pin",
         "inrou_guest_pin" => "inrou_guest_pin",
+        "inrou_discovery_pin" => "inrou_discovery_pin",
         _ => return Err(eyre!("unsupported Inrou predecessor kind")),
     };
     if tagged.get("kind").and_then(Value::as_str) != Some(expected_tag)
@@ -1761,7 +1867,7 @@ fn prove_inrou_predecessor_applied(
                 eyre::bail!("Inrou predecessor final-canary verifier selected different bytes");
             }
         }
-        "inrou_bundle_pin" | "inrou_guest_pin" => {
+        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_discovery_pin" => {
             let typed: PreparedInrouTransactionV1 =
                 json::from_value(Value::Object(payload.clone()))
                     .wrap_err("Inrou predecessor operation is not exact typed V1 JSON")?;
@@ -1774,7 +1880,9 @@ fn prove_inrou_predecessor_applied(
                 args.mode,
             )?;
             if root.get("stage")
-                != Some(&json::to_value(PreparedInrouStageIdentityV1::from(&stage))?)
+                != Some(&json::to_value(&PreparedInrouStageIdentityV1::from(
+                    &stage,
+                ))?)
             {
                 eyre::bail!("Inrou predecessor retained-stage identity was substituted");
             }
@@ -1795,6 +1903,9 @@ fn prove_inrou_predecessor_applied(
                 }
                 "inrou_guest_pin" => {
                     crate::soracloud::TairaInrouCanaryPreparedOperationV1::GuestPin
+                }
+                "inrou_discovery_pin" => {
+                    crate::soracloud::TairaInrouCanaryPreparedOperationV1::DiscoveryPin
                 }
                 _ => unreachable!("matched exact Inrou predecessor kinds"),
             };
@@ -1831,6 +1942,35 @@ fn prove_inrou_predecessor_applied(
         eyre::bail!("Inrou predecessor has not reached exact global Applied state");
     }
     verify_exact_committed_transaction(&client, &transaction, &wire)?;
+    if expected_kind != "write_canary" {
+        let operation = match expected_kind {
+            "inrou_bundle_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::BundlePin,
+            "inrou_guest_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::GuestPin,
+            "inrou_discovery_pin" => {
+                crate::soracloud::TairaInrouCanaryPreparedOperationV1::DiscoveryPin
+            }
+            _ => return Err(eyre!("unsupported Inrou pin predecessor kind")),
+        };
+        match crate::soracloud::taira_inrou_canary_pin_readiness_v1(
+            config,
+            &args.stage_dir,
+            public_root,
+            args.timeout_secs,
+            args.mode,
+            operation,
+        )? {
+            crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(epoch) if epoch > 0 => {}
+            crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(_) => {
+                eyre::bail!("Inrou predecessor pin has an invalid zero approval epoch")
+            }
+            crate::soracloud::TairaInrouCanaryPinReadinessV1::Pending => {
+                eyre::bail!("Inrou predecessor pin governance is still Pending")
+            }
+            crate::soracloud::TairaInrouCanaryPinReadinessV1::Missing => {
+                eyre::bail!("Inrou predecessor pin approval is missing")
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1850,7 +1990,7 @@ fn decode_exact_inrou_predecessor_v1(bytes: &[u8], expected_kind: &str) -> Resul
                 json::to_json(&envelope)?.into_bytes(),
             )
         }
-        "inrou_bundle_pin" | "inrou_guest_pin" => {
+        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_discovery_pin" => {
             let envelope: PreparedInrouEnvelopeV1 = json::from_slice(bytes)
                 .wrap_err("Inrou predecessor is not an exact prepared-Inrou V1 envelope")?;
             let expected_variant = matches!(
@@ -1861,6 +2001,9 @@ fn decode_exact_inrou_predecessor_v1(bytes: &[u8], expected_kind: &str) -> Resul
                 ) | (
                     PreparedInrouOperationV1::InrouGuestPin(_),
                     "inrou_guest_pin"
+                ) | (
+                    PreparedInrouOperationV1::InrouDiscoveryPin(_),
+                    "inrou_discovery_pin"
                 )
             );
             if !expected_variant {
@@ -1914,7 +2057,10 @@ fn verify_exact_committed_transaction(
 /// Read-only verification of one retained canonical Taira Inrou stage.
 #[derive(clap::Args, Debug)]
 pub struct InrouCheck {
-    /// Public Torii root URL used only for signed status and public route reads.
+    /// Public Torii root URL used for network preflight and public route reads.
+    ///
+    /// Signed Soracloud status reads continue to use the Torii URL from the selected client
+    /// configuration so validator-specific restart checks cannot collapse onto the public edge.
     #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
     pub public_root: String,
     /// Owner-only stage created by `iroha taira inrou-stage` and retained after deployment.
@@ -1942,17 +2088,28 @@ impl Run for InrouCheck {
         )?;
         let public_root = normalize_root_url(&self.public_root)?;
         preflight_taira_network_identity(&public_root, context.config())?;
-        let mut status_config = context.config().clone();
-        status_config.torii_api_url = Url::parse(&format!("{public_root}/"))
-            .wrap_err("failed to bind the signed status client to the selected Taira root")?;
-        let status_client = IrohaClient::new(status_config);
-        let receipt = verify_inrou_check(&public_root, &status_client, &stage, self.timeout_secs)?;
+        let receipt = verify_inrou_check_from_selected_status_origin(
+            &public_root,
+            context.config(),
+            &stage,
+            self.timeout_secs,
+        )?;
         render_report(context, self.json, &receipt)?;
         if report_status(&receipt) != Some("ok") {
             eyre::bail!("Taira Inrou read-only check found hard failures");
         }
         Ok(())
     }
+}
+
+fn verify_inrou_check_from_selected_status_origin(
+    public_root: &str,
+    status_config: &Config,
+    stage: &crate::soracloud::TairaInrouStageIdentity,
+    timeout_secs: u64,
+) -> Result<Value> {
+    let status_client = IrohaClient::new(status_config.clone());
+    verify_inrou_check(public_root, &status_client, stage, timeout_secs)
 }
 fn ensure_canonical_taira_client_identity(config: &Config) -> Result<()> {
     if config.chain.to_string() != DEFAULT_CHAIN_ID {
@@ -1990,6 +2147,7 @@ fn preflight_taira_network_identity(public_root: &str, config: &Config) -> Resul
 struct HttpJson {
     status: u16,
     body: Option<Value>,
+    raw_body_empty: bool,
 }
 #[derive(Debug)]
 struct CanarySigner {
@@ -2050,21 +2208,13 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     }
     let mcp_url = join_url(&public_root, "/v1/mcp")?;
     let mcp_get = http_json(&http, reqwest::Method::GET, mcp_url.as_str(), None)?;
-    let mcp_get_error = (mcp_get.status == 200)
-        .then(|| validate_mcp_protocol_response(mcp_get.body.as_ref(), false).err())
-        .flatten();
-    let mcp_get_ok = mcp_get.status == 200 && mcp_get_error.is_none();
-    push_check(
-        &mut checks,
-        "mcp_get",
-        mcp_get.status,
-        mcp_get_ok,
-        mcp_get_error.clone(),
-    );
+    let mcp_get_ok = mcp_get.status == 405;
+    push_check(&mut checks, "mcp_get", mcp_get.status, mcp_get_ok, None);
     if !mcp_get_ok {
-        failures.push(
-            mcp_get_error.unwrap_or_else(|| format!("mcp_get returned HTTP {}", mcp_get.status)),
-        );
+        failures.push(format!(
+            "mcp_get returned HTTP {}; expected 405 for the POST-only MCP transport",
+            mcp_get.status
+        ));
     }
     let initialize = norito::json!({
         "jsonrpc": "2.0",
@@ -2082,9 +2232,30 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         mcp_url.as_str(),
         Some(&initialize),
     )?;
-    let mcp_init_error = (mcp_init.status == 200)
-        .then(|| validate_mcp_protocol_response(mcp_init.body.as_ref(), true).err())
+    let mut mcp_init_error = (mcp_init.status == 200)
+        .then(|| validate_mcp_initialize_response(mcp_init.body.as_ref()).err())
         .flatten();
+    if mcp_init.status == 200 && mcp_init_error.is_none() {
+        let initialized_notification = norito::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        });
+        let initialized = http_json_with_mcp_protocol_version(
+            &http,
+            reqwest::Method::POST,
+            mcp_url.as_str(),
+            Some(&initialized_notification),
+        )?;
+        if initialized.status != 202 {
+            mcp_init_error = Some(format!(
+                "MCP initialized notification returned HTTP {}; expected 202",
+                initialized.status
+            ));
+        } else if !initialized.raw_body_empty {
+            mcp_init_error =
+                Some("MCP initialized notification must return an empty response body".to_owned());
+        }
+    }
     let mcp_init_ok = mcp_init.status == 200 && mcp_init_error.is_none();
     push_check(
         &mut checks,
@@ -2105,7 +2276,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         "method": "tools/list",
         "params": {}
     });
-    let tools = http_json(
+    let tools = http_json_with_mcp_protocol_version(
         &http,
         reqwest::Method::POST,
         mcp_url.as_str(),
@@ -2177,8 +2348,17 @@ struct InrouProbeIdentity {
     route_path_prefix: String,
     healthcheck_path: String,
     stage_mode: String,
+    bundle_hash: String,
+    discovery_payload_dir: String,
+    discovery_document_hash: String,
+    discovery_content_cid: String,
+    discovery_manifest_digest_hex: String,
+    public_discovery_url: String,
+    public_discovery_cid_host_url: String,
+    deployment_bundle_hash: String,
     container_manifest_hash: String,
     service_manifest_hash: String,
+    placement_targets: BTreeSet<iroha::data_model::soracloud::SoraInrouPlacementTargetV1>,
 }
 impl From<&crate::soracloud::TairaInrouStageIdentity> for InrouProbeIdentity {
     fn from(stage: &crate::soracloud::TairaInrouStageIdentity) -> Self {
@@ -2189,15 +2369,316 @@ impl From<&crate::soracloud::TairaInrouStageIdentity> for InrouProbeIdentity {
             route_path_prefix: stage.route_path_prefix.clone(),
             healthcheck_path: stage.healthcheck_path.clone(),
             stage_mode: stage.stage_mode.clone(),
+            bundle_hash: stage.bundle_hash.clone(),
+            discovery_payload_dir: stage.discovery_payload_dir.clone(),
+            discovery_document_hash: stage.discovery_document_hash.clone(),
+            discovery_content_cid: stage.discovery_content_cid.clone(),
+            discovery_manifest_digest_hex: stage.discovery_manifest_digest_hex.clone(),
+            public_discovery_url: stage.public_discovery_url.clone(),
+            public_discovery_cid_host_url: stage.public_discovery_cid_host_url.clone(),
+            deployment_bundle_hash: stage.deployment_bundle_hash.clone(),
             container_manifest_hash: stage.container_manifest_hash.clone(),
             service_manifest_hash: stage.service_manifest_hash.clone(),
+            placement_targets: stage.placement_targets.clone(),
         }
     }
+}
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize)]
+struct InrouPublicDiscoveryDocumentV1 {
+    schema_version: u16,
+    service_name: String,
+    service_version: String,
+    execution_plane: String,
+    runtime: String,
+    route_host: String,
+    path_prefix: String,
+    base_url: String,
+    #[norito(required)]
+    healthcheck_path: Option<String>,
+    #[norito(required)]
+    healthcheck_url: Option<String>,
+    service_manifest_hash: Hash,
+    container_manifest_hash: Hash,
+    deployment_bundle_hash: Hash,
+}
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct InrouPublicDiscoveryV1 {
+    schema_version: u16,
+    service_name: String,
+    service_version: String,
+    execution_plane: String,
+    runtime: String,
+    route_host: String,
+    path_prefix: String,
+    base_url: String,
+    #[norito(required)]
+    healthcheck_path: Option<String>,
+    #[norito(required)]
+    healthcheck_url: Option<String>,
+    service_manifest_hash: Hash,
+    container_manifest_hash: Hash,
+    deployment_bundle_hash: Hash,
+    document_hash: Hash,
+    content_cid: String,
+    public_discovery_url: String,
+    public_discovery_cid_host_url: String,
+    manifest_digest_hex: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct InrouPublicDiscoveryResponseV1 {
+    schema_version: u16,
+    service_name: String,
+    current_version: String,
+    requested_version: String,
+    discovery: InrouPublicDiscoveryV1,
+}
+struct ExpectedInrouPublicDiscoveryV1 {
+    response: InrouPublicDiscoveryResponseV1,
+    document_bytes: Vec<u8>,
+}
+fn parse_exact_inrou_hash(field: &str, value: &str) -> Result<Hash> {
+    let hash = Hash::from_str(value)
+        .wrap_err_with(|| format!("retained Taira Inrou stage has invalid {field}"))?;
+    if hash.to_string() != value {
+        eyre::bail!("retained Taira Inrou stage has noncanonical {field}");
+    }
+    Ok(hash)
+}
+fn expected_inrou_public_discovery(
+    deployment: &InrouProbeIdentity,
+) -> Result<ExpectedInrouPublicDiscoveryV1> {
+    let mut base_url = Url::parse(&format!("https://{}", deployment.route_host))
+        .wrap_err("retained Taira Inrou route host cannot form a discovery base URL")?;
+    base_url.set_path(&format!(
+        "{}/",
+        deployment.route_path_prefix.trim_end_matches('/')
+    ));
+    let base_url = base_url.to_string();
+    let mut healthcheck_url =
+        Url::parse(&base_url).wrap_err("retained Taira Inrou discovery base URL is invalid")?;
+    healthcheck_url.set_path(&inrou_canary_health_path(
+        &deployment.route_path_prefix,
+        &deployment.healthcheck_path,
+    ));
+    let service_manifest_hash =
+        parse_exact_inrou_hash("service_manifest_hash", &deployment.service_manifest_hash)?;
+    let container_manifest_hash = parse_exact_inrou_hash(
+        "container_manifest_hash",
+        &deployment.container_manifest_hash,
+    )?;
+    let deployment_bundle_hash =
+        parse_exact_inrou_hash("deployment_bundle_hash", &deployment.deployment_bundle_hash)?;
+    let document = InrouPublicDiscoveryDocumentV1 {
+        schema_version: 1,
+        service_name: deployment.service_name.clone(),
+        service_version: deployment.service_version.clone(),
+        execution_plane: "HttpService".to_owned(),
+        runtime: "Inrou".to_owned(),
+        route_host: deployment.route_host.clone(),
+        path_prefix: deployment.route_path_prefix.clone(),
+        base_url: base_url.clone(),
+        healthcheck_path: Some(deployment.healthcheck_path.clone()),
+        healthcheck_url: Some(healthcheck_url.to_string()),
+        service_manifest_hash,
+        container_manifest_hash,
+        deployment_bundle_hash,
+    };
+    let document_bytes = json::to_vec(&document)
+        .wrap_err("failed to encode exact retained Taira Inrou discovery document")?;
+    if u64::try_from(document_bytes.len()).unwrap_or(u64::MAX)
+        > INROU_PUBLIC_DISCOVERY_RESPONSE_MAX_BYTES
+    {
+        eyre::bail!("retained Taira Inrou discovery document exceeds the V1 byte limit");
+    }
+    let document_hash = Hash::new(&document_bytes);
+    if document_hash.to_string() != deployment.discovery_document_hash {
+        eyre::bail!(
+            "retained Taira Inrou discovery document hash does not bind its canonical bytes"
+        );
+    }
+    let discovery = InrouPublicDiscoveryV1 {
+        schema_version: document.schema_version,
+        service_name: document.service_name,
+        service_version: document.service_version,
+        execution_plane: document.execution_plane,
+        runtime: document.runtime,
+        route_host: document.route_host,
+        path_prefix: document.path_prefix,
+        base_url: document.base_url,
+        healthcheck_path: document.healthcheck_path,
+        healthcheck_url: document.healthcheck_url,
+        service_manifest_hash: document.service_manifest_hash,
+        container_manifest_hash: document.container_manifest_hash,
+        deployment_bundle_hash: document.deployment_bundle_hash,
+        document_hash,
+        content_cid: deployment.discovery_content_cid.clone(),
+        public_discovery_url: deployment.public_discovery_url.clone(),
+        public_discovery_cid_host_url: deployment.public_discovery_cid_host_url.clone(),
+        manifest_digest_hex: deployment.discovery_manifest_digest_hex.clone(),
+    };
+    Ok(ExpectedInrouPublicDiscoveryV1 {
+        response: InrouPublicDiscoveryResponseV1 {
+            schema_version: 1,
+            service_name: deployment.service_name.clone(),
+            current_version: deployment.service_version.clone(),
+            requested_version: deployment.service_version.clone(),
+            discovery,
+        },
+        document_bytes,
+    })
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InrouLocalPlacement {
+    peer_id: String,
+    validator_account_id: String,
+    replica_slot: u16,
+    placement_incarnation: String,
+}
+impl InrouLocalPlacement {
+    fn to_json(&self) -> Value {
+        norito::json!({
+            "peer_id": (self.peer_id.clone()),
+            "validator_account_id": (self.validator_account_id.clone()),
+            "replica_slot": (self.replica_slot),
+            "placement_incarnation": (self.placement_incarnation.clone())
+        })
+    }
+}
+fn exact_inrou_local_placement(
+    root: &Map,
+    deployment: &InrouProbeIdentity,
+    authoritative_process_generation: u64,
+) -> Result<InrouLocalPlacement, String> {
+    let snapshot_value = root
+        .get("runtime_manager")
+        .and_then(Value::as_object)
+        .and_then(|runtime| runtime.get("snapshot"))
+        .ok_or_else(|| "runtime manager is missing its exact local snapshot".to_owned())?;
+    let snapshot = json::from_value::<iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot>(
+        snapshot_value.clone(),
+    )
+    .map_err(|error| format!("runtime manager snapshot is not exact V1 JSON: {error}"))?;
+    if snapshot.schema_version
+        != iroha_core::soracloud_runtime::SORACLOUD_RUNTIME_SNAPSHOT_VERSION_V1
+    {
+        return Err("runtime manager snapshot is not schema version 1".to_owned());
+    }
+    let local_peer_id = snapshot
+        .local_peer_id
+        .as_deref()
+        .ok_or_else(|| "runtime manager snapshot is missing local_peer_id".to_owned())?;
+    let canonical_peer_id = local_peer_id
+        .parse::<iroha::data_model::peer::PeerId>()
+        .map_err(|error| format!("runtime manager local_peer_id is invalid: {error}"))?;
+    if canonical_peer_id.to_string() != local_peer_id {
+        return Err("runtime manager local_peer_id is not canonical".to_owned());
+    }
+    let versions = snapshot
+        .services
+        .get(&deployment.service_name)
+        .ok_or_else(|| "runtime manager snapshot is missing the canary service".to_owned())?;
+    if versions.len() != 1 {
+        return Err(
+            "runtime manager snapshot must contain exactly one revision for the canary service"
+                .to_owned(),
+        );
+    }
+    let plan = versions.get(&deployment.service_version).ok_or_else(|| {
+        "runtime manager snapshot is missing the retained canary revision".to_owned()
+    })?;
+    let inrou = plan.inrou.as_ref().ok_or_else(|| {
+        "runtime manager is missing the exact AArch64 Inrou canary plan".to_owned()
+    })?;
+    if plan.service_name != deployment.service_name
+        || plan.service_version != deployment.service_version
+        || plan.runtime != iroha::data_model::soracloud::SoraContainerRuntimeV1::Inrou
+        || plan.execution_plane
+            != iroha::data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
+        || plan.role != iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active
+        || plan.traffic_percent != 100
+        || plan.bundle_hash != deployment.bundle_hash
+        || plan.bundle_path != "/app/server.py"
+        || plan.entrypoint != "/app/server.py"
+        || !plan.bundle_available_locally
+        || plan.process_generation != Some(authoritative_process_generation)
+        || plan.desired_replica_count != 4
+        || plan.health_status != iroha::data_model::soracloud::SoraServiceHealthStatusV1::Healthy
+        || plan.local_replicas.len() != 1
+        || plan.rollout_handle.is_some()
+        || inrou.selected_guest_isa != iroha::data_model::soracloud::SoraInrouGuestIsaV1::Aarch64
+        || inrou.kernel_image_path != "/inrou/aarch64/vmlinux"
+        || inrou.rootfs_image_path != "/inrou/aarch64/rootfs.ext4"
+        || inrou.initrd_image_path.as_deref() != Some("/inrou/aarch64/initrd.img")
+        || inrou.root_volume_name != "root_disk"
+    {
+        return Err(
+            "runtime manager does not expose the exact retained healthy AArch64 Inrou canary revision"
+                .to_owned(),
+        );
+    }
+    let replica = &plan.local_replicas[0];
+    if plan.local_replica_slots.as_slice() != [replica.replica_slot]
+        || !(1..=4).contains(&replica.replica_slot)
+        || !replica.host_availability.is_available()
+        || replica.health_status != iroha::data_model::soracloud::SoraServiceHealthStatusV1::Healthy
+        || replica.peer_id != local_peer_id
+        || !replica.pid.is_some_and(|pid| pid > 0)
+        || replica.listen_base_url.is_none()
+        || replica.last_error.is_some()
+    {
+        return Err(
+            "runtime manager local replica is not the exact healthy placement for this host"
+                .to_owned(),
+        );
+    }
+    let validator_account = AccountId::parse_encoded(&replica.validator_account_id)
+        .map_err(|error| format!("local placement validator account is invalid: {error}"))?;
+    if validator_account.to_string() != replica.validator_account_id {
+        return Err("local placement validator account is not canonical".to_owned());
+    }
+    let replica_peer = replica
+        .peer_id
+        .parse::<iroha::data_model::peer::PeerId>()
+        .map_err(|error| format!("local placement peer ID is invalid: {error}"))?;
+    if replica_peer.to_string() != replica.peer_id {
+        return Err("local placement peer ID is not canonical".to_owned());
+    }
+    if validator_account.try_signatory().is_none() {
+        return Err("local placement validator account must be single-signatory".to_owned());
+    }
+    let placement_target = iroha::data_model::soracloud::SoraInrouPlacementTargetV1 {
+        validator_account_id: validator_account,
+        peer_id: replica.peer_id.clone(),
+    };
+    if !deployment.placement_targets.contains(&placement_target) {
+        return Err(
+            "local placement account/peer pair is absent from the retained stage allowlist"
+                .to_owned(),
+        );
+    }
+    let placement_incarnation = Hash::from_str(&replica.placement_incarnation)
+        .map_err(|error| format!("local placement incarnation is invalid: {error}"))?;
+    if placement_incarnation.to_string() != replica.placement_incarnation {
+        return Err("local placement incarnation is not canonical".to_owned());
+    }
+    let mut zero_prehash_sentinel = [0_u8; Hash::LENGTH];
+    zero_prehash_sentinel[Hash::LENGTH - 1] = 1;
+    if <[u8; Hash::LENGTH]>::from(placement_incarnation) == zero_prehash_sentinel {
+        return Err("local placement incarnation must not be the zero prehash sentinel".to_owned());
+    }
+    Ok(InrouLocalPlacement {
+        peer_id: replica.peer_id.clone(),
+        validator_account_id: replica.validator_account_id.clone(),
+        replica_slot: replica.replica_slot,
+        placement_incarnation: replica.placement_incarnation.clone(),
+    })
 }
 fn validate_exact_inrou_canary_status(
     status: &Value,
     deployment: &InrouProbeIdentity,
-) -> Result<(u64, u64), String> {
+) -> Result<(u64, u64, InrouLocalPlacement), String> {
     if !crate::soracloud::is_taira_inrou_canary_service_version(&deployment.service_version) {
         return Err("retained Taira Inrou stage has a noncanonical revision identity".to_owned());
     }
@@ -2269,6 +2750,23 @@ fn validate_exact_inrou_canary_status(
         != Some(deployment.service_version.as_str())
     {
         return Err("authoritative canary version does not match the retained stage".to_owned());
+    }
+    if service.get("config_entry_count").and_then(Value::as_u64) != Some(2)
+        || service
+            .get("public_discovery_content_cid")
+            .and_then(Value::as_str)
+            != Some(deployment.discovery_content_cid.as_str())
+        || service.get("public_discovery_url").and_then(Value::as_str)
+            != Some(deployment.public_discovery_url.as_str())
+        || service
+            .get("public_discovery_cid_host_url")
+            .and_then(Value::as_str)
+            != Some(deployment.public_discovery_cid_host_url.as_str())
+    {
+        return Err(
+            "authoritative canary status does not expose the exact two-config discovery identity"
+                .to_owned(),
+        );
     }
     let (expected_action, revision_count_is_valid): (&str, fn(u64) -> bool) =
         match deployment.stage_mode.as_str() {
@@ -2370,43 +2868,105 @@ fn validate_exact_inrou_canary_status(
         && revision.get("route_host").and_then(Value::as_str)
             == Some(deployment.route_host.as_str())
         && revision.get("route_path_prefix").and_then(Value::as_str)
-            == Some(deployment.route_path_prefix.as_str());
+            == Some(deployment.route_path_prefix.as_str())
+        && revision.get("route_service_port").and_then(Value::as_u64)
+            == Some(INROU_CANARY_SERVICE_PORT_V1)
+        && revision.get("route_visibility").and_then(Value::as_str) == Some("Public")
+        && revision.get("route_tls_mode").and_then(Value::as_str) == Some("Required");
+    let canonical = canonical
+        && revision
+            .get("public_discovery_content_cid")
+            .and_then(Value::as_str)
+            == Some(deployment.discovery_content_cid.as_str())
+        && revision.get("public_discovery_url").and_then(Value::as_str)
+            == Some(deployment.public_discovery_url.as_str())
+        && revision
+            .get("public_discovery_cid_host_url")
+            .and_then(Value::as_str)
+            == Some(deployment.public_discovery_cid_host_url.as_str());
     if !canonical {
         return Err(
             "authoritative canary revision differs from the canonical four-replica Inrou route"
                 .to_owned(),
         );
     }
-    Ok((active_adverts, hosted_replicas))
+    let authoritative_process_generation = revision
+        .get("process_generation")
+        .and_then(Value::as_u64)
+        .filter(|generation| *generation > 0)
+        .ok_or_else(|| {
+            "authoritative canary revision has no positive process generation".to_owned()
+        })?;
+    let local_placement =
+        exact_inrou_local_placement(root, deployment, authoritative_process_generation)?;
+    Ok((active_adverts, hosted_replicas, local_placement))
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InrouHealthIdentity {
+    replica_slot: u64,
+    identity: String,
+    response_sha256: String,
+    app_data_marker_sha256: String,
+    boot_sequence: u64,
+    guest_boot_id_sha256: String,
 }
 fn exact_inrou_health_identity(
     body: &Value,
     deployment: &InrouProbeIdentity,
-) -> Option<(u64, String, String)> {
+) -> Option<InrouHealthIdentity> {
     let object = body.as_object()?;
-    if object.len() != 5 {
+    if object.len() != 9 {
         return None;
     }
+    let schema_version = object.get("schema_version").and_then(Value::as_u64)?;
     let service = object.get("service").and_then(Value::as_str)?;
     let service_version = object.get("service_version").and_then(Value::as_str)?;
     let runtime = object.get("runtime").and_then(Value::as_str)?;
     let replica_slot = object.get("replica_slot").and_then(Value::as_u64)?;
     let identity = object.get("identity").and_then(Value::as_str)?;
+    let app_data_marker_sha256 = object
+        .get("app_data_marker_sha256")
+        .and_then(Value::as_str)?;
+    let boot_sequence = object.get("boot_sequence").and_then(Value::as_u64)?;
+    let guest_boot_id_sha256 = object.get("guest_boot_id_sha256").and_then(Value::as_str)?;
     let expected_identity = format!("{}:replica:{replica_slot}", deployment.service_name);
-    if service != deployment.service_name.as_str()
+    if schema_version != 1
+        || service != deployment.service_name.as_str()
         || service_version != deployment.service_version.as_str()
         || runtime != "Inrou"
         || !(1..=4).contains(&replica_slot)
         || identity != expected_identity
+        || boot_sequence == 0
+        || validate_sha256_argument(app_data_marker_sha256).is_err()
+        || validate_sha256_argument(guest_boot_id_sha256).is_err()
     {
         return None;
     }
     let encoded = json::to_vec(body).ok()?;
-    Some((
+    Some(InrouHealthIdentity {
         replica_slot,
-        identity.to_owned(),
-        hex::encode(Sha256::digest(encoded)),
-    ))
+        identity: identity.to_owned(),
+        response_sha256: hex::encode(Sha256::digest(encoded)),
+        app_data_marker_sha256: app_data_marker_sha256.to_owned(),
+        boot_sequence,
+        guest_boot_id_sha256: guest_boot_id_sha256.to_owned(),
+    })
+}
+fn retain_exact_inrou_health_identity(
+    identities: &mut BTreeMap<u64, InrouHealthIdentity>,
+    identity: InrouHealthIdentity,
+) -> Result<(), String> {
+    if let Some(previous) = identities.get(&identity.replica_slot) {
+        if previous != &identity {
+            return Err(format!(
+                "replica slot {} returned conflicting durable health evidence",
+                identity.replica_slot
+            ));
+        }
+        return Ok(());
+    }
+    identities.insert(identity.replica_slot, identity);
+    Ok(())
 }
 fn inrou_canary_health_path(route_prefix: &str, healthcheck_path: &str) -> String {
     format!(
@@ -2415,6 +2975,220 @@ fn inrou_canary_health_path(route_prefix: &str, healthcheck_path: &str) -> Strin
         healthcheck_path.trim_start_matches('/')
     )
 }
+fn inrou_public_discovery_authority_url(
+    public_root: &str,
+    service_name: &str,
+    service_version: Option<&str>,
+) -> Result<Url> {
+    let mut url = join_url(public_root, "/v1/soracloud/services/")?;
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|_| eyre!("public root cannot carry encoded discovery identity segments"))?;
+    segments.pop_if_empty().push(service_name);
+    if let Some(service_version) = service_version {
+        segments.push("revisions").push(service_version);
+    }
+    segments.push("public-discovery");
+    drop(segments);
+    Ok(url)
+}
+fn read_bounded_inrou_public_response(
+    response: reqwest::blocking::Response,
+    context: &str,
+) -> Result<(u16, reqwest::header::HeaderMap, Vec<u8>)> {
+    let status = response.status().as_u16();
+    if response
+        .content_length()
+        .is_some_and(|length| length > INROU_PUBLIC_DISCOVERY_RESPONSE_MAX_BYTES)
+    {
+        eyre::bail!("{context} exceeds the V1 byte limit");
+    }
+    let headers = response.headers().clone();
+    let mut bytes = Vec::new();
+    response
+        .take(INROU_PUBLIC_DISCOVERY_RESPONSE_MAX_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .wrap_err_with(|| format!("failed to read {context}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > INROU_PUBLIC_DISCOVERY_RESPONSE_MAX_BYTES {
+        eyre::bail!("{context} exceeds the V1 byte limit");
+    }
+    Ok((status, headers, bytes))
+}
+fn has_one_exact_inrou_header(
+    headers: &reqwest::header::HeaderMap,
+    name: &'static str,
+    expected: &str,
+) -> bool {
+    let mut values = headers.get_all(name).iter();
+    values
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == expected)
+        && values.next().is_none()
+}
+fn fetch_inrou_public_discovery_authority(
+    http: &HttpClient,
+    url: Url,
+    expected: &InrouPublicDiscoveryResponseV1,
+    context: &str,
+) -> Result<Vec<u8>> {
+    let response = http
+        .get(url.clone())
+        .header(reqwest::header::ACCEPT, INROU_PUBLIC_DISCOVERY_CONTENT_TYPE)
+        .send()
+        .wrap_err_with(|| format!("{context} request failed for {url}"))?;
+    let (status, headers, bytes) = read_bounded_inrou_public_response(response, context)?;
+    if status != 200 {
+        eyre::bail!("{context} returned HTTP {status}; redirects are not accepted");
+    }
+    if !has_one_exact_inrou_header(
+        &headers,
+        reqwest::header::CONTENT_TYPE.as_str(),
+        INROU_PUBLIC_DISCOVERY_CONTENT_TYPE,
+    ) {
+        eyre::bail!("{context} did not return exact application/json content type");
+    }
+    let decoded = json::from_slice::<InrouPublicDiscoveryResponseV1>(&bytes)
+        .wrap_err_with(|| format!("{context} is not exact V1 discovery JSON"))?;
+    if &decoded != expected {
+        eyre::bail!("{context} differs from the fully revalidated retained stage");
+    }
+    Ok(bytes)
+}
+fn fetch_exact_inrou_public_discovery_document(
+    http: &HttpClient,
+    public_root: &str,
+    published_url: &str,
+    expected_host: &str,
+    expected_content_cid: &str,
+    expected_document_hash: &Hash,
+    expected_bytes: &[u8],
+    context: &str,
+) -> Result<()> {
+    let published = Url::parse(published_url)
+        .wrap_err_with(|| format!("{context} has an invalid published URL"))?;
+    if published.scheme() != "https"
+        || !published.username().is_empty()
+        || published.password().is_some()
+        || published.host_str() != Some(expected_host)
+        || published.port().is_some()
+        || published.query().is_some()
+        || published.fragment().is_some()
+    {
+        eyre::bail!("{context} has a noncanonical published URL identity");
+    }
+    let mut request_url = join_url(public_root, published.path())?;
+    request_url.set_query(None);
+    request_url.set_fragment(None);
+    let response = http
+        .get(request_url.clone())
+        .header(reqwest::header::ACCEPT, INROU_PUBLIC_DISCOVERY_CONTENT_TYPE)
+        .header(reqwest::header::HOST, expected_host)
+        .send()
+        .wrap_err_with(|| format!("{context} request failed for {request_url}"))?;
+    let (status, headers, bytes) = read_bounded_inrou_public_response(response, context)?;
+    if status != 200 {
+        eyre::bail!("{context} returned HTTP {status}; redirects are not accepted");
+    }
+    let expected_length = expected_bytes.len().to_string();
+    let expected_etag = format!("\"{expected_document_hash}\"");
+    for (name, expected) in [
+        (
+            reqwest::header::CONTENT_TYPE.as_str(),
+            INROU_PUBLIC_DISCOVERY_CONTENT_TYPE,
+        ),
+        (
+            reqwest::header::CONTENT_LENGTH.as_str(),
+            expected_length.as_str(),
+        ),
+        (
+            INROU_PUBLIC_DISCOVERY_CONTENT_CID_HEADER,
+            expected_content_cid,
+        ),
+        (
+            reqwest::header::CACHE_CONTROL.as_str(),
+            INROU_PUBLIC_DISCOVERY_CACHE_CONTROL,
+        ),
+        (reqwest::header::ETAG.as_str(), expected_etag.as_str()),
+        ("x-content-type-options", "nosniff"),
+    ] {
+        if !has_one_exact_inrou_header(&headers, name, expected) {
+            eyre::bail!("{context} has a missing, duplicate, or substituted `{name}` header");
+        }
+    }
+    if bytes != expected_bytes || Hash::new(&bytes) != *expected_document_hash {
+        eyre::bail!("{context} bytes or document hash differ from the retained stage");
+    }
+    Ok(())
+}
+fn verify_inrou_public_discovery(
+    http: &HttpClient,
+    public_root: &str,
+    deployment: &InrouProbeIdentity,
+) -> Result<u16> {
+    let expected = expected_inrou_public_discovery(deployment)?;
+    if deployment.discovery_payload_dir != "payloads/discovery" {
+        eyre::bail!("retained Taira Inrou discovery payload directory is not canonical V1");
+    }
+    let expected_path = format!(
+        "/sorafs/cid/{}/index.json",
+        deployment.discovery_content_cid
+    );
+    let path_url = Url::parse(&deployment.public_discovery_url)
+        .wrap_err("retained Taira Inrou path-gateway discovery URL is invalid")?;
+    if path_url.path() != expected_path {
+        eyre::bail!("retained Taira Inrou path-gateway discovery URL has substituted identity");
+    }
+    let expected_cid_host = format!("{}.sorafs.taira.sora.org", deployment.discovery_content_cid);
+    let cid_host_url = Url::parse(&deployment.public_discovery_cid_host_url)
+        .wrap_err("retained Taira Inrou CID-host discovery URL is invalid")?;
+    if cid_host_url.path() != "/index.json" {
+        eyre::bail!("retained Taira Inrou CID-host discovery URL has substituted identity");
+    }
+    let current_url =
+        inrou_public_discovery_authority_url(public_root, &deployment.service_name, None)?;
+    let revision_url = inrou_public_discovery_authority_url(
+        public_root,
+        &deployment.service_name,
+        Some(&deployment.service_version),
+    )?;
+    let current_bytes = fetch_inrou_public_discovery_authority(
+        http,
+        current_url,
+        &expected.response,
+        "current Taira Inrou public-discovery authority",
+    )?;
+    let revision_bytes = fetch_inrou_public_discovery_authority(
+        http,
+        revision_url,
+        &expected.response,
+        "revision Taira Inrou public-discovery authority",
+    )?;
+    if current_bytes != revision_bytes {
+        eyre::bail!("current and revision Taira Inrou discovery authority bytes differ");
+    }
+    fetch_exact_inrou_public_discovery_document(
+        http,
+        public_root,
+        &deployment.public_discovery_url,
+        &deployment.route_host,
+        &deployment.discovery_content_cid,
+        &expected.response.discovery.document_hash,
+        &expected.document_bytes,
+        "Taira Inrou path-gateway discovery document",
+    )?;
+    fetch_exact_inrou_public_discovery_document(
+        http,
+        public_root,
+        &deployment.public_discovery_cid_host_url,
+        &expected_cid_host,
+        &deployment.discovery_content_cid,
+        &expected.response.discovery.document_hash,
+        &expected.document_bytes,
+        "Taira Inrou CID-host discovery document",
+    )?;
+    Ok(200)
+}
 struct InrouProbeObservation {
     health_path: String,
     active_host_adverts: u64,
@@ -2422,6 +3196,7 @@ struct InrouProbeObservation {
     checks: Vec<Value>,
     failures: Vec<String>,
     replica_identities: Value,
+    local_placement: Option<InrouLocalPlacement>,
 }
 fn probe_inrou_service(
     public_root: &str,
@@ -2444,15 +3219,25 @@ fn probe_inrou_service(
     let mut status_ready = false;
     let mut active_adverts = 0_u64;
     let mut hosted_replicas = 0_u64;
+    let mut local_placement = None;
     let mut last_status_code = 0_u16;
     let mut last_status_error = "status not observed".to_owned();
     let mut last_route_code = 0_u16;
     let mut last_route_error = "route not observed".to_owned();
-    let mut identities = BTreeMap::<u64, (String, String)>::new();
-    while Instant::now() < deadline && (!status_ready || identities.len() < 4) {
+    let mut current_route_ready = false;
+    let mut discovery_ready = false;
+    let mut last_discovery_code = 0_u16;
+    let mut last_discovery_error = "public discovery not observed".to_owned();
+    let mut health_identity_conflict = false;
+    let mut identities = BTreeMap::<u64, InrouHealthIdentity>::new();
+    while Instant::now() < deadline
+        && (!status_ready || !current_route_ready || identities.len() < 4 || !discovery_ready)
+    {
         status_ready = false;
+        current_route_ready = false;
         active_adverts = 0;
         hosted_replicas = 0;
+        local_placement = None;
         match account_signed_soracloud_status(status_client) {
             Ok(response) => {
                 last_status_code = response.status;
@@ -2462,10 +3247,11 @@ fn probe_inrou_service(
                     .ok_or_else(|| "Soracloud status returned non-JSON".to_owned())
                     .and_then(|status| validate_exact_inrou_canary_status(status, deployment))
                 {
-                    Ok((adverts, replicas)) if response.status == 200 => {
+                    Ok((adverts, replicas, placement)) if response.status == 200 => {
                         status_ready = true;
                         active_adverts = adverts;
                         hosted_replicas = replicas;
+                        local_placement = Some(placement);
                         last_status_error.clear();
                     }
                     Ok(_) => last_status_error = format!("HTTP {}", response.status),
@@ -2487,11 +3273,11 @@ fn probe_inrou_service(
         match route_response {
             Ok(response) => {
                 last_route_code = response.status().as_u16();
-                let response = match decode_http_json_response(response) {
+                let response = match decode_inrou_canary_health_response(response) {
                     Ok(response) => response,
                     Err(error) => {
                         last_route_error = format!("{error:#}");
-                        if !status_ready || identities.len() < 4 {
+                        if !status_ready || !current_route_ready || identities.len() < 4 {
                             std::thread::sleep(Duration::from_millis(200));
                         }
                         continue;
@@ -2499,7 +3285,7 @@ fn probe_inrou_service(
                 };
                 if response.status != 200 {
                     last_route_error = format!("HTTP {}", response.status);
-                    if !status_ready || identities.len() < 4 {
+                    if !status_ready || !current_route_ready || identities.len() < 4 {
                         std::thread::sleep(Duration::from_millis(200));
                     }
                     continue;
@@ -2508,9 +3294,18 @@ fn probe_inrou_service(
                     .body
                     .as_ref()
                     .and_then(|body| exact_inrou_health_identity(body, deployment));
-                if let Some((slot, identity, digest)) = identity {
-                    identities.insert(slot, (identity, digest));
-                    last_route_error.clear();
+                if let Some(identity) = identity {
+                    if let Err(error) =
+                        retain_exact_inrou_health_identity(&mut identities, identity)
+                    {
+                        health_identity_conflict = true;
+                        last_route_error = error;
+                    } else {
+                        current_route_ready = true;
+                        if !health_identity_conflict {
+                            last_route_error.clear();
+                        }
+                    }
                 } else {
                     last_route_error =
                         "health response violated the canary identity contract".to_owned();
@@ -2518,7 +3313,21 @@ fn probe_inrou_service(
             }
             Err(error) => last_route_error = format!("{error:#}"),
         }
-        if !status_ready || identities.len() < 4 {
+        if status_ready && current_route_ready && identities.len() == 4 && !health_identity_conflict
+        {
+            match verify_inrou_public_discovery(&http, public_root, deployment) {
+                Ok(status) => {
+                    discovery_ready = true;
+                    last_discovery_code = status;
+                    last_discovery_error.clear();
+                }
+                Err(error) => {
+                    discovery_ready = false;
+                    last_discovery_error = format!("{error:#}");
+                }
+            }
+        }
+        if !status_ready || !current_route_ready || identities.len() < 4 || !discovery_ready {
             std::thread::sleep(Duration::from_millis(200));
         }
     }
@@ -2536,15 +3345,44 @@ fn probe_inrou_service(
     );
     push_check(
         &mut checks,
+        "inrou_public_discovery",
+        last_discovery_code,
+        discovery_ready,
+        Some(if discovery_ready {
+            "current and revision authority plus public path and CID-host bytes, headers, and hash are exact"
+                .to_owned()
+        } else {
+            last_discovery_error.clone()
+        }),
+    );
+    let marker_count = identities
+        .values()
+        .map(|identity| identity.app_data_marker_sha256.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let guest_boot_id_count = identities
+        .values()
+        .map(|identity| identity.guest_boot_id_sha256.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let routes_ready = current_route_ready
+        && last_route_code == 200
+        && !health_identity_conflict
+        && identities.len() == 4
+        && marker_count == 4
+        && guest_boot_id_count == 4;
+    push_check(
+        &mut checks,
         "inrou_public_routes",
         last_route_code,
-        identities.len() == 4,
-        Some(if identities.len() == 4 {
-            "observed deterministic identities for replica slots 1, 2, 3, and 4".to_owned()
+        routes_ready,
+        Some(if routes_ready {
+            "observed distinct durable identities and guest boots for replica slots 1, 2, 3, and 4"
+                .to_owned()
         } else {
             format!(
-                "observed {}/4 replica identities; {last_route_error}",
-                identities.len()
+                "observed {}/4 replica identities, {marker_count} durable markers, and {guest_boot_id_count} guest boots; {last_route_error}",
+                identities.len(),
             )
         }),
     );
@@ -2554,19 +3392,27 @@ fn probe_inrou_service(
             "authoritative Inrou status did not converge: {last_status_error}"
         ));
     }
-    if identities.len() != 4 {
+    if !routes_ready {
         failures.push(format!(
-            "public Inrou route did not reach all replicas: {last_route_error}"
+            "public Inrou route did not prove four distinct durable replicas: {last_route_error}"
+        ));
+    }
+    if !discovery_ready {
+        failures.push(format!(
+            "public Inrou discovery did not converge: {last_discovery_error}"
         ));
     }
     let replica_identities = Value::Array(
         identities
             .into_iter()
-            .map(|(slot, (identity, response_sha256))| {
+            .map(|(slot, identity)| {
                 norito::json!({
-                    "replica_slot": slot,
-                    "identity": identity,
-                    "response_sha256": response_sha256
+                    "replica_slot": (slot),
+                    "identity": (identity.identity),
+                    "response_sha256": (identity.response_sha256),
+                    "app_data_marker_sha256": (identity.app_data_marker_sha256),
+                    "boot_sequence": (identity.boot_sequence),
+                    "guest_boot_id_sha256": (identity.guest_boot_id_sha256)
                 })
             })
             .collect(),
@@ -2578,6 +3424,7 @@ fn probe_inrou_service(
         checks,
         failures,
         replica_identities,
+        local_placement,
     })
 }
 fn verify_inrou_check(
@@ -2620,6 +3467,13 @@ fn verify_inrou_check(
         Value::from(observation.hosted_replica_count),
     );
     extra.insert(
+        "local_placement".to_owned(),
+        observation
+            .local_placement
+            .as_ref()
+            .map_or(Value::Null, InrouLocalPlacement::to_json),
+    );
+    extra.insert(
         "bundle_hash".to_owned(),
         Value::from(stage.bundle_hash.clone()),
     );
@@ -2638,6 +3492,34 @@ fn verify_inrou_check(
     extra.insert(
         "guest_manifest_digest_hex".to_owned(),
         Value::from(stage.guest_manifest_digest_hex.clone()),
+    );
+    extra.insert(
+        "discovery_payload_dir".to_owned(),
+        Value::from(stage.discovery_payload_dir.clone()),
+    );
+    extra.insert(
+        "discovery_document_hash".to_owned(),
+        Value::from(stage.discovery_document_hash.clone()),
+    );
+    extra.insert(
+        "discovery_content_cid".to_owned(),
+        Value::from(stage.discovery_content_cid.clone()),
+    );
+    extra.insert(
+        "discovery_manifest_digest_hex".to_owned(),
+        Value::from(stage.discovery_manifest_digest_hex.clone()),
+    );
+    extra.insert(
+        "public_discovery_url".to_owned(),
+        Value::from(stage.public_discovery_url.clone()),
+    );
+    extra.insert(
+        "public_discovery_cid_host_url".to_owned(),
+        Value::from(stage.public_discovery_cid_host_url.clone()),
+    );
+    extra.insert(
+        "deployment_bundle_hash".to_owned(),
+        Value::from(stage.deployment_bundle_hash.clone()),
     );
     extra.insert(
         "container_manifest_hash".to_owned(),
@@ -4441,9 +5323,35 @@ fn http_json(
     url: &str,
     body: Option<&Value>,
 ) -> Result<HttpJson> {
+    http_json_with_optional_mcp_protocol_version(http, method, url, body, None)
+}
+fn http_json_with_mcp_protocol_version(
+    http: &HttpClient,
+    method: reqwest::Method,
+    url: &str,
+    body: Option<&Value>,
+) -> Result<HttpJson> {
+    http_json_with_optional_mcp_protocol_version(
+        http,
+        method,
+        url,
+        body,
+        Some(MCP_PROTOCOL_VERSION),
+    )
+}
+fn http_json_with_optional_mcp_protocol_version(
+    http: &HttpClient,
+    method: reqwest::Method,
+    url: &str,
+    body: Option<&Value>,
+    mcp_protocol_version: Option<&str>,
+) -> Result<HttpJson> {
     let mut request = http
         .request(method, url)
         .header(reqwest::header::ACCEPT, "application/json");
+    if let Some(protocol_version) = mcp_protocol_version {
+        request = request.header("MCP-Protocol-Version", protocol_version);
+    }
     if let Some(body) = body {
         let bytes = json::to_vec(body).map_err(|err| eyre!("encode JSON request body: {err}"))?;
         request = request
@@ -4462,18 +5370,24 @@ fn account_signed_soracloud_status(client: &IrohaClient) -> Result<HttpJson> {
     let status = response.status().as_u16();
     let text = String::from_utf8(response.body().to_vec())
         .wrap_err("canonical account-signed Soracloud status response is not UTF-8")?;
+    let raw_body_empty = text.is_empty();
     let body = if text.trim().is_empty() {
         None
     } else {
         json::from_str::<Value>(&text).ok()
     };
-    Ok(HttpJson { status, body })
+    Ok(HttpJson {
+        status,
+        body,
+        raw_body_empty,
+    })
 }
 fn decode_http_json_response(response: reqwest::blocking::Response) -> Result<HttpJson> {
     let status = response.status().as_u16();
     let text = response
         .text()
         .wrap_err("failed to read Taira HTTP response body")?;
+    let raw_body_empty = text.is_empty();
     let parsed = if text.trim().is_empty() {
         None
     } else {
@@ -4482,6 +5396,40 @@ fn decode_http_json_response(response: reqwest::blocking::Response) -> Result<Ht
     Ok(HttpJson {
         status,
         body: parsed,
+        raw_body_empty,
+    })
+}
+fn decode_inrou_canary_health_response(response: reqwest::blocking::Response) -> Result<HttpJson> {
+    let status = response.status().as_u16();
+    if response
+        .content_length()
+        .is_some_and(|length| length > INROU_CANARY_HEALTH_RESPONSE_MAX_BYTES)
+    {
+        eyre::bail!("Taira Inrou health response exceeds the V1 byte limit");
+    }
+    decode_inrou_canary_health_reader(status, response)
+}
+fn decode_inrou_canary_health_reader(status: u16, reader: impl std::io::Read) -> Result<HttpJson> {
+    let mut bytes = Vec::new();
+    reader
+        .take(INROU_CANARY_HEALTH_RESPONSE_MAX_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .wrap_err("failed to read Taira Inrou health response body")?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > INROU_CANARY_HEALTH_RESPONSE_MAX_BYTES {
+        eyre::bail!("Taira Inrou health response exceeds the V1 byte limit");
+    }
+    let text = std::str::from_utf8(&bytes)
+        .wrap_err("Taira Inrou health response body is not exact UTF-8")?;
+    let raw_body_empty = text.is_empty();
+    let body = if text.trim().is_empty() {
+        None
+    } else {
+        json::from_str::<Value>(text).ok()
+    };
+    Ok(HttpJson {
+        status,
+        body,
+        raw_body_empty,
     })
 }
 fn collect_status_warnings(status: Option<&Value>, warnings: &mut Vec<String>) {
@@ -4717,12 +5665,25 @@ fn validate_soracloud_hash(value: &Value, context: &str) -> Result<(), String> {
         .ok_or_else(|| format!("{context} must be a canonical hash string"))?;
     let hash = json::from_value::<Hash>(value.clone())
         .map_err(|_| format!("{context} must be a canonical hash string"))?;
-    if hash.to_string() != raw {
+    let canonical =
+        json::to_value(&hash).map_err(|_| format!("{context} must be a canonical hash string"))?;
+    if canonical.as_str() != Some(raw) {
         return Err(format!("{context} must use exact canonical hash text"));
     }
     Ok(())
 }
-fn validate_soracloud_nullable_hash(
+fn validate_soracloud_bare_hash(value: &Value, context: &str) -> Result<(), String> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| format!("{context} must be an exact bare hash string"))?;
+    let hash =
+        Hash::from_str(raw).map_err(|_| format!("{context} must be an exact bare hash string"))?;
+    if hash.to_string() != raw {
+        return Err(format!("{context} must use exact bare hash text"));
+    }
+    Ok(())
+}
+fn validate_soracloud_nullable_bare_hash(
     object: &Map,
     field: &str,
     context: &str,
@@ -4731,21 +5692,8 @@ fn validate_soracloud_nullable_hash(
     if value.is_null() {
         Ok(())
     } else {
-        validate_soracloud_hash(value, &format!("{context}.{field}"))
+        validate_soracloud_bare_hash(value, &format!("{context}.{field}"))
     }
-}
-fn validate_soracloud_u128(value: &Value, context: &str) -> Result<(), String> {
-    let literal =
-        json::to_string(value).map_err(|_| format!("{context} must be an unsigned integer"))?;
-    let parsed = literal
-        .parse::<u128>()
-        .map_err(|_| format!("{context} must be an unsigned integer"))?;
-    if parsed.to_string() != literal {
-        return Err(format!(
-            "{context} must use exact canonical unsigned integer text"
-        ));
-    }
-    Ok(())
 }
 fn validate_canonical_soracloud_route_host(host: &str, context: &str) -> Result<(), String> {
     if host.is_empty()
@@ -4875,7 +5823,7 @@ fn validate_soracloud_service_health(value: &Value) -> Result<&str, String> {
     ] {
         soracloud_status_u64(object, field, context)?;
     }
-    validate_soracloud_nullable_hash(object, "observed_block_hash", context)?;
+    validate_soracloud_nullable_bare_hash(object, "observed_block_hash", context)?;
     soracloud_status_string(object, "state_dir", context)?;
     Ok(status)
 }
@@ -4953,7 +5901,6 @@ fn validate_soracloud_runtime_pressure(value: &Value) -> Result<(), String> {
         "service_revisions",
         "apartments",
         "max_load_factor_bps",
-        "reported_pending_mailbox_messages",
         "authoritative_pending_mailbox_messages",
         "bundle_cache_misses",
         "artifact_cache_misses",
@@ -4974,6 +5921,11 @@ fn validate_soracloud_runtime_pressure(value: &Value) -> Result<(), String> {
     soracloud_status_string(object, "state_dir", context)?;
     for field in &FULL_FIELDS[2..] {
         soracloud_status_u64(object, field, context)?;
+    }
+    if soracloud_status_u64(object, "max_load_factor_bps", context)? > 10_000 {
+        return Err(format!(
+            "{context}.max_load_factor_bps exceeds the V1 basis-point domain"
+        ));
     }
     Ok(())
 }
@@ -5031,7 +5983,7 @@ fn validate_soracloud_runtime_snapshot(value: &Value) -> Result<(), String> {
         return Err(format!("{context}.schema_version must equal 1"));
     }
     soracloud_status_u64(object, "observed_height", context)?;
-    validate_soracloud_nullable_hash(object, "observed_block_hash", context)?;
+    validate_soracloud_nullable_bare_hash(object, "observed_block_hash", context)?;
     validate_soracloud_nullable_string(object, "local_peer_id", context)?;
     for field in ["services", "apartments"] {
         if !soracloud_status_field(object, field, context)?.is_object() {
@@ -5074,33 +6026,82 @@ fn validate_soracloud_rollout(value: &Value, context: &str) -> Result<(), String
         "updated_sequence",
     ];
     let object = exact_soracloud_status_object(value, context, FIELDS)?;
-    soracloud_status_string(object, "rollout_handle", context)?;
-    validate_soracloud_nullable_string(object, "baseline_version", context)?;
-    soracloud_status_string(object, "candidate_version", context)?;
-    for field in [
-        "canary_percent",
-        "traffic_percent",
-        "health_failures",
-        "max_health_failures",
-        "health_window_secs",
-        "created_sequence",
-        "updated_sequence",
-    ] {
-        soracloud_status_u64(object, field, context)?;
-    }
-    if soracloud_status_u64(object, "canary_percent", context)? > 100
-        || soracloud_status_u64(object, "traffic_percent", context)? > 100
+    let rollout_handle = soracloud_status_string(object, "rollout_handle", context)?;
+    let baseline_version = soracloud_status_string(object, "baseline_version", context)?;
+    let candidate_version = soracloud_status_string(object, "candidate_version", context)?;
+    if rollout_handle.trim().is_empty()
+        || baseline_version.trim().is_empty()
+        || candidate_version.trim().is_empty()
     {
+        return Err(format!(
+            "{context} rollout identity fields must be nonempty"
+        ));
+    }
+    if baseline_version == candidate_version {
+        return Err(format!(
+            "{context}.baseline_version must differ from candidate_version"
+        ));
+    }
+    let canary_percent = soracloud_status_u64(object, "canary_percent", context)?;
+    let traffic_percent = soracloud_status_u64(object, "traffic_percent", context)?;
+    let health_failures = soracloud_status_u64(object, "health_failures", context)?;
+    let max_health_failures = soracloud_status_u64(object, "max_health_failures", context)?;
+    let health_window_secs = soracloud_status_u64(object, "health_window_secs", context)?;
+    let created_sequence = soracloud_status_u64(object, "created_sequence", context)?;
+    let updated_sequence = soracloud_status_u64(object, "updated_sequence", context)?;
+    if canary_percent > 100 || traffic_percent > 100 {
         return Err(format!(
             "{context} rollout percentages must be within 0..=100"
         ));
     }
-    validate_soracloud_tagged_unit(
+    for (field, value, maximum) in [
+        ("health_failures", health_failures, u64::from(u32::MAX)),
+        (
+            "max_health_failures",
+            max_health_failures,
+            u64::from(u32::MAX),
+        ),
+        (
+            "health_window_secs",
+            health_window_secs,
+            u64::from(u32::MAX),
+        ),
+    ] {
+        if value > maximum {
+            return Err(format!("{context}.{field} exceeds the V1 u32 domain"));
+        }
+    }
+    if max_health_failures == 0 || health_window_secs == 0 {
+        return Err(format!(
+            "{context}.max_health_failures and health_window_secs must be positive"
+        ));
+    }
+    if updated_sequence < created_sequence {
+        return Err(format!(
+            "{context}.updated_sequence must not precede created_sequence"
+        ));
+    }
+    let stage = validate_soracloud_tagged_unit(
         soracloud_status_field(object, "stage", context)?,
         "stage",
         &["Canary", "Promoted", "RolledBack"],
         &format!("{context}.stage"),
     )?;
+    let stage_is_valid = match stage {
+        "Canary" => {
+            (1..100).contains(&canary_percent)
+                && (canary_percent..100).contains(&traffic_percent)
+                && health_failures < max_health_failures
+        }
+        "Promoted" => traffic_percent == 100 && health_failures == 0,
+        "RolledBack" => traffic_percent == 0 && health_failures >= max_health_failures,
+        _ => unreachable!("tagged-unit validator returned an admitted rollout stage"),
+    };
+    if !stage_is_valid {
+        return Err(format!(
+            "{context} rollout counters do not match the exact V1 stage"
+        ));
+    }
     Ok(())
 }
 fn validate_soracloud_network_policy(value: &Value, context: &str) -> Result<(), String> {
@@ -5130,6 +6131,9 @@ fn validate_soracloud_revision(value: &Value, context: &str) -> Result<(), Strin
         "execution_plane",
         "route_host",
         "route_path_prefix",
+        "route_service_port",
+        "route_visibility",
+        "route_tls_mode",
         "base_url",
         "healthcheck_url",
         "public_discovery_content_cid",
@@ -5208,14 +6212,15 @@ fn validate_soracloud_revision(value: &Value, context: &str) -> Result<(), Strin
     ] {
         soracloud_status_u64(object, field, context)?;
     }
-    validate_soracloud_tagged_unit(
+    let execution_plane = validate_soracloud_tagged_unit(
         soracloud_status_field(object, "execution_plane", context)?,
         "execution_plane",
         &["DeterministicService", "HttpService"],
         &format!("{context}.execution_plane"),
     )?;
     let route_host = soracloud_status_field(object, "route_host", context)?;
-    if !route_host.is_null() {
+    let route_host_is_present = !route_host.is_null();
+    if route_host_is_present {
         validate_canonical_soracloud_route_host(
             route_host
                 .as_str()
@@ -5224,13 +6229,76 @@ fn validate_soracloud_revision(value: &Value, context: &str) -> Result<(), Strin
         )?;
     }
     let route_prefix = soracloud_status_field(object, "route_path_prefix", context)?;
-    if !route_prefix.is_null() {
+    let route_prefix_is_present = !route_prefix.is_null();
+    if route_prefix_is_present {
         validate_canonical_soracloud_route_prefix(
             route_prefix
                 .as_str()
                 .ok_or_else(|| format!("{context}.route_path_prefix must be a string or null"))?,
             &format!("{context}.route_path_prefix"),
         )?;
+    }
+    let route_service_port = soracloud_status_field(object, "route_service_port", context)?;
+    let route_service_port_is_present = if route_service_port.is_null() {
+        false
+    } else {
+        let port = route_service_port.as_u64().ok_or_else(|| {
+            format!("{context}.route_service_port must be a positive V1 u16 or null")
+        })?;
+        if port == 0 || port > u64::from(u16::MAX) {
+            return Err(format!(
+                "{context}.route_service_port must be a positive V1 u16 or null"
+            ));
+        }
+        true
+    };
+    let route_visibility = soracloud_status_field(object, "route_visibility", context)?;
+    let route_visibility_is_present = if route_visibility.is_null() {
+        false
+    } else {
+        let visibility = route_visibility.as_str().ok_or_else(|| {
+            format!("{context}.route_visibility must be a V1 string variant or null")
+        })?;
+        if !matches!(visibility, "Public" | "Internal") {
+            return Err(format!(
+                "{context}.route_visibility has unknown V1 variant `{visibility}`"
+            ));
+        }
+        true
+    };
+    let route_tls_mode = soracloud_status_field(object, "route_tls_mode", context)?;
+    let route_tls_mode_is_present = if route_tls_mode.is_null() {
+        false
+    } else {
+        let tls_mode = route_tls_mode.as_str().ok_or_else(|| {
+            format!("{context}.route_tls_mode must be a V1 string variant or null")
+        })?;
+        if !matches!(tls_mode, "Required" | "Optional" | "Disabled") {
+            return Err(format!(
+                "{context}.route_tls_mode has unknown V1 variant `{tls_mode}`"
+            ));
+        }
+        true
+    };
+    let route_fields_present = [
+        route_host_is_present,
+        route_prefix_is_present,
+        route_service_port_is_present,
+        route_visibility_is_present,
+        route_tls_mode_is_present,
+    ];
+    if route_fields_present
+        .iter()
+        .any(|present| *present != route_host_is_present)
+    {
+        return Err(format!(
+            "{context} must project either one complete V1 route or five null route fields"
+        ));
+    }
+    if execution_plane == "HttpService" && !route_host_is_present {
+        return Err(format!(
+            "{context} HttpService revisions must project one complete V1 route"
+        ));
     }
     for field in [
         "base_url",
@@ -5282,54 +6350,6 @@ fn validate_soracloud_revision(value: &Value, context: &str) -> Result<(), Strin
     soracloud_status_string(object, "signed_by", context)?;
     Ok(())
 }
-fn validate_soracloud_lease_epoch_rollover(value: &Value, context: &str) -> Result<(), String> {
-    const FIELDS: &[&str] = &[
-        "schema_version",
-        "economic_clock",
-        "lease_started_height",
-        "previous_reporting_epoch",
-        "new_reporting_epoch",
-        "reporter_account_id",
-        "active_service_version",
-        "replica_slot",
-        "placement_incarnation",
-        "finalized_checkpoint_count",
-        "settled_egress_bytes_delta",
-        "settled_egress_bytes",
-    ];
-    let object = exact_soracloud_status_object(value, context, FIELDS)?;
-    if soracloud_status_u64(object, "schema_version", context)? != 1 {
-        return Err(format!("{context}.schema_version must equal 1"));
-    }
-    validate_soracloud_tagged_unit(
-        soracloud_status_field(object, "economic_clock", context)?,
-        "clock",
-        &["CanonicalBlockHeight"],
-        &format!("{context}.economic_clock"),
-    )?;
-    for field in [
-        "lease_started_height",
-        "previous_reporting_epoch",
-        "new_reporting_epoch",
-        "replica_slot",
-        "finalized_checkpoint_count",
-    ] {
-        soracloud_status_u64(object, field, context)?;
-    }
-    soracloud_status_string(object, "reporter_account_id", context)?;
-    soracloud_status_string(object, "active_service_version", context)?;
-    validate_soracloud_hash(
-        soracloud_status_field(object, "placement_incarnation", context)?,
-        &format!("{context}.placement_incarnation"),
-    )?;
-    for field in ["settled_egress_bytes_delta", "settled_egress_bytes"] {
-        validate_soracloud_u128(
-            soracloud_status_field(object, field, context)?,
-            &format!("{context}.{field}"),
-        )?;
-    }
-    Ok(())
-}
 fn validate_soracloud_audit_event(value: &Value, context: &str) -> Result<(), String> {
     const FIELDS: &[&str] = &[
         "sequence",
@@ -5339,83 +6359,143 @@ fn validate_soracloud_audit_event(value: &Value, context: &str) -> Result<(), St
         "to_version",
         "service_manifest_hash",
         "container_manifest_hash",
+        "process_generation",
+        "config_generation",
+        "secret_generation",
+        "config_snapshot_hash",
+        "secret_snapshot_hash",
         "binding_name",
         "state_key",
-        "config_name",
-        "secret_name",
+        "config_mutations",
+        "secret_mutations",
         "governance_tx_hash",
-        "rollout_handle",
+        "rollout_state",
         "policy_name",
         "policy_snapshot_hash",
         "jurisdiction_tag",
         "consent_evidence_hash",
         "break_glass",
         "break_glass_reason",
+        "lease_usage",
+        "service_lease_commitment",
         "lease_reporting_epoch_rollover",
         "signed_by",
     ];
+    exact_soracloud_status_object(value, context, FIELDS)?;
+
+    // Torii intentionally projects away ledger-only block metadata and the
+    // two fixed V1 schema markers. Restore those constants, validate the
+    // authoritative data-model event, and project it back before comparing.
+    // This keeps the public doctor boundary exactly aligned with every
+    // action-specific, break-glass, rollout, and lease-accounting invariant.
+    let mut authoritative_value = value.clone();
+    let authoritative_object = authoritative_value
+        .as_object_mut()
+        .expect("the exact-object validator admitted an audit object");
+    let signer = authoritative_object
+        .remove("signed_by")
+        .expect("the exact-object validator required signed_by");
+    authoritative_object.insert("schema_version".to_owned(), Value::from(1_u64));
+    authoritative_object.insert("block_height".to_owned(), Value::from(1_u64));
+    authoritative_object.insert("block_timestamp_ms".to_owned(), Value::from(1_u64));
+    authoritative_object.insert("signer".to_owned(), signer);
+    if let Some(rollout) = authoritative_object
+        .get_mut("rollout_state")
+        .and_then(Value::as_object_mut)
+    {
+        rollout.insert("schema_version".to_owned(), Value::from(1_u64));
+    }
+
+    let event = json::from_value::<iroha::data_model::soracloud::SoraServiceAuditEventV1>(
+        authoritative_value,
+    )
+    .map_err(|error| {
+        format!("{context} is not exact authoritative audit-event V1 JSON: {error}")
+    })?;
+    event
+        .validate()
+        .map_err(|error| format!("{context} violates audit-event V1 invariants: {error}"))?;
+
+    let mut canonical = json::to_value(&event)
+        .map_err(|error| format!("{context} could not be canonically encoded: {error}"))?;
+    let canonical_object = canonical
+        .as_object_mut()
+        .expect("an authoritative audit event serializes as an object");
+    canonical_object.remove("schema_version");
+    canonical_object.remove("block_height");
+    canonical_object.remove("block_timestamp_ms");
+    let signer = canonical_object
+        .remove("signer")
+        .expect("an authoritative audit event serializes its signer");
+    canonical_object.insert("signed_by".to_owned(), signer);
+    if let Some(rollout) = canonical_object
+        .get_mut("rollout_state")
+        .and_then(Value::as_object_mut)
+    {
+        rollout.remove("schema_version");
+    }
+    if &canonical != value {
+        return Err(format!(
+            "{context} is not exact canonical projected audit-event V1 JSON"
+        ));
+    }
+    Ok(())
+}
+fn validate_soracloud_service_lease(value: &Value, context: &str) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "authoritative_state",
+        "effective_status",
+        "remaining_runtime_balance",
+    ];
     let object = exact_soracloud_status_object(value, context, FIELDS)?;
-    soracloud_status_u64(object, "sequence", context)?;
-    validate_soracloud_tagged_unit(
-        soracloud_status_field(object, "action", context)?,
-        "action",
-        &[
-            "Deploy",
-            "Upgrade",
-            "Rollback",
-            "ConfigMutation",
-            "SecretMutation",
-            "StateMutation",
-            "FheJobRun",
-            "FhePolicyRegister",
-            "FhePolicyRotate",
-            "FhePolicyRevoke",
-            "DecryptionRequest",
-            "CiphertextQuery",
-            "Rollout",
-            "LeaseReportingEpochRollover",
-        ],
-        &format!("{context}.action"),
-    )?;
-    for field in ["service_name", "to_version", "signed_by"] {
-        soracloud_status_string(object, field, context)?;
+
+    let authoritative_value = soracloud_status_field(object, "authoritative_state", context)?;
+    let authoritative = json::from_value::<iroha::data_model::soracloud::SoraServiceLeaseStateV1>(
+        authoritative_value.clone(),
+    )
+    .map_err(|error| {
+        format!("{context}.authoritative_state is not exact SoraServiceLeaseStateV1 JSON: {error}")
+    })?;
+    authoritative.validate().map_err(|error| {
+        format!(
+            "{context}.authoritative_state violates SoraServiceLeaseStateV1 invariants: {error}"
+        )
+    })?;
+    let canonical_authoritative = json::to_value(&authoritative).map_err(|error| {
+        format!("{context}.authoritative_state could not be canonically encoded: {error}")
+    })?;
+    if &canonical_authoritative != authoritative_value {
+        return Err(format!(
+            "{context}.authoritative_state is not exact canonical SoraServiceLeaseStateV1 JSON"
+        ));
     }
-    for field in ["service_manifest_hash", "container_manifest_hash"] {
-        validate_soracloud_hash(
-            soracloud_status_field(object, field, context)?,
-            &format!("{context}.{field}"),
-        )?;
+
+    let effective_value = soracloud_status_field(object, "effective_status", context)?;
+    let effective_status =
+        json::from_value::<iroha::data_model::soracloud::SoraServiceLeaseStatusV1>(
+            effective_value.clone(),
+        )
+        .map_err(|error| format!("{context}.effective_status is not exact V1 JSON: {error}"))?;
+    let canonical_effective = json::to_value(&effective_status).map_err(|error| {
+        format!("{context}.effective_status could not be canonically encoded: {error}")
+    })?;
+    if &canonical_effective != effective_value {
+        return Err(format!(
+            "{context}.effective_status is not exact canonical V1 JSON"
+        ));
     }
-    for field in [
-        "from_version",
-        "binding_name",
-        "state_key",
-        "config_name",
-        "secret_name",
-        "rollout_handle",
-        "policy_name",
-        "jurisdiction_tag",
-        "break_glass_reason",
-    ] {
-        validate_soracloud_nullable_string(object, field, context)?;
-    }
-    for field in [
-        "governance_tx_hash",
-        "policy_snapshot_hash",
-        "consent_evidence_hash",
-    ] {
-        validate_soracloud_nullable_hash(object, field, context)?;
-    }
-    let break_glass = soracloud_status_field(object, "break_glass", context)?;
-    if !break_glass.is_null() && !break_glass.is_bool() {
-        return Err(format!("{context}.break_glass must be a boolean or null"));
-    }
-    let rollover = soracloud_status_field(object, "lease_reporting_epoch_rollover", context)?;
-    if !rollover.is_null() {
-        validate_soracloud_lease_epoch_rollover(
-            rollover,
-            &format!("{context}.lease_reporting_epoch_rollover"),
-        )?;
+
+    let remaining_value = soracloud_status_field(object, "remaining_runtime_balance", context)?;
+    let remaining = json::from_value::<Quantity>(remaining_value.clone()).map_err(|error| {
+        format!("{context}.remaining_runtime_balance is not an exact V1 quantity: {error}")
+    })?;
+    let canonical_remaining = json::to_value(&remaining).map_err(|error| {
+        format!("{context}.remaining_runtime_balance could not be canonically encoded: {error}")
+    })?;
+    if &canonical_remaining != remaining_value {
+        return Err(format!(
+            "{context}.remaining_runtime_balance is not an exact canonical V1 quantity"
+        ));
     }
     Ok(())
 }
@@ -5428,11 +6508,7 @@ fn validate_soracloud_service(value: &Value, index: usize) -> Result<(), String>
         "secret_generation",
         "config_entry_count",
         "secret_entry_count",
-        "quota_class",
-        "service_lease_status",
-        "lease_expires_height",
-        "prepaid_runtime_balance",
-        "remaining_runtime_balance",
+        "service_lease",
         "public_discovery_content_cid",
         "public_discovery_url",
         "public_discovery_cid_host_url",
@@ -5453,27 +6529,9 @@ fn validate_soracloud_service(value: &Value, index: usize) -> Result<(), String>
     ] {
         soracloud_status_u64(object, field, &context)?;
     }
-    validate_soracloud_nullable_string(object, "quota_class", &context)?;
-    let lease_status = soracloud_status_field(object, "service_lease_status", &context)?;
-    if !lease_status.is_null() {
-        validate_soracloud_tagged_unit(
-            lease_status,
-            "status",
-            &["Active", "Expired", "Exhausted", "Suspended"],
-            &format!("{context}.service_lease_status"),
-        )?;
-    }
-    let lease_height = soracloud_status_field(object, "lease_expires_height", &context)?;
-    if !lease_height.is_null() && lease_height.as_u64().is_none() {
-        return Err(format!(
-            "{context}.lease_expires_height must be a nonnegative integer or null"
-        ));
-    }
-    for field in ["prepaid_runtime_balance", "remaining_runtime_balance"] {
-        let value = soracloud_status_field(object, field, &context)?;
-        if !value.is_null() && !value.is_string() {
-            return Err(format!("{context}.{field} must be a string or null"));
-        }
+    let service_lease = soracloud_status_field(object, "service_lease", &context)?;
+    if !service_lease.is_null() {
+        validate_soracloud_service_lease(service_lease, &format!("{context}.service_lease"))?;
     }
     for field in [
         "public_discovery_content_cid",
@@ -5657,20 +6715,16 @@ fn validate_soracloud_status(status: Option<&Value>) -> Result<(), String> {
     }
     Ok(())
 }
-fn validate_mcp_protocol_response(payload: Option<&Value>, json_rpc: bool) -> Result<(), String> {
+fn validate_mcp_initialize_response(payload: Option<&Value>) -> Result<(), String> {
     let payload = payload.ok_or_else(|| "MCP response body is not canonical JSON".to_owned())?;
-    let capabilities = if json_rpc {
-        if payload.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
-            || payload.get("id").and_then(Value::as_u64) != Some(1)
-        {
-            return Err("MCP initialize response has a substituted JSON-RPC envelope".to_owned());
-        }
-        payload
-            .get("result")
-            .ok_or_else(|| "MCP initialize response omits result".to_owned())?
-    } else {
-        payload
-    };
+    if payload.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || payload.get("id").and_then(Value::as_u64) != Some(1)
+    {
+        return Err("MCP initialize response has a substituted JSON-RPC envelope".to_owned());
+    }
+    let capabilities = payload
+        .get("result")
+        .ok_or_else(|| "MCP initialize response omits result".to_owned())?;
     if capabilities.get("protocolVersion").and_then(Value::as_str) != Some(MCP_PROTOCOL_VERSION) {
         return Err(format!(
             "MCP response protocolVersion must equal `{MCP_PROTOCOL_VERSION}`"
@@ -6023,7 +7077,7 @@ mod tests {
         net::{TcpListener, TcpStream},
         sync::{
             Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         thread,
     };
@@ -6777,6 +7831,7 @@ mod tests {
             400 => "Bad Request",
             401 => "Unauthorized",
             404 => "Not Found",
+            405 => "Method Not Allowed",
             503 => "Service Unavailable",
             _ => "OK",
         };
@@ -6871,11 +7926,19 @@ mod tests {
                     "message": "canonical account request authentication is required"
                 }),
             ),
-            ("GET", "/v1/mcp") => MockResponse::json(
-                200,
-                norito::json!({"protocolVersion": MCP_PROTOCOL_VERSION}),
-            ),
+            ("GET", "/v1/mcp") => MockResponse::text(405, "method not allowed"),
+            ("POST", "/v1/mcp") if request.body.contains("notifications/initialized") => {
+                assert_eq!(
+                    request.header_values("mcp-protocol-version"),
+                    vec![MCP_PROTOCOL_VERSION]
+                );
+                MockResponse::text(202, "")
+            }
             ("POST", "/v1/mcp") if request.body.contains("tools/list") => {
+                assert_eq!(
+                    request.header_values("mcp-protocol-version"),
+                    vec![MCP_PROTOCOL_VERSION]
+                );
                 let tools: Vec<Value> = REQUIRED_MCP_TOOLS
                     .iter()
                     .copied()
@@ -6907,25 +7970,543 @@ mod tests {
         }
     }
     fn inrou_canary_deployment(mode: &str, version: &str) -> InrouProbeIdentity {
+        let validator_key = fixture_key_pair(0x91);
+        let bundle_hash = Hash::new(b"taira-test-bundle");
+        let deployment_bundle_hash = Hash::new(b"taira-test-deployment-bundle");
+        let container_manifest_hash = Hash::new(b"taira-test-container-manifest");
+        let service_manifest_hash = Hash::new(b"taira-test-service-manifest");
+        let discovery_document = InrouPublicDiscoveryDocumentV1 {
+            schema_version: 1,
+            service_name: "taira_inrou_canary".to_owned(),
+            service_version: version.to_owned(),
+            execution_plane: "HttpService".to_owned(),
+            runtime: "Inrou".to_owned(),
+            route_host: "taira.sora.org".to_owned(),
+            path_prefix: "/api/v1/inrou-canary".to_owned(),
+            base_url: "https://taira.sora.org/api/v1/inrou-canary/".to_owned(),
+            healthcheck_path: Some("/health".to_owned()),
+            healthcheck_url: Some("https://taira.sora.org/api/v1/inrou-canary/health".to_owned()),
+            service_manifest_hash,
+            container_manifest_hash,
+            deployment_bundle_hash,
+        };
+        let discovery_document_hash = Hash::new(
+            json::to_vec(&discovery_document).expect("encode exact discovery document fixture"),
+        );
+        let discovery_content_cid =
+            "bafyr6ibugm2danbugm2danbugm2danbugm2danbugm2danbugm2danbugm".to_owned();
         InrouProbeIdentity {
             service_name: "taira_inrou_canary".to_owned(),
             service_version: version.to_owned(),
-            route_host: "taira-inrou-canary.sora".to_owned(),
-            route_path_prefix: "/api/v1".to_owned(),
+            route_host: "taira.sora.org".to_owned(),
+            route_path_prefix: "/api/v1/inrou-canary".to_owned(),
             healthcheck_path: "/health".to_owned(),
             stage_mode: mode.to_owned(),
-            container_manifest_hash: Hash::new(b"taira-test-container-manifest").to_string(),
-            service_manifest_hash: Hash::new(b"taira-test-service-manifest").to_string(),
+            bundle_hash: bundle_hash.to_string(),
+            discovery_payload_dir: "payloads/discovery".to_owned(),
+            discovery_document_hash: discovery_document_hash.to_string(),
+            discovery_content_cid: discovery_content_cid.clone(),
+            discovery_manifest_digest_hex: "33".repeat(32),
+            public_discovery_url: format!(
+                "https://taira.sora.org/sorafs/cid/{discovery_content_cid}/index.json"
+            ),
+            public_discovery_cid_host_url: format!(
+                "https://{discovery_content_cid}.sorafs.taira.sora.org/index.json"
+            ),
+            deployment_bundle_hash: deployment_bundle_hash.to_string(),
+            container_manifest_hash: container_manifest_hash.to_string(),
+            service_manifest_hash: service_manifest_hash.to_string(),
+            placement_targets: BTreeSet::from([
+                iroha::data_model::soracloud::SoraInrouPlacementTargetV1 {
+                    validator_account_id: AccountId::new(validator_key.public_key().clone()),
+                    peer_id: validator_key.public_key().to_string(),
+                },
+            ]),
         }
+    }
+    fn inrou_canary_stage_identity(
+        mode: &str,
+        version: &str,
+    ) -> crate::soracloud::TairaInrouStageIdentity {
+        let deployment = inrou_canary_deployment(mode, version);
+        let placement_targets = deployment.placement_targets.clone();
+        crate::soracloud::TairaInrouStageIdentity {
+            service_name: deployment.service_name,
+            service_version: deployment.service_version,
+            route_host: deployment.route_host,
+            route_path_prefix: deployment.route_path_prefix,
+            healthcheck_path: deployment.healthcheck_path,
+            stage_mode: deployment.stage_mode,
+            bundle_hash: deployment.bundle_hash,
+            bundle_content_cid: "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
+                .to_owned(),
+            bundle_manifest_digest_hex: "31".repeat(32),
+            guest_content_cid: "bafyr6ibsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgi"
+                .to_owned(),
+            guest_manifest_digest_hex: "32".repeat(32),
+            discovery_payload_dir: deployment.discovery_payload_dir,
+            discovery_document_hash: deployment.discovery_document_hash,
+            discovery_content_cid: deployment.discovery_content_cid,
+            discovery_manifest_digest_hex: deployment.discovery_manifest_digest_hex,
+            public_discovery_url: deployment.public_discovery_url,
+            public_discovery_cid_host_url: deployment.public_discovery_cid_host_url,
+            deployment_bundle_hash: deployment.deployment_bundle_hash,
+            container_manifest_hash: deployment.container_manifest_hash,
+            service_manifest_hash: deployment.service_manifest_hash,
+            placement_targets,
+        }
+    }
+    fn exact_inrou_discovery_authority(deployment: &InrouProbeIdentity) -> Value {
+        json::to_value(
+            &expected_inrou_public_discovery(deployment)
+                .expect("exact discovery fixture")
+                .response,
+        )
+        .expect("serialize exact discovery authority fixture")
+    }
+    fn exact_inrou_discovery_document_response(deployment: &InrouProbeIdentity) -> MockResponse {
+        let expected =
+            expected_inrou_public_discovery(deployment).expect("exact discovery document fixture");
+        let etag = format!("\"{}\"", expected.response.discovery.document_hash);
+        MockResponse {
+            status: 200,
+            content_type: INROU_PUBLIC_DISCOVERY_CONTENT_TYPE,
+            headers: vec![
+                (
+                    INROU_PUBLIC_DISCOVERY_CONTENT_CID_HEADER,
+                    deployment.discovery_content_cid.clone(),
+                ),
+                (
+                    reqwest::header::CACHE_CONTROL.as_str(),
+                    INROU_PUBLIC_DISCOVERY_CACHE_CONTROL.to_owned(),
+                ),
+                (reqwest::header::ETAG.as_str(), etag),
+                ("x-content-type-options", "nosniff".to_owned()),
+            ],
+            body: String::from_utf8(expected.document_bytes)
+                .expect("canonical discovery document is UTF-8"),
+        }
+    }
+
+    fn inrou_public_discovery_http_client() -> HttpClient {
+        HttpClient::builder()
+            .timeout(Duration::from_secs(2))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("build exact public-discovery client")
+    }
+    fn inrou_discovery_mock_response(
+        request: &MockRequest,
+        deployment: &InrouProbeIdentity,
+    ) -> Option<MockResponse> {
+        let path = path_only(&request.path);
+        let current_path = format!(
+            "/v1/soracloud/services/{}/public-discovery",
+            deployment.service_name
+        );
+        let revision_path = format!(
+            "/v1/soracloud/services/{}/revisions/{}/public-discovery",
+            deployment.service_name, deployment.service_version
+        );
+        if path == current_path || path == revision_path {
+            return Some(MockResponse::json(
+                200,
+                exact_inrou_discovery_authority(deployment),
+            ));
+        }
+        let path_gateway = format!(
+            "/sorafs/cid/{}/index.json",
+            deployment.discovery_content_cid
+        );
+        if path == path_gateway {
+            assert_eq!(
+                request.header_values("host"),
+                vec![deployment.route_host.as_str()]
+            );
+            return Some(exact_inrou_discovery_document_response(deployment));
+        }
+        if path == "/index.json" {
+            let expected_host =
+                format!("{}.sorafs.taira.sora.org", deployment.discovery_content_cid);
+            assert_eq!(request.header_values("host"), vec![expected_host.as_str()]);
+            return Some(exact_inrou_discovery_document_response(deployment));
+        }
+        None
     }
     fn inrou_canary_artifact_version(seed: u8) -> String {
         format!("artifact-{}", Hash::new(&[seed; 32]))
+    }
+
+    #[test]
+    fn inrou_public_discovery_authority_encodes_identity_segments() {
+        let current =
+            inrou_public_discovery_authority_url("https://taira.sora.org", "service/name", None)
+                .expect("encode current discovery identity");
+        assert_eq!(
+            current.as_str(),
+            "https://taira.sora.org/v1/soracloud/services/service%2Fname/public-discovery"
+        );
+
+        let revision = inrou_public_discovery_authority_url(
+            "https://taira.sora.org",
+            "service/name",
+            Some("artifact/revision?selected"),
+        )
+        .expect("encode revision discovery identity");
+        assert_eq!(
+            revision.as_str(),
+            "https://taira.sora.org/v1/soracloud/services/service%2Fname/revisions/artifact%2Frevision%3Fselected/public-discovery"
+        );
+    }
+
+    #[test]
+    fn inrou_public_discovery_rejects_missing_duplicate_or_substituted_etag() {
+        let service_version = inrou_canary_artifact_version(0x2A);
+        let deployment = inrou_canary_deployment("deploy", &service_version);
+        let expected = expected_inrou_public_discovery(&deployment)
+            .expect("build exact public-discovery expectation");
+        for variant in ["missing", "duplicate", "substituted"] {
+            let server_deployment = deployment.clone();
+            let server = spawn_mock_http(1, move |_request| {
+                let mut response = exact_inrou_discovery_document_response(&server_deployment);
+                let etag_index = response
+                    .headers
+                    .iter()
+                    .position(|(name, _)| name.eq_ignore_ascii_case(reqwest::header::ETAG.as_str()))
+                    .expect("exact fixture has ETag");
+                match variant {
+                    "missing" => {
+                        response.headers.remove(etag_index);
+                    }
+                    "duplicate" => {
+                        let duplicate = response.headers[etag_index].1.clone();
+                        response
+                            .headers
+                            .push((reqwest::header::ETAG.as_str(), duplicate));
+                    }
+                    "substituted" => {
+                        response.headers[etag_index].1 = format!("\"{}\"", Hash::new(b"other"));
+                    }
+                    _ => unreachable!("bounded test variant"),
+                }
+                response
+            });
+            let error = fetch_exact_inrou_public_discovery_document(
+                &inrou_public_discovery_http_client(),
+                &server.base_url,
+                &deployment.public_discovery_url,
+                &deployment.route_host,
+                &deployment.discovery_content_cid,
+                &expected.response.discovery.document_hash,
+                &expected.document_bytes,
+                "test Taira Inrou discovery document",
+            )
+            .expect_err("non-exact ETag must fail closed");
+            assert!(
+                error.to_string().contains("`etag` header"),
+                "unexpected {variant} ETag error: {error:#}"
+            );
+            assert_eq!(finish_mock(server).len(), 1);
+        }
+    }
+
+    #[test]
+    fn inrou_public_discovery_does_not_follow_redirects() {
+        let service_version = inrou_canary_artifact_version(0x2B);
+        let deployment = inrou_canary_deployment("deploy", &service_version);
+        let expected = expected_inrou_public_discovery(&deployment)
+            .expect("build exact public-discovery expectation");
+        let server = spawn_mock_http(1, |_request| MockResponse {
+            status: 307,
+            content_type: "text/plain",
+            headers: vec![(
+                reqwest::header::LOCATION.as_str(),
+                "https://attacker.invalid/substituted".to_owned(),
+            )],
+            body: String::new(),
+        });
+        let error = fetch_exact_inrou_public_discovery_document(
+            &inrou_public_discovery_http_client(),
+            &server.base_url,
+            &deployment.public_discovery_url,
+            &deployment.route_host,
+            &deployment.discovery_content_cid,
+            &expected.response.discovery.document_hash,
+            &expected.document_bytes,
+            "test Taira Inrou discovery document",
+        )
+        .expect_err("public discovery redirects must fail closed");
+        assert!(
+            error.to_string().contains("redirects are not accepted"),
+            "unexpected redirect error: {error:#}"
+        );
+        assert_eq!(finish_mock(server).len(), 1);
+    }
+
+    #[test]
+    fn retained_stage_discovery_bytes_bind_encoded_deployment_bundle() {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let temp = tempfile::Builder::new()
+            .prefix(".taira-retained-stage-test-")
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+            .expect("create retained-stage fixture directory under a real owner path");
+        let kernel = temp.path().join("kernel.source");
+        let rootfs = temp.path().join("rootfs.source");
+        let initrd = temp.path().join("initrd.source");
+        fs::write(&kernel, b"aarch64-kernel").expect("write kernel fixture");
+        fs::write(&rootfs, b"aarch64-rootfs").expect("write rootfs fixture");
+        fs::write(&initrd, b"aarch64-initrd").expect("write initrd fixture");
+        let workspace = temp.path().join("workspace");
+        crate::soracloud::create_taira_inrou_canary_workspace(
+            &kernel, &rootfs, &initrd, &workspace,
+        )
+        .expect("create canonical Taira Inrou workspace");
+
+        let placement_targets = (0_u8..4)
+            .map(|offset| {
+                let key = fixture_key_pair(0x70 + offset);
+                iroha::data_model::soracloud::SoraInrouPlacementTargetV1 {
+                    validator_account_id: AccountId::new(key.public_key().clone()),
+                    peer_id: key.public_key().to_string(),
+                }
+            })
+            .collect::<BTreeSet<_>>();
+        let stage_dir = temp.path().join("stage");
+        let stage_key = fixture_key_pair(0x74);
+        crate::soracloud::stage_taira_inrou_canary_deployment(
+            InrouCanaryMode::Deploy,
+            &workspace.join("container_manifest.json"),
+            &workspace.join("service_manifest.json"),
+            &workspace.join("bundle.tgz"),
+            &stage_dir,
+            &stage_key,
+            NonZeroU64::new(2_000_000_000).expect("positive retention epoch"),
+            placement_targets,
+        )
+        .expect("stage canonical Taira Inrou deployment");
+
+        let mut config = crate::fallback_config();
+        config.key_pair = stage_key;
+        let stage = crate::soracloud::load_taira_inrou_stage_identity(
+            &config,
+            &stage_dir,
+            InrouCanaryMode::Deploy,
+        )
+        .expect("fully revalidate retained Taira Inrou stage");
+        let expected = expected_inrou_public_discovery(&InrouProbeIdentity::from(&stage))
+            .expect("derive exact public discovery from retained stage");
+        let staged_document = fs::read(stage_dir.join("payloads/discovery/index.json"))
+            .expect("read retained discovery document");
+        assert_eq!(expected.document_bytes, staged_document);
+        assert_eq!(
+            expected.response.discovery.document_hash.to_string(),
+            stage.discovery_document_hash
+        );
+        assert_eq!(
+            expected
+                .response
+                .discovery
+                .deployment_bundle_hash
+                .to_string(),
+            stage.deployment_bundle_hash
+        );
+        assert_ne!(stage.bundle_hash, stage.deployment_bundle_hash);
+    }
+    fn exact_inrou_health_response(version: &str, replica_slot: u64) -> Value {
+        norito::json!({
+            "schema_version": 1,
+            "service": "taira_inrou_canary",
+            "service_version": version,
+            "runtime": "Inrou",
+            "replica_slot": replica_slot,
+            "identity": (format!("taira_inrou_canary:replica:{replica_slot}")),
+            "app_data_marker_sha256": (format!("{replica_slot:x}").repeat(64)),
+            "boot_sequence": 1,
+            "guest_boot_id_sha256": (format!("{:x}", replica_slot + 4).repeat(64))
+        })
+    }
+    fn exact_inrou_runtime_snapshot(
+        version: &str,
+        process_generation: u64,
+        observed_block_hash: &str,
+    ) -> Value {
+        use iroha::data_model::soracloud::{
+            SoraContainerRuntimeV1, SoraInrouGuestIsaV1, SoraInrouReplicaHostAvailabilityV1,
+            SoraServiceExecutionPlaneV1, SoraServiceHealthStatusV1,
+        };
+        use iroha_core::soracloud_runtime::{
+            SoracloudRuntimeInrouPlan, SoracloudRuntimeReplicaPlan, SoracloudRuntimeRevisionRole,
+            SoracloudRuntimeServicePlan, SoracloudRuntimeSnapshot,
+        };
+        let validator_key_pair = fixture_key_pair(0x91);
+        let peer_id = validator_key_pair.public_key().to_string();
+        let validator_account_id =
+            AccountId::new(validator_key_pair.public_key().clone()).to_string();
+        let plan = SoracloudRuntimeServicePlan {
+            service_name: "taira_inrou_canary".to_owned(),
+            service_version: version.to_owned(),
+            role: SoracloudRuntimeRevisionRole::Active,
+            traffic_percent: 100,
+            runtime: SoraContainerRuntimeV1::Inrou,
+            execution_plane: SoraServiceExecutionPlaneV1::HttpService,
+            bundle_hash: Hash::new(b"taira-test-bundle").to_string(),
+            bundle_path: "/app/server.py".to_owned(),
+            entrypoint: "/app/server.py".to_owned(),
+            inrou: Some(SoracloudRuntimeInrouPlan {
+                selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
+                kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
+                rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
+                initrd_image_path: Some("/inrou/aarch64/initrd.img".to_owned()),
+                root_volume_name: "root_disk".to_owned(),
+            }),
+            bundle_cache_path: "/runtime/cache/taira-inrou".to_owned(),
+            bundle_available_locally: true,
+            process_generation: Some(process_generation),
+            desired_replica_count: 4,
+            local_replica_slots: vec![2],
+            local_replicas: vec![SoracloudRuntimeReplicaPlan {
+                replica_slot: 2,
+                lease_started_height: 1,
+                placement_incarnation: Hash::new(b"taira-test-placement").to_string(),
+                host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
+                validator_account_id,
+                peer_id: peer_id.clone(),
+                materialization_dir: "/runtime/taira-inrou/replica-0002".to_owned(),
+                health_status: SoraServiceHealthStatusV1::Healthy,
+                listen_base_url: Some("http://127.0.0.1:18082".to_owned()),
+                pid: Some(1234),
+                last_error: None,
+            }],
+            health_status: SoraServiceHealthStatusV1::Healthy,
+            load_factor_bps: 0,
+            authoritative_pending_mailbox_messages: 0,
+            rollout_handle: None,
+            config_generation: 0,
+            secret_generation: 0,
+            quota_class: None,
+            service_lease_status: None,
+            lease_expires_height: None,
+            remaining_runtime_balance: None,
+            config_entry_count: 2,
+            secret_entry_count: 0,
+            config_exports: Vec::new(),
+            supports_host_read_config: false,
+            supports_host_read_secret_envelope: false,
+            materialization_dir: "/runtime/taira-inrou".to_owned(),
+            config_materialization_dir: "/runtime/taira-inrou/config".to_owned(),
+            effective_env: BTreeMap::new(),
+            effective_env_materialization_path: "/runtime/taira-inrou/env.json".to_owned(),
+            config_exports_materialization_dir: "/runtime/taira-inrou/exports".to_owned(),
+            secret_envelopes_materialization_dir: "/runtime/taira-inrou/secrets".to_owned(),
+            lease_volumes: Vec::new(),
+            mailboxes: Vec::new(),
+            artifacts: Vec::new(),
+        };
+        json::to_value(&SoracloudRuntimeSnapshot {
+            schema_version: 1,
+            observed_height: 1,
+            observed_block_hash: Some(observed_block_hash.to_owned()),
+            local_peer_id: Some(peer_id),
+            services: BTreeMap::from([(
+                "taira_inrou_canary".to_owned(),
+                BTreeMap::from([(version.to_owned(), plan)]),
+            )]),
+            apartments: BTreeMap::new(),
+        })
+        .expect("serialize exact local Inrou runtime snapshot")
+    }
+    fn exact_service_lease_snapshot(service_version: &str) -> Value {
+        use iroha::data_model::soracloud::{
+            SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1, SORA_SERVICE_LEASE_STATE_VERSION_V1,
+            SoraInrouGuestIsaV1, SoraInrouReplicaHostAvailabilityV1, SoraInrouReplicaPlacementV1,
+            SoraServiceLeaseClockV1, SoraServiceLeaseEgressCheckpointV1,
+            SoraServiceLeaseReporterAssignmentV1, SoraServiceLeaseStateV1,
+            SoraServiceLeaseStatusV1,
+        };
+
+        let validator_key_pair = fixture_key_pair(0x96);
+        let validator_account_id = AccountId::new(validator_key_pair.public_key().clone());
+        let lease = SoraServiceLeaseStateV1 {
+            schema_version: SORA_SERVICE_LEASE_STATE_VERSION_V1,
+            economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+            status: SoraServiceLeaseStatusV1::Active,
+            quota_class: "taira-open".to_owned(),
+            replica_count: std::num::NonZeroU16::new(4).expect("nonzero replica count"),
+            deployment_deposit: "1".parse().expect("deployment deposit"),
+            prepaid_runtime_balance: "50".parse().expect("prepaid balance"),
+            runtime_price_per_block: "0.00025".parse().expect("runtime price"),
+            storage_price_per_gib_block: "0.000025".parse().expect("storage price"),
+            egress_price_per_mib: "0.000005".parse().expect("egress price"),
+            lease_started_height: 1,
+            lease_expires_height: 100,
+            reporting_epoch: 1,
+            settled_egress_bytes: 1_024,
+            egress_reporter_checkpoints: vec![SoraServiceLeaseEgressCheckpointV1 {
+                reporting_epoch: 1,
+                assignment: SoraServiceLeaseReporterAssignmentV1 {
+                    schema_version: SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+                    service_version: service_version.to_owned(),
+                    placement: SoraInrouReplicaPlacementV1 {
+                        replica_slot: 2,
+                        economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                        lease_started_height: 1,
+                        placement_incarnation: Hash::new(b"taira-status-lease-placement"),
+                        host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
+                        validator_account_id,
+                        peer_id: validator_key_pair.public_key().to_string(),
+                        selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
+                    },
+                    placement_reconciled_at_ms: 1,
+                },
+                accounted_egress_bytes: 256,
+                last_updated_height: 1,
+                finalize_reporter: false,
+            }],
+            accounted_egress_bytes: 1_280,
+            last_status_reason: None,
+        };
+        lease.validate().expect("exact service lease fixture");
+        let remaining_runtime_balance: Quantity =
+            "49.99975".parse().expect("remaining runtime balance");
+        norito::json!({
+            "authoritative_state": (json::to_value(&lease).expect("serialize service lease")),
+            "effective_status": (json::to_value(&SoraServiceLeaseStatusV1::Active)
+                .expect("serialize effective lease status")),
+            "remaining_runtime_balance": (json::to_value(&remaining_runtime_balance)
+                .expect("serialize remaining runtime balance"))
+        })
     }
     #[expect(
         clippy::too_many_lines,
         reason = "the fixture spells out the complete exact Soracloud V1 response"
     )]
     fn exact_inrou_status(version: &str, action: &str, revision_count: u64) -> Value {
+        let observed_block_hash = Hash::new(b"taira-test-observed-block").to_string();
+        let validator_signer = fixture_key_pair(0x96).public_key().to_string();
+        let discovery = inrou_canary_deployment("deploy", version);
+        let (audit_from_version, audit_rollout_state) = if action == "Upgrade" {
+            let baseline_version = format!("{version}-baseline");
+            (
+                Value::from(baseline_version.clone()),
+                norito::json!({
+                    "rollout_handle": (format!(
+                        "taira_inrou_canary:rollout:{revision_count}"
+                    )),
+                    "baseline_version": baseline_version,
+                    "candidate_version": version,
+                    "canary_percent": 100,
+                    "traffic_percent": 100,
+                    "stage": {"stage": "Promoted", "value": null},
+                    "health_failures": 0,
+                    "max_health_failures": 3,
+                    "health_window_secs": 30,
+                    "created_sequence": revision_count,
+                    "updated_sequence": revision_count
+                }),
+            )
+        } else {
+            (Value::Null, Value::Null)
+        };
         norito::json!({
             "schema_version": 1,
             "service_health": {
@@ -6933,7 +8514,7 @@ mod tests {
                 "status": "healthy",
                 "message": "embedded runtime manager reports healthy hosted workloads",
                 "observed_height": 1,
-                "observed_block_hash": null,
+                "observed_block_hash": (observed_block_hash.clone()),
                 "state_dir": "/tmp/taira-inrou-runtime",
                 "service_revisions": 1,
                 "healthy_service_revisions": 1,
@@ -6976,7 +8557,6 @@ mod tests {
                     "service_revisions": 1,
                     "apartments": 0,
                     "max_load_factor_bps": 0,
-                    "reported_pending_mailbox_messages": 0,
                     "authoritative_pending_mailbox_messages": 0,
                     "bundle_cache_misses": 0,
                     "artifact_cache_misses": 0
@@ -6991,14 +8571,11 @@ mod tests {
             "runtime_manager": {
                 "available": true,
                 "state_dir": "/tmp/taira-inrou-runtime",
-                "snapshot": {
-                    "schema_version": 1,
-                    "observed_height": 1,
-                    "observed_block_hash": null,
-                    "local_peer_id": null,
-                    "services": {},
-                    "apartments": {}
-                }
+                "snapshot": (exact_inrou_runtime_snapshot(
+                    version,
+                    revision_count,
+                    &observed_block_hash,
+                ))
             },
             "control_plane": {
                 "schema_version": 1,
@@ -7010,16 +8587,12 @@ mod tests {
                     "revision_count": revision_count,
                     "config_generation": 0,
                     "secret_generation": 0,
-                    "config_entry_count": 0,
+                    "config_entry_count": 2,
                     "secret_entry_count": 0,
-                    "quota_class": null,
-                    "service_lease_status": null,
-                    "lease_expires_height": null,
-                    "prepaid_runtime_balance": null,
-                    "remaining_runtime_balance": null,
-                    "public_discovery_content_cid": null,
-                    "public_discovery_url": null,
-                    "public_discovery_cid_host_url": null,
+                    "service_lease": (exact_service_lease_snapshot(version)),
+                    "public_discovery_content_cid": (discovery.discovery_content_cid.clone()),
+                    "public_discovery_url": (discovery.public_discovery_url.clone()),
+                    "public_discovery_cid_host_url": (discovery.public_discovery_cid_host_url.clone()),
                     "active_rollout": null,
                     "last_rollout": null,
                     "latest_revision": {
@@ -7033,13 +8606,16 @@ mod tests {
                             "execution_plane": "HttpService",
                             "value": null
                         },
-                        "route_host": "taira-inrou-canary.sora",
-                        "route_path_prefix": "/api/v1",
-                        "base_url": null,
-                        "healthcheck_url": null,
-                        "public_discovery_content_cid": null,
-                        "public_discovery_url": null,
-                        "public_discovery_cid_host_url": null,
+                        "route_host": "taira.sora.org",
+                        "route_path_prefix": "/api/v1/inrou-canary",
+                        "route_service_port": 8787,
+                        "route_visibility": "Public",
+                        "route_tls_mode": "Required",
+                        "base_url": "https://taira.sora.org/api/v1/inrou-canary/",
+                        "healthcheck_url": "https://taira.sora.org/api/v1/inrou-canary/health",
+                        "public_discovery_content_cid": (discovery.discovery_content_cid.clone()),
+                        "public_discovery_url": (discovery.public_discovery_url.clone()),
+                        "public_discovery_cid_host_url": (discovery.public_discovery_cid_host_url.clone()),
                         "state_binding_count": 0,
                         "state_bindings": [],
                         "lease_volumes": [],
@@ -7062,31 +8638,38 @@ mod tests {
                         "sandbox_profile_hash": (Hash::new(b"taira-test-sandbox-profile")),
                         "process_generation": revision_count,
                         "process_started_sequence": revision_count,
-                        "signed_by": "taira-test-validator"
+                        "signed_by": (validator_signer.clone())
                     }
                 }],
                 "recent_audit_events": [{
                     "sequence": revision_count,
                     "action": { "action": action, "value": null },
                     "service_name": "taira_inrou_canary",
-                    "from_version": null,
+                    "from_version": audit_from_version,
                     "to_version": version,
                     "service_manifest_hash": (Hash::new(b"taira-test-service-manifest")),
                     "container_manifest_hash": (Hash::new(b"taira-test-container-manifest")),
+                    "process_generation": revision_count,
+                    "config_generation": 0,
+                    "secret_generation": 0,
+                    "config_snapshot_hash": (Hash::new(b"taira-test-config-snapshot")),
+                    "secret_snapshot_hash": (Hash::new(b"taira-test-secret-snapshot")),
                     "binding_name": null,
                     "state_key": null,
-                    "config_name": null,
-                    "secret_name": null,
+                    "config_mutations": [],
+                    "secret_mutations": [],
                     "governance_tx_hash": null,
-                    "rollout_handle": null,
+                    "rollout_state": audit_rollout_state,
                     "policy_name": null,
                     "policy_snapshot_hash": null,
                     "jurisdiction_tag": null,
                     "consent_evidence_hash": null,
                     "break_glass": null,
                     "break_glass_reason": null,
+                    "lease_usage": null,
+                    "service_lease_commitment": null,
                     "lease_reporting_epoch_rollover": null,
-                    "signed_by": "taira-test-validator"
+                    "signed_by": validator_signer
                 }]
             }
         })
@@ -7170,6 +8753,22 @@ mod tests {
                 "a live {hash_field} mismatch must fail closed"
             );
         }
+        for (field, invalid) in [
+            ("route_service_port", Value::from(8_788_u64)),
+            ("route_visibility", Value::from("Internal")),
+            ("route_tls_mode", Value::from("Optional")),
+        ] {
+            let mut mismatched = deploy_status.clone();
+            *mismatched
+                .pointer_mut(&format!(
+                    "/control_plane/services/0/latest_revision/{field}"
+                ))
+                .expect("status fixture has the complete route projection") = invalid;
+            assert!(
+                validate_exact_inrou_canary_status(&mismatched, &deploy).is_err(),
+                "the fixed Inrou canary route must reject a mismatched {field}"
+            );
+        }
         for (path, retired) in [
             ("/control_plane/services/0/latest_revision/action", "Deploy"),
             ("/control_plane/services/0/latest_revision/runtime", "Inrou"),
@@ -7204,8 +8803,8 @@ mod tests {
                 "last_rollout".to_owned(),
                 norito::json!({
                     "rollout_handle": "taira-inrou-upgrade",
-                    "baseline_version": deployed_version.clone(),
-                    "candidate_version": upgraded_version.clone(),
+                    "baseline_version": (deployed_version.clone()),
+                    "candidate_version": (upgraded_version.clone()),
                     "canary_percent": 100,
                     "traffic_percent": 100,
                     "stage": { "stage": "Promoted", "value": null },
@@ -7272,6 +8871,476 @@ mod tests {
         }
     }
     #[test]
+    fn exact_inrou_status_requires_one_canonical_local_placement() {
+        let version = inrou_canary_artifact_version(0x31);
+        let deployment = inrou_canary_deployment("deploy", &version);
+        let status = exact_inrou_status(&version, "Deploy", 1);
+        let (_, _, placement) = validate_exact_inrou_canary_status(&status, &deployment)
+            .expect("exact status contains one local healthy placement");
+        assert_eq!(placement.replica_slot, 2);
+        assert_eq!(
+            placement.peer_id,
+            fixture_key_pair(0x91).public_key().to_string()
+        );
+        assert_eq!(
+            placement.validator_account_id,
+            AccountId::new(fixture_key_pair(0x91).public_key().clone()).to_string()
+        );
+        assert_eq!(
+            placement.placement_incarnation,
+            Hash::new(b"taira-test-placement").to_string()
+        );
+
+        let mut mismatched_peer = status.clone();
+        *mismatched_peer
+            .pointer_mut("/runtime_manager/snapshot/local_peer_id")
+            .expect("snapshot has local peer ID") =
+            Value::from(fixture_key_pair(0x92).public_key().to_string());
+        assert!(
+            validate_exact_inrou_canary_status(&mismatched_peer, &deployment).is_err(),
+            "local snapshot identity must match the replica placement"
+        );
+
+        let placement_path = format!(
+            "/runtime_manager/snapshot/services/taira_inrou_canary/{version}/local_replicas/0"
+        );
+        let plan_path = format!("/runtime_manager/snapshot/services/taira_inrou_canary/{version}");
+        let mut mismatched_validator = status.clone();
+        *mismatched_validator
+            .pointer_mut(&format!("{placement_path}/validator_account_id"))
+            .expect("snapshot has local validator account ID") =
+            Value::from(AccountId::new(fixture_key_pair(0x93).public_key().clone()).to_string());
+        let error = validate_exact_inrou_canary_status(&mismatched_validator, &deployment)
+            .expect_err("an account/peer pair absent from the stage must fail closed");
+        assert!(
+            error.contains("absent from the retained stage allowlist"),
+            "mismatched validator identity reported the wrong error: {error}"
+        );
+
+        use iroha::data_model::account::{MultisigMember, MultisigPolicy};
+        let multisig_validator = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                vec![
+                    MultisigMember::new(fixture_key_pair(0x94).public_key().clone(), 1)
+                        .expect("first multisig validator member"),
+                    MultisigMember::new(fixture_key_pair(0x95).public_key().clone(), 1)
+                        .expect("second multisig validator member"),
+                ],
+            )
+            .expect("multisig validator fixture policy"),
+        );
+        let mut multisig_validator_status = status.clone();
+        *multisig_validator_status
+            .pointer_mut(&format!("{placement_path}/validator_account_id"))
+            .expect("snapshot has local validator account ID") =
+            Value::from(multisig_validator.to_string());
+        let error = validate_exact_inrou_canary_status(&multisig_validator_status, &deployment)
+            .expect_err("a multisig validator account must fail closed");
+        assert!(
+            error.contains("validator account must be single-signatory"),
+            "multisig validator identity reported the wrong error: {error}"
+        );
+
+        let mut sentinel_incarnation = status.clone();
+        let mut zero_prehash_sentinel = [0_u8; Hash::LENGTH];
+        zero_prehash_sentinel[Hash::LENGTH - 1] = 1;
+        *sentinel_incarnation
+            .pointer_mut(&format!("{placement_path}/placement_incarnation"))
+            .expect("snapshot has local placement incarnation") =
+            Value::from(Hash::prehashed(zero_prehash_sentinel).to_string());
+        let error = validate_exact_inrou_canary_status(&sentinel_incarnation, &deployment)
+            .expect_err("the zero-prehash placement incarnation sentinel must fail closed");
+        assert!(
+            error.contains("zero prehash sentinel"),
+            "zero-prehash placement incarnation reported the wrong error: {error}"
+        );
+
+        let mut duplicate = status.clone();
+        let replicas = duplicate
+            .pointer_mut(&format!(
+                "/runtime_manager/snapshot/services/taira_inrou_canary/{version}/local_replicas"
+            ))
+            .and_then(Value::as_array_mut)
+            .expect("snapshot has local replicas");
+        replicas.push(replicas[0].clone());
+        assert!(
+            validate_exact_inrou_canary_status(&duplicate, &deployment).is_err(),
+            "more than one local replica must fail closed"
+        );
+
+        for (field, value) in [
+            (
+                "bundle_hash",
+                Value::from(Hash::new(b"substituted bundle").to_string()),
+            ),
+            ("bundle_available_locally", Value::from(false)),
+            ("process_generation", Value::from(2_u64)),
+            ("bundle_path", Value::from("/app/substituted.py")),
+            ("entrypoint", Value::from("/app/substituted.py")),
+        ] {
+            let mut substituted = status.clone();
+            *substituted
+                .pointer_mut(&format!("{plan_path}/{field}"))
+                .expect("snapshot plan contains bound field") = value;
+            assert!(
+                validate_exact_inrou_canary_status(&substituted, &deployment).is_err(),
+                "substituted local plan field {field} must fail closed"
+            );
+        }
+
+        let mut zero_authoritative_generation = status.clone();
+        *zero_authoritative_generation
+            .pointer_mut("/control_plane/services/0/latest_revision/process_generation")
+            .expect("control-plane revision has a process generation") = Value::from(0_u64);
+        assert!(
+            validate_exact_inrou_canary_status(&zero_authoritative_generation, &deployment)
+                .is_err(),
+            "zero authoritative process generation must fail closed"
+        );
+
+        for (field, value) in [
+            (
+                "selected_guest_isa",
+                json::to_value(&iroha::data_model::soracloud::SoraInrouGuestIsaV1::X8664)
+                    .expect("serialize substituted guest ISA"),
+            ),
+            ("kernel_image_path", Value::from("/inrou/aarch64/other")),
+            (
+                "rootfs_image_path",
+                Value::from("/inrou/aarch64/other.ext4"),
+            ),
+            ("initrd_image_path", Value::Null),
+            ("root_volume_name", Value::from("retired_root")),
+        ] {
+            let mut substituted = status.clone();
+            *substituted
+                .pointer_mut(&format!("{plan_path}/inrou/{field}"))
+                .expect("snapshot Inrou plan contains bound field") = value;
+            assert!(
+                validate_exact_inrou_canary_status(&substituted, &deployment).is_err(),
+                "substituted AArch64 Inrou plan field {field} must fail closed"
+            );
+        }
+
+        for (field, value) in [
+            ("traffic_percent", Value::from(99_u64)),
+            ("inrou", Value::Null),
+            ("process_generation", Value::Null),
+            ("rollout_handle", Value::from("retired-rollout")),
+        ] {
+            let mut noncanonical = status.clone();
+            *noncanonical
+                .pointer_mut(&format!(
+                    "/runtime_manager/snapshot/services/taira_inrou_canary/{version}/{field}"
+                ))
+                .expect("snapshot plan contains tested field") = value;
+            assert!(
+                validate_exact_inrou_canary_status(&noncanonical, &deployment).is_err(),
+                "noncanonical local plan field {field} must fail closed"
+            );
+        }
+
+        let mut extra_revision = status.clone();
+        let revisions = extra_revision
+            .pointer_mut("/runtime_manager/snapshot/services/taira_inrou_canary")
+            .and_then(Value::as_object_mut)
+            .expect("snapshot has canary revisions");
+        let plan = revisions
+            .get(&version)
+            .expect("snapshot has retained revision")
+            .clone();
+        revisions.insert("retired-revision".to_owned(), plan);
+        assert!(
+            validate_exact_inrou_canary_status(&extra_revision, &deployment).is_err(),
+            "more than one local canary revision must fail closed"
+        );
+
+        let mut future_snapshot = status.clone();
+        *future_snapshot
+            .pointer_mut("/runtime_manager/snapshot/schema_version")
+            .expect("runtime snapshot has schema version") = Value::from(2_u64);
+        assert!(
+            validate_exact_inrou_canary_status(&future_snapshot, &deployment).is_err(),
+            "non-V1 runtime snapshots must fail closed"
+        );
+
+        let mut unknown_snapshot_field = status;
+        unknown_snapshot_field
+            .pointer_mut("/runtime_manager/snapshot")
+            .and_then(Value::as_object_mut)
+            .expect("runtime snapshot object")
+            .insert("legacy_placement".to_owned(), Value::Null);
+        assert!(
+            validate_exact_inrou_canary_status(&unknown_snapshot_field, &deployment).is_err(),
+            "unknown runtime snapshot fields must fail closed"
+        );
+    }
+    #[test]
+    fn doctor_soracloud_status_accepts_only_nested_service_lease_v1() {
+        let canonical = exact_inrou_status(&inrou_canary_artifact_version(0x34), "Deploy", 1);
+        validate_soracloud_status(Some(&canonical)).expect("exact nested V1 service lease");
+
+        let service = canonical
+            .pointer("/control_plane/services/0")
+            .and_then(Value::as_object)
+            .expect("status fixture has one service");
+        for retired in [
+            "quota_class",
+            "service_lease_status",
+            "lease_expires_height",
+            "prepaid_runtime_balance",
+            "remaining_runtime_balance",
+        ] {
+            assert!(
+                !service.contains_key(retired),
+                "fixture must not expose retired flattened field {retired}"
+            );
+            let mut flattened = canonical.clone();
+            flattened
+                .pointer_mut("/control_plane/services/0")
+                .and_then(Value::as_object_mut)
+                .expect("status fixture has one service")
+                .insert(retired.to_owned(), Value::Null);
+            let error = validate_soracloud_status(Some(&flattened))
+                .expect_err("retired flattened lease field must fail closed");
+            assert!(
+                error.contains(retired),
+                "retired field {retired} reported the wrong error: {error}"
+            );
+        }
+
+        let mut absent = canonical.clone();
+        absent
+            .pointer_mut("/control_plane/services/0")
+            .and_then(Value::as_object_mut)
+            .expect("status fixture has one service")
+            .remove("service_lease");
+        validate_soracloud_status(Some(&absent))
+            .expect_err("required nullable service_lease field must not be omitted");
+
+        let mut no_lease = canonical.clone();
+        *no_lease
+            .pointer_mut("/control_plane/services/0/service_lease")
+            .expect("status fixture has a service lease") = Value::Null;
+        validate_soracloud_status(Some(&no_lease))
+            .expect("the nested service_lease field is explicitly nullable");
+
+        for field in [
+            "authoritative_state",
+            "effective_status",
+            "remaining_runtime_balance",
+        ] {
+            let mut missing = canonical.clone();
+            missing
+                .pointer_mut("/control_plane/services/0/service_lease")
+                .and_then(Value::as_object_mut)
+                .expect("status fixture has a service lease")
+                .remove(field);
+            validate_soracloud_status(Some(&missing))
+                .expect_err("every nested service lease field is required");
+        }
+
+        for (path, replacement) in [
+            (
+                "/control_plane/services/0/service_lease/authoritative_state/schema_version",
+                Value::from(2_u64),
+            ),
+            (
+                "/control_plane/services/0/service_lease/authoritative_state/economic_clock",
+                Value::from("CanonicalBlockHeight"),
+            ),
+            (
+                "/control_plane/services/0/service_lease/authoritative_state/lease_expires_height",
+                Value::from(1_u64),
+            ),
+            (
+                "/control_plane/services/0/service_lease/authoritative_state/egress_reporter_checkpoints/0/reporting_epoch",
+                Value::from(2_u64),
+            ),
+            (
+                "/control_plane/services/0/service_lease/authoritative_state/accounted_egress_bytes",
+                Value::from(1_279_u64),
+            ),
+            (
+                "/control_plane/services/0/service_lease/authoritative_state/last_status_reason",
+                Value::from(""),
+            ),
+            (
+                "/control_plane/services/0/service_lease/effective_status",
+                Value::from("Active"),
+            ),
+            (
+                "/control_plane/services/0/service_lease/remaining_runtime_balance",
+                Value::from("01"),
+            ),
+        ] {
+            let mut malformed = canonical.clone();
+            *malformed
+                .pointer_mut(path)
+                .unwrap_or_else(|| panic!("status fixture has nested lease field at {path}")) =
+                replacement;
+            assert!(
+                validate_soracloud_status(Some(&malformed)).is_err(),
+                "noncanonical nested lease value at {path} must fail closed"
+            );
+        }
+    }
+    #[test]
+    fn doctor_soracloud_status_accepts_only_current_audit_event_v1() {
+        let version = inrou_canary_artifact_version(0x35);
+        let canonical = exact_inrou_status(&version, "Deploy", 1);
+        validate_soracloud_status(Some(&canonical)).expect("exact current audit event V1");
+
+        let mut read_only_action = canonical.clone();
+        *read_only_action
+            .pointer_mut("/control_plane/recent_audit_events/0/action")
+            .expect("status fixture has an audit action") =
+            norito::json!({"action": "CiphertextQuery", "value": null});
+        validate_soracloud_status(Some(&read_only_action))
+            .expect_err("read-only CiphertextQuery must never be persisted as an audit event");
+
+        let mut missing_config_delta = canonical.clone();
+        *missing_config_delta
+            .pointer_mut("/control_plane/recent_audit_events/0/action")
+            .expect("status fixture has an audit action") =
+            norito::json!({"action": "ConfigMutation", "value": null});
+        validate_soracloud_status(Some(&missing_config_delta))
+            .expect_err("ConfigMutation must carry exactly one authoritative config delta");
+
+        let mut illegal_break_glass = canonical.clone();
+        *illegal_break_glass
+            .pointer_mut("/control_plane/recent_audit_events/0/break_glass")
+            .expect("status fixture has a break-glass field") = Value::from(true);
+        *illegal_break_glass
+            .pointer_mut("/control_plane/recent_audit_events/0/break_glass_reason")
+            .expect("status fixture has a break-glass reason") = Value::from("emergency");
+        validate_soracloud_status(Some(&illegal_break_glass))
+            .expect_err("break-glass fields must be null outside decryption requests");
+
+        for retired in ["config_name", "secret_name", "rollout_handle"] {
+            let mut stale = canonical.clone();
+            stale
+                .pointer_mut("/control_plane/recent_audit_events/0")
+                .and_then(Value::as_object_mut)
+                .expect("status fixture has one audit event")
+                .insert(retired.to_owned(), Value::Null);
+            let error = validate_soracloud_status(Some(&stale))
+                .expect_err("retired audit field must fail closed");
+            assert!(
+                error.contains(retired),
+                "retired audit field {retired} reported the wrong error: {error}"
+            );
+        }
+        for current in [
+            "process_generation",
+            "config_generation",
+            "secret_generation",
+            "config_snapshot_hash",
+            "secret_snapshot_hash",
+            "config_mutations",
+            "secret_mutations",
+            "rollout_state",
+            "lease_usage",
+            "service_lease_commitment",
+        ] {
+            let mut missing = canonical.clone();
+            missing
+                .pointer_mut("/control_plane/recent_audit_events/0")
+                .and_then(Value::as_object_mut)
+                .expect("status fixture has one audit event")
+                .remove(current);
+            let error = validate_soracloud_status(Some(&missing))
+                .expect_err("current audit field must be required");
+            assert!(
+                error.contains(current),
+                "missing audit field {current} reported the wrong error: {error}"
+            );
+        }
+
+        let assignment = canonical
+            .pointer("/control_plane/services/0/service_lease/authoritative_state/egress_reporter_checkpoints/0/assignment")
+            .expect("status fixture has one reporter assignment")
+            .clone();
+        let mut lease_usage = canonical.clone();
+        let event = lease_usage
+            .pointer_mut("/control_plane/recent_audit_events/0")
+            .and_then(Value::as_object_mut)
+            .expect("status fixture has one audit event");
+        event.insert(
+            "action".to_owned(),
+            norito::json!({"action": "LeaseUsage", "value": null}),
+        );
+        event.insert("from_version".to_owned(), Value::from(version));
+        event.insert(
+            "lease_usage".to_owned(),
+            norito::json!({
+                "schema_version": 1,
+                "reporting_epoch": 1,
+                "assignment": assignment,
+                "replica_accounted_egress_bytes": 256,
+                "finalize_reporter": false
+            }),
+        );
+        event.insert(
+            "service_lease_commitment".to_owned(),
+            json::to_value(&Hash::new(b"taira-test-service-lease"))
+                .expect("serialize service lease commitment"),
+        );
+        validate_soracloud_status(Some(&lease_usage))
+            .expect("current LeaseUsage audit payload is accepted");
+
+        let mut wrong_reporter = lease_usage.clone();
+        *wrong_reporter
+            .pointer_mut("/control_plane/recent_audit_events/0/signed_by")
+            .expect("lease usage has a signer") =
+            Value::from(fixture_key_pair(0x97).public_key().to_string());
+        validate_soracloud_status(Some(&wrong_reporter))
+            .expect_err("lease-usage reporter and audit signer must be identical");
+
+        let mut lease_fields_on_deploy = lease_usage.clone();
+        *lease_fields_on_deploy
+            .pointer_mut("/control_plane/recent_audit_events/0/action")
+            .expect("lease usage has an action") =
+            norito::json!({"action": "Deploy", "value": null});
+        *lease_fields_on_deploy
+            .pointer_mut("/control_plane/recent_audit_events/0/from_version")
+            .expect("lease usage has a from-version field") = Value::Null;
+        validate_soracloud_status(Some(&lease_fields_on_deploy))
+            .expect_err("lease usage and commitment must be null for Deploy");
+
+        *lease_usage
+            .pointer_mut("/control_plane/recent_audit_events/0/lease_usage/schema_version")
+            .expect("lease usage has a schema version") = Value::from(2_u64);
+        validate_soracloud_status(Some(&lease_usage))
+            .expect_err("non-V1 lease usage must fail closed");
+
+        let mut nullable_baseline =
+            exact_inrou_status(&inrou_canary_artifact_version(0x36), "Upgrade", 2);
+        nullable_baseline
+            .pointer_mut("/control_plane/services/0")
+            .and_then(Value::as_object_mut)
+            .expect("status fixture has one service")
+            .insert(
+                "last_rollout".to_owned(),
+                norito::json!({
+                    "rollout_handle": "taira_inrou_canary:rollout:1",
+                    "baseline_version": null,
+                    "candidate_version": "candidate",
+                    "canary_percent": 100,
+                    "traffic_percent": 100,
+                    "stage": {"stage": "Promoted", "value": null},
+                    "health_failures": 0,
+                    "max_health_failures": 3,
+                    "health_window_secs": 30,
+                    "created_sequence": 1,
+                    "updated_sequence": 2
+                }),
+            );
+        validate_soracloud_status(Some(&nullable_baseline))
+            .expect_err("retired nullable rollout baseline must fail closed");
+    }
+    #[test]
     fn tagged_enum_name_requires_exact_tagged_unit_envelope() {
         let canonical = norito::json!({"runtime": "Inrou", "value": null});
         assert_eq!(tagged_enum_name(&canonical, "runtime"), Some("Inrou"));
@@ -7285,6 +9354,67 @@ mod tests {
                 tagged_enum_name(&retired, "runtime"),
                 None,
                 "noncanonical tagged enum must fail: {retired:?}"
+            );
+        }
+    }
+    #[test]
+    fn soracloud_hash_requires_the_canonical_norito_literal() {
+        let hash = Hash::new(b"canonical Soracloud status hash");
+        let canonical = json::to_value(&hash).expect("serialize canonical Hash literal");
+        validate_soracloud_hash(&canonical, "fixture hash")
+            .expect("canonical Norito Hash literal is accepted");
+        let literal = canonical.as_str().expect("canonical Hash JSON is a string");
+        let lowercase_literal = literal.to_ascii_lowercase();
+        assert_ne!(
+            lowercase_literal, literal,
+            "fixture must exercise canonical Hash-literal case"
+        );
+        for invalid in [
+            hash.to_string(),
+            lowercase_literal,
+            format!(" {literal}"),
+            format!("{literal} "),
+        ] {
+            assert!(
+                validate_soracloud_hash(&Value::from(invalid.clone()), "fixture hash").is_err(),
+                "noncanonical Soracloud hash text must fail closed: {invalid}"
+            );
+        }
+
+        let bare = hash.to_string();
+        validate_soracloud_bare_hash(&Value::from(bare.clone()), "snapshot hash")
+            .expect("runtime snapshot hash uses exact Hash display text");
+        for invalid in [
+            canonical
+                .as_str()
+                .expect("canonical Hash JSON string")
+                .to_owned(),
+            bare.to_ascii_uppercase(),
+            format!(" {bare}"),
+            format!("{bare} "),
+        ] {
+            assert!(
+                validate_soracloud_bare_hash(&Value::from(invalid.clone()), "snapshot hash")
+                    .is_err(),
+                "noncanonical bare snapshot hash must fail closed: {invalid}"
+            );
+        }
+
+        let version = inrou_canary_artifact_version(0x33);
+        let status = exact_inrou_status(&version, "Deploy", 1);
+        validate_soracloud_status(Some(&status))
+            .expect("live-shaped non-null bare observed block hashes are valid");
+        for path in [
+            "/service_health/observed_block_hash",
+            "/runtime_manager/snapshot/observed_block_hash",
+        ] {
+            let mut typed_literal = status.clone();
+            *typed_literal
+                .pointer_mut(path)
+                .expect("status fixture has an observed block hash") = canonical.clone();
+            assert!(
+                validate_soracloud_status(Some(&typed_literal)).is_err(),
+                "string-projected observed block hash must reject typed literal at {path}"
             );
         }
     }
@@ -7352,6 +9482,11 @@ mod tests {
             "/runtime_manager/snapshot",
             "/control_plane",
             "/control_plane/services/0",
+            "/control_plane/services/0/service_lease",
+            "/control_plane/services/0/service_lease/authoritative_state",
+            "/control_plane/services/0/service_lease/authoritative_state/egress_reporter_checkpoints/0",
+            "/control_plane/services/0/service_lease/authoritative_state/egress_reporter_checkpoints/0/assignment",
+            "/control_plane/services/0/service_lease/authoritative_state/egress_reporter_checkpoints/0/assignment/placement",
             "/control_plane/services/0/latest_revision",
             "/control_plane/recent_audit_events/0",
         ] {
@@ -7379,7 +9514,15 @@ mod tests {
             ("/runtime_manager", "snapshot"),
             ("/runtime_manager/snapshot", "services"),
             ("/control_plane", "recent_audit_events"),
-            ("/control_plane/services/0", "quota_class"),
+            ("/control_plane/services/0", "service_lease"),
+            (
+                "/control_plane/services/0/service_lease",
+                "authoritative_state",
+            ),
+            (
+                "/control_plane/services/0/service_lease/authoritative_state",
+                "economic_clock",
+            ),
             ("/control_plane/services/0/latest_revision", "network"),
             (
                 "/control_plane/recent_audit_events/0",
@@ -7432,7 +9575,7 @@ mod tests {
     fn doctor_soracloud_status_rejects_noncanonical_route_text() {
         let canonical = exact_inrou_status(&inrou_canary_artifact_version(0x11), "Deploy", 1);
         for (field, retired) in [
-            ("route_host", " taira-inrou-canary.sora"),
+            ("route_host", " taira.sora.org"),
             ("route_host", "TAIRA-INROU-CANARY.SORA"),
             ("route_path_prefix", " /api/v1"),
             ("route_path_prefix", "/api/v1/"),
@@ -7449,6 +9592,105 @@ mod tests {
                 "noncanonical {field} value {retired:?} must fail closed"
             );
         }
+    }
+    #[test]
+    fn doctor_soracloud_status_accepts_only_current_route_and_pressure_v1() {
+        let version = inrou_canary_artifact_version(0x12);
+        let canonical = exact_inrou_status(&version, "Deploy", 1);
+        validate_soracloud_status(Some(&canonical))
+            .expect("live-shaped current route and runtime pressure are valid");
+
+        let runtime_pressure = canonical
+            .pointer("/resource_pressure/runtime")
+            .and_then(Value::as_object)
+            .expect("status fixture has runtime pressure");
+        assert!(
+            !runtime_pressure.contains_key("reported_pending_mailbox_messages"),
+            "the fixture must not preserve the retired reported mailbox counter"
+        );
+        let mut retired_pressure = canonical.clone();
+        retired_pressure
+            .pointer_mut("/resource_pressure/runtime")
+            .and_then(Value::as_object_mut)
+            .expect("status fixture has runtime pressure")
+            .insert(
+                "reported_pending_mailbox_messages".to_owned(),
+                Value::from(0_u64),
+            );
+        let error = validate_soracloud_status(Some(&retired_pressure))
+            .expect_err("retired runtime pressure fields must fail closed");
+        assert!(error.contains("reported_pending_mailbox_messages"));
+        let mut impossible_pressure = canonical.clone();
+        *impossible_pressure
+            .pointer_mut("/resource_pressure/runtime/max_load_factor_bps")
+            .expect("status fixture has a load factor") = Value::from(10_001_u64);
+        validate_soracloud_status(Some(&impossible_pressure))
+            .expect_err("runtime load factor must remain in the V1 basis-point domain");
+
+        for field in ["route_service_port", "route_visibility", "route_tls_mode"] {
+            let mut missing = canonical.clone();
+            missing
+                .pointer_mut("/control_plane/services/0/latest_revision")
+                .and_then(Value::as_object_mut)
+                .expect("status fixture has a latest revision")
+                .remove(field);
+            let error = validate_soracloud_status(Some(&missing))
+                .expect_err("current route projection fields are required");
+            assert!(error.contains(field), "wrong missing-field error: {error}");
+        }
+
+        for (field, invalid) in [
+            ("route_service_port", Value::from(0_u64)),
+            ("route_service_port", Value::from(65_536_u64)),
+            ("route_service_port", Value::from("8787")),
+            ("route_visibility", Value::from("External")),
+            ("route_tls_mode", Value::from("TlsRequired")),
+            ("route_tls_mode", Value::Null),
+        ] {
+            let mut malformed = canonical.clone();
+            *malformed
+                .pointer_mut(&format!(
+                    "/control_plane/services/0/latest_revision/{field}"
+                ))
+                .expect("status fixture has the complete route projection") = invalid;
+            assert!(
+                validate_soracloud_status(Some(&malformed)).is_err(),
+                "invalid {field} must fail closed"
+            );
+        }
+
+        let mut no_route = canonical;
+        for field in [
+            "route_host",
+            "route_path_prefix",
+            "route_service_port",
+            "route_visibility",
+            "route_tls_mode",
+        ] {
+            *no_route
+                .pointer_mut(&format!(
+                    "/control_plane/services/0/latest_revision/{field}"
+                ))
+                .expect("status fixture has the complete route projection") = Value::Null;
+        }
+        validate_soracloud_revision(
+            no_route
+                .pointer("/control_plane/services/0/latest_revision")
+                .expect("status fixture has a latest revision"),
+            "fixture revision",
+        )
+        .expect_err("an HttpService revision cannot project an all-null route");
+        *no_route
+            .pointer_mut("/control_plane/services/0/latest_revision/execution_plane")
+            .expect("status fixture has an execution plane") =
+            norito::json!({"execution_plane": "DeterministicService", "value": null});
+        validate_soracloud_revision(
+            no_route
+                .pointer("/control_plane/services/0/latest_revision")
+                .expect("status fixture has a latest revision"),
+            "fixture revision",
+        )
+        .expect("a DeterministicService revision may project an explicit all-null route");
     }
     #[test]
     fn write_canary_child_idempotency_keys_are_domain_separated() {
@@ -7493,17 +9735,219 @@ mod tests {
         assert!(error.to_string().contains("must be greater than zero"));
     }
     #[test]
+    fn inrou_canary_health_response_rejects_oversized_body_before_json_decode() {
+        let oversized = vec![
+            b' ';
+            usize::try_from(INROU_CANARY_HEALTH_RESPONSE_MAX_BYTES)
+                .expect("V1 health bound fits usize")
+                + 1
+        ];
+        for status in [200, 503] {
+            let error = decode_inrou_canary_health_reader(
+                status,
+                std::io::Cursor::new(oversized.as_slice()),
+            )
+            .expect_err("oversized unauthenticated health response must fail closed");
+            assert!(
+                error.to_string().contains("exceeds the V1 byte limit"),
+                "unexpected oversized-response error for HTTP {status}: {error:#}"
+            );
+        }
+    }
+    #[test]
+    fn inrou_canary_health_response_rejects_oversized_declared_content_length() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local health fixture");
+        let address = listener.local_addr().expect("local health fixture address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept local health request");
+            let _request = read_mock_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{{}}",
+                INROU_CANARY_HEALTH_RESPONSE_MAX_BYTES + 1
+            )
+            .expect("write oversized declared health response");
+        });
+        let response = HttpClient::builder()
+            .timeout(Duration::from_secs(2))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("build local health client")
+            .get(format!("http://{address}/health"))
+            .send()
+            .expect("read local health response headers");
+        assert_eq!(response.status().as_u16(), 503);
+        let error = decode_inrou_canary_health_response(response)
+            .expect_err("oversized declared Content-Length must fail before body decoding");
+        assert!(
+            error.to_string().contains("exceeds the V1 byte limit"),
+            "unexpected declared-length error: {error:#}"
+        );
+        server.join().expect("local health fixture thread");
+    }
+    #[test]
+    fn inrou_probe_requires_a_current_successful_route_observation() {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let service_version = inrou_canary_artifact_version(0x24);
+        let deployment = inrou_canary_deployment("deploy", &service_version);
+        let status = exact_inrou_status(&service_version, "Deploy", 1);
+        let status_calls = Arc::new(AtomicUsize::new(0));
+        let route_calls = Arc::new(AtomicUsize::new(0));
+        let server_status_calls = Arc::clone(&status_calls);
+        let server_route_calls = Arc::clone(&route_calls);
+        let server_version = service_version.clone();
+        let server_deployment = deployment.clone();
+        let server = spawn_mock_http(16, move |request| match path_only(&request.path) {
+            "/v1/soracloud/status" => {
+                let call = server_status_calls.fetch_add(1, Ordering::AcqRel);
+                MockResponse::json(if call < 4 { 503 } else { 200 }, status.clone())
+            }
+            "/api/v1/inrou-canary/health" => {
+                let call = server_route_calls.fetch_add(1, Ordering::AcqRel);
+                if call == 4 {
+                    MockResponse::json(503, norito::json!({"error": "transient"}))
+                } else {
+                    let slot = if call < 4 {
+                        u64::try_from(call + 1).expect("bounded slot")
+                    } else {
+                        1
+                    };
+                    MockResponse::json(200, exact_inrou_health_response(&server_version, slot))
+                }
+            }
+            path => inrou_discovery_mock_response(request, &server_deployment)
+                .unwrap_or_else(|| panic!("unexpected Inrou probe path: {path}")),
+        });
+        let key_pair = fixture_key_pair(0x42);
+        let mut config = crate::fallback_config();
+        config.account = AccountId::new(key_pair.public_key().clone());
+        config.key_pair = key_pair;
+        config.torii_api_url =
+            Url::parse(&format!("{}/", server.base_url)).expect("mock Torii URL");
+        let client = IrohaClient::new(config);
+
+        let observation = probe_inrou_service(&server.base_url, &client, &deployment, 3)
+            .expect("probe converges after a final current route success");
+        assert!(
+            observation.failures.is_empty(),
+            "unexpected probe failures: {:?}",
+            observation.failures
+        );
+        let route_check = observation
+            .checks
+            .iter()
+            .find(|check| check.get("name").and_then(Value::as_str) == Some("inrou_public_routes"))
+            .expect("route check");
+        assert_eq!(
+            route_check.get("http_status").and_then(Value::as_u64),
+            Some(200)
+        );
+        assert_eq!(route_check.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(status_calls.load(Ordering::Acquire), 6);
+        assert_eq!(route_calls.load(Ordering::Acquire), 6);
+        let requests = finish_mock(server);
+        assert_eq!(requests.len(), 16);
+    }
+    #[test]
+    fn inrou_check_separates_selected_status_origin_from_public_route_origin() {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let service_version = inrou_canary_artifact_version(0x25);
+        let stage = inrou_canary_stage_identity("deploy", &service_version);
+        let status = exact_inrou_status(&service_version, "Deploy", 1);
+
+        let status_server = spawn_mock_http(4, move |request| {
+            assert_eq!(request.method, "GET");
+            assert_eq!(path_only(&request.path), "/v1/soracloud/status");
+            MockResponse::json(200, status.clone())
+        });
+        let route_index = Arc::new(AtomicUsize::new(0));
+        let server_route_index = Arc::clone(&route_index);
+        let route_version = service_version.clone();
+        let public_deployment = inrou_canary_deployment("deploy", &service_version);
+        let server_deployment = public_deployment.clone();
+        let public_server = spawn_mock_http(8, move |request| {
+            assert_eq!(request.method, "GET");
+            if path_only(&request.path) == "/api/v1/inrou-canary/health" {
+                let replica_slot =
+                    u64::try_from(server_route_index.fetch_add(1, Ordering::AcqRel) + 1)
+                        .expect("bounded replica slot");
+                MockResponse::json(
+                    200,
+                    exact_inrou_health_response(&route_version, replica_slot),
+                )
+            } else {
+                inrou_discovery_mock_response(request, &server_deployment)
+                    .unwrap_or_else(|| panic!("unexpected public Inrou path: {}", request.path))
+            }
+        });
+
+        let key_pair = fixture_key_pair(0x43);
+        let mut status_config = crate::fallback_config();
+        status_config.account = AccountId::new(key_pair.public_key().clone());
+        status_config.key_pair = key_pair;
+        status_config.torii_api_url = Url::parse(&format!("{}/", status_server.base_url))
+            .expect("selected validator Torii URL");
+        let report = verify_inrou_check_from_selected_status_origin(
+            &public_server.base_url,
+            &status_config,
+            &stage,
+            2,
+        )
+        .expect("status and route probes use their distinct configured origins");
+        assert_eq!(report_status(&report), Some("ok"));
+        assert_eq!(route_index.load(Ordering::Acquire), 4);
+
+        let status_requests = finish_mock(status_server);
+        assert_eq!(status_requests.len(), 4);
+        assert!(
+            status_requests
+                .iter()
+                .all(|request| path_only(&request.path) == "/v1/soracloud/status")
+        );
+        let public_requests = finish_mock(public_server);
+        assert_eq!(public_requests.len(), 8);
+        assert_eq!(
+            public_requests
+                .iter()
+                .filter(|request| { path_only(&request.path) == "/api/v1/inrou-canary/health" })
+                .count(),
+            4
+        );
+    }
+    #[test]
     fn inrou_health_identity_requires_exact_v1_shape_and_version() {
         let service_version = inrou_canary_artifact_version(0x22);
         let deployment = inrou_canary_deployment("upgrade", &service_version);
         let canonical = norito::json!({
+            "schema_version": 1,
             "service": "taira_inrou_canary",
-            "service_version": service_version.clone(),
+            "service_version": (service_version.clone()),
             "runtime": "Inrou",
             "replica_slot": 3,
-            "identity": "taira_inrou_canary:replica:3"
+            "identity": "taira_inrou_canary:replica:3",
+            "app_data_marker_sha256": ("ab".repeat(32)),
+            "boot_sequence": 7,
+            "guest_boot_id_sha256": ("cd".repeat(32))
         });
-        assert!(exact_inrou_health_identity(&canonical, &deployment).is_some());
+        let parsed = exact_inrou_health_identity(&canonical, &deployment)
+            .expect("exact durable V1 health identity");
+        assert_eq!(parsed.replica_slot, 3);
+        assert_eq!(parsed.app_data_marker_sha256, "ab".repeat(32));
+        assert_eq!(parsed.boot_sequence, 7);
+        assert_eq!(parsed.guest_boot_id_sha256, "cd".repeat(32));
+
+        let mut identities = BTreeMap::new();
+        retain_exact_inrou_health_identity(&mut identities, parsed.clone())
+            .expect("first exact observation");
+        retain_exact_inrou_health_identity(&mut identities, parsed.clone())
+            .expect("an exact-equal repeated observation");
+        let mut conflict = parsed.clone();
+        conflict.boot_sequence += 1;
+        assert!(
+            retain_exact_inrou_health_identity(&mut identities, conflict).is_err(),
+            "a changed observation for one slot must fail closed"
+        );
+        assert_eq!(identities.get(&3), Some(&parsed));
 
         let mut extra = canonical.clone();
         extra
@@ -7517,15 +9961,31 @@ mod tests {
             .expect("health fixture has a service version") =
             Value::from(inrou_canary_artifact_version(0x11));
         assert!(exact_inrou_health_identity(&stale, &deployment).is_none());
-        let mut string_slot = canonical;
+        let mut string_slot = canonical.clone();
         *string_slot
             .pointer_mut("/replica_slot")
             .expect("health fixture has a replica slot") = Value::from("3");
         assert!(exact_inrou_health_identity(&string_slot, &deployment).is_none());
+
+        for (path, invalid) in [
+            ("/schema_version", Value::from(2_u64)),
+            ("/app_data_marker_sha256", Value::from("AB".repeat(32))),
+            ("/boot_sequence", Value::from(0_u64)),
+            ("/guest_boot_id_sha256", Value::from("cd".repeat(31))),
+        ] {
+            let mut malformed = canonical.clone();
+            *malformed
+                .pointer_mut(path)
+                .expect("health fixture contains tested field") = invalid;
+            assert!(
+                exact_inrou_health_identity(&malformed, &deployment).is_none(),
+                "malformed health field {path} must fail closed"
+            );
+        }
     }
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
-        let server = spawn_mock_http(15, |request| doctor_mock_response(request, None));
+        let server = spawn_mock_http(16, |request| doctor_mock_response(request, None));
         let report = run_doctor(&server.base_url).expect("doctor report");
         let requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("ok"));
@@ -7534,10 +9994,23 @@ mod tests {
                 .iter()
                 .any(|request| request.method == "POST" && request.body.contains("initialize"))
         );
-        assert!(
-            requests
-                .iter()
-                .any(|request| request.method == "POST" && request.body.contains("tools/list"))
+        let initialized = requests
+            .iter()
+            .find(|request| {
+                request.method == "POST" && request.body.contains("notifications/initialized")
+            })
+            .expect("MCP initialized notification");
+        assert_eq!(
+            initialized.header_values("mcp-protocol-version"),
+            vec![MCP_PROTOCOL_VERSION]
+        );
+        let tools_list = requests
+            .iter()
+            .find(|request| request.method == "POST" && request.body.contains("tools/list"))
+            .expect("MCP tools/list request");
+        assert_eq!(
+            tools_list.header_values("mcp-protocol-version"),
+            vec![MCP_PROTOCOL_VERSION]
         );
         assert!(requests.iter().any(|request| {
             request.method == "GET"
@@ -7850,7 +10323,7 @@ mod tests {
     #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];
-        let server = spawn_mock_http(15, move |request| {
+        let server = spawn_mock_http(16, move |request| {
             doctor_mock_response(request, Some(missing_tool))
         });
         let report = run_doctor(&server.base_url).expect("doctor report");
@@ -7870,9 +10343,22 @@ mod tests {
     }
     #[test]
     fn doctor_rejects_substituted_mcp_protocol_version() {
-        let server = spawn_mock_http(15, |request| {
-            if request.method == "GET" && path_only(&request.path) == "/v1/mcp" {
-                MockResponse::json(200, norito::json!({"protocolVersion": "2024-11-05"}))
+        let server = spawn_mock_http(16, |request| {
+            if request.method == "POST"
+                && path_only(&request.path) == "/v1/mcp"
+                && request.body.contains("initialize")
+            {
+                MockResponse::json(
+                    200,
+                    norito::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {}
+                        }
+                    }),
+                )
             } else {
                 doctor_mock_response(request, None)
             }
@@ -7891,13 +10377,74 @@ mod tests {
         );
     }
     #[test]
+    fn doctor_rejects_noncanonical_mcp_initialized_notification_response() {
+        for noncanonical_response in ["wrong_status", "response_body"] {
+            let server = spawn_mock_http(16, move |request| {
+                if request.method == "POST"
+                    && path_only(&request.path) == "/v1/mcp"
+                    && request.body.contains("notifications/initialized")
+                {
+                    assert_eq!(
+                        request.header_values("mcp-protocol-version"),
+                        vec![MCP_PROTOCOL_VERSION]
+                    );
+                    match noncanonical_response {
+                        "wrong_status" => MockResponse::text(200, ""),
+                        "response_body" => MockResponse::text(202, "unexpected"),
+                        _ => unreachable!(),
+                    }
+                } else {
+                    doctor_mock_response(request, None)
+                }
+            });
+            let report = run_doctor(&server.base_url).expect("doctor report");
+            let _requests = finish_mock(server);
+            assert_eq!(report_status(&report), Some("fail"));
+            assert!(
+                report
+                    .get("failures")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .any(|failure| failure.contains("initialized notification")),
+                "unexpected doctor report for {noncanonical_response}: {report:?}"
+            );
+        }
+    }
+    #[test]
+    fn doctor_rejects_retired_mcp_get_capability_document() {
+        let server = spawn_mock_http(16, |request| {
+            if request.method == "GET" && path_only(&request.path) == "/v1/mcp" {
+                MockResponse::json(
+                    200,
+                    norito::json!({"protocolVersion": MCP_PROTOCOL_VERSION}),
+                )
+            } else {
+                doctor_mock_response(request, None)
+            }
+        });
+        let report = run_doctor(&server.base_url).expect("doctor report");
+        let _requests = finish_mock(server);
+        assert_eq!(report_status(&report), Some("fail"));
+        assert!(
+            report
+                .get("failures")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .any(|failure| failure.contains("expected 405"))
+        );
+    }
+    #[test]
     fn doctor_rejects_non_iroha_or_malformed_mcp_tools() {
         for hostile_tool in [
             norito::json!({"name": "connect.legacy", "description": "retired"}),
             norito::json!({"description": "missing name"}),
             norito::json!({"name": (REQUIRED_MCP_TOOLS[0]), "description": "duplicate"}),
         ] {
-            let server = spawn_mock_http(15, move |request| {
+            let server = spawn_mock_http(16, move |request| {
                 if request.method == "POST"
                     && path_only(&request.path) == "/v1/mcp"
                     && request.body.contains("tools/list")
