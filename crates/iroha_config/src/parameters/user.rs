@@ -2643,13 +2643,13 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE"
     )]
     pub coordination_council_size: usize,
-    /// Policy Jury size.
+    /// Policy Jury size (at least two for non-identity timed-OVN masks).
     #[config(
         env = "GOV_POLICY_JURY_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE"
     )]
     pub policy_jury_size: usize,
-    /// Maximum Confirmation Jury size.
+    /// Maximum Confirmation Jury size (at least two for timed-OVN confirmation).
     #[config(
         default = "crate::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE"
     )]
@@ -2799,6 +2799,15 @@ impl Governance {
             assert!(
                 (1..=1_000).contains(&size),
                 "{name} must be within 1..=1_000"
+            );
+        }
+        for (name, size) in [
+            ("policy_jury_size", self.policy_jury_size),
+            ("confirmation_jury_size", self.confirmation_jury_size),
+        ] {
+            assert!(
+                (2..=1_000).contains(&size),
+                "{name} must be within 2..=1_000 because hidden timed-OVN ballots require at least two seats"
             );
         }
         let parliament_timed_ovn = self.parliament_timed_ovn.parse();
@@ -3223,6 +3232,34 @@ max_corpus_entries = 16
             std::panic::catch_unwind(|| governance.parse()).is_err(),
             "a hidden body larger than the timed-OVN corpus must fail at startup"
         );
+    }
+
+    #[test]
+    fn parliament_hidden_body_sizes_require_two_seats() {
+        let mut one_policy_seat = Governance::default();
+        one_policy_seat.policy_jury_size = 1;
+        assert!(
+            std::panic::catch_unwind(|| one_policy_seat.parse()).is_err(),
+            "a single-seat Policy Jury would produce identity timed-OVN masks"
+        );
+
+        let mut one_confirmation_seat = Governance::default();
+        one_confirmation_seat.confirmation_jury_size = 1;
+        assert!(
+            std::panic::catch_unwind(|| one_confirmation_seat.parse()).is_err(),
+            "a single-seat Confirmation Jury would produce identity timed-OVN masks"
+        );
+
+        let mut one_public_seat = Governance::default();
+        one_public_seat.rules_committee_size = 1;
+        one_public_seat.agenda_council_size = 1;
+        one_public_seat.interest_panel_size = 1;
+        one_public_seat.review_panel_size = 1;
+        one_public_seat.coordination_council_size = 1;
+        one_public_seat.oversight_committee_size = 1;
+        one_public_seat.mpc_committee_size = 1;
+        one_public_seat.fma_committee_size = 1;
+        one_public_seat.parse();
     }
 
     #[test]
@@ -7753,6 +7790,13 @@ pub struct Network {
     /// (clamped to >= 100ms).
     #[config(default = "defaults::network::IDLE_TIMEOUT.into()")]
     pub idle_timeout_ms: DurationMs,
+    /// Maximum total tenure for an accepted transport to authenticate
+    /// (clamped to >= 100ms).
+    #[config(default = "defaults::network::PREAUTH_TIMEOUT.into()")]
+    pub preauth_timeout_ms: DurationMs,
+    /// Maximum concurrent pre-authentication transports admitted from one source IP.
+    #[config(default = "defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP")]
+    pub preauth_max_connections_per_ip: NonZeroUsize,
     /// Base deadline for an exact reply to await one peer writer's full flush
     /// (clamped to >= 100ms).
     #[config(default = "defaults::network::REPLY_WRITER_FLUSH_TIMEOUT.into()")]
@@ -8035,6 +8079,8 @@ impl Network {
             transaction_gossip_restricted_fallback,
             transaction_gossip_restricted_public_payload,
             idle_timeout_ms: idle_timeout,
+            preauth_timeout_ms: preauth_timeout,
+            preauth_max_connections_per_ip,
             reply_writer_flush_timeout_ms: reply_writer_flush_timeout,
             connect_startup_delay_ms: connect_startup_delay,
             dial_timeout_ms: dial_timeout,
@@ -8209,6 +8255,7 @@ impl Network {
         };
         let min_interval = MIN_TIMER_INTERVAL;
         let idle_timeout = idle_timeout.get().max(min_interval);
+        let preauth_timeout = preauth_timeout.get().max(min_interval);
         let reply_writer_flush_timeout = reply_writer_flush_timeout.get().max(min_interval);
         let dial_timeout = dial_timeout.get().max(min_interval);
         let peer_gossip_period = peer_gossip_period.get().max(min_interval);
@@ -8243,6 +8290,8 @@ impl Network {
                 relay_hub_addresses,
                 relay_ttl,
                 idle_timeout,
+                preauth_timeout,
+                preauth_max_connections_per_ip,
                 reply_writer_flush_timeout,
                 connect_startup_delay: connect_startup_delay.get(),
                 dial_timeout,
@@ -13064,9 +13113,12 @@ pub struct SoracloudRuntime {
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS))"
     )]
     pub reconcile_interval_ms: DurationMs,
-    /// Maximum concurrent artifact hydration workers.
+    /// Maximum concurrent artifact hydration workers, independent of Inrou guest concurrency.
     #[config(default = "defaults::soracloud_runtime::HYDRATION_CONCURRENCY")]
     pub hydration_concurrency: NonZeroUsize,
+    /// Maximum idle prepared IVM runtimes retained independently of hydration workers.
+    #[config(default = "defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY")]
+    pub prepared_runtime_cache_capacity: NonZeroUsize,
     /// Cache budgets for hydrated Soracloud artifacts.
     #[config(default)]
     pub cache_budgets: SoracloudRuntimeCacheBudgets,
@@ -13093,11 +13145,31 @@ impl SoracloudRuntime {
                 ),
             );
         }
+        if self.hydration_concurrency.get() > defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.hydration_concurrency must not exceed {}",
+                    defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+                )),
+            );
+        }
+        if self.prepared_runtime_cache_capacity.get()
+            > defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.prepared_runtime_cache_capacity must not exceed {}",
+                    defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX
+                )),
+            );
+        }
         actual::SoracloudRuntime {
             production_mode,
             state_dir: self.state_dir.resolve_relative_path(),
             reconcile_interval,
             hydration_concurrency: self.hydration_concurrency,
+            prepared_runtime_cache_capacity: self.prepared_runtime_cache_capacity,
             cache_budgets: self.cache_budgets.parse(),
             inrou: self.inrou.parse(emitter),
             submission,
@@ -13111,6 +13183,7 @@ struct SoracloudRuntimeFields {
     state_dir: Option<WithOrigin<PathBuf>>,
     reconcile_interval_ms: Option<DurationMs>,
     hydration_concurrency: Option<NonZeroUsize>,
+    prepared_runtime_cache_capacity: Option<NonZeroUsize>,
     cache_budgets: Option<SoracloudRuntimeCacheBudgets>,
     inrou: Option<SoracloudRuntimeInrou>,
     submission: Option<SoracloudRuntimeSubmission>,
@@ -13162,6 +13235,12 @@ impl SoracloudRuntimeFields {
                 parser,
                 <NonZeroUsize as json::JsonDeserialize>::json_deserialize,
             ),
+            "prepared_runtime_cache_capacity" => Self::set_unique(
+                &mut self.prepared_runtime_cache_capacity,
+                "prepared_runtime_cache_capacity",
+                parser,
+                <NonZeroUsize as json::JsonDeserialize>::json_deserialize,
+            ),
             "cache_budgets" => Self::set_unique(
                 &mut self.cache_budgets,
                 "cache_budgets",
@@ -13205,6 +13284,9 @@ impl SoracloudRuntimeFields {
             hydration_concurrency: self
                 .hydration_concurrency
                 .unwrap_or(defaults::soracloud_runtime::HYDRATION_CONCURRENCY),
+            prepared_runtime_cache_capacity: self
+                .prepared_runtime_cache_capacity
+                .unwrap_or(defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY),
             cache_budgets: self.cache_budgets.unwrap_or_default(),
             inrou: self.inrou.unwrap_or_default(),
             submission: self.submission.unwrap_or_default(),
@@ -35279,6 +35361,7 @@ publish_delay_seconds = 17
             runtime.state_dir => defaults::soracloud_runtime::state_dir(),
             runtime.reconcile_interval => StdDuration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS),
             runtime.hydration_concurrency => defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
+            runtime.prepared_runtime_cache_capacity => defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY,
             runtime.cache_budgets.bundle_bytes => defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
             inrou.enabled => defaults::soracloud_runtime::INROU_ENABLED,
             inrou.guest_image_max_bytes => defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES,
@@ -35863,6 +35946,7 @@ max_storage_bytes = 10737418240
 state_dir = "./runtime/custom"
 reconcile_interval_ms = 2500
 hydration_concurrency = 7
+prepared_runtime_cache_capacity = 11
 
 [cache_budgets]
 bundle_bytes = 1024
@@ -35909,6 +35993,7 @@ max_bytes_per_minute = 262144
         assert_all_eq!(
             runtime.reconcile_interval => StdDuration::from_millis(2_500),
             runtime.hydration_concurrency.get() => 7,
+            runtime.prepared_runtime_cache_capacity.get() => 11,
             runtime.cache_budgets.bundle_bytes.get() => 1_024,
             runtime.cache_budgets.model_weight_bytes.get() => 6_144,
             inrou.guest_image_max_bytes.get() => 12_345_678,
@@ -35953,6 +36038,35 @@ max_bytes_per_minute = 262144
                 )))
                 .is_err(),
                 "noncanonical Soracloud runtime configuration must fail closed: {snippet}"
+            );
+        }
+    }
+    #[test]
+    fn soracloud_runtime_worker_and_cache_limits_are_bounded() {
+        for (field, maximum) in [
+            (
+                "hydration_concurrency",
+                defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX,
+            ),
+            (
+                "prepared_runtime_cache_capacity",
+                defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX,
+            ),
+        ] {
+            actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+                &format!("{field} = {maximum}\n"),
+            )))
+            .unwrap_or_else(|error| panic!("{field} must accept its V1 ceiling: {error:?}"));
+
+            let rejected = maximum.checked_add(1).expect("V1 limit plus one");
+            let error = actual::Root::from_toml_source(TomlSource::inline(
+                table_with_soracloud_runtime(&format!("{field} = {rejected}\n")),
+            ))
+            .expect_err("values above the V1 ceiling must fail closed");
+            let report = format!("{error:?}");
+            assert!(
+                report.contains(field),
+                "out-of-range {field} diagnostic must identify the field: {report}"
             );
         }
     }

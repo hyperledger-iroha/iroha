@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="${CSHARP_SDK_PACKAGE_CONSUMER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 DOTNET_BIN="${CSHARP_SDK_PACKAGE_CONSUMER_DOTNET_BIN:-dotnet}"
+DOTNET_GLOBAL_JSON="${CSHARP_SDK_PACKAGE_CONSUMER_GLOBAL_JSON:-${ROOT_DIR}/csharp/global.json}"
 PACKAGE_DIR="${CSHARP_SDK_PACKAGE_CONSUMER_PACKAGE_DIR:-${ROOT_DIR}/csharp/artifacts/packages}"
 PACKAGE_VERSION="${CSHARP_SDK_PACKAGE_CONSUMER_PACKAGE_VERSION:-}"
 NATIVE_PACKAGE_ROOT="${CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT:-${ROOT_DIR}/csharp/artifacts/native-package}"
@@ -93,20 +94,53 @@ require_local_package() {
   fi
 }
 
+run_dotnet() {
+  local sdk_dir="$1"
+  shift
+  (
+    cd "${sdk_dir}" || return 1
+    "${DOTNET_BIN}" "$@"
+  )
+}
+
+stage_pinned_dotnet_global_json() {
+  local app_dir="$1"
+  local staged_global_json="${app_dir}/global.json"
+  if [[ ! -f "${DOTNET_GLOBAL_JSON}" || -L "${DOTNET_GLOBAL_JSON}" ]]; then
+    echo "error: canonical C# SDK global.json is missing or not a regular file: ${DOTNET_GLOBAL_JSON}" >&2
+    return 1
+  fi
+  if [[ ! -d "${app_dir}" || -L "${app_dir}" ]]; then
+    echo "error: C# SDK package consumer directory is missing or not a real directory: ${app_dir}" >&2
+    return 1
+  fi
+  if [[ -e "${staged_global_json}" || -L "${staged_global_json}" ]]; then
+    echo "error: refusing to replace pre-existing package consumer SDK pin: ${staged_global_json}" >&2
+    return 1
+  fi
+  cp "${DOTNET_GLOBAL_JSON}" "${staged_global_json}" || return 1
+  if [[ ! -f "${staged_global_json}" || -L "${staged_global_json}" ]] \
+    || ! cmp -s "${DOTNET_GLOBAL_JSON}" "${staged_global_json}"; then
+    echo "error: staged package consumer SDK pin does not match ${DOTNET_GLOBAL_JSON}" >&2
+    return 1
+  fi
+}
+
 require_dotnet() {
+  local sdk_dir="$1"
   if ! command -v "${DOTNET_BIN}" >/dev/null 2>&1; then
     echo "error: C# SDK package consumer smoke requires .NET SDK 8.0.x; '${DOTNET_BIN}' was not found" >&2
     return 1
   fi
   local dotnet_version
-  dotnet_version="$("${DOTNET_BIN}" --version)"
+  dotnet_version="$(run_dotnet "${sdk_dir}" --version)"
   printf 'C# SDK package consumer dotnet version: %s\n' "${dotnet_version}"
   if [[ ! "${dotnet_version}" =~ ^8\.0\.[1-9][0-9]*$ ]]; then
     echo "error: C# SDK package consumer smoke requires a stable canonical .NET SDK 8.0.x with a non-zero patch; got ${dotnet_version}" >&2
     return 1
   fi
   printf 'C# SDK package consumer dotnet --info:\n'
-  "${DOTNET_BIN}" --info
+  run_dotnet "${sdk_dir}" --info
 }
 
 require_runtime_identifier() {
@@ -172,9 +206,21 @@ if (Encoding.UTF8.GetString(canonicalMessage) != expectedMessage)
     throw new InvalidOperationException("Canonical request package smoke failed");
 }
 
-EthereumMainnetSccp.RequireMainnetChainId(EthereumMainnetSccp.MainnetChainId);
-EthereumMainnetSccp.RequireInboundRoute(EthereumMainnetSccp.DomainEthereum, EthereumMainnetSccp.DomainSora);
-EthereumMainnetSccp.RequireOutboundRoute(EthereumMainnetSccp.DomainSora, EthereumMainnetSccp.DomainEthereum);
+var inboundLane = new SccpLaneIdV1(
+    SccpNetworkV1.EthereumMainnet,
+    SccpNetworkV1.SoraTaira);
+var outboundLane = new SccpLaneIdV1(
+    SccpNetworkV1.SoraTaira,
+    SccpNetworkV1.EthereumMainnet);
+if (SccpNetworkV1.EthereumMainnet.ProfileKey() != "ethereum-mainnet"
+    || SccpNetworkV1.EthereumMainnet.DomainId() != 1u
+    || !inboundLane.IsInbound
+    || inboundLane.IsOutbound
+    || !outboundLane.IsOutbound
+    || outboundLane.IsInbound)
+{
+    throw new InvalidOperationException("Packed SCCP route model is unavailable");
+}
 if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 23u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {
@@ -224,18 +270,20 @@ run_consumer_smoke() {
   require_local_package "${package_dir}" "${PACKAGE_VERSION}" || return 1
   require_runtime_identifier || return 1
   verify_native_package "${package_dir}" "${PACKAGE_VERSION}" || return 1
-  require_dotnet || return 1
 
   WORK_DIR="$(mktemp -d "${WORK_PARENT}/iroha-csharp-sdk-package-consumer.XXXXXX")" || return 1
   local app_dir="${WORK_DIR}/consumer"
   local project_file="${app_dir}/consumer.csproj"
+  mkdir -p "${app_dir}" || return 1
+  stage_pinned_dotnet_global_json "${app_dir}" || return 1
+  require_dotnet "${app_dir}" || return 1
   export DOTNET_CLI_TELEMETRY_OPTOUT="${DOTNET_CLI_TELEMETRY_OPTOUT:-1}"
   export DOTNET_NOLOGO="${DOTNET_NOLOGO:-1}"
   export DOTNET_SKIP_FIRST_TIME_EXPERIENCE="${DOTNET_SKIP_FIRST_TIME_EXPERIENCE:-1}"
   export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-${WORK_DIR}/dotnet-home}"
   export NUGET_PACKAGES="${NUGET_PACKAGES:-${WORK_DIR}/nuget-packages}"
 
-  "${DOTNET_BIN}" new console --framework net8.0 --output "${app_dir}" --no-restore || return 1
+  run_dotnet "${app_dir}" new console --framework net8.0 --output . --no-restore || return 1
   cat > "${app_dir}/Directory.Build.props" <<EOF
 <Project>
   <PropertyGroup>
@@ -253,11 +301,8 @@ EOF
   </packageSources>
 </configuration>
 EOF
-  (
-    cd "${app_dir}"
-    "${DOTNET_BIN}" add package Hyperledger.Iroha.Sdk --version "${PACKAGE_VERSION}" \
-      | tee "${WORK_DIR}/dotnet-add-package.log"
-  ) || return 1
+  run_dotnet "${app_dir}" add package Hyperledger.Iroha.Sdk --version "${PACKAGE_VERSION}" \
+    | tee "${WORK_DIR}/dotnet-add-package.log" || return 1
   if ! package_install_log_matches_local_source "${WORK_DIR}/dotnet-add-package.log" "${package_dir}"; then
     echo "error: package consumer smoke did not install Hyperledger.Iroha.Sdk ${PACKAGE_VERSION} from ${package_dir}" >&2
     return 1
@@ -276,8 +321,8 @@ EOF
   fi
   validate_consumer_project "${project_file}" || return 1
   write_consumer_program "${app_dir}/Program.cs" "${expected_query}"
-  "${DOTNET_BIN}" build "${project_file}" --configuration Release --no-restore -warnaserror || return 1
-  "${DOTNET_BIN}" run --project "${project_file}" --configuration Release --no-build || return 1
+  run_dotnet "${app_dir}" build "${project_file}" --configuration Release --no-restore -warnaserror || return 1
+  run_dotnet "${app_dir}" run --project "${project_file}" --configuration Release --no-build || return 1
   printf 'C# SDK package consumer package: %s/Hyperledger.Iroha.Sdk.%s.nupkg\n' \
     "${package_dir}" "${PACKAGE_VERSION}"
 }

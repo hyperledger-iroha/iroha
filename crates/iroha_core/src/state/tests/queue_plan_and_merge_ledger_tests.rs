@@ -271,6 +271,130 @@ fn panic_payload_text(payload: Box<dyn core::any::Any + Send>) -> String {
     }
     "non-string panic payload".to_owned()
 }
+#[test]
+fn queue_plan_staging_reuses_pristine_block_snapshot_during_state_write_generation() {
+    let (state, validator_keypairs, _, parent) = configured_two_lane_merge_state();
+    let state = Arc::new(state);
+    let participant_lane = LaneId::new(1);
+    let routing_plan = crate::queue::RoutingPlan::native_amx(
+        crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        vec![crate::queue::RouteLeg::new(
+            crate::queue::RoutingDecision::new(participant_lane, DataSpaceId::UNIVERSAL),
+            crate::queue::RouteLegRole::Participant,
+        )],
+    );
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        state.as_ref(),
+        routing_plan,
+        &validator_keypairs,
+        queue_plan_authority_height_for_state_test(state.as_ref()),
+        0x6A,
+    );
+    let carrier = empty_global_block_after(Some(&parent));
+    let mut state_block = state.block(carrier.header());
+    let active_lanes = State::queue_plan_active_lane_bindings_from_snapshot(
+        &state_block.nexus,
+        &state_block.lane_incarnations,
+        &state_block.lane_incarnation_activation_heights,
+    )
+    .expect("StateBlock lane lifecycle snapshot");
+
+    let (writer_ready_tx, writer_ready_rx) = std::sync::mpsc::channel();
+    let (release_writer_tx, release_writer_rx) = std::sync::mpsc::channel();
+    let writer_state = Arc::clone(&state);
+    let writer = std::thread::spawn(move || {
+        let _state_write_lock = writer_state.state_write_lock.lock();
+        let generation = writer_state.begin_state_view_write();
+        writer_ready_tx
+            .send(())
+            .expect("signal active State write generation");
+        let released_before_timeout = release_writer_rx
+            .recv_timeout(Duration::from_secs(3))
+            .is_ok();
+        drop(generation);
+        released_before_timeout
+    });
+    writer_ready_rx
+        .recv()
+        .expect("State write generation became active");
+
+    let staged = state_block.stage_queue_plan_admissions(
+        &[certificate],
+        &active_lanes,
+        carrier.header().height().get(),
+    );
+    let _ = release_writer_tx.send(());
+    let released_before_timeout = writer.join().expect("State writer thread must not panic");
+
+    assert!(
+        released_before_timeout,
+        "QueuePlan staging reopened the backing State and waited for the active write generation"
+    );
+    staged.expect("the StateBlock snapshot must authenticate QueuePlan authority");
+}
+#[test]
+fn queue_plan_live_validation_holds_no_block_hash_guard_while_waiting_for_snapshot() {
+    let (state, validator_keypairs, _, parent) = configured_two_lane_merge_state();
+    let state = Arc::new(state);
+    let routing_plan = crate::queue::RoutingPlan::native_amx(
+        crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        vec![crate::queue::RouteLeg::new(
+            crate::queue::RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL),
+            crate::queue::RouteLegRole::Participant,
+        )],
+    );
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        state.as_ref(),
+        routing_plan,
+        &validator_keypairs,
+        queue_plan_authority_height_for_state_test(state.as_ref()),
+        0x6B,
+    );
+    let carrier_height = empty_global_block_after(Some(&parent))
+        .header()
+        .height()
+        .get();
+    *state.view_lock_contention_log.lock() = ViewLockContentionLog::default();
+
+    let state_write_lock = state.state_write_lock.lock();
+    let generation = state.begin_state_view_write();
+    let validator_state = Arc::clone(&state);
+    let validator = std::thread::spawn(move || {
+        validator_state.validate_queue_plan_admissions_for_carrier(
+            &[certificate],
+            carrier_height,
+        )
+    });
+    let contention_deadline = Instant::now() + Duration::from_secs(5);
+    while state
+        .view_lock_contention_log
+        .lock()
+        .last_warn_at
+        .is_none()
+    {
+        assert!(
+            Instant::now() < contention_deadline,
+            "QueuePlan validator did not wait on the active State generation"
+        );
+        std::thread::yield_now();
+    }
+    let block_hash_writer_available = state.block_hashes.inner.try_write().is_some();
+
+    drop(generation);
+    drop(state_write_lock);
+    let validated = validator.join().expect("QueuePlan validator must not panic");
+
+    assert!(
+        block_hash_writer_available,
+        "QueuePlan validation retained a block-hash read guard before opening its State snapshot"
+    );
+    assert_eq!(
+        validated
+            .expect("one immutable State snapshot must authenticate the QueuePlan certificate")
+            .len(),
+        1
+    );
+}
 state_test! { sync staged_merge_missing_transaction_block_mutates_nothing
     let (state, validator_keypairs, commit_keypairs, parent) = configured_single_lane_merge_state();
     let entry = next_relay_merge_entry(&state, 1, &validator_keypairs, &commit_keypairs);

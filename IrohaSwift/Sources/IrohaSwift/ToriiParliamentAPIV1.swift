@@ -732,6 +732,7 @@ public enum ToriiParliamentAPIV1 {
         .init(noritoIndex: 5, jsonTag: "BallotReleasePulseUnavailable"),
         .init(noritoIndex: 6, jsonTag: "BallotOpeningDeadlineExpired"),
         .init(noritoIndex: 7, jsonTag: "SortitionRetriesExhausted"),
+        .init(noritoIndex: 8, jsonTag: "ConfirmationJuryCapacityUnavailable"),
     ]
 
     public static let bodyStateFields = [

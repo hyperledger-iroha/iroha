@@ -5460,6 +5460,19 @@ impl V2LaneWorkAdapter {
                 )
                 .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             }
+            let terminal_authorizations = self
+                .kura
+                .authorize_completed_autonomous_queue_cleanup_for_entrypoints(
+                    network_id,
+                    &payload.entrypoint_hashes,
+                )
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            queue
+                .remove_state_committed_hashes_with_kura_terminal_authorizations(
+                    self.state.as_ref(),
+                    terminal_authorizations,
+                )
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         }
         Ok(())
     }
@@ -23592,7 +23605,23 @@ pub(super) mod tests {
         let _ = adapter.drain_effects(usize::MAX);
         adapter
             .schedule_retransmission()
-            .expect("schedule exact missing-certificate discovery");
+            .expect("schedule the first exact missing-certificate discovery round");
+        let first_round = adapter.drain_effects(usize::MAX);
+        assert!(
+            first_round.iter().any(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostLaneBlock {
+                        message: BlockMessage::LaneBlockProposal(pending),
+                        ..
+                    } if pending == &proposal
+                )
+            }),
+            "the rehydrated proposal must become a bounded certificate request source"
+        );
+        adapter
+            .schedule_retransmission()
+            .expect("reissue exact discovery after the first round is dropped");
         assert!(
             adapter.drain_effects(usize::MAX).iter().any(|effect| {
                 matches!(
@@ -23603,7 +23632,7 @@ pub(super) mod tests {
                     } if pending == &proposal
                 )
             }),
-            "the rehydrated proposal must become a bounded certificate request source"
+            "a dropped first discovery round must not make decided-lane recovery passive"
         );
         let certificate = LaneBlockCertificateV1 {
             proposal: recovered.proposal.clone(),

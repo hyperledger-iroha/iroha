@@ -1797,10 +1797,8 @@ mod tests {
         );
         stx.world
             .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
-        stx.world.account_rekey_records.insert(
-            alias.clone(),
-            AccountRekeyRecord::new(alias.clone(), ALICE_ID.clone()),
-        );
+        stx.world
+            .replace_account_rekey_record(AccountRekeyRecord::new(alias.clone(), ALICE_ID.clone()));
         assert_eq!(
             crate::sns::resolve_active_account_alias(
                 &stx.world,

@@ -1655,9 +1655,7 @@ fn exact_alias_resolve_rejects_rekey_index_split_brain() {
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     tx.world_mut_for_testing()
-        .account_rekey_records_mut_for_testing()
-        .insert(
-            alias.clone(),
+        .replace_account_rekey_record_for_testing(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, forged),
         );
     tx.apply();

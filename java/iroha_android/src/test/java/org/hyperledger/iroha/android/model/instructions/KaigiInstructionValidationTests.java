@@ -15,7 +15,7 @@ public final class KaigiInstructionValidationTests {
 
   public static void main(final String[] args) {
     usageDurationAboveSignedIntRangeRoundTrips();
-    fullWidthUnsignedFieldsRoundTripThroughSignedJvmCarriers();
+    boundedParticipantsAndFullWidthU64FieldsRoundTripThroughJvmCarriers();
     rejectsOversizedAndSparseRelayManifestHopIndices();
     typedParsersRequireExactActionDiscriminator();
     parsersRejectUnknownFieldsAndRebuildImmutableCanonicalMaps();
@@ -52,21 +52,21 @@ public final class KaigiInstructionValidationTests {
     assertEquals(instruction, decoded);
   }
 
-  private static void fullWidthUnsignedFieldsRoundTripThroughSignedJvmCarriers() {
+  private static void boundedParticipantsAndFullWidthU64FieldsRoundTripThroughJvmCarriers() {
     final long u64Max = -1L;
-    final int u32Max = -1;
     final String u64MaxText = "18446744073709551615";
-    final String u32MaxText = "4294967295";
+    final int maxParticipants = CreateKaigiInstruction.MAX_PARTICIPANTS_V1;
+    final String maxParticipantsText = "4096";
 
     final CreateKaigiInstruction create =
         CreateKaigiInstruction.builder()
             .setCallId("wonderland", "unsigned-boundary")
             .setHost("host")
-            .setMaxParticipants(u32Max)
+            .setMaxParticipants(maxParticipants)
             .setGasRatePerMinute(u64Max)
             .setScheduledStartMs(u64Max)
             .build();
-    assertEquals(u32MaxText, create.toArguments().get("max_participants"));
+    assertEquals(maxParticipantsText, create.toArguments().get("max_participants"));
     assertEquals(u64MaxText, create.toArguments().get("gas_rate_per_minute"));
     assertEquals(u64MaxText, create.toArguments().get("scheduled_start_ms"));
     assertEquals(create, CreateKaigiInstruction.fromArguments(create.toArguments()));
@@ -132,6 +132,25 @@ public final class KaigiInstructionValidationTests {
             CreateKaigiInstruction.fromArguments(
                 withArgument(create.toArguments(), "max_participants", "4294967296")),
         "expected overflowing u32 to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.builder()
+                .setCallId("wonderland", "participant-limit")
+                .setHost("host")
+                .setMaxParticipants(maxParticipants + 1),
+        "expected participant cap overflow to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.builder()
+                .setCallId("wonderland", "participant-limit")
+                .setHost("host")
+                .setMaxParticipants(-1),
+        "expected negative u32 carrier to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.fromArguments(
+                withArgument(create.toArguments(), "max_participants", "4097")),
+        "expected parsed participant cap overflow to throw");
   }
 
   private static void rejectsOversizedAndSparseRelayManifestHopIndices() {

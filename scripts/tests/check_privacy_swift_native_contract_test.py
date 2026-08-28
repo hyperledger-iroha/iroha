@@ -225,13 +225,95 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         checker_job = workflow_job(workflow, "checker-self-test")
         apple_job = workflow_job(workflow, "apple-mobile-sdk")
         android_job = workflow_job(workflow, "android-mobile-sdk")
-        self.assertIn('APPLE_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
-        self.assertIn('ANDROID_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
-        self.assertIn('PRIVACY_PRODUCTION_ENABLED: "false"', apple_job)
-        self.assertIn('PRIVACY_PRODUCTION_ENABLED: "false"', android_job)
+        publisher_job = workflow_job(workflow, "publish-release-assets")
+        self.assertNotIn("APPLE_PRIVACY_PRODUCTION_ENABLED", workflow)
+        self.assertNotIn("ANDROID_PRIVACY_PRODUCTION_ENABLED", workflow)
+        production_binding = (
+            "PRIVACY_PRODUCTION_ENABLED: "
+            "${{ needs.authorize-mobile-production.outputs.production }}"
+        )
+        self.assertIn(production_binding, apple_job)
+        self.assertIn(production_binding, android_job)
+        self.assertIn(
+            'MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION: "1"',
+            apple_job,
+        )
+        self.assertIn(
+            "-PrequireKagemushaProductionAuthorization=true",
+            android_job,
+        )
         self.assertNotIn("PRIVACY_PRODUCTION_ENABLED: ${{ env.", workflow)
         self.assertNotIn("inputs.privacy_production_enabled", workflow)
         self.assertNotIn("github.ref_type == 'tag' ||", workflow)
+        self.assertIn("Verify and enable only the Apple production build", apple_job)
+        self.assertIn("Verify and enable only the Android production build", android_job)
+        self.assertIn('echo "PRIVACY_PRODUCTION_ENABLED=true" >> "$GITHUB_ENV"', apple_job)
+        self.assertIn('echo "PRIVACY_PRODUCTION_ENABLED=true" >> "$GITHUB_ENV"', android_job)
+        self.assertIn("gh attestation verify", apple_job)
+        self.assertIn("gh attestation verify", android_job)
+        self.assertIn(
+            '-PkagemushaProductionAuthorizationSha256="$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256"',
+            android_job,
+        )
+        self.assertIn("verify-pair", publisher_job)
+        self.assertGreaterEqual(publisher_job.count("gh attestation verify"), 2)
+        self.assertIn("verify-apple-artifact", publisher_job)
+        self.assertIn("verify-android-artifact", publisher_job)
+        self.assertIn(
+            "package_inventory_sha256: "
+            "${{ steps.verify-apple-package.outputs.package_inventory_sha256 }}",
+            apple_job,
+        )
+        self.assertIn(
+            "package_inventory_sha256: "
+            "${{ steps.verify-android-package.outputs.package_inventory_sha256 }}",
+            android_job,
+        )
+        self.assertIn("Bind every Apple package byte to this build job", apple_job)
+        self.assertIn("Bind every Android package byte to this build job", android_job)
+        self.assertIn("APPLE_BUILD_PACKAGE_INVENTORY_SHA256", publisher_job)
+        self.assertIn("ANDROID_BUILD_PACKAGE_INVENTORY_SHA256", publisher_job)
+        self.assertEqual(publisher_job.count("verify-release-inventory"), 3)
+        self.assertIn("--phase artifacts", publisher_job)
+        self.assertEqual(publisher_job.count("--phase final"), 2)
+        self.assertIn(
+            '--release-root "$GITHUB_WORKSPACE/release-assets"', publisher_job
+        )
+        self.assertIn(
+            '--archive "$release_root/NoritoBridge-${RELEASE_TAG}.xcframework.zip"',
+            publisher_job,
+        )
+        self.assertIn(
+            '--archive "$release_root/iroha-mobile-sdk-android-${RELEASE_TAG}.zip"',
+            publisher_job,
+        )
+        self.assertNotIn('--manifest "release-assets/', publisher_job)
+        self.assertIn(
+            "release asset bytes changed after final verification", publisher_job
+        )
+        self.assertLess(
+            publisher_job.index("Reverify both authorizations"),
+            publisher_job.index('gh release create "$GITHUB_REF_NAME"'),
+        )
+
+        apple_builder = read("scripts/build_norito_xcframework.sh")
+        self.assertIn(
+            "MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION:-0",
+            apple_builder,
+        )
+        self.assertIn(
+            "official production build requires a verified Kagemusha authorization digest",
+            apple_builder,
+        )
+        android_builder = read("kotlin/client-android/build.gradle.kts")
+        self.assertIn(
+            'gradleProperty("requireKagemushaProductionAuthorization").orNull ?: "false"',
+            android_builder,
+        )
+        self.assertIn(
+            "official production build requires a verified Kagemusha authorization digest",
+            android_builder,
+        )
         for trigger in (
             "ci/check_swift_pod_bridge.sh",
             "scripts/check_swift_pod_bridge.sh",
@@ -257,12 +339,15 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             checker_job.index("Reject a noncanonical release tag before setup or build"),
             checker_job.index("actions/setup-python@"),
         )
-        tag_precedence = (
-            'if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then\n'
-            '            version="${GITHUB_REF_NAME}"\n'
-            '          elif [[ -n "$input_version" ]]; then'
+        production_version_precedence = (
+            'if [[ "$authorized_production" == "true" ]]; then\n'
+            '            [[ "$authorized_release_tag" =~ '
+            '^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.'
+            '(0|[1-9][0-9]*)$ ]]\n'
+            '            version="$authorized_release_tag"\n'
+            '          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then'
         )
-        self.assertEqual(workflow.count(tag_precedence), 2)
+        self.assertEqual(workflow.count(production_version_precedence), 2)
         self.assertEqual(
             workflow.count(
                 're.fullmatch(rb"(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.'
@@ -327,12 +412,14 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "scripts/build_norito_xcframework.sh",
             "scripts/check_mobile_sdk_artifact_pin_commit.py",
             "scripts/exec_with_file_lock.py",
+            "scripts/norito_bridge_apple_slice_handoff.py",
             "scripts/norito_bridge_source_seal.py",
             "scripts/package_mobile_sdk_artifacts.sh",
             "scripts/run_mobile_hermetic_command.py",
             "scripts/render_norito_bridge_podspec.py",
             "scripts/tests/package_mobile_sdk_artifacts_test.py",
             "scripts/tests/render_norito_bridge_podspec_test.py",
+            "scripts/tests/norito_bridge_apple_slice_handoff_test.py",
             "scripts/tests/norito_bridge_source_seal_test.py",
             "scripts/update_norito_bridge_swift_pins.py",
             "scripts/validate_norito_bridge_xcframework.py",

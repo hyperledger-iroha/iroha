@@ -2,9 +2,11 @@
 //!
 //! This module is compiled only into the dedicated test daemon. It derives one
 //! deterministic, proof-valid adaptive-DKG share for the exact local seat in an
-//! exact four-validator roster. It never emits pulses, final signatures, seeds,
-//! reducer state, or validation results; the ordinary Sumeragi aggregator still
-//! independently verifies every returned share and constructs the unique pulse.
+//! exact four-validator roster. Two domain-separated public fixtures exercise
+//! initial installation and one genuine key rotation. The signer never emits
+//! pulses, final signatures, seeds, reducer state, or validation results; the
+//! ordinary Sumeragi aggregator still independently verifies every returned
+//! share and constructs the unique pulse.
 
 #[cfg(not(debug_assertions))]
 compile_error!(
@@ -40,6 +42,8 @@ use thiserror::Error;
 const EXACT_TEST_VALIDATORS_V1: usize = 4;
 const EXACT_TEST_THRESHOLD_V1: u16 = 2;
 const TEST_SESSION_ID_DOMAIN_V1: &[u8] = b"iroha.test-network.parliament-beacon.session.v1\0";
+const TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1: &[u8] =
+    b"iroha.test-network.parliament-beacon.successor-session.v1\0";
 const TEST_DEALER_SEED_DOMAIN_V1: &[u8] = b"iroha.test-network.parliament-beacon.dealers.v1\0";
 
 /// Closed construction failure for the feature-isolated Parliament beacon fixture.
@@ -78,15 +82,17 @@ fn validate_roster_v1(roster: &[PeerId]) -> Result<(), TestNetworkParliamentBeac
 fn deterministic_session_v1(
     network_id: NetworkId,
     roster: &[PeerId],
+    successor: bool,
 ) -> Result<GlobalThresholdBeaconDkgSessionV1, TestNetworkParliamentBeaconSignerErrorV1> {
     validate_roster_v1(roster)?;
     let roster_hash = global_threshold_beacon_roster_hash_v1(roster);
-    let mut session_id: [u8; 32] = Hash::new_from_chunks(&[
-        TEST_SESSION_ID_DOMAIN_V1,
-        network_id.as_bytes(),
-        &roster_hash,
-    ])
-    .into();
+    let session_domain = if successor {
+        TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1
+    } else {
+        TEST_SESSION_ID_DOMAIN_V1
+    };
+    let mut session_id: [u8; 32] =
+        Hash::new_from_chunks(&[session_domain, network_id.as_bytes(), &roster_hash]).into();
     if session_id == [0; 32] {
         session_id[0] = 1;
     }
@@ -124,8 +130,9 @@ fn dealer_commitment_dto_v1(
 fn deterministic_fixture_v1(
     network_id: NetworkId,
     roster: &[PeerId],
+    successor: bool,
 ) -> Result<DeterministicFixtureV1, TestNetworkParliamentBeaconSignerErrorV1> {
-    let dkg_session = deterministic_session_v1(network_id, roster)?;
+    let dkg_session = deterministic_session_v1(network_id, roster, successor)?;
     let parameters = adaptive_beacon_parameters(&dkg_session)
         .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)?;
     let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
@@ -183,7 +190,23 @@ pub fn deterministic_parliament_beacon_key_record_v1(
     FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     TestNetworkParliamentBeaconSignerErrorV1,
 > {
-    let fixture = deterministic_fixture_v1(network_id, ordered_roster)?;
+    let fixture = deterministic_fixture_v1(network_id, ordered_roster, false)?;
+    FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
+        .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)
+}
+
+/// Derive the domain-separated successor record used by the rotation corridor.
+///
+/// This is a second complete adaptive-DKG transcript, not an alias for the
+/// initial key. Like the initial fixture, it exports public material only.
+pub fn deterministic_parliament_beacon_successor_key_record_v1(
+    network_id: NetworkId,
+    ordered_roster: &[PeerId],
+) -> Result<
+    FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    TestNetworkParliamentBeaconSignerErrorV1,
+> {
+    let fixture = deterministic_fixture_v1(network_id, ordered_roster, true)?;
     FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
         .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)
 }
@@ -247,11 +270,21 @@ impl GlobalThresholdBeaconPartialSignerV1 for TestNetworkParliamentBeaconPartial
         session: &ValidatedGlobalThresholdBeaconSessionV1,
         payload: &[u8],
     ) -> Result<GlobalThresholdBeaconPartialSignatureV1, String> {
-        let fixture = deterministic_fixture_v1(self.network_id, &self.ordered_roster)
-            .map_err(|_| "test Parliament beacon fixture is unavailable".to_owned())?;
-        if fixture.session.record() != session.record() {
-            return Err("test Parliament beacon session binding differs".to_owned());
-        }
+        let initial_fixture =
+            deterministic_fixture_v1(self.network_id, &self.ordered_roster, false)
+                .map_err(|_| "test Parliament beacon fixture is unavailable".to_owned())?;
+        let fixture = if initial_fixture.session.record() == session.record() {
+            initial_fixture
+        } else {
+            let successor_fixture =
+                deterministic_fixture_v1(self.network_id, &self.ordered_roster, true).map_err(
+                    |_| "test Parliament successor beacon fixture is unavailable".to_owned(),
+                )?;
+            if successor_fixture.session.record() != session.record() {
+                return Err("test Parliament beacon session binding differs".to_owned());
+            }
+            successor_fixture
+        };
         let private_contributions = fixture
             .dealer_secrets
             .iter()
@@ -349,6 +382,47 @@ mod tests {
         )
         .expect("bind exact seat to a different network");
         assert!(signer.sign_partial(&validated, payload).is_err());
+    }
+
+    #[test]
+    fn exact_seat_signer_supports_one_domain_separated_successor_session() {
+        let roster = roster();
+        let initial = deterministic_parliament_beacon_key_record_v1(network_id(), &roster)
+            .expect("derive initial public fixture");
+        let successor =
+            deterministic_parliament_beacon_successor_key_record_v1(network_id(), &roster)
+                .expect("derive successor public fixture");
+        assert_ne!(initial.session.session_id, successor.session.session_id);
+        assert_ne!(
+            initial.session.transcript_hash,
+            successor.session.transcript_hash
+        );
+        let binding = GlobalThresholdBeaconSessionBindingV1 {
+            network_id: successor.session.network_id,
+            session_id: successor.session.session_id,
+            roster_hash: successor.session.roster_hash,
+            transcript_hash: successor.session.transcript_hash,
+        };
+        let validated = validate_global_threshold_beacon_session_v1(successor.session, &binding)
+            .expect("validate successor public fixture");
+        let payload = b"exact feature-isolated successor payload";
+        for peer in &roster {
+            let signer = TestNetworkParliamentBeaconPartialSignerV1::try_new(
+                network_id(),
+                roster.clone(),
+                peer,
+            )
+            .expect("bind exact successor test seat");
+            let partial = signer
+                .sign_partial(&validated, payload)
+                .expect("produce successor proof-valid share");
+            let partial = super::super::adaptive_partial_signature_from_dto_v1(&partial)
+                .expect("decode successor partial share");
+            validated
+                .transcript
+                .verify_partial_signature(payload, &partial)
+                .expect("independently verify successor test share");
+        }
     }
 
     #[test]

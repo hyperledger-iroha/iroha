@@ -16,6 +16,7 @@ SPEC.loader.exec_module(MODULE)
 REPO_ROOT = MODULE_PATH.parents[1]
 EXAMPLE_ROSTER_PATH = REPO_ROOT / "configs/soranexus/taira/validator_roster.example.toml"
 CHECKED_IN_EXAMPLE_PATH = REPO_ROOT / "configs/soranexus/taira/taira-explorer.nginx.conf"
+TAIRA_CONFIG_PATH = REPO_ROOT / "configs/soranexus/taira/config.toml"
 
 
 def _location_block(server: str, marker: str) -> str:
@@ -283,6 +284,55 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     assert "location = /v1/mcp" in rendered
     assert "location ^~ /v1/app-api/" in rendered
     assert "client_max_body_size 1g;" in rendered
+
+
+def test_public_torii_cors_matches_runtime_policy_and_browser_sdk_headers() -> None:
+    cors = MODULE._load_toml(TAIRA_CONFIG_PATH)["torii"]["cors"]
+
+    assert MODULE.PUBLIC_TORII_CORS_ORIGINS == cors["allowed_origins"]
+    assert MODULE.PUBLIC_TORII_CORS_METHODS == ", ".join(cors["allowed_methods"])
+    assert MODULE.PUBLIC_TORII_CORS_HEADERS == ", ".join(cors["allowed_headers"])
+    assert MODULE.PUBLIC_TORII_CORS_EXPOSED_HEADERS == ", ".join(
+        cors["exposed_headers"]
+    )
+
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+    rendered = MODULE.render_edge_nginx_conf(validators)
+    public_server = rendered.split("server_name taira.sora.org;", 1)[1].split(
+        "server_name mon.taira.sora.net;", 1
+    )[0]
+
+    for origin in cors["allowed_origins"]:
+        assert f'  "{origin}" $http_origin;' in rendered
+    assert (
+        f'add_header Access-Control-Allow-Headers "{MODULE.PUBLIC_TORII_CORS_HEADERS}" always;'
+        in public_server
+    )
+    assert (
+        "idempotency-key" in MODULE.PUBLIC_TORII_CORS_HEADERS
+    ), "browser Kagemusha top-up and redemption require Idempotency-Key"
+    for header in (
+        "x-iroha-account",
+        "x-iroha-signature",
+        "x-iroha-timestamp-ms",
+        "x-iroha-nonce",
+        "x-iroha-witness",
+    ):
+        assert header in MODULE.PUBLIC_TORII_CORS_HEADERS
+    assert (
+        f'add_header Access-Control-Expose-Headers "{MODULE.PUBLIC_TORII_CORS_EXPOSED_HEADERS}" always;'
+        in public_server
+    )
+    assert "location" in MODULE.PUBLIC_TORII_CORS_EXPOSED_HEADERS
+    assert "retry-after" in MODULE.PUBLIC_TORII_CORS_EXPOSED_HEADERS
 
 
 def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> None:

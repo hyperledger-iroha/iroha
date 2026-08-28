@@ -9886,43 +9886,6 @@
         ],
         "type": "object"
       },
-      "GovernanceEnactRequestV1": {
-        "additionalProperties": false,
-        "properties": {
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "proposal_id"
-        ],
-        "type": "object"
-      },
-      "GovernanceFinalizeRequestV1": {
-        "additionalProperties": false,
-        "properties": {
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "referendum_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "proposal_id",
-          "referendum_id"
-        ],
-        "type": "object"
-      },
       "GovernanceManifestProvenanceV1": {
         "additionalProperties": false,
         "description": "Public signature metadata binding the proposed contract manifest to its signer.",
@@ -11934,6 +11897,19 @@
             "properties": {
               "reason": {
                 "const": "SortitionRetriesExhausted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "const": "ConfirmationJuryCapacityUnavailable",
                 "type": "string"
               }
             },
@@ -23647,7 +23623,7 @@
             "type": "boolean"
           },
           "required_bridge_abi_version": {
-            "const": 22,
+            "const": 23,
             "description": "Exact native bridge ABI required for authenticated V4 artifacts.",
             "format": "uint32",
             "type": "integer"
@@ -67097,7 +67073,7 @@
     },
     "/v1/offline/readiness": {
       "get": {
-        "description": "Report the universal offline-wallet protocol capability implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 22 are available independently of asset, verifier, release, or backend-readiness state. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity.",
+        "description": "Report the universal offline-wallet protocol capability implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 23 are available independently of asset, verifier, release, or backend-readiness state. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity.",
         "operationId": "offlineCapability",
         "parameters": [
           {

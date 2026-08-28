@@ -28,7 +28,8 @@ use std::{
 /// Chosen to be small compared to the default per-block gas limit.
 // Tuned to target a simple fee envelope:
 // - Typical SetKeyValue with small JSON: ~128 gas.
-// - Register/Unregister: ~200/150 gas.
+// - Ordinary Register/Unregister variants: ~200/150 gas; account/domain lifecycle
+//   variants add bounded state-validation escrows where required.
 // - Transfer/Mint/Burn: ~180/150/150 gas.
 const BASE_REGISTER: u64 = 200;
 const BASE_UNREGISTER: u64 = 150;
@@ -51,6 +52,19 @@ const BASE_KAIGI_LEAVE: u64 = 150;
 const BASE_KAIGI_END: u64 = 220;
 const BASE_KAIGI_USAGE: u64 = 240;
 const BASE_KAIGI_RELAY_MANIFEST: u64 = 220;
+/// Worst-case bounded work for loading one retained native Kaigi metadata value.
+const KAIGI_METADATA_READ_ESCROW: u64 =
+    iroha_data_model::kaigi::KAIGI_METADATA_VALUE_MAX_JSON_BYTES_V1 as u64;
+/// Worst-case bounded work for loading one retained Kaigi record.
+const KAIGI_RECORD_READ_ESCROW: u64 = KAIGI_METADATA_READ_ESCROW;
+/// Worst-case bounded work for two independent retained Kaigi metadata reads.
+const KAIGI_RELAY_STATE_READ_ESCROW: u64 = KAIGI_METADATA_READ_ESCROW.saturating_mul(2);
+/// Worst-case bounded work for loading and replacing one retained Kaigi record.
+///
+/// This reserves one record unit for the initial decode and two for the deep
+/// scrubbed clone plus checked serialization/canonicalization. Native execution
+/// reuses dependency information and therefore does not perform a second decode.
+const KAIGI_RECORD_MUTATION_ESCROW: u64 = KAIGI_RECORD_READ_ESCROW.saturating_mul(3);
 /// Conservative per-row charge for bounded, fail-closed indexed registry validation.
 const PER_KAIGI_RELAY_REGISTRY_ENTRY_SCAN: u64 = 32;
 const BASE_KAIGI_RELAY_REGISTER: u64 = BASE_REGISTER
@@ -270,6 +284,12 @@ fn parliament_encoded_input_gas(encoded_len: usize) -> u64 {
     )
 }
 
+fn kaigi_create_record_gas(create: &dm_isi::kaigi::CreateKaigi) -> u64 {
+    KAIGI_RECORD_READ_ESCROW.saturating_add(
+        PER_BYTE_JSON.saturating_mul(u64::try_from(create.call.encode().len()).unwrap_or(u64::MAX)),
+    )
+}
+
 fn parliament_max_cached_record_gas() -> u64 {
     PER_PARLIAMENT_CACHED_RECORD.saturating_mul(
         u64::try_from(iroha_crypto::timed_ovn::TIMED_OVN_MAX_PARTICIPANTS_V1).unwrap_or(u64::MAX),
@@ -343,9 +363,21 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     if let Some(reg) = any.downcast_ref::<dm_isi::register::RegisterBox>() {
         return match reg {
             dm_isi::register::RegisterBox::Peer(_) => BASE_REGISTER + 20,
-            dm_isi::register::RegisterBox::Domain(_)
-            | dm_isi::register::RegisterBox::Account(_)
-            | dm_isi::register::RegisterBox::AssetDefinition(_)
+            dm_isi::register::RegisterBox::Account(_) => {
+                BASE_REGISTER.saturating_add(KAIGI_RECORD_READ_ESCROW)
+            }
+            dm_isi::register::RegisterBox::Domain(register) => {
+                let allowlist_bytes = register
+                    .object
+                    .metadata
+                    .iter()
+                    .find(|(key, _)| key.as_ref() == "kaigi_relay_allowlist")
+                    .map_or(0, |(_, value)| {
+                        u64::try_from(json_len(value)).unwrap_or(u64::MAX)
+                    });
+                BASE_REGISTER.saturating_add(PER_BYTE_JSON.saturating_mul(allowlist_bytes))
+            }
+            dm_isi::register::RegisterBox::AssetDefinition(_)
             | dm_isi::register::RegisterBox::Nft(_)
             | dm_isi::register::RegisterBox::Role(_) => BASE_REGISTER,
             dm_isi::register::RegisterBox::Trigger(_) => BASE_REGISTER + 50, // triggers slightly heavier
@@ -354,9 +386,11 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     // Unregister
     if let Some(unreg) = any.downcast_ref::<dm_isi::register::UnregisterBox>() {
         return match unreg {
+            dm_isi::register::UnregisterBox::Account(_)
+            | dm_isi::register::UnregisterBox::Domain(_) => {
+                BASE_UNREGISTER.saturating_add(KAIGI_RECORD_READ_ESCROW)
+            }
             dm_isi::register::UnregisterBox::Peer(_)
-            | dm_isi::register::UnregisterBox::Domain(_)
-            | dm_isi::register::UnregisterBox::Account(_)
             | dm_isi::register::UnregisterBox::AssetDefinition(_)
             | dm_isi::register::UnregisterBox::Nft(_)
             | dm_isi::register::UnregisterBox::Role(_)
@@ -427,6 +461,25 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         let sz = json_len(&custom.payload) as u64;
         return BASE_CUSTOM + PER_BYTE_JSON.saturating_mul(sz);
     }
+    // Account controller and primary-alias lifecycle instructions can validate one retained,
+    // indexed Kaigi metadata value before rejecting a rekey or relay-home move. Reserve that
+    // bounded read even when a particular execution does not need it; metering must remain
+    // independent of world state.
+    if any.downcast_ref::<dm_isi::AddSignatory>().is_some()
+        || any.downcast_ref::<dm_isi::RemoveSignatory>().is_some()
+        || any.downcast_ref::<dm_isi::SetAccountQuorum>().is_some()
+        || any
+            .downcast_ref::<dm_isi::account_recovery::ReplaceAccountController>()
+            .is_some()
+        || any
+            .downcast_ref::<dm_isi::account_recovery::FinalizeAccountRecovery>()
+            .is_some()
+        || any
+            .downcast_ref::<dm_isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
+            .is_some()
+    {
+        return BASE_CUSTOM.saturating_add(KAIGI_RECORD_READ_ESCROW);
+    }
     if let Some(record) = any.downcast_ref::<dm_isi::bridge::RecordSccpMessage>() {
         let sz = u64::try_from(record.payload_bytes.len()).unwrap_or(u64::MAX);
         return BASE_CUSTOM + sz;
@@ -440,10 +493,11 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             .call
             .relay_manifest
             .as_ref()
-            .map_or(0, kaigi_relay_manifest_payload_gas);
+            .map_or(0, kaigi_relay_manifest_gas);
         return BASE_KAIGI_CREATE
             .saturating_add(proof_gas)
-            .saturating_add(relay_gas);
+            .saturating_add(relay_gas)
+            .saturating_add(kaigi_create_record_gas(create));
     }
     // Private roster transitions remain fail-closed in production and do not dispatch a verifier;
     // retain their calibrated payload bases while sourcing the byte price from governance.
@@ -458,9 +512,10 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
                 .as_ref()
                 .map_or(0, |proof| u64::try_from(proof.len()).unwrap_or(u64::MAX));
             return BASE_KAIGI_JOIN_ZK
+                .saturating_add(KAIGI_RECORD_MUTATION_ESCROW)
                 .saturating_add(zk_gas_per_proof_byte().saturating_mul(proof_bytes));
         }
-        return BASE_KAIGI_JOIN;
+        return BASE_KAIGI_JOIN.saturating_add(KAIGI_RECORD_MUTATION_ESCROW);
     }
     if let Some(leave) = any.downcast_ref::<dm_isi::kaigi::LeaveKaigi>() {
         let is_privacy = leave.commitment.is_some()
@@ -473,16 +528,19 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
                 .as_ref()
                 .map_or(0, |proof| u64::try_from(proof.len()).unwrap_or(u64::MAX));
             return BASE_KAIGI_LEAVE_ZK
+                .saturating_add(KAIGI_RECORD_MUTATION_ESCROW)
                 .saturating_add(zk_gas_per_proof_byte().saturating_mul(proof_bytes));
         }
-        return BASE_KAIGI_LEAVE;
+        return BASE_KAIGI_LEAVE.saturating_add(KAIGI_RECORD_MUTATION_ESCROW);
     }
     if let Some(end) = any.downcast_ref::<dm_isi::kaigi::EndKaigi>() {
         let proof_gas = end
             .proof
             .as_deref()
             .map_or(0, |proof| gas_for_kaigi_proof_verification(proof, 6, 1, 0));
-        return BASE_KAIGI_END.saturating_add(proof_gas);
+        return BASE_KAIGI_END
+            .saturating_add(KAIGI_RECORD_MUTATION_ESCROW)
+            .saturating_add(proof_gas);
     }
     if let Some(usage) = any.downcast_ref::<dm_isi::kaigi::RecordKaigiUsage>() {
         let is_privacy = usage.usage_commitment.is_some() || usage.proof.is_some();
@@ -491,34 +549,41 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
                 .proof
                 .as_deref()
                 .map_or(0, |proof| gas_for_kaigi_proof_verification(proof, 1, 0, 1));
-            return BASE_KAIGI_USAGE_ZK.saturating_add(proof_gas);
+            return BASE_KAIGI_USAGE_ZK
+                .saturating_add(KAIGI_RECORD_MUTATION_ESCROW)
+                .saturating_add(proof_gas);
         }
-        return BASE_KAIGI_USAGE;
+        return BASE_KAIGI_USAGE.saturating_add(KAIGI_RECORD_MUTATION_ESCROW);
     }
     if let Some(update) = any.downcast_ref::<dm_isi::kaigi::SetKaigiRelayManifest>() {
-        let payload_gas = update
+        let manifest_gas = update
             .relay_manifest
             .as_ref()
-            .map_or(0, kaigi_relay_manifest_payload_gas);
-        return BASE_KAIGI_RELAY_MANIFEST.saturating_add(payload_gas);
+            .map_or(0, kaigi_relay_manifest_gas);
+        return BASE_KAIGI_RELAY_MANIFEST
+            .saturating_add(KAIGI_RECORD_MUTATION_ESCROW)
+            .saturating_add(manifest_gas);
     }
     if let Some(register) = any.downcast_ref::<dm_isi::kaigi::RegisterKaigiRelay>() {
         let key_bytes = u64::try_from(register.relay.hpke_public_key.len()).unwrap_or(u64::MAX);
         return BASE_KAIGI_RELAY_REGISTER
+            .saturating_add(KAIGI_RELAY_STATE_READ_ESCROW)
             .saturating_add(PER_BYTE_KAIGI_RELAY_DESCRIPTOR.saturating_mul(key_bytes));
     }
     if any
         .downcast_ref::<dm_isi::kaigi::UnregisterKaigiRelay>()
         .is_some()
     {
-        return BASE_KAIGI_RELAY_UNREGISTER;
+        return BASE_KAIGI_RELAY_UNREGISTER.saturating_add(KAIGI_RELAY_STATE_READ_ESCROW);
     }
     if let Some(report) = any.downcast_ref::<dm_isi::kaigi::ReportKaigiRelayHealth>() {
         let notes_bytes = report
             .notes
             .as_ref()
             .map_or(0, |notes| u64::try_from(notes.len()).unwrap_or(u64::MAX));
-        return BASE_KAIGI_RELAY_HEALTH.saturating_add(PER_BYTE_JSON.saturating_mul(notes_bytes));
+        return BASE_KAIGI_RELAY_HEALTH
+            .saturating_add(KAIGI_RELAY_STATE_READ_ESCROW)
+            .saturating_add(PER_BYTE_JSON.saturating_mul(notes_bytes));
     }
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
@@ -559,11 +624,12 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     // allocation and traversal could not affect the charged gas.
     BASE_CUSTOM
 }
-fn kaigi_relay_manifest_payload_gas(manifest: &iroha_data_model::kaigi::KaigiRelayManifest) -> u64 {
+fn kaigi_relay_manifest_gas(manifest: &iroha_data_model::kaigi::KaigiRelayManifest) -> u64 {
     manifest.hops.iter().fold(0_u64, |total, hop| {
         let key_bytes = u64::try_from(hop.hpke_public_key.len()).unwrap_or(u64::MAX);
         total
             .saturating_add(PER_KAIGI_RELAY_HOP)
+            .saturating_add(KAIGI_RELAY_STATE_READ_ESCROW)
             .saturating_add(PER_BYTE_KAIGI_RELAY_DESCRIPTOR.saturating_mul(key_bytes))
     })
 }
@@ -650,6 +716,39 @@ mod tests {
         let g_small = meter_instruction(&InstructionBox::from(SetKeyValueBox::from(small)));
         let g_big = meter_instruction(&InstructionBox::from(SetKeyValueBox::from(big)));
         assert!(g_big > g_small);
+    }
+    #[test]
+    fn domain_registration_gas_accounts_for_kaigi_allowlist_bytes() {
+        use iroha_data_model::kaigi::{KaigiRelayAllowlist, kaigi_relay_allowlist_key};
+
+        let key = kaigi_relay_allowlist_key().expect("allowlist metadata key");
+        let small_value = Json::try_new(KaigiRelayAllowlist::default()).expect("small allowlist");
+        let mut large_allowlist = KaigiRelayAllowlist::default();
+        for _ in 0..32 {
+            large_allowlist.allowed_relays.insert(sample_account());
+        }
+        let large_value = Json::try_new(large_allowlist).expect("large allowlist");
+        let make_registration = |name: &str, value: Json| {
+            let mut metadata = Metadata::default();
+            metadata.insert(key.clone(), value);
+            InstructionBox::from(Register::domain(
+                Domain::new(DomainId::try_new(name, "universal").expect("valid domain id"))
+                    .with_metadata(metadata),
+            ))
+        };
+        let small = make_registration("small-allowlist-gas", small_value.clone());
+        let large = make_registration("large-allowlist-gas", large_value.clone());
+        assert_eq!(
+            meter_instruction(&small),
+            BASE_REGISTER
+                + u64::try_from(small_value.as_ref().len()).expect("JSON length fits u64")
+        );
+        assert_eq!(
+            meter_instruction(&large),
+            BASE_REGISTER
+                + u64::try_from(large_value.as_ref().len()).expect("JSON length fits u64")
+        );
+        assert!(meter_instruction(&large) > meter_instruction(&small));
     }
     #[test]
     fn mint_and_transfer_have_nonzero_costs() {
@@ -995,7 +1094,11 @@ mod tests {
             dm_isi::transfer::Transfer::asset_quantity(asset_id, 1_u32, authority.clone()).into();
         let cases = [
             ("RegisterDomain", register_domain, 200),
-            ("RegisterAccount", register_account, 200),
+            (
+                "RegisterAccount",
+                register_account,
+                BASE_REGISTER + KAIGI_RECORD_READ_ESCROW,
+            ),
             ("RegisterAssetDef", register_asset_definition, 200),
             ("SetAccountKV_small", set_account_kv, 67),
             ("GrantAccountRole", grant_account_role, 96),
@@ -1093,7 +1196,14 @@ mod tests {
         .into();
         assert_eq!(
             meter_instruction(&create),
-            BASE_KAIGI_CREATE.saturating_add(expected_create_proof_gas)
+            BASE_KAIGI_CREATE
+                .saturating_add(expected_create_proof_gas)
+                .saturating_add(kaigi_create_record_gas(
+                    create
+                        .as_any()
+                        .downcast_ref::<CreateKaigi>()
+                        .expect("CreateKaigi instruction"),
+                ))
         );
         assert_eq!(confidential_gas_cost(&create), expected_create_proof_gas);
 
@@ -1122,7 +1232,9 @@ mod tests {
         .into();
         assert_eq!(
             meter_instruction(&join),
-            BASE_KAIGI_JOIN_ZK.saturating_add(schedule.per_proof_byte.saturating_mul(proof_len))
+            BASE_KAIGI_JOIN_ZK
+                .saturating_add(KAIGI_RECORD_MUTATION_ESCROW)
+                .saturating_add(schedule.per_proof_byte.saturating_mul(proof_len))
         );
 
         let leave: InstructionBox = LeaveKaigi {
@@ -1136,7 +1248,9 @@ mod tests {
         .into();
         assert_eq!(
             meter_instruction(&leave),
-            BASE_KAIGI_LEAVE_ZK.saturating_add(schedule.per_proof_byte.saturating_mul(proof_len))
+            BASE_KAIGI_LEAVE_ZK
+                .saturating_add(KAIGI_RECORD_MUTATION_ESCROW)
+                .saturating_add(schedule.per_proof_byte.saturating_mul(proof_len))
         );
 
         let end: InstructionBox = EndKaigi {
@@ -1150,7 +1264,9 @@ mod tests {
         .into();
         assert_eq!(
             meter_instruction(&end),
-            BASE_KAIGI_END.saturating_add(expected_end_proof_gas)
+            BASE_KAIGI_END
+                .saturating_add(KAIGI_RECORD_MUTATION_ESCROW)
+                .saturating_add(expected_end_proof_gas)
         );
         assert_eq!(confidential_gas_cost(&end), expected_end_proof_gas);
 
@@ -1164,7 +1280,9 @@ mod tests {
         .into();
         assert_eq!(
             meter_instruction(&usage),
-            BASE_KAIGI_USAGE_ZK.saturating_add(expected_usage_proof_gas)
+            BASE_KAIGI_USAGE_ZK
+                .saturating_add(KAIGI_RECORD_MUTATION_ESCROW)
+                .saturating_add(expected_usage_proof_gas)
         );
         assert_eq!(confidential_gas_cost(&usage), expected_usage_proof_gas);
 
@@ -1176,7 +1294,16 @@ mod tests {
             proof: None,
         }
         .into();
-        assert_eq!(meter_instruction(&proofless_create), BASE_KAIGI_CREATE);
+        let expected_create_record_gas = kaigi_create_record_gas(
+            proofless_create
+                .as_any()
+                .downcast_ref::<CreateKaigi>()
+                .expect("CreateKaigi instruction"),
+        );
+        assert_eq!(
+            meter_instruction(&proofless_create),
+            BASE_KAIGI_CREATE.saturating_add(expected_create_record_gas)
+        );
         assert_eq!(confidential_gas_cost(&proofless_create), 0);
 
         super::configure_confidential_gas(super::ConfidentialGasSchedule::default());
@@ -1185,12 +1312,12 @@ mod tests {
     fn kaigi_relay_gas_scales_with_bounded_descriptor_payloads() {
         use iroha_data_model::{
             isi::kaigi::{
-                RegisterKaigiRelay, ReportKaigiRelayHealth, SetKaigiRelayManifest,
+                CreateKaigi, RegisterKaigiRelay, ReportKaigiRelayHealth, SetKaigiRelayManifest,
                 UnregisterKaigiRelay,
             },
             kaigi::{
                 KaigiId, KaigiRelayHealthStatus, KaigiRelayHop, KaigiRelayManifest,
-                KaigiRelayRegistration,
+                KaigiRelayRegistration, NewKaigi,
             },
         };
 
@@ -1207,6 +1334,28 @@ mod tests {
             }],
             expiry_ms: 1,
         };
+        let mut call = NewKaigi::with_defaults(call_id.clone(), sample_account());
+        call.relay_manifest = Some(manifest.clone());
+        let create: InstructionBox = CreateKaigi {
+            call,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .into();
+        let create_ref = create
+            .as_any()
+            .downcast_ref::<CreateKaigi>()
+            .expect("CreateKaigi instruction");
+        assert_eq!(
+            meter_instruction(&create),
+            BASE_KAIGI_CREATE
+                + kaigi_create_record_gas(create_ref)
+                + KAIGI_RELAY_STATE_READ_ESCROW
+                + PER_KAIGI_RELAY_HOP
+                + 3
+        );
         let set: InstructionBox = SetKaigiRelayManifest {
             call_id: call_id.clone(),
             relay_manifest: Some(manifest),
@@ -1214,7 +1363,11 @@ mod tests {
         .into();
         assert_eq!(
             meter_instruction(&set),
-            BASE_KAIGI_RELAY_MANIFEST + PER_KAIGI_RELAY_HOP + 3
+            BASE_KAIGI_RELAY_MANIFEST
+                + KAIGI_RECORD_MUTATION_ESCROW
+                + KAIGI_RELAY_STATE_READ_ESCROW
+                + PER_KAIGI_RELAY_HOP
+                + 3
         );
 
         let register: InstructionBox = RegisterKaigiRelay {
@@ -1225,13 +1378,19 @@ mod tests {
             },
         }
         .into();
-        assert_eq!(meter_instruction(&register), BASE_KAIGI_RELAY_REGISTER + 3);
+        assert_eq!(
+            meter_instruction(&register),
+            BASE_KAIGI_RELAY_REGISTER + KAIGI_RELAY_STATE_READ_ESCROW + 3
+        );
 
         let unregister: InstructionBox = UnregisterKaigiRelay {
             relay_id: relay.clone(),
         }
         .into();
-        assert_eq!(meter_instruction(&unregister), BASE_KAIGI_RELAY_UNREGISTER);
+        assert_eq!(
+            meter_instruction(&unregister),
+            BASE_KAIGI_RELAY_UNREGISTER + KAIGI_RELAY_STATE_READ_ESCROW
+        );
 
         let health: InstructionBox = ReportKaigiRelayHealth {
             call_id,
@@ -1241,7 +1400,209 @@ mod tests {
             notes: Some("abc".to_owned()),
         }
         .into();
-        assert_eq!(meter_instruction(&health), BASE_KAIGI_RELAY_HEALTH + 3);
+        assert_eq!(
+            meter_instruction(&health),
+            BASE_KAIGI_RELAY_HEALTH + KAIGI_RELAY_STATE_READ_ESCROW + 3
+        );
+    }
+    #[test]
+    fn kaigi_record_gas_reserves_bounded_work_and_create_input_bytes() {
+        use iroha_data_model::{
+            isi::kaigi::{
+                CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage,
+                ReportKaigiRelayHealth, SetKaigiRelayManifest,
+            },
+            kaigi::{KaigiId, KaigiRelayHealthStatus, NewKaigi},
+        };
+
+        assert_eq!(
+            KAIGI_RECORD_MUTATION_ESCROW,
+            KAIGI_RECORD_READ_ESCROW.saturating_mul(3)
+        );
+        assert_eq!(
+            KAIGI_RELAY_STATE_READ_ESCROW,
+            KAIGI_METADATA_READ_ESCROW.saturating_mul(2)
+        );
+        assert!(
+            KAIGI_RECORD_MUTATION_ESCROW + BASE_KAIGI_USAGE < 4_000_000,
+            "one maximum-size proofless record mutation must fit the default block gas limit"
+        );
+
+        let host = sample_account();
+        let participant = sample_account();
+        let call_id = KaigiId::new(
+            DomainId::try_new("kaigi-record-gas", "universal").expect("valid domain id"),
+            "bounded-call".parse().expect("valid call name"),
+        );
+        let short_call = NewKaigi::with_defaults(call_id.clone(), host.clone());
+        let short_create: InstructionBox = CreateKaigi {
+            call: short_call.clone(),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .into();
+        let mut long_call = short_call;
+        long_call.title = Some("meter every Kaigi call input byte".repeat(32));
+        long_call.description = Some("including descriptions and metadata".repeat(32));
+        long_call.metadata.insert(
+            "metered".parse().expect("valid metadata key"),
+            Json::new("metadata bytes".repeat(32)),
+        );
+        let long_create: InstructionBox = CreateKaigi {
+            call: long_call,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .into();
+        assert!(
+            meter_instruction(&long_create) > meter_instruction(&short_create),
+            "larger title/description input must increase CreateKaigi gas"
+        );
+
+        let join: InstructionBox = JoinKaigi {
+            call_id: call_id.clone(),
+            participant: participant.clone(),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&join),
+            BASE_KAIGI_JOIN + KAIGI_RECORD_MUTATION_ESCROW
+        );
+        let leave: InstructionBox = LeaveKaigi {
+            call_id: call_id.clone(),
+            participant,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&leave),
+            BASE_KAIGI_LEAVE + KAIGI_RECORD_MUTATION_ESCROW
+        );
+        let end: InstructionBox = EndKaigi {
+            call_id: call_id.clone(),
+            ended_at_ms: None,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&end),
+            BASE_KAIGI_END + KAIGI_RECORD_MUTATION_ESCROW
+        );
+        let usage: InstructionBox = RecordKaigiUsage {
+            call_id: call_id.clone(),
+            duration_ms: 1,
+            billed_gas: 1,
+            usage_commitment: None,
+            proof: None,
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&usage),
+            BASE_KAIGI_USAGE + KAIGI_RECORD_MUTATION_ESCROW
+        );
+        let manifest: InstructionBox = SetKaigiRelayManifest {
+            call_id: call_id.clone(),
+            relay_manifest: None,
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&manifest),
+            BASE_KAIGI_RELAY_MANIFEST + KAIGI_RECORD_MUTATION_ESCROW
+        );
+        let health: InstructionBox = ReportKaigiRelayHealth {
+            call_id,
+            relay_id: host,
+            status: KaigiRelayHealthStatus::Healthy,
+            reported_at_ms: 0,
+            notes: None,
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&health),
+            BASE_KAIGI_RELAY_HEALTH + KAIGI_RELAY_STATE_READ_ESCROW
+        );
+    }
+    #[test]
+    fn account_lifecycle_changes_reserve_kaigi_dependency_reads() {
+        use core::num::NonZeroU16;
+        use iroha_data_model::{
+            account::rekey::AccountAlias,
+            isi::account_recovery::{FinalizeAccountRecovery, ReplaceAccountController},
+            isi::alias_setup::CompareAndSetPrimaryAccountAlias,
+            nexus::DataSpaceId,
+        };
+
+        let account = sample_account();
+        let replacement = sample_account();
+        let replacement_signatory = replacement
+            .controller()
+            .single_signatory()
+            .expect("sample account has a single signatory")
+            .clone();
+        let expected = BASE_CUSTOM.saturating_add(KAIGI_RECORD_READ_ESCROW);
+        let controller_changes = [
+            InstructionBox::from(dm_isi::AddSignatory::new(
+                account.clone(),
+                replacement_signatory.clone(),
+            )),
+            InstructionBox::from(dm_isi::RemoveSignatory::new(
+                account.clone(),
+                replacement_signatory,
+            )),
+            InstructionBox::from(dm_isi::SetAccountQuorum::new(
+                account.clone(),
+                NonZeroU16::new(1).expect("nonzero quorum"),
+            )),
+            InstructionBox::from(ReplaceAccountController {
+                account: account.clone(),
+                new_controller: replacement.controller().clone(),
+            }),
+            InstructionBox::from(FinalizeAccountRecovery {
+                alias: AccountAlias::domainless(
+                    "gas-recovery".parse().expect("valid account alias"),
+                    DataSpaceId::UNIVERSAL,
+                ),
+            }),
+            InstructionBox::from(CompareAndSetPrimaryAccountAlias::new(
+                account.clone(),
+                None,
+                None,
+            )),
+        ];
+        for instruction in controller_changes {
+            assert_eq!(meter_instruction(&instruction), expected);
+        }
+
+        let unregister_account: InstructionBox = Unregister::account(account).into();
+        assert_eq!(
+            meter_instruction(&unregister_account),
+            BASE_UNREGISTER + KAIGI_RECORD_READ_ESCROW
+        );
+        let unregister_domain: InstructionBox = Unregister::domain(
+            DomainId::try_new("gas-unregister", "universal").expect("valid domain id"),
+        )
+        .into();
+        assert_eq!(
+            meter_instruction(&unregister_domain),
+            BASE_UNREGISTER + KAIGI_RECORD_READ_ESCROW
+        );
+        let unregister_role: InstructionBox =
+            Unregister::role(RoleId::new("gas-role".parse().expect("valid role name"))).into();
+        assert_eq!(meter_instruction(&unregister_role), BASE_UNREGISTER);
     }
     #[test]
     fn proof_public_input_gas_rejects_alternate_norito_layout() {

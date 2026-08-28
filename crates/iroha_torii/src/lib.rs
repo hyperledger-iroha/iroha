@@ -2514,7 +2514,6 @@ struct AppState {
     #[cfg(feature = "app_api")]
     account_onboarding: Option<AccountOnboardingSigner>,
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
-    vpn_quotes: Arc<DashMap<String, vpn::VpnQuoteRecord>>,
     vpn_used_payments: Arc<DashMap<String, ()>>,
     vpn_sessions: Arc<DashMap<String, vpn::VpnSessionRecord>>,
     vpn_receipts: Arc<DashMap<AccountId, Vec<vpn::VpnReceiptRecord>>>,
@@ -50469,7 +50468,6 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_onboarding: self.account_onboarding.clone(),
             vpn_relay_trust: self.vpn_relay_trust.clone(),
-            vpn_quotes: Arc::new(DashMap::new()),
             vpn_used_payments: Arc::new(DashMap::new()),
             vpn_sessions: Arc::new(DashMap::new()),
             vpn_receipts: Arc::new(DashMap::new()),

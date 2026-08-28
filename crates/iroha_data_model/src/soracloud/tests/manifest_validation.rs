@@ -1414,7 +1414,7 @@ fn assert_inrou_published_artifact_field_is_required(published: &Value, field: &
     let error = norito::json::from_value::<SoraInrouManifestV1>(value)
         .expect_err("first-release published-artifact fields must not be omitted");
     assert!(
-        matches!(&error, json::Error::Message(message) if message == &format!("missing field `{field}`")),
+        matches!(&error, json::Error::MissingField { field: missing } if missing == field),
         "missing published-artifact `{field}` reported the wrong error: {error:?}"
     );
 }

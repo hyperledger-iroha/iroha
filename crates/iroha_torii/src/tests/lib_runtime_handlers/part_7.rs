@@ -505,9 +505,48 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
         ),
     );
     let mut app = mk_app_state_for_tests_with_world(world);
+    seed_hosted_http_public_lane_validator(&app, &hosted_validator_account_id, &hosted_peer_id);
+    record_latest_committed_header_for_test(&app, 1, 1);
     let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-    app_mut.local_peer_id = Some(hosted_peer_id);
+    app_mut.local_peer_id = Some(hosted_peer_id.clone());
     app_mut.soracloud_runtime = Some(Arc::new(runtime));
+    {
+        let state_view = app.state.view();
+        let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+        assert_eq!(current_height, 1, "hosted SSE lease must start at height 1");
+        assert!(
+            state_view.is_lane_active_for_authority(iroha_data_model::nexus::LaneId::SINGLE),
+            "hosted SSE validator lane must be active"
+        );
+        let world = state_view.world();
+        let capability = world
+            .soracloud_inrou_host_capabilities()
+            .get(&hosted_validator_account_id)
+            .expect("hosted SSE validator capability");
+        assert!(
+            capability.can_host_replicas_at(super::current_public_ingress_ledger_time_ms(&app)),
+            "hosted SSE validator capability must be active"
+        );
+        assert!(
+            iroha_core::soracloud_runtime::soracloud_validator_has_active_peer_binding(
+                world,
+                &hosted_validator_account_id,
+                &hosted_peer_id.to_string(),
+                |lane_id| state_view.is_lane_active_for_authority(lane_id),
+            ),
+            "hosted SSE validator must retain its canonical active peer binding"
+        );
+        let assignments = iroha_core::soracloud_runtime::resolve_active_inrou_replica_assignments(
+            world,
+            "web_portal",
+            "2026.02.0",
+            super::current_public_ingress_ledger_time_ms(&app),
+            current_height,
+            |lane_id| state_view.is_lane_active_for_authority(lane_id),
+        )
+        .expect("hosted SSE authoritative assignments");
+        assert_eq!(assignments.len(), 1, "hosted SSE authoritative replica");
+    }
     let route_match = match soracloud::resolve_public_route(
         &app,
         "portal.sora",

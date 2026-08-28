@@ -27,7 +27,7 @@ static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
             .expect("package-local Torii OpenAPI authority must contain a paths object");
         retain_catalog_openapi_operations(paths, crate::router::builder::compiled_route_features());
     }
-    remove_retired_soracloud_runtime_schemas(&mut document);
+    remove_hard_retired_schemas(&mut document);
     document
 });
 static COMPILED_OPENAPI_JSON: LazyLock<String> = LazyLock::new(|| {
@@ -119,7 +119,7 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
         })
     });
 }
-fn remove_retired_soracloud_runtime_schemas(document: &mut Value) {
+fn remove_hard_retired_schemas(document: &mut Value) {
     let schemas = document
         .as_object_mut()
         .and_then(|document| document.get_mut("components"))
@@ -128,6 +128,8 @@ fn remove_retired_soracloud_runtime_schemas(document: &mut Value) {
         .and_then(Value::as_object_mut)
         .expect("package-local Torii OpenAPI authority must contain component schemas");
     for schema in [
+        "GovernanceEnactRequestV1",
+        "GovernanceFinalizeRequestV1",
         "UploadedModelEncryptionRecipientResponse",
         "PrivateUploadedModelExecuteRequest",
         "PrivateUploadedModelExecuteResponse",
@@ -198,20 +200,6 @@ mod tests {
     };
     use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
     use std::collections::{BTreeSet, VecDeque};
-
-    fn catalog_method_name(method: CatalogHttpMethod) -> &'static str {
-        match method {
-            CatalogHttpMethod::Get => "get",
-            CatalogHttpMethod::Post => "post",
-            CatalogHttpMethod::Put => "put",
-            CatalogHttpMethod::Patch => "patch",
-            CatalogHttpMethod::Delete => "delete",
-            CatalogHttpMethod::Any => {
-                panic!("ANY gateways cannot enter the OpenAPI surface")
-            }
-        }
-    }
-
     const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
         "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
     const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";
@@ -4328,6 +4316,15 @@ mod tests {
                 .and_then(Value::as_str),
             Some("offlineCapability")
         );
+        let capability_description = capability_operation
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline capability description");
+        assert!(
+            capability_description.contains("native bridge ABI 23"),
+            "offline capability documentation must match the compiled Kagemusha bridge ABI"
+        );
+        assert!(!capability_description.contains("ABI 22"));
         assert!(
             capability_operation
                 .get("parameters")

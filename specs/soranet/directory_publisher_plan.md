@@ -230,7 +230,8 @@ consume the same Norito structures that the publisher emits. See
 Relays that set `guard_directory.pinning_proof_path` write a JSON artefact
 containing the validated directory hash, relay identifier, descriptor commit,
 certificate validity window, and weights every time the snapshot check
-succeeds. Static KEM metadata is deliberately absent. Directory publishers ingest these files alongside
+succeeds. Relay identifiers use canonical lowercase hex so one relay cannot occupy
+multiple evidence slots through alternate encodings. Static KEM metadata is deliberately absent. Directory publishers ingest these files alongside
 operator evidence to prove that every guard pinned the committee-issued
 descriptor before activation.
 

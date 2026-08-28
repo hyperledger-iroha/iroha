@@ -11,8 +11,10 @@ mutation boundaries:
      recovery source for an incomplete pointerless carrier at N; only that
      identity or exact terminal/receipt evidence can discharge the source;
   2. READY-bearing autonomous successor admission accepts only the exact WSV
-     frontier or a carrier-revalidated MergeExecution receipt; hash-only lane
-     ownership is not economic application evidence;
+     frontier, a carrier-revalidated MergeExecution receipt, or an exact
+     canonical-block/results-revalidated Current receipt; hash-only lane
+     ownership and DirectExecution receipts are not economic application
+     evidence;
   3. startup repair cannot consume capacity before carrier envelopes have
      been reconstructed;
   4. certification creates durable pair and bundle capacity obligations, so
@@ -45,7 +47,8 @@ RecoveryCapacityModes ==
    "PrunePeakDropsReservationEnvelope",
    "DebugAppendBeforeCarrierReservation",
    "DebugRestartDropsAccounting",
-   "HashOnlyAutonomousPredecessor"}
+   "HashOnlyAutonomousPredecessor",
+   "DirectExecutionAutonomousPredecessor"}
 
 CarrierNStatuses == {"Incomplete", "Recovered", "Terminal", "Receipted"}
 CarrierNSources ==
@@ -53,7 +56,8 @@ CarrierNSources ==
    "TerminalProofN", "ReceiptProofN"}
 AutonomousPredecessorEvidence ==
   {"None", "HashOnlyOwnership", "ExactWsvFrontier",
-   "MergeReceiptCarrierRevalidated"}
+   "MergeReceiptCarrierRevalidated", "CanonicalReceiptRevalidated",
+   "DirectExecutionReceipt"}
 StartupPhases == {"Cold", "EnvelopesReconstructed", "Repairing", "Published"}
 DebugPhases == {"Idle", "CarrierReserved", "Appended", "RestartPending",
                 "RestartAccounted"}
@@ -219,6 +223,13 @@ ObserveHashOnlyAutonomousPredecessor ==
        (Mode = "HashOnlyAutonomousPredecessor")
   /\ UNCHANGED <<CarrierVars, StartupVars, FrontierVars, PeakVars, DebugVars>>
 
+ObserveDirectExecutionAutonomousPredecessor ==
+  /\ autonomousPredecessorEvidence = "None"
+  /\ autonomousPredecessorEvidence' = "DirectExecutionReceipt"
+  /\ autonomousPredecessorAdmitted' =
+       (Mode = "DirectExecutionAutonomousPredecessor")
+  /\ UNCHANGED <<CarrierVars, StartupVars, FrontierVars, PeakVars, DebugVars>>
+
 AdmitAutonomousPredecessorFromExactWsvFrontier ==
   /\ autonomousPredecessorEvidence = "None"
   /\ autonomousPredecessorEvidence' = "ExactWsvFrontier"
@@ -228,6 +239,12 @@ AdmitAutonomousPredecessorFromExactWsvFrontier ==
 AdmitAutonomousPredecessorFromRevalidatedMergeReceipt ==
   /\ autonomousPredecessorEvidence = "None"
   /\ autonomousPredecessorEvidence' = "MergeReceiptCarrierRevalidated"
+  /\ autonomousPredecessorAdmitted' = TRUE
+  /\ UNCHANGED <<CarrierVars, StartupVars, FrontierVars, PeakVars, DebugVars>>
+
+AdmitAutonomousPredecessorFromRevalidatedCanonicalReceipt ==
+  /\ autonomousPredecessorEvidence = "None"
+  /\ autonomousPredecessorEvidence' = "CanonicalReceiptRevalidated"
   /\ autonomousPredecessorAdmitted' = TRUE
   /\ UNCHANGED <<CarrierVars, StartupVars, FrontierVars, PeakVars, DebugVars>>
 
@@ -421,8 +438,10 @@ Next ==
   \/ DischargeCarrierNWithTerminalProof
   \/ DischargeCarrierNWithReceiptProof
   \/ ObserveHashOnlyAutonomousPredecessor
+  \/ ObserveDirectExecutionAutonomousPredecessor
   \/ AdmitAutonomousPredecessorFromExactWsvFrontier
   \/ AdmitAutonomousPredecessorFromRevalidatedMergeReceipt
+  \/ AdmitAutonomousPredecessorFromRevalidatedCanonicalReceipt
   \/ ReconstructCarrierEnvelopesOnStartup
   \/ BeginStartupCapacityRepair
   \/ PublishStartupRepair
@@ -489,8 +508,11 @@ MLStartupRepairAfterCarrierEnvelopes ==
 MLAutonomousPredecessorGloballyApplied ==
   /\ autonomousPredecessorAdmitted =>
        autonomousPredecessorEvidence
-         \in {"ExactWsvFrontier", "MergeReceiptCarrierRevalidated"}
+         \in {"ExactWsvFrontier", "MergeReceiptCarrierRevalidated",
+              "CanonicalReceiptRevalidated"}
   /\ (autonomousPredecessorEvidence = "HashOnlyOwnership") =>
+       ~autonomousPredecessorAdmitted
+  /\ (autonomousPredecessorEvidence = "DirectExecutionReceipt") =>
        ~autonomousPredecessorAdmitted
 
 MLCertifiedFrontierCapacityReconstructable ==

@@ -60,7 +60,9 @@ class CreateKaigiInstruction internal constructor(
     init {
         require(host.isNotBlank()) { "host must not be blank" }
         if (maxParticipants != null) {
-            require(maxParticipants != 0) { "maxParticipants must be greater than zero when provided" }
+            require(maxParticipants in 1..MAX_PARTICIPANTS_V1) {
+                "maxParticipants must be between 1 and $MAX_PARTICIPANTS_V1 when provided"
+            }
         }
         require(commitmentAliasTag == null) {
             "commitment aliasTag is off-chain only and must be omitted"
@@ -131,6 +133,9 @@ class CreateKaigiInstruction internal constructor(
     }
 
     companion object {
+        /** Maximum concurrent participants excluding the host in Kaigi V1. */
+        const val MAX_PARTICIPANTS_V1: Int = 4_096
+
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): CreateKaigiInstruction {
             KaigiInstructionUtils.requireKnownArguments(

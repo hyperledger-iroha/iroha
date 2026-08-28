@@ -195,8 +195,10 @@ pub struct SoracloudRuntime {
     pub state_dir: PathBuf,
     /// Reconciliation cadence against authoritative world state.
     pub reconcile_interval: Duration,
-    /// Maximum concurrent artifact hydration workers.
+    /// Maximum concurrent artifact hydration workers, independent of Inrou guest concurrency.
     pub hydration_concurrency: NonZeroUsize,
+    /// Maximum idle prepared IVM runtimes retained independently of hydration workers.
+    pub prepared_runtime_cache_capacity: NonZeroUsize,
     /// Cache budgets for hydrated Soracloud artifacts.
     pub cache_budgets: SoracloudRuntimeCacheBudgets,
     /// Inrou microVM hosting limits.
@@ -214,6 +216,8 @@ impl_default!(SoracloudRuntime => {
                 defaults::soracloud_runtime::RECONCILE_INTERVAL_MS,
             ),
             hydration_concurrency: defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
+            prepared_runtime_cache_capacity:
+                defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY,
             cache_budgets: SoracloudRuntimeCacheBudgets::default(),
             inrou: SoracloudRuntimeInrou::default(),
             submission: SoracloudRuntimeSubmission::default(),
@@ -227,6 +231,16 @@ impl SoracloudRuntime {
     /// callers that construct runtime settings directly cannot bypass the
     /// runtime posture checks performed by user-config parsing.
     pub fn assert_runtime_posture(&self) {
+        assert!(
+            self.hydration_concurrency.get()
+                <= defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX,
+            "soracloud_runtime.hydration_concurrency exceeds the first-release worker limit"
+        );
+        assert!(
+            self.prepared_runtime_cache_capacity.get()
+                <= defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX,
+            "soracloud_runtime.prepared_runtime_cache_capacity exceeds the first-release idle-runtime limit"
+        );
         self.inrou.assert_archive_resource_bounds();
         self.inrou.assert_lifecycle_grace_bounds();
         self.inrou.assert_portable_vm_v1_shape();
@@ -1542,6 +1556,10 @@ pub struct Network {
     pub require_sm_openssl_preview_match: bool,
     /// Idle connection timeout.
     pub idle_timeout: Duration,
+    /// Maximum total tenure for an accepted transport to authenticate.
+    pub preauth_timeout: Duration,
+    /// Maximum concurrent pre-authentication transports admitted from one source IP.
+    pub preauth_max_connections_per_ip: NonZeroUsize,
     /// Base deadline for an exact reply to await one peer writer's full flush.
     pub reply_writer_flush_timeout: Duration,
     /// Delay outbound peer dials after startup.
@@ -2216,9 +2234,9 @@ pub struct Governance {
     pub review_panel_size: usize,
     /// Coordination Council size.
     pub coordination_council_size: usize,
-    /// Policy Jury size.
+    /// Policy Jury size (at least two for non-identity timed-OVN masks).
     pub policy_jury_size: usize,
-    /// Maximum Confirmation Jury size.
+    /// Confirmation Jury target/cap (at least two for timed-OVN confirmation).
     pub confirmation_jury_size: usize,
     /// Oversight Committee size.
     pub oversight_committee_size: usize,

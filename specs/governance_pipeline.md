@@ -13,6 +13,13 @@ release qualified.
    new `GovernanceAttemptId` from that content id and the exact next sequence.
 2. Core derives the risk tier, required-body order, policy version, exact effect
    preimage hash, and compare-and-set head. A caller cannot supply those fields.
+   First-release proposal semantics require both the Monetary Policy Committee
+   and Financial Markets Authority for `ValidationFeePolicy` and
+   `ValidationFeePayoutLifecycle`: their complete order is Rules, Agenda,
+   Interest, Review, Coordination, MPC, FMA, Oversight, Policy Jury. This
+   reflects their network-wide fee-schedule and governed treasury-payout
+   effects. SCCP route governance retains the same order without MPC; all other
+   proposal mappings are unchanged.
 3. For each body election, Core freezes the complete canonically ordered
    eligible-citizen snapshot in the containing block. The corresponding
    `SortitionRequestV1` commits that snapshot before the one exact finalized
@@ -23,18 +30,38 @@ release qualified.
    pulse heights during live admission and persistence validation.
    The first pulse consumption covers every initially required body in one
    simultaneous batch; a later no-roster retry or a newly required Confirmation
-   Jury consumes a fresh pulse slot. Threshold key rotation is independent of
-   that logical request identifier. Its exact-roster certificate
-   compare-and-sets the expected active predecessor, and a global key change in
-   block `H` takes effect at `H + 1`. Consequently an optional Parliament pulse
-   or mandatory NPoS pulse produced from the parent state is verified against
-   the key session active at its own height, not the successor pointer visible
-   after the block's transactions execute. The retired consensus VRF
-   commit/reveal protocol and independent epoch-council records are neither
-   entropy sources nor fallbacks.
+   Jury consumes a fresh pulse slot. `ConsumeSortitionPulseBatch` is a
+   permissionless progress trigger, but its relayer cannot choose entropy or
+   split the pending set: Core verifies the exact finalized pulse and requires
+   the complete strictly ordered request family before deriving assignments.
+   `RegisterSortitionRequest` remains manager-gated request intent. If an
+   ordinary initial generation includes a hidden-ballot body, or an ordinary
+   hidden-body retry is requested, and the live body-specific electorate has
+   zero or one member, Core records typed pre-request capacity evidence instead
+   of admitting an invalid `SortitionRequestV1`. The exact 0/1-member snapshot,
+   request slot, target, and sequence are frozen; no beacon pulse is reserved or
+   consumed. A later block may request only the exact next bounded generation,
+   and the final failed generation rejects the governance attempt as
+   `SortitionRetriesExhausted`. The special atomic Confirmation-capacity result
+   described below remains separate.
+   Threshold key rotation is independent of that logical request identifier.
+   Its exact-roster certificate compare-and-sets the expected active predecessor,
+   and a global key change in block `H` takes effect at `H + 1`. Consequently an
+   optional Parliament pulse or mandatory NPoS pulse produced from the parent
+   state is verified against the key session active at its own height, not the
+   successor pointer visible after the block's transactions execute. The
+   retired consensus VRF commit/reveal protocol and independent epoch-council
+   records are neither entropy sources nor fallbacks.
 4. The future pulse deterministically ranks primaries and alternates. Candidates
    accept or decline their own invitations under their transaction authority;
-   after the fixed response window, Core derives and seals the roster. The
+   `BeginInvitationAcceptance` is permissionless and carries only the election
+   id; containing-block height and the consensus configuration determine its
+   window. After that fixed response window, either permissionless
+   `SealBodyRoster` derives the nonempty accepted assignments, roster root, and
+   body id, or permissionless `FailBodyElectionNoRoster` proves from the reducer
+   and finalized-pulse store that the pulse expired unavailable or the accepted
+   roster is empty. Neither trigger accepts a caller-selected window, failure
+   reason, assignment list, root, or body id. The
    `RecordAttemptAbsence` lets the same authority declare only its exact seated
    assignment absent. Absence is attempt-local and immutable, does not slash or
    change the original-seat quorum denominator, and must precede that body's
@@ -44,6 +71,14 @@ release qualified.
    quorum mathematically unreachable, Core sets that body to `NoResult` and
    rejects the governance attempt.
    The independent epoch-council read is not a roster source or fallback.
+   Every member of a frozen candidate snapshot retains its citizenship bond
+   while its election is `AwaitingPulse`, `Drawing`, or
+   `AcceptingInvitations`. `NoRoster` and superseded elections release unseated
+   candidates; sealed body assignments retain their members through the active
+   attempt. An active retryable singleton pre-request capacity failure likewise
+   retains its one candidate until a later generation supersedes it or final
+   exhaustion rejects the attempt. Eligibility therefore cannot be withdrawn
+   after request intent but before retry, draw, or roster sealing.
 5. For a nonbinding body, `EndorsePublicFinding` lets each nonexcluded seated
    authority endorse exactly one root of the public evidence, deliberation, and
    dissent record. Core automatically finalizes only when one identical root
@@ -56,7 +91,22 @@ release qualified.
    finding. The Policy Jury, and a fresh disjoint Confirmation Jury when a
    narrowly approved result requires one, must use the mandatory private
    zero-knowledge timed-OVN ballot. A public finding is not a formal ballot and
-   cannot replace a required private jury result.
+   cannot replace a required private jury result. Hidden-ballot bodies and their
+   eligible candidate snapshots require at least two members. Before a narrow
+   Policy result is committed, Core removes every sealed Policy Jury member from
+   the current eligible-citizen snapshot. Fewer than two remaining candidates
+   terminalize the verified opening as
+   `ConfirmationJuryCapacityUnavailable`; the Policy binding and unfillable
+   Confirmation requirement are not committed. With at least two, that same
+   finalization transaction freezes and registers the exact disjoint snapshot,
+   configured target, current request height, and deterministic future pulse
+   slot. The sequence-zero request height must equal the Policy result height,
+   and restore rejects a missing or differently timed initial request.
+   Eligibility cannot race a separate initial Confirmation request. If
+   later invitation responses leave only one accepted hidden-ballot seat, Core
+   records an objective insufficient-roster election failure and follows the
+   bounded fresh-sortition retry path rather than sealing a cryptographically
+   unusable body.
    After each endorsement, Core derives `eligible = original roster -
    authenticated absences` and `remaining = eligible - immutable
    endorsements`. If the strongest existing root plus every remaining seat is
@@ -115,8 +165,9 @@ release qualified.
    instead of leaving it active without a legal retry. There is no plaintext,
    manual-opening, public-ballot, or post-freeze recovery fallback.
    Committed audit events classify sortition retry exhaustion, both
-   public-finding outcomes, and the five private-ballot failures with the closed
-   eight-variant `ParliamentNoResultKindV1`; callers cannot supply that
+   public-finding outcomes, the five phase/release private-ballot failures, and
+   insufficient fresh Confirmation capacity with the closed nine-variant
+   `ParliamentNoResultKindV1`; callers cannot supply that
    classification. `SortitionRetriesExhausted` is emitted when the final
    permitted body-election sequence fails before a body instance exists.
 9. Core automatically constructs one `GovernanceCertificateV1` when the final
@@ -188,10 +239,13 @@ NIST IR 8214C's January 2026 Threshold Call asks submitters for a technical
 specification, reference implementation, and experimental report, followed by
 public analysis and a possible characterization report. It is an evidence-
 gathering process, not a standardization or approval of Parliament's Das--Ren
-profile. The MPTS 2026 workshop likewise records previews and current research
-on BLS security, adaptive and proactive corruption, post-quantum threshold
-schemes, and threshold ZK; a workshop preview is not a conformance or security
-certificate.
+profile. The January 2026 BBDL tBLS item is explicitly a version-0.1 preview of a
+planned later package, whose team and technical scope may still change; it is
+not a completed NIST submission, standard, validation, or approval of this
+different threshold-release profile. The MPTS 2026 workshop likewise records
+previews and current research on BLS security, adaptive and proactive
+corruption, post-quantum threshold schemes, and threshold ZK; a workshop
+preview is not a conformance or security certificate.
 
 The 13 August 2026 Berkeley report on practical witness encryption says that
 general-NP constructions remain prohibitively expensive and rest on strong,
@@ -241,7 +295,7 @@ separately specified, reviewed, consensus-enacted protocol revision and new
 fixtures; current lattice DKG/beacon proposals are research inputs, not
 standards or drop-in implementations.
 
-Research boundary reviewed through 2026-08-27:
+Research boundary reviewed through 2026-08-28:
 
 - Das and Ren, [*Adaptively Secure BLS Threshold Signatures from DDH and
   co-CDH*](https://eprint.iacr.org/2023/1553).
@@ -259,6 +313,9 @@ Research boundary reviewed through 2026-08-27:
   2026)](https://datatracker.ietf.org/doc/draft-irtf-cfrg-bls-signature/07/).
 - NIST, [*NIST First Call for Multi-Party Threshold Schemes*, NIST IR
   8214C](https://doi.org/10.6028/NIST.IR.8214C), January 2026.
+- Bacho, Boldyreva, Das, and Loss, [*tBLS: Threshold BLS Signature Scheme,
+  Preview Writeup version 0.1*](https://csrc.nist.gov/csrc/media/Projects/threshold-cryptography/documents/TCall-1/BBDL-tBLS-PW01.pdf),
+  19 January 2026.
 - NIST, [*MPTS 2026: NIST Workshop on Multi-Party Threshold Schemes
   2026*](https://csrc.nist.gov/Events/2026/mpts2026), January 2026.
 - Policharla, [*Practical Witness Encryption Schemes and
@@ -316,9 +373,16 @@ mode, client finalization, or client enactment path.
   the bounded public broker projection/projected-signer validation boundary
   against a genuine authenticated broker/HSM provider. The public projection is
   not evidence of committed-state origin. Qualify the implemented consensus
-  active-session cutover and the custody rule that forbids retirement while a
-  session remains selectable or any committed ballot deadline references it;
-  then demonstrate daemon-scoped broker admission,
+  active-session cutover, immutable per-session ordered-roster persistence, and
+  the custody rule that forbids retirement while a session remains selectable
+  or any committed ballot deadline references it. Startup now scans the active
+  session and every deadline-retained historical session, derives the local seat
+  from that session's frozen roster, and requires the same runtime signer to
+  return an exact non-signing key-session/transcript/seat capability
+  attestation. The external broker path requalifies around that lookup and
+  poisons substituted results. This is point-in-time readiness evidence, not a
+  proof of future availability, HSM provenance, or erasure. Demonstrate the
+  complete behavior with daemon-scoped broker admission,
   old-share retention/zeroization,
   restart recovery, peer authentication/rate limits, and threshold collection
   on at least four peers. The source seam is not yet an operationally automatic
@@ -335,14 +399,20 @@ mode, client finalization, or client enactment path.
   complete platform-keystore wrappers and archive refresh, and prove that no
   seed, registration secret, dropout set, masked ballot, share, or opening is
   returned by the read surface.
-- Add four-peer finalized-beacon, timed-release, missed-deadline, retry,
-  restart/restore, authority-bound self-absence, conflicting/matching
-  public-finding endorsements, stale-head supersession, and exact-height
-  enactment tests.
-- Qualify early impossible-quorum and post-deadline public-finding `NoResult`
-  across restore and four peers, including permissionless-trigger availability.
-  The reducer's terminal state is deterministic, but progress still assumes an
-  eligible transaction eventually submits the deadline trigger.
+- The feature-isolated four-validator corridor exercises two independently
+  validated global-beacon DKG transcripts. It installs the predecessor, applies
+  a `2f + 1` compare-and-set rotation in an epoch-boundary block, verifies that
+  the same block's pre-boundary pulse still uses the parent session, and verifies
+  that the next pre-boundary pulse and epoch seed use the activated successor.
+  The same corridor covers proof-valid timed release, exact-height enactment,
+  and normal restart/restore; stale-head supersession and rollback-isolated
+  execution failure still require four-validator evidence.
+- The four-validator public-finding branch covers authority-bound self-absence,
+  early impossible-quorum `NoResult`, a fresh governance retry, immutable
+  competing roots, post-deadline endorsement rejection, permissionless
+  `PublicFindingDeadlineExpired`, a second retry, four-peer state equality, and
+  normal validator restore. Progress still assumes an eligible transaction
+  eventually submits the deterministic deadline trigger.
 - Complete Torii, MCP, CLI, OpenAPI, Rust/JavaScript/Kotlin/Java/Swift SDK, and
   shared-fixture coverage for the typed attempt and certificate surface; verify
   the retired equal Parliament ballot stays absent and remove remaining

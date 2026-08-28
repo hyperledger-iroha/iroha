@@ -45,9 +45,7 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
     let canonical = AccountRekeyRecord::new(alias.clone(), retired.clone())
         .repoint_for_account_id_rekey(active.clone())
         .expect("canonical account-id rekey fixture");
-    world
-        .account_rekey_records
-        .insert(alias.clone(), canonical.clone());
+    world.replace_account_rekey_record_for_testing(canonical.clone());
     let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -97,8 +95,7 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
         .world
         .smart_contract_state
         .insert(storage_key, lease.encode());
-    state_transaction.world.account_rekey_records.insert(
-        alias.clone(),
+    state_transaction.world.replace_account_rekey_record(
         AccountRekeyRecord::new(alias.clone(), retired.clone())
             .reassign_alias_to_account(active.clone())
             .expect("alias reassignment fixture"),
@@ -112,10 +109,7 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
     cyclic
         .transition_provenance
         .push(AccountRekeyTransitionProvenance::AccountIdRekey);
-    state_transaction
-        .world
-        .account_rekey_records
-        .insert(alias, cyclic);
+    state_transaction.world.replace_account_rekey_record(cyclic);
     assert!(
         !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
             .expect("malformed lineage check")

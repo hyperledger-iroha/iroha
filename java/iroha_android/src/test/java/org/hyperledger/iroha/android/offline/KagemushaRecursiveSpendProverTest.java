@@ -13,6 +13,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.Signature;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -31,6 +32,7 @@ import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -1532,37 +1534,58 @@ public final class KagemushaRecursiveSpendProverTest {
               neverTransport,
               new LocalSigningContext(networkId)));
     }
+    final TransportExecutor transport =
+        request -> {
+          captured.set(request);
+          final boolean capability = request.uri().getPath().endsWith("/readiness");
+          final boolean lineage = request.uri().getPath().endsWith("/receiver-lineage");
+          final boolean command = "POST".equals(request.method()) && !lineage;
+          return CompletableFuture.completedFuture(
+              TransportResponse.builder()
+                  .setStatusCode(command ? 202 : 200)
+                  .addHeader(
+                      "content-type",
+                      capability ? "application/json" : "application/x-norito")
+                  .addHeader(
+                      "Location", "/v1/offline/operations/" + repeat("11", 32))
+                  .addHeader("Retry-After", "1")
+                  .setBody(
+                      capability
+                          ? universalOfflineCapabilityJson().getBytes(StandardCharsets.UTF_8)
+                          : archive(
+                              command
+                                  ? "OfflineOperationReference"
+                                  : lineage
+                                      ? "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
+                                  : request.uri().getPath().contains("/operations/")
+                                      ? "OfflineOperationStatus"
+                                      : unexpectedToriiRoute(request)))
+                  .build());
+        };
+    final URI toriiBaseUri = URI.create("https://torii.example/api/");
+    final LocalSigningContext localSigningContext = new LocalSigningContext(networkId);
+    KagemushaRecursiveSpendProver.newToriiClient(
+            toriiBaseUri, transport, localSigningContext)
+        .getOfflineCapability()
+        .join();
+    assert captured.get().timeout() == null;
+    KagemushaRecursiveSpendProver.newToriiClient(
+            toriiBaseUri, transport, localSigningContext, null)
+        .getOfflineCapability()
+        .join();
+    assert captured.get().timeout() == null;
+    KagemushaRecursiveSpendProver.newToriiClient(
+            toriiBaseUri, transport, localSigningContext, Duration.ZERO)
+        .getOfflineCapability()
+        .join();
+    assert captured.get().timeout().equals(Duration.ZERO);
+    assertThrowsIllegalArgument(
+        () -> KagemushaRecursiveSpendProver.newToriiClient(
+            toriiBaseUri, transport, localSigningContext, Duration.ofMillis(-1)));
+    final Duration requestTimeout = Duration.ofSeconds(37);
     final KagemushaRecursiveSpendProver.ToriiClient client =
         KagemushaRecursiveSpendProver.newToriiClient(
-            URI.create("https://torii.example/api/"),
-            request -> {
-              captured.set(request);
-              final boolean capability = request.uri().getPath().endsWith("/readiness");
-              final boolean lineage = request.uri().getPath().endsWith("/receiver-lineage");
-              final boolean command = "POST".equals(request.method()) && !lineage;
-              return CompletableFuture.completedFuture(
-                  TransportResponse.builder()
-                      .setStatusCode(command ? 202 : 200)
-                      .addHeader(
-                          "content-type",
-                          capability ? "application/json" : "application/x-norito")
-                      .addHeader(
-                          "Location", "/v1/offline/operations/" + repeat("11", 32))
-                      .addHeader("Retry-After", "1")
-                      .setBody(
-                          capability
-                              ? universalOfflineCapabilityJson().getBytes(StandardCharsets.UTF_8)
-                              : archive(
-                                  command
-                                      ? "OfflineOperationReference"
-                                      : lineage
-                                          ? "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
-                                      : request.uri().getPath().contains("/operations/")
-                                          ? "OfflineOperationStatus"
-                                          : unexpectedToriiRoute(request)))
-                      .build());
-            },
-            new LocalSigningContext(networkId));
+            toriiBaseUri, transport, localSigningContext, requestTimeout);
 
     final KagemushaRecursiveSpendProver.OfflineStatus status =
         client.getOfflineCapability().join();
@@ -1576,6 +1599,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert captured.get().uri().toString()
         .equals("https://torii.example/api/v1/offline/readiness");
     assert captured.get().headers().get("Accept").equals(Arrays.asList("application/json"));
+    assert captured.get().timeout().equals(requestTimeout);
 
     final KagemushaRecursiveSpendProver.RecipientLineageQueryV2 query = construct(
         KagemushaRecursiveSpendProver.RecipientLineageQueryV2.class,
@@ -1593,6 +1617,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert lineageRequest.headers().get(CanonicalRequestSigner.HEADER_NONCE)
         .equals(Arrays.asList(nonce));
     assert lineageRequest.replayPolicy() == RequestReplayPolicy.ONE_SHOT;
+    assert lineageRequest.timeout().equals(requestTimeout);
     final byte[] signature =
         Base64.getDecoder()
             .decode(
@@ -1662,6 +1687,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert captured.get().headers().get("Content-Type")
         .equals(Arrays.asList("application/x-norito"));
     assert captured.get().headers().get("Idempotency-Key").equals(Arrays.asList(operationId));
+    assert captured.get().timeout().equals(requestTimeout);
 
     client
         .submitRedeem(
@@ -1670,9 +1696,11 @@ public final class KagemushaRecursiveSpendProverTest {
             operationId)
         .join();
     assert captured.get().uri().getPath().equals("/api/v1/offline/redeem");
+    assert captured.get().timeout().equals(requestTimeout);
 
     client.getOperation(operationId).join();
     assert captured.get().uri().getPath().equals("/api/v1/offline/operations/" + operationId);
+    assert captured.get().timeout().equals(requestTimeout);
   }
 
   private static String universalOfflineCapabilityJson() {

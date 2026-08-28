@@ -455,6 +455,15 @@ scaled amounts, V4 artifact streaming and backend-capability checks, plus the so
 `DeviceAttestationRegistration` / `RegisterOfflineDeviceAttestation` transaction path. The latter
 validates finalized platform material and emits exactly one native registration instruction.
 
+Android applications should acquire that material through `KagemushaAndroidKeyMint` from
+`client-android`. Its preferred `generateRegistration(...)` flow derives the canonical challenge,
+creates an API-31 hardware-enforced single-use P-256 assertion key, and returns the matching
+registration plus its retained authorization handle. `StrongBoxPolicy.REQUIRED` never downgrades;
+unsupported API levels or devices without `FEATURE_KEYSTORE_SINGLE_USE_KEY` fail before generation.
+After `prepareRequestAuthorization(...)`, call `authorize(...)` exactly once. Material is consumed
+before signing, failed signing attempts alias cleanup, and native finalization runs only after the
+exhausted alias has been deleted.
+
 The clean Offline Cash V1 lifecycle additionally requires one rollback-resistant
 intent slot, an exact-next monetary counter, trusted time, authenticated terminal
 recovery, and an authenticated staged-payment outbox. Android KeyMint's one-use
@@ -475,6 +484,32 @@ cryptographic inventory. `ReleaseAuthentication` also requires the canonical can
 promotion record and runner-signed internal-validation receipt alongside the trusted policy,
 attestation, benchmark evidence, and cryptographic review. The receipt and review are each limited
 to 1 MiB; an authenticated-but-unpromoted release cannot be installed.
+
+For the public SORA Taira testnet, `TairaTestnetProfile` supplies only stable, non-secret deployment
+metadata and the `https://taira.sora.org` Torii origin. Supply the exact current genesis-derived
+`NetworkId` from the deployed client config or trusted genesis material; do not substitute the
+stable semantic `CHAIN_ID`, and do not persist account private keys or bearer tokens in the profile.
+Public resets can change the signing `NetworkId`.
+
+```kotlin
+val deployed = ClientConfigManifestLoader.load(runtimeManifest).clientConfig()
+val deployedNetworkId = deployed.localSigningContext().orElseThrow {
+    IllegalStateException("runtime Taira config has no network_id")
+}.networkId()
+val config = TairaTestnetProfile.clientConfig(deployedNetworkId)
+val kagemusha = config.toKagemushaToriiClient()
+
+val capability = kagemusha.getOfflineCapability().join()
+```
+
+Applications that already load `ClientConfig` through `ClientConfigManifestLoader` can call
+`toKagemushaToriiClient()` on that config after setting its Torii base URI to
+`TairaTestnetProfile.TORII_BASE_URI`. The manifest's `network_id` remains the authoritative runtime
+input; the SDK never learns a signing identity from the public endpoint. The adapter applies
+`ClientConfig.requestTimeout()` to all five Kagemusha routes. It deliberately does not copy
+`defaultHeaders()` into Kagemusha requests: command authorization is payload-bound, receiver-lineage
+authorization is supplied per call, and ambient bearer or account credentials must not leak into
+this protocol surface.
 
 `KagemushaRecursiveSpendProver.newToriiClient` requires a genesis-derived
 `LocalSigningContext`. Its receiver-lineage method additionally requires a per-call

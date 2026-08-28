@@ -8,8 +8,8 @@ use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr};
 use iroha::data_model::{
     kaigi::{
-        KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1, KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
-        KAIGI_RELAY_MANIFEST_MIN_HOPS_V1,
+        KAIGI_MAX_PARTICIPANTS_V1, KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
+        KAIGI_RELAY_MANIFEST_MAX_HOPS_V1, KAIGI_RELAY_MANIFEST_MIN_HOPS_V1,
     },
     metadata::Metadata,
     prelude::{
@@ -82,7 +82,7 @@ pub struct CreateArgs {
     /// Optional description for participants.
     #[arg(long)]
     pub description: Option<String>,
-    /// Maximum concurrent participants (excluding host); zero is invalid.
+    /// Maximum concurrent participants excluding the host (1..=4096).
     #[arg(long, value_name = "U32")]
     pub max_participants: Option<u32>,
     /// Gas rate charged per minute (defaults to 0).
@@ -778,8 +778,12 @@ fn parse_call_id(domain: &str, call_name: &str) -> Result<KaigiId> {
     Ok(KaigiId::new(domain_id, call))
 }
 fn validate_max_participants(max_participants: Option<u32>) -> Result<()> {
-    if max_participants == Some(0) {
-        eyre::bail!("Kaigi max participants must be greater than zero when provided");
+    if max_participants
+        .is_some_and(|limit| !(1..=KAIGI_MAX_PARTICIPANTS_V1 as u32).contains(&limit))
+    {
+        eyre::bail!(
+            "Kaigi max participants must be between 1 and {KAIGI_MAX_PARTICIPANTS_V1} when provided"
+        );
     }
     Ok(())
 }
@@ -1230,7 +1234,9 @@ mod tests {
     fn local_scalar_validation_rejects_requests_core_would_refuse() {
         assert!(validate_max_participants(None).is_ok());
         assert!(validate_max_participants(Some(1)).is_ok());
+        assert!(validate_max_participants(Some(KAIGI_MAX_PARTICIPANTS_V1 as u32)).is_ok());
         assert!(validate_max_participants(Some(0)).is_err());
+        assert!(validate_max_participants(Some(KAIGI_MAX_PARTICIPANTS_V1 as u32 + 1)).is_err());
         assert!(validate_usage_duration(1).is_ok());
         assert!(validate_usage_duration(0).is_err());
         assert!(validate_relay_hpke_public_key(&[1]).is_ok());

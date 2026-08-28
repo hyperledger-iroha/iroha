@@ -25089,21 +25089,50 @@ impl Kura {
                 Some(pending_canonical_bytes),
             )?
         {
-            if autonomous.artifact.executable_payload.origin_proposal != artifact.proposal {
+            let same_proposal =
+                autonomous.artifact.executable_payload.origin_proposal == artifact.proposal;
+            if autonomous_certificate && !same_proposal {
                 return Err(Self::invalid_lane_artifact_error(
                     Self::autonomous_lane_block_latest_attempt_path_for_entry(
                         &entry,
                         &self.store_root,
                         lane_block_height,
                     ),
-                    "certification proposal conflicts with the durable autonomous lane slot",
+                    "autonomous certification proposal conflicts with the durable autonomous lane slot",
                 ));
             }
-            if autonomous.retirement.is_some() {
+            if same_proposal && autonomous.retirement.is_some() {
                 return Err(Self::invalid_lane_artifact_error(
                     autonomous.view_state_path,
                     "durably retired autonomous lane slot cannot be certified",
                 ));
+            }
+            if !autonomous_certificate && !same_proposal {
+                if autonomous.retirement.is_none() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                            &entry,
+                            &self.store_root,
+                            lane_block_height,
+                        ),
+                        "ordinary certification conflicts with a live durable autonomous lane slot",
+                    ));
+                }
+                if authority.is_none() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        autonomous.view_state_path,
+                        "ordinary certification replacing a retired autonomous lane slot lacks State lifecycle authority",
+                    ));
+                }
+                // Retirement is only the first half of losing-attempt
+                // terminalization. Reopen the source-authenticated Complete
+                // outcome and its released claims before allowing the
+                // State-authorized ordinary winner to occupy this lane height.
+                self.require_autonomous_lifecycle_retired_attempt_complete_for_ordinary_certificate_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    &autonomous,
+                )?;
             }
         }
         if !self.recover_bound_progress_sidecar_artifacts(

@@ -59,6 +59,7 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
             "state_dir":"./runtime/json",
             "reconcile_interval_ms":2500,
             "hydration_concurrency":7,
+            "prepared_runtime_cache_capacity":11,
             "cache_budgets":{
                 "bundle_bytes":1024,
                 "static_asset_bytes":2048,
@@ -105,6 +106,7 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
     );
     assert_eq!(parsed.inrou.bundle_archive_max_decoded_bytes.get(), 40_000);
     assert_eq!(parsed.inrou.bundle_archive_max_entries.get(), 123);
+    assert_eq!(parsed.prepared_runtime_cache_capacity.get(), 11);
     assert_eq!(parsed.inrou.bundle_archive_max_file_bytes.get(), 20_000);
     assert_eq!(
         parsed.inrou.bundle_archive_max_total_file_bytes.get(),
@@ -136,6 +138,7 @@ fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
             "state_dir":"./runtime/json",
             "reconcile_interval_ms":2500,
             "hydration_concurrency":7,
+            "prepared_runtime_cache_capacity":11,
             "cache_budgets":{
                 "bundle_bytes":1024,
                 "static_asset_bytes":2048,
@@ -444,6 +447,7 @@ fn network_parse_clamps_zero_periods() {
         Value::Integer(0),
     );
     network.insert("idle_timeout_ms".into(), Value::Integer(0));
+    network.insert("preauth_timeout_ms".into(), Value::Integer(0));
     network.insert("reply_writer_flush_timeout_ms".into(), Value::Integer(0));
     let actual = load_root(table);
     let min = StdDuration::from_millis(100);
@@ -467,7 +471,21 @@ fn network_parse_clamps_zero_periods() {
     assert_eq!(actual.network.peer_gossip_period, min);
     assert_eq!(actual.network.peer_gossip_max_period, min);
     assert_eq!(actual.network.idle_timeout, min);
+    assert_eq!(actual.network.preauth_timeout, min);
     assert_eq!(actual.network.reply_writer_flush_timeout, min);
+}
+
+#[test]
+fn network_parse_applies_preauth_per_ip_connection_cap() {
+    let mut table = base_table();
+    table
+        .get_mut("network")
+        .and_then(Value::as_table_mut)
+        .expect("network table")
+        .insert("preauth_max_connections_per_ip".into(), Value::Integer(3));
+
+    let actual = load_root(table);
+    assert_eq!(actual.network.preauth_max_connections_per_ip.get(), 3);
 }
 
 #[test]

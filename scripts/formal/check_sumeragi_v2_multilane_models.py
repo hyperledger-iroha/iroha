@@ -1863,6 +1863,21 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "remove_queue_plan_marker(member_key)",
         ),
     ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "validate_queue_plan_admissions_for_carrier_in_view",
+        (
+            "state_view: &impl StateReadOnly",
+            "decode_and_validate_queue_plan_admission_certificate_v1(",
+            "state_view.network_id()",
+            "state_view.block_hashes().get(index).copied()",
+            "exact_predecessor != context.predecessor_block_hash",
+            "queue_plan_authoritative_peers_in_view_at_height(",
+            "state_view,",
+            "authority.as_ref().ok() != Some(&route.validator_set)",
+        ),
+    ),
     (QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE, "fn", "stage_queue_plan_admissions_for_carrier", (
             "ensure_pristine_execution_control_stage",
             "queue_plan_active_lane_bindings",
@@ -1870,7 +1885,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "staged_queue_plan_admissions",
     )),
     (QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE, "fn", "stage_queue_plan_admissions", (
-            "validate_queue_plan_admissions_for_carrier",
+            "validate_queue_plan_admissions_for_carrier_in_view",
             "queue_plan_pending_obligation_from_admission",
             "queue_plan_pending_obligation_matches_active_lifecycle",
             ".collect::<Result<Vec<_>, MergeLedgerCommitError>>()?",
@@ -1902,7 +1917,9 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
     *(
         binding for binding in QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS
         if binding[2] in (
-            "decode_exact_queue_plan_pending_route_member_marker", "stage_queue_plan_admissions",
+            "decode_exact_queue_plan_pending_route_member_marker",
+            "validate_queue_plan_admissions_for_carrier_in_view",
+            "stage_queue_plan_admissions",
             "resolve_queue_plan_pending_obligations_for_entrypoints",
         )
     ),

@@ -175,22 +175,42 @@ impl SoranetHandshakeRuntime {
 pub(crate) fn runtime_from_handshake(
     handshake: ActualSoranetHandshake,
 ) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
+    runtime_from_handshake_with_store(handshake, |owner| {
+        TicketRevocationStore::load(
+            &owner.replay_state_path,
+            owner.revocation_limits,
+            SystemTime::now(),
+        )
+        .map_err(|err| {
+            Error::HandshakeSoranet(format!(
+                "failed to load soranet revocation store at {}: {err}",
+                owner.replay_state_path.display()
+            ))
+        })
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn runtime_from_handshake_in_memory(
+    handshake: ActualSoranetHandshake,
+) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
+    runtime_from_handshake_with_store(handshake, |owner| {
+        TicketRevocationStore::in_memory(owner.revocation_limits).map_err(|err| {
+            Error::HandshakeSoranet(format!("invalid soranet revocation configuration: {err}"))
+        })
+    })
+}
+
+fn runtime_from_handshake_with_store(
+    handshake: ActualSoranetHandshake,
+    load_store: impl FnOnce(&SoranetHandshakeOwnerConfig) -> Result<TicketRevocationStore, Error>,
+) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
     let validated = validate_handshake(handshake)?;
     let owner = validated.owner.clone();
     let puzzle_work_admission =
         process_wide_admission(owner.outbound_mint_capacity, owner.inbound_verify_capacity)
             .map_err(Error::HandshakeSoranet)?;
-    let revocation_store = TicketRevocationStore::load(
-        &owner.replay_state_path,
-        owner.revocation_limits,
-        SystemTime::now(),
-    )
-    .map_err(|err| {
-        Error::HandshakeSoranet(format!(
-            "failed to load soranet revocation store at {}: {err}",
-            owner.replay_state_path.display()
-        ))
-    })?;
+    let revocation_store = load_store(&owner)?;
     let shared_state = SoranetHandshakeSharedState::new(
         Arc::new(Mutex::new(revocation_store)),
         puzzle_work_admission,

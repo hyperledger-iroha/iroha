@@ -32,6 +32,13 @@ function jsonResponse(payload, { status = 200, headers = {} } = {}) {
   });
 }
 
+function rawJsonResponse(payload, { status = 200, headers = {} } = {}) {
+  return new Response(payload, {
+    status,
+    headers: { "content-type": "application/json", ...headers },
+  });
+}
+
 function universalCapability(overrides = {}) {
   return {
     cash_handoff_capability: "cash_handoff_v1",
@@ -219,6 +226,12 @@ test("ToriiClient preserves all four Kagemusha routes and V4 request headers", a
     ],
   );
   assert.equal(observed[0].url.search, "");
+  assert.deepEqual(observed.map(({ init }) => init.redirect), [
+    "error",
+    "error",
+    "error",
+    "error",
+  ]);
   const submittedArchives = [
     noritoArchive(TOP_UP_SCHEMA_NAME),
     noritoArchive(REDEEM_SCHEMA_NAME),
@@ -229,6 +242,7 @@ test("ToriiClient preserves all four Kagemusha routes and V4 request headers", a
     const headers = new Headers(init.headers);
     assert.equal(headers.get("content-type"), "application/x-norito");
     assert.equal(headers.get("idempotency-key"), OPERATION_ID);
+    assert.equal(init.redirect, "error");
     assert.deepEqual([...new Uint8Array(init.body)], [...expectedArchive]);
   }
 });
@@ -267,6 +281,11 @@ test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", as
 
   assert.equal(capability.ready, true);
   assert.equal(observed[0].url.search, "");
+  assert.deepEqual(observed.map(({ init }) => init.redirect), [
+    "error",
+    "error",
+    "error",
+  ]);
   assert.equal(reference.state.state, "pending");
   assert.equal(status.state, "pending");
   assert.deepEqual(
@@ -277,6 +296,35 @@ test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", as
       `/v1/offline/operations/${OPERATION_ID}`,
     ],
   );
+});
+
+test("Kagemusha clients reject duplicate and oversized JSON responses", async () => {
+  const duplicateCapability =
+    '{"cash_handoff_capability":"cash_handoff_v1",' +
+    '"required_bridge_abi_version":23,"max_hops":8,"ready":true,"ready":true}';
+  const oversizedCapability = JSON.stringify({
+    ...universalCapability(),
+    padding: "x".repeat(256 * 1024),
+  });
+
+  for (const createClient of [
+    (response) => new ToriiClient("https://torii.example", {
+      fetchImpl: async () => response,
+      maxRetries: 0,
+    }),
+    (response) => new ToriiBrowserClient("https://torii.example", {
+      fetchImpl: async () => response,
+    }),
+  ]) {
+    await assert.rejects(
+      () => createClient(rawJsonResponse(duplicateCapability)).getOfflineCapability(),
+      /duplicate object key "ready"/u,
+    );
+    await assert.rejects(
+      () => createClient(rawJsonResponse(oversizedCapability)).getOfflineCapability(),
+      /262144-byte response (?:limit|size bound)/u,
+    );
+  }
 });
 
 test("operation references require Torii's positive Retry-After header", () => {

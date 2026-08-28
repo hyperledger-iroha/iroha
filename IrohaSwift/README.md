@@ -191,9 +191,19 @@ scripts/build_norito_xcframework.sh --privacy-production-enabled
 That option passes the existing `privacy-production-enabled` Cargo feature to
 every Apple slice and marks the XCFramework plus its artifact manifest. The
 `Mobile SDK Artifacts` manual workflow exposes the same default-off option.
-The builder always compiles all four slices into the one caller-selected target,
+The builder always compiles all five target libraries into the one caller-selected target,
 uses the root `Cargo.lock`, and fails closed if `xcodebuild` cannot package them.
 There is no skip-build, preserved-target, alternate-lock, or manual-packaging mode.
+
+The Kagemusha pull-request lane preserves that build envelope while avoiding a
+hosted-runner timeout: five isolated macOS jobs each build one attested target
+library, and the sole Swift assembler accepts them only when their independent
+archive digests and exact source, lock, toolchain, SDK, deployment-target, and
+feature attestations all match. The assembler then produces the same three-slice
+XCFramework and authenticated handoff used by the Swift lifecycle consumer.
+Each attestation also retains its runner's Python, Git, and rustup evidence;
+those orchestration tools may differ because they do not enter the hermetic
+Cargo invocation.
 
 CI runs `.github/workflows/mobile_sdk_artifacts.yml` to authenticate the exact
 external Apple artifact, enforce mandatory missing-artifact rejection, run the
@@ -1263,7 +1273,8 @@ the application owns reconciliation and any later explicit submission.
 `POST /v1/offline/redeem`, `GET /v1/offline/operations/{operation_id}`, and
 `POST /v1/offline/receiver-lineage`.
 Use `getOfflineCapability()`, `submitKagemushaTopUp`,
-`submitKagemushaRedeem`, `getKagemushaOperationStatus(operationId:)`, and
+`submitKagemushaRedeem`,
+`getKagemushaOperationStatus(operationId:chainDiscriminant:)`, and
 `getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
 `getOfflineCapability()` takes no selector.
 

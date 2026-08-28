@@ -643,6 +643,30 @@ fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
     );
     assert_eq!(receipt.results, vec![result]);
     assert!(kura.lane_block_application_receipt_available(&proposal));
+    let mut successor = proposal.clone();
+    successor.descriptor.proposal_height = successor
+        .descriptor
+        .proposal_height
+        .checked_add(1)
+        .expect("direct-receipt successor proposal height");
+    successor.descriptor.previous_lane_block_height = lane_block_height;
+    successor.descriptor.previous_lane_block_descriptor_hash =
+        Some(proposal.descriptor.descriptor_hash);
+    successor.descriptor.lane_block_height = lane_block_height
+        .checked_add(1)
+        .expect("direct-receipt successor lane height");
+    successor.descriptor.descriptor_hash = successor.descriptor.computed_descriptor_hash();
+    successor.proposal_hash = successor.computed_proposal_hash();
+    assert!(
+        kura.lane_block_predecessor_application_receipt_available(&successor),
+        "the generic lane corridor may consume an exact direct-execution receipt"
+    );
+    assert!(
+        !kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &successor,
+        ),
+        "an autonomous successor must not mistake direct execution for canonical global application"
+    );
     drop(kura);
     let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reload kura");
@@ -1438,6 +1462,12 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         "canonical predecessor application must unblock the successor"
     );
     assert!(
+        kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &successor_proposal,
+        ),
+        "the exact canonical predecessor receipt must authorize an autonomous successor"
+    );
+    assert!(
         kura.read_preflighted_lane_block_execution_input_for_application(
             &successor_proposal,
             0,
@@ -1464,6 +1494,12 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         !kura.lane_block_predecessor_application_receipt_available(&wrong_hash_proposal),
         "a different declared predecessor descriptor must not authorize a successor"
     );
+    assert!(
+        !kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &wrong_hash_proposal,
+        ),
+        "canonical autonomous-predecessor admission must bind the exact descriptor hash"
+    );
     let mut non_increasing_global_height = successor_ownership.clone();
     non_increasing_global_height.proposal_height = predecessor_ownership.proposal_height;
     let non_increasing_global_height_proposal =
@@ -1474,6 +1510,12 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         ),
         "a predecessor must be anchored at an earlier global proposal height"
     );
+    assert!(
+        !kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &non_increasing_global_height_proposal,
+        ),
+        "canonical autonomous-predecessor admission must reject a non-increasing proposal height"
+    );
     let mut wrong_dataspace = successor_ownership.clone();
     wrong_dataspace.dataspace_id = DataSpaceId::new(dataspace_id.as_u64().saturating_add(1));
     let wrong_dataspace_proposal = canonical_proposal_for(wrong_dataspace);
@@ -1481,12 +1523,24 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         !kura.lane_block_predecessor_application_receipt_available(&wrong_dataspace_proposal),
         "a predecessor receipt from another dataspace must not authorize a successor"
     );
+    assert!(
+        !kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &wrong_dataspace_proposal,
+        ),
+        "canonical autonomous-predecessor admission must bind the exact dataspace"
+    );
     let mut wrong_incarnation = successor_ownership;
     wrong_incarnation.lane_incarnation = Hash::new(b"different successor lane incarnation");
     let wrong_incarnation_proposal = canonical_proposal_for(wrong_incarnation);
     assert!(
         !kura.lane_block_predecessor_application_receipt_available(&wrong_incarnation_proposal),
         "a predecessor receipt from another lane incarnation must not authorize a successor"
+    );
+    assert!(
+        !kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &wrong_incarnation_proposal,
+        ),
+        "canonical autonomous-predecessor admission must bind the exact lane incarnation"
     );
 }
 fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails() {

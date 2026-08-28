@@ -70,6 +70,10 @@ impl State {
     /// Require canonical economic application of the exact predecessor of an
     /// autonomous proposal.
     ///
+    /// The predecessor may itself have reached WSV through an ordinary
+    /// canonical block (`Current` receipt) or through an autonomous merge
+    /// carrier. Neither path admits a direct-execution receipt.
+    ///
     /// Unlike the ordinary helper, this deliberately ignores hash-only lane
     /// ownership snapshots. Those snapshots authenticate a canonical carrier
     /// identity but cannot prove that its autonomous effects crossed the WSV
@@ -103,8 +107,11 @@ impl State {
             return frontier == (previous_height, Some(previous_descriptor_hash));
         }
         self.kura
-            .autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair(
-                proposal,
-            )
+            .canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(proposal)
+            || self
+                .kura
+                .autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair(
+                    proposal,
+                )
     }
 }

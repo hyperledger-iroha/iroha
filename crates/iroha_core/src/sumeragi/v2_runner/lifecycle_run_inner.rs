@@ -1096,20 +1096,21 @@ fn run_lifecycle_active_height(
             continue;
         }
 
-        let (ready_to_finish, executor_slice) = if terminal_finalization_fenced
-            || drain_disposition.terminal_settlement_stops_runtime()
-        {
-            activated.with_runner_runtime(
-                &mut active_runner,
-                |_owner, executor, _services, _local_proposal| {
-                    Ok::<_, V2RunnerError>((
-                        executor.ready_to_finish(),
-                        AdvanceExecutorSliceOutcomeV1::Idle,
-                    ))
-                },
-            )?
-        } else {
-            activated.with_runner_runtime(
+        let (ready_to_finish, executor_slice, ready_proposal_sign_preempts_producer) =
+            if terminal_finalization_fenced || drain_disposition.terminal_settlement_stops_runtime()
+            {
+                activated.with_runner_runtime(
+                    &mut active_runner,
+                    |_owner, executor, _services, _local_proposal| {
+                        Ok::<_, V2RunnerError>((
+                            executor.ready_to_finish(),
+                            AdvanceExecutorSliceOutcomeV1::Idle,
+                            false,
+                        ))
+                    },
+                )?
+            } else {
+                activated.with_runner_runtime(
                 &mut active_runner,
                 |owner, executor, services, local_proposal| {
                     if executor
@@ -1172,7 +1173,7 @@ fn run_lifecycle_active_height(
                     // entire synchronous batch.
                     let executor_slice = advance_executor(receiver, owner, executor, services, 1)?;
                     if let AdvanceExecutorSliceOutcomeV1::Yielded(_) = executor_slice {
-                        return Ok::<_, V2RunnerError>((false, executor_slice));
+                        return Ok::<_, V2RunnerError>((false, executor_slice, false));
                     }
                     let _ = retry_exact_output_and_apply_sidecar_admissions(
                         &mut lane_work,
@@ -1234,11 +1235,44 @@ fn run_lifecycle_active_height(
                     services
                         .replay_buffered_chunks(executor)
                         .map_err(V2RunnerError::Service)?;
-                    Ok::<_, V2RunnerError>((executor.ready_to_finish(), executor_slice))
+                    let ready_proposal_sign_preempts_producer =
+                        if executor_slice
+                            == AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary
+                        {
+                            let fence = executor.lifecycle_reducer_fence_observation();
+                            match owner
+                                .ready_proposal_sign_preempts_bounded_producer_point(fence)
+                            {
+                                Ok(preempts) => preempts,
+                                Err(error) => {
+                                    iroha_logger::error!(
+                                        ?error,
+                                        "post-ingress Ready proposal Sign authentication failed closed"
+                                    );
+                                    output_guard.close_admission_for_restart();
+                                    return Err(V2RunnerError::RestartRequired);
+                                }
+                            }
+                        } else {
+                            false
+                        };
+                    Ok::<_, V2RunnerError>((
+                        executor.ready_to_finish(),
+                        executor_slice,
+                        ready_proposal_sign_preempts_producer,
+                    ))
                 },
             )?
-        };
+            };
         match executor_slice {
+            AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary
+                if ready_proposal_sign_preempts_producer =>
+            {
+                // The local body is validated, but its exact SignProposal has
+                // not crossed bounded I/O yet. Re-enter Completion rank before
+                // Producer can append a timeout/new-view leader-wire barrier.
+                continue;
+            }
             AdvanceExecutorSliceOutcomeV1::Idle
             | AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}
             AdvanceExecutorSliceOutcomeV1::Yielded(reason) => {
@@ -1415,6 +1449,11 @@ fn run_lifecycle_active_height(
                         block_sync_server,
                         DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                     )?;
+                    let now = Instant::now();
+                    if now >= next_lane_retransmit {
+                        lane_work.schedule_retransmission()?;
+                        next_lane_retransmit = deadline_after(now, retransmit_interval);
+                    }
                     dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
                     Ok::<_, V2RunnerError>(drained.is_some())
                 },

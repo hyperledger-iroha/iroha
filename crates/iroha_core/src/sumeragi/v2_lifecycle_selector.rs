@@ -46,13 +46,16 @@ use crate::sumeragi::{
     },
     v2_effects::{
         CertifiedResponsePriorityCandidate, CertifiedResponsePriorityProbe, EffectExecutorError,
-        EffectTransportError, EffectWorkId, RecoveredDecisionFetchResponseCandidateV1,
-        V2EffectExecutor, v2_ingress_head_can_drain,
+        EffectRuntime, EffectTransportError, EffectWorkId,
+        RecoveredDecisionFetchResponseCandidateV1, V2EffectExecutor, v2_ingress_head_can_drain,
     },
     v2_runtime::SerializedV2Runtime,
     v2_transport::V2TransportError,
     v2_transport::{AuthenticatedCertifiedBodyRequest, AuthenticatedCertifiedBodyResponse},
-    v2_worker::{PreparedCertifiedFetchBodyPersistenceCompletion, ProductionV2Services},
+    v2_worker::{
+        LifecycleIoCapacityReservation, PreparedCertifiedFetchBodyPersistenceCompletion,
+        ProductionV2Services,
+    },
 };
 use iroha_crypto::HashOf;
 use iroha_data_model::block::consensus_v2 as wire;
@@ -165,10 +168,13 @@ impl LifecycleIngressSelectorError {
         }
     }
 }
-/// Opaque exact identity of one bounded certified-Fetch persistence command.
+/// Opaque Phase-A identity of one bounded certified-Fetch persistence command.
 ///
 /// The physical queue identity remains nested and cannot be reconstructed from
-/// a work id, response hash, or caller-supplied ordinal.
+/// a work id, response hash, or caller-supplied ordinal. Phase B may join this
+/// snapshot to a refreshed ownership-history digest only when the fresh selector
+/// retains the same physical coordinates and the exact authenticated response,
+/// responder, and work owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) struct CertifiedFetchBodyPersistenceId {
     ingress_identity: PendingFairIngressIdentity,
@@ -249,6 +255,22 @@ impl CertifiedFetchBodyPersistenceCompletion {
     pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         HashOf::new(self.authenticated.response())
     }
+    /// Replace only the persisted work owner in strict Phase-B identity tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn replace_work_id_for_test(
+        &mut self,
+        replacement: EffectWorkId,
+    ) -> EffectWorkId {
+        std::mem::replace(&mut self.id.work_id, replacement)
+    }
+    /// Replace only the authenticated response in strict Phase-B identity tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn replace_authenticated_response_for_test(
+        &mut self,
+        replacement: AuthenticatedCertifiedBodyResponse,
+    ) -> AuthenticatedCertifiedBodyResponse {
+        std::mem::replace(&mut self.authenticated, replacement)
+    }
 }
 /// Opaque physical-ingress and lifecycle identity of one recovered Decision
 /// Fetch body persistence command.
@@ -319,6 +341,23 @@ impl RecoveredDecisionFetchBodyPersistenceTaskV1 {
     ) -> crate::sumeragi::v2_transport::CertifiedBodyResponseClaimPreflight {
         self.claim_preflight
     }
+    /// Project a completed persistence handoff for selector-only tests.
+    ///
+    /// Body-store durability itself is covered by the store and worker suites;
+    /// this helper keeps queue-identity refresh tests independent of block-signature
+    /// fixtures while retaining an internally exact response/receipt projection.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn assume_persisted_for_test(
+        self,
+    ) -> RecoveredDecisionFetchBodyPersistenceCompletionV1 {
+        let receipt =
+            DurableCertifiedFetchBodyReceipt::for_authenticated_response_test(&self.authenticated);
+        RecoveredDecisionFetchBodyPersistenceCompletionV1 {
+            id: self.id,
+            authenticated: self.authenticated,
+            receipt,
+        }
+    }
     /// Persist the authenticated response through the crash-safe body store.
     pub(in crate::sumeragi) fn persist(
         self,
@@ -366,6 +405,22 @@ impl RecoveredDecisionFetchBodyPersistenceCompletionV1 {
     /// Hash of the exact signed request family answered by this completion.
     pub(in crate::sumeragi) fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
         self.authenticated.response().request_hash
+    }
+    /// Replace only the recovered dispatch owner in strict Phase-B identity tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn replace_dispatch_key_for_test(
+        &mut self,
+        replacement: super::work_registry::RecoveredDecisionFetchDispatchKeyV1,
+    ) -> super::work_registry::RecoveredDecisionFetchDispatchKeyV1 {
+        std::mem::replace(&mut self.id.dispatch_key, replacement)
+    }
+    /// Replace only the authenticated response in strict Phase-B identity tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn replace_authenticated_response_for_test(
+        &mut self,
+        replacement: AuthenticatedCertifiedBodyResponse,
+    ) -> AuthenticatedCertifiedBodyResponse {
+        std::mem::replace(&mut self.authenticated, replacement)
     }
     /// Project the fixed body-frame authority without exposing response or receipt parts.
     pub(in crate::sumeragi) fn project_store_body_authority(
@@ -430,6 +485,7 @@ enum CertifiedFetchBodyPersistenceRetryFailure {
     Selector(CertifiedFetchReadyPublicationError),
     CompletionIdentity(&'static str),
     Executor(EffectTransportError),
+    Queue(FairIngressQueueCutError),
     CoordinatorStutter,
     Registry(CertifiedFetchCompletionError),
     Service(String),
@@ -476,6 +532,7 @@ impl CertifiedFetchBodyPersistenceRetryError {
                 "persistence completion identity"
             }
             CertifiedFetchBodyPersistenceRetryFailure::Executor(_) => "executor preflight",
+            CertifiedFetchBodyPersistenceRetryFailure::Queue(_) => "queue preflight",
             CertifiedFetchBodyPersistenceRetryFailure::CoordinatorStutter => "coordinator mutation",
             CertifiedFetchBodyPersistenceRetryFailure::Registry(_) => "registry preflight",
             CertifiedFetchBodyPersistenceRetryFailure::Service(_) => "service preflight",
@@ -500,6 +557,7 @@ impl CertifiedFetchBodyPersistenceRetryError {
                 (*detail).to_owned()
             }
             CertifiedFetchBodyPersistenceRetryFailure::Executor(error) => error.to_string(),
+            CertifiedFetchBodyPersistenceRetryFailure::Queue(error) => format!("{error:?}"),
             CertifiedFetchBodyPersistenceRetryFailure::CoordinatorStutter => {
                 "waiting Fetch did not stage one new Ready successor".to_owned()
             }
@@ -696,11 +754,35 @@ fn certified_fetch_postdequeue_ingress_handoff(
         }
     }
 }
-/// Exact fresh queue witness retained after LedgerV1 may have advanced.
+/// Exact fresh queue witness which has not crossed the final publication lock.
 struct PreparedCertifiedFetchExactDequeue {
     context: LifecycleContext,
     ingress_identity: PendingFairIngressIdentity,
     queue_witness: PreparedFairIngressQueueWitness,
+}
+/// Prevalidated ordinary certified-Fetch dequeue held across LedgerV1 fsync.
+#[must_use = "the locked certified-Fetch response must commit or retain its witness"]
+struct LockedPreparedCertifiedFetchExactDequeue<'a> {
+    context: LifecycleContext,
+    ingress_identity: PendingFairIngressIdentity,
+    locked: LockedPreparedFairIngressExactDequeue<'a>,
+}
+/// Test-only proof that ordinary Phase B owns the production publication fence.
+#[cfg(test)]
+pub(in crate::sumeragi) struct LockedCertifiedFetchExactDequeueTestV1<'a> {
+    locked: LockedPreparedCertifiedFetchExactDequeue<'a>,
+}
+#[cfg(test)]
+impl LockedCertifiedFetchExactDequeueTestV1<'_> {
+    /// Return the fresh physical occurrence protected by the lock.
+    pub(in crate::sumeragi) const fn physical_admission_ordinal(&self) -> u64 {
+        self.locked.ingress_identity.physical_admission_ordinal()
+    }
+
+    /// Model a restart-only Ledger failure without dequeuing the response.
+    pub(in crate::sumeragi) fn release_without_dequeue(self) {
+        drop(self.locked.unlock_retaining());
+    }
 }
 /// Closed pre-fsync failure for recovered exact-ingress locking.
 #[derive(Debug)]
@@ -780,24 +862,25 @@ impl PreparedCertifiedFetchExactDequeue {
     const fn physical_admission_ordinal(&self) -> u64 {
         self.ingress_identity.physical_admission_ordinal()
     }
-    fn commit(
+    fn lock<'a>(
         self,
-        ingress: &FairV2Ingress,
-    ) -> Result<CertifiedFetchDequeuedResponse, (FairIngressQueueCutError, Self)> {
+        ingress: &'a FairV2Ingress,
+    ) -> Result<LockedPreparedCertifiedFetchExactDequeue<'a>, (FairIngressQueueCutError, Self)>
+    {
         let Self {
             context,
             ingress_identity,
             queue_witness,
         } = self;
-        match queue_witness.commit_exact_dequeue_retaining(
+        match queue_witness.lock_exact_dequeue_retaining(
             ingress,
             context,
             ingress_identity.physical_admission_ordinal(),
         ) {
-            Ok((inbound, disposition)) => Ok(CertifiedFetchDequeuedResponse {
+            Ok(locked) => Ok(LockedPreparedCertifiedFetchExactDequeue {
+                context,
                 ingress_identity,
-                inbound,
-                disposition,
+                locked,
             }),
             Err((error, queue_witness)) => Err((
                 error,
@@ -810,13 +893,36 @@ impl PreparedCertifiedFetchExactDequeue {
         }
     }
 }
-/// Restart-only failure after LedgerV1 publication was invoked.
-#[derive(Debug)]
-#[allow(variant_size_differences)]
-enum CertifiedFetchBodyPersistenceRestartFailure {
-    Ledger(String),
-    Queue(FairIngressQueueCutError),
+impl LockedPreparedCertifiedFetchExactDequeue<'_> {
+    fn unlock_retaining(self) -> PreparedCertifiedFetchExactDequeue {
+        let Self {
+            context,
+            ingress_identity,
+            locked,
+        } = self;
+        PreparedCertifiedFetchExactDequeue {
+            context,
+            ingress_identity,
+            queue_witness: locked.unlock_retaining(),
+        }
+    }
+
+    fn commit(self) -> CertifiedFetchDequeuedResponse {
+        let Self {
+            context: _,
+            ingress_identity,
+            locked,
+        } = self;
+        let (inbound, disposition) = locked.commit();
+        assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+        CertifiedFetchDequeuedResponse {
+            ingress_identity,
+            inbound,
+            disposition,
+        }
+    }
 }
+/// Restart-only failure after LedgerV1 publication was invoked.
 /// Sealed post-ledger authority which may never be retried in-process.
 ///
 /// Both the still-indexed I/O completion and fresh exact queue witness remain
@@ -824,24 +930,18 @@ enum CertifiedFetchBodyPersistenceRestartFailure {
 /// closed output before this value can reach its caller.
 #[must_use = "post-ledger failure requires process restart"]
 pub(crate) struct CertifiedFetchBodyPersistenceRestartError {
-    failure: CertifiedFetchBodyPersistenceRestartFailure,
+    failure: String,
     completion: PreparedCertifiedFetchBodyPersistenceCompletion,
     exact_dequeue: PreparedCertifiedFetchExactDequeue,
 }
 impl CertifiedFetchBodyPersistenceRestartError {
     /// Stable diagnostic category for the restart-only boundary.
     pub(crate) const fn reason(&self) -> &'static str {
-        match &self.failure {
-            CertifiedFetchBodyPersistenceRestartFailure::Ledger(_) => "LedgerV1 publication",
-            CertifiedFetchBodyPersistenceRestartFailure::Queue(_) => "post-ledger queue CAS",
-        }
+        "LedgerV1 publication"
     }
     /// Preserve the exact post-ledger error for restart diagnostics.
     pub(crate) fn detail(&self) -> String {
-        match &self.failure {
-            CertifiedFetchBodyPersistenceRestartFailure::Ledger(error) => error.clone(),
-            CertifiedFetchBodyPersistenceRestartFailure::Queue(error) => format!("{error:?}"),
-        }
+        self.failure.clone()
     }
     /// Return the still-indexed existing executor work identity.
     pub(crate) const fn work_id(&self) -> EffectWorkId {
@@ -914,7 +1014,7 @@ enum CertifiedFetchReadyPublication {
     /// The exact row was already terminal; no generation changed.
     StutterTerminal,
 }
-/// Move-only logical mutation prepared before the fallible queue CAS.
+/// Move-only logical mutation prepared before the final queue publication lock.
 struct PreparedCertifiedFetchReadyMutation<'a> {
     target: &'a mut LifecycleCoordinator,
     next: LifecycleCoordinator,
@@ -946,7 +1046,7 @@ enum CertifiedFetchCompletionPreparationError {
 ///
 /// The queue identity remains distinct across byte-identical retransmissions.
 /// The executor candidate is opaque and has been equality re-probed, but no
-/// response claim, runtime capacity, service handoff, or composite queue CAS
+/// response claim, runtime capacity, service handoff, or queue publication lock
 /// is exposed yet.
 #[derive(Debug)]
 struct PreparedClaimedResponseFamily {
@@ -1520,6 +1620,32 @@ impl PreparedLifecycleIngressSelector {
         };
         Ok(())
     }
+    /// Reauthenticate the exact certified-Fetch target moved from this
+    /// selector into a live worker-capacity reservation.
+    ///
+    /// `take_lifecycle_io_target` deliberately leaves `Unsupported` in the
+    /// selector so the one-shot target cannot be minted twice. That moved-from
+    /// marker is sufficient only when the reservation still owns the matching
+    /// context, physical ingress identity, command family, and executor work
+    /// id checked here.
+    pub(in crate::sumeragi) fn matches_captured_certified_fetch_target(
+        &self,
+        target: &LifecycleIngressIoTargetSeal,
+    ) -> bool {
+        if !matches!(
+            self.io_target,
+            PreparedLifecycleIngressIoTarget::Unsupported
+        ) || target.context() != self.context
+            || target.ingress_identity() != *self.selected_identity()
+            || target.kind() != LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence
+        {
+            return false;
+        }
+        self.selected_claimed_response_family()
+            .ok()
+            .and_then(|family| family.candidate.ordinary())
+            .is_some_and(|candidate| target.matches_certified_fetch_work_id(candidate.work_id()))
+    }
     /// Prepare the selected response's exact durable Waiting Fetch owner.
     ///
     /// This seals the pending executor request, response manifest, active
@@ -1577,21 +1703,33 @@ impl PreparedLifecycleIngressSelector {
     /// its installed concrete registry incumbent without changing either.
     pub(super) fn attest_scheduler_fetch_carrier(
         &self,
+        capacity: &LifecycleIoCapacityReservation<'_>,
         coordinator: &LifecycleCoordinator,
         registry: &mut LifecycleWorkRegistryHolder,
     ) -> Result<LifecycleIngressSchedulerFetchSeal, LifecycleIngressSchedulerCarrierError> {
-        if !matches!(
-            self.io_target,
-            PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
-        ) {
+        if !capacity.matches_captured_certified_fetch_target(self) {
             return Err(LifecycleIngressSchedulerCarrierError::UnsupportedCarrier);
         }
-        let authority = self
-            .selected_certified_fetch_ready_authority()
-            .map_err(|_| LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
-        let location = coordinator
-            .certified_fetch_current_location(authority)
-            .map_err(|_| LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let authority = match self.selected_certified_fetch_ready_authority() {
+            Ok(authority) => authority,
+            Err(error) => {
+                iroha_logger::error!(
+                    error = ?error,
+                    "selected certified Fetch failed ready-authority derivation"
+                );
+                return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch);
+            }
+        };
+        let location = match coordinator.certified_fetch_current_location(authority) {
+            Ok(location) => location,
+            Err(error) => {
+                iroha_logger::error!(
+                    error = ?error,
+                    "selected certified Fetch failed current-location resolution"
+                );
+                return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch);
+            }
+        };
         let wait = match coordinator
             .records
             .get(&location.ordinal())
@@ -1599,22 +1737,53 @@ impl PreparedLifecycleIngressSelector {
         {
             Some(LifecycleState::Waiting(wait)) => wait,
             Some(
-                LifecycleState::Ready | LifecycleState::Claimed(_) | LifecycleState::Terminal(_),
-            )
-            | None => return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch),
+                state @ (LifecycleState::Ready
+                | LifecycleState::Claimed(_)
+                | LifecycleState::Terminal(_)),
+            ) => {
+                iroha_logger::error!(
+                    ordinal = location.ordinal(),
+                    ?state,
+                    "selected certified Fetch current location was not Waiting"
+                );
+                return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch);
+            }
+            None => {
+                iroha_logger::error!(
+                    ordinal = location.ordinal(),
+                    "selected certified Fetch current location lost its coordinator record"
+                );
+                return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch);
+            }
         };
-        let next_generation = certified_fetch_scheduler_generation(wait)
-            .ok_or(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
-        let prepared = self
+        let Some(next_generation) = certified_fetch_scheduler_generation(wait) else {
+            iroha_logger::error!(
+                ordinal = location.ordinal(),
+                observed_generation = wait.observed_generation(),
+                "selected certified Fetch scheduler generation overflowed"
+            );
+            return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch);
+        };
+        let prepared = match self
             .prepare_selected_certified_fetch_completion(registry.registry_mut(), location)
-            .map_err(|error| match error {
-                CertifiedFetchCompletionPreparationError::ReadyAuthority(_) => {
-                    LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch
-                }
-                CertifiedFetchCompletionPreparationError::Registry(_) => {
-                    LifecycleIngressSchedulerCarrierError::InvalidRegistryIncumbent
-                }
-            })?;
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                iroha_logger::error!(
+                    ordinal = location.ordinal(),
+                    error = ?error,
+                    "selected certified Fetch failed registry preflight"
+                );
+                return Err(match error {
+                    CertifiedFetchCompletionPreparationError::ReadyAuthority(_) => {
+                        LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch
+                    }
+                    CertifiedFetchCompletionPreparationError::Registry(_) => {
+                        LifecycleIngressSchedulerCarrierError::InvalidRegistryIncumbent
+                    }
+                });
+            }
+        };
         drop(prepared);
         Ok(LifecycleIngressSchedulerFetchSeal {
             owner: location.owner(),
@@ -1779,7 +1948,9 @@ impl PreparedLifecycleIngressSelector {
         let ready = self
             .selected_certified_fetch_ready_authority()
             .map_err(CertifiedFetchBodyPersistenceRetryFailure::Selector)?;
-        if ready.ingress_identity != id.ingress_identity
+        if !ready
+            .ingress_identity
+            .shares_physical_coordinates(&id.ingress_identity)
             || self.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
         {
             return Err(
@@ -1801,7 +1972,7 @@ impl PreparedLifecycleIngressSelector {
                 "fresh selector no longer authenticates the persisted response",
             ),
         )?;
-        if family.ingress_identity != id.ingress_identity
+        if family.ingress_identity != ready.ingress_identity
             || family
                 .candidate
                 .ordinary()
@@ -1825,7 +1996,8 @@ impl PreparedLifecycleIngressSelector {
         completion: &RecoveredDecisionFetchBodyPersistenceCompletionV1,
     ) -> Result<&PreparedClaimedResponseFamily, RecoveredDecisionFetchExactDequeueErrorV1> {
         let id = completion.id;
-        if *self.selected_identity() != id.ingress_identity
+        let selected_identity = *self.selected_identity();
+        if !selected_identity.shares_physical_coordinates(&id.ingress_identity)
             || self.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
         {
             return Err(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity);
@@ -1833,7 +2005,7 @@ impl PreparedLifecycleIngressSelector {
         let family = self
             .claimed_response_families
             .values()
-            .find(|family| family.ingress_identity == id.ingress_identity)
+            .find(|family| family.ingress_identity == selected_identity)
             .ok_or(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity)?;
         let Some(candidate) = family.candidate.recovered() else {
             return Err(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity);
@@ -1853,9 +2025,12 @@ impl PreparedLifecycleIngressSelector {
         Ok(family)
     }
     /// Re-probe and pre-lock one recovered response occurrence before LedgerV1 fsync.
-    pub(in crate::sumeragi) fn into_locked_recovered_decision_fetch_dequeue<'a>(
+    pub(in crate::sumeragi) fn into_locked_recovered_decision_fetch_dequeue<
+        'a,
+        R: EffectRuntime,
+    >(
         self,
-        executor: &V2EffectExecutor<SerializedV2Runtime>,
+        executor: &V2EffectExecutor<R>,
         ingress: &'a FairV2Ingress,
         completion: &RecoveredDecisionFetchBodyPersistenceCompletionV1,
     ) -> Result<
@@ -1933,6 +2108,7 @@ impl PreparedLifecycleIngressSelector {
                 ),
             );
         }
+        let ingress_identity = *self.selected_identity();
         let Self {
             context,
             request_fence_active: _,
@@ -1946,9 +2122,25 @@ impl PreparedLifecycleIngressSelector {
         drop(claimed_response_families);
         Ok(PreparedCertifiedFetchExactDequeue {
             context,
-            ingress_identity: id.ingress_identity,
+            ingress_identity,
             queue_witness,
         })
+    }
+    /// Exercise the production ordinary Phase-B final queue lock.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn lock_certified_fetch_exact_dequeue_for_test<'a>(
+        self,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+        ingress: &'a FairV2Ingress,
+        completion: &CertifiedFetchBodyPersistenceCompletion,
+    ) -> Result<LockedCertifiedFetchExactDequeueTestV1<'a>, String> {
+        let prepared = self
+            .into_exact_certified_fetch_dequeue(executor, completion.id, &completion.authenticated)
+            .map_err(|error| format!("ordinary Phase-B dequeue preparation failed: {error:?}"))?;
+        let locked = prepared.lock(ingress).map_err(|(error, _retained)| {
+            format!("ordinary Phase-B final queue lock failed: {error:?}")
+        })?;
+        Ok(LockedCertifiedFetchExactDequeueTestV1 { locked })
     }
     /// Mint the sole concrete-registry preflight capability from the selected
     /// authenticated family winner.
@@ -2250,13 +2442,15 @@ fn certified_fetch_scheduler_generation(wait: super::WaitToken) -> Option<u64> {
 impl LifecycleCoordinator {
     /// Complete one persisted certified-Fetch response across every exact owner.
     ///
-    /// All selector, executor, registry, service, address, and durable-receipt
-    /// checks finish before the LedgerV1 publication call. Once that call is
-    /// invoked, every error is restart-only: the fresh queue witness and still
-    /// indexed I/O completion remain sealed in the returned authority while
-    /// the fail-stop output operation closes admission. A successful ledger
-    /// cut is followed by the checked dequeue and an assertion-only registry,
-    /// coordinator, executor, service, and work-index commit tail.
+    /// All selector, executor, registry, service, address, durable-receipt, and
+    /// final queue-lock checks finish before the LedgerV1 publication call. The
+    /// queue service and producer guards then remain held across fsync, so an
+    /// exact relay retry cannot change ownership history inside the durable cut.
+    /// Once publication is invoked, every error is restart-only: the unlocked
+    /// exact witness and still-indexed I/O completion remain sealed in returned
+    /// authority while the fail-stop operation closes admission. A successful
+    /// ledger cut is followed by assertion-only dequeue, registry, coordinator,
+    /// executor, service, and work-index commit tails.
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub(crate) fn complete_certified_fetch_body_persistence(
         &mut self,
@@ -2575,7 +2769,18 @@ impl LifecycleCoordinator {
                 }
             };
         let _authorized_historical_pipeline = checked_transition.into_projection();
+        let exact_dequeue = match exact_dequeue.lock(ingress) {
+            Ok(locked) => locked,
+            Err((error, _retained)) => {
+                let receipt = durable_registry.abort_before_dequeue();
+                retry!(
+                    CertifiedFetchBodyPersistenceRetryFailure::Queue(error),
+                    receipt
+                );
+            }
+        };
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            drop(exact_dequeue.unlock_retaining());
             let receipt = durable_registry.abort_before_dequeue();
             retry!(
                 CertifiedFetchBodyPersistenceRetryFailure::OutputClosed,
@@ -2585,13 +2790,13 @@ impl LifecycleCoordinator {
         if let PreparedCertifiedFetchReadyTransition::Mutation(ready_mutation) = &ready
             && let Err(error) = ready_mutation.persist_exact_staged_successor()
         {
+            drop(operation);
+            let exact_dequeue = exact_dequeue.unlock_retaining();
             let receipt = durable_registry.abort_before_dequeue();
             return Err(
                 CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
                     CertifiedFetchBodyPersistenceRestartError {
-                        failure: CertifiedFetchBodyPersistenceRestartFailure::Ledger(
-                            error.to_string(),
-                        ),
+                        failure: error.to_string(),
                         completion: PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
                             CertifiedFetchBodyPersistenceCompletion {
                                 id,
@@ -2605,28 +2810,7 @@ impl LifecycleCoordinator {
                 ),
             );
         }
-        let dequeued = match exact_dequeue.commit(ingress) {
-            Ok(dequeued) => dequeued,
-            Err((error, exact_dequeue)) => {
-                let receipt = durable_registry.abort_before_dequeue();
-                return Err(
-                    CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
-                        CertifiedFetchBodyPersistenceRestartError {
-                            failure: CertifiedFetchBodyPersistenceRestartFailure::Queue(error),
-                            completion: PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
-                                CertifiedFetchBodyPersistenceCompletion {
-                                    id,
-                                    authenticated,
-                                    receipt,
-                                },
-                                work_ack,
-                            ),
-                            exact_dequeue,
-                        },
-                    ),
-                );
-            }
-        };
+        let dequeued = exact_dequeue.commit();
         let runtime_receipt =
             certified_fetch_postdequeue_ingress_handoff(dequeued.inbound(), &selected_ingress_mode)
                 .map_err(|error| {

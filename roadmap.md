@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-27
+Last updated: 2026-08-28
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -163,14 +163,6 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Torii first-release closure
 
-- Define governed DA lane/epoch producer authority, an admissible epoch
-  horizon, and an atomic durable retirement operation for replay cursors and
-  receipts. Enforce that policy before replay-window reservation so arbitrary
-  authenticated accounts cannot consume the finite lane/epoch inventory.
-- Specify a canonical, size-bounded Taikai anchor acknowledgement whose proof
-  is authenticated and bound to the exact request digest and manifest ID.
-  Require HTTPS outside loopback testing, same-origin/no redirects, request
-  deadlines, and verified receipt persistence before source artefacts retire.
 - Make DA spool recovery transactional: journal server-owned timestamps and
   intended artefact bytes before the first immutable write, then resume or
   quarantine receipt-less partial transactions deterministically after
@@ -273,7 +265,30 @@ Completed history lives in [`status.md`](./status.md).
   missed-deadline classification, objective release failure,
   opening-deadline expiry, fresh-TLE retry, restart/restore replay,
   narrow-result fresh Confirmation Jury, stale-head supersession, exact-height
-  enactment, and rollback-isolated execution failure.
+  enactment, and rollback-isolated execution failure. The reservation-bound
+  carrier attestation, manifest-less certified-Fetch Phase-B completion, and
+  ordinary/recovered exact-retransmission ownership-history refresh are
+  implemented and covered by focused source/regression checks, but fresh strict
+  four-validator evidence for their resulting source is still required.
+- Carry the completed zero/singleton hidden-electorate capacity path, bounded
+  generation-16 exhaustion, live-candidate bond retention, atomic narrow-Policy
+  Confirmation capacity decision, account-rekey containment, and protected
+  validation-fee restore checks through that four-peer matrix. Preserve the
+  fail-closed terminal shapes and prove that retries, restore, and exact-height
+  execution cannot strand a bond, an unfillable body requirement, an account
+  identity, or fee admission behind missing provenance. The isolated target now
+  contains source-budgeted four-validator tests for bond retention/release,
+  Confirmation-capacity abort, exact stale-head supersession, fail-fast
+  execution-failure unchanged-state isolation, state equality, and restart;
+  run them from the settled candidate before treating the matrix as evidence.
+- Candidate-qualify the exact Ready-Proposal-Sign producer-point preemption and
+  the certified-response queue-refresh retry. The first patched four-validator
+  rerun showed no recurrence of the former queue-cut fail-stop, but its
+  threshold-key installation transaction timed out after 600 seconds under
+  severe unrelated host contention, so it is diagnostic evidence rather than a
+  liveness receipt. Repeat below-threshold install, epoch-boundary activation,
+  and the full Policy-to-enactment corridor on an uncontended same-source
+  four-validator candidate.
 - Qualify the implemented live threshold-beacon partial-share transport,
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
@@ -299,13 +314,22 @@ Completed history lives in [`status.md`](./status.md).
   the refreshed finalized height immediately before normal signed submission.
   Qualify the implemented certified
   public-session install, atomic active-pointer cutover/retirement, new-ballot
-  selection guard, and local-custody retirement guard against every committed
-  ballot/retry deadline. Complete the authenticated broker transport and HSM
-  provisioning path; then demonstrate old-share retention/zeroization, restart
-  recovery, peer authentication/rate limits, freshness expiry, canonical
-  collection, and operator submission on at least four peers. Do not describe
-  aggregate opening as operationally automatic or claim secure erasure from the
-  software adapter.
+  selection guard, immutable session-to-ordered-roster binding, and
+  local-custody retirement guard against every committed ballot/retry deadline.
+  Startup now derives the local seat separately for the active and every
+  deadline-retained historical session and requires an exact non-signing
+  key-session/transcript/seat lookup through the same signer. The authenticated
+  broker operation and software custody implementation are complete, including
+  independent result matching, surrounding requalification, mismatch poisoning,
+  and fail-closed defaults. Source tests now exercise exact active-plus-retained
+  daemon call sets, historical expiry, all three independent result-binding
+  substitutions, and truncated replies. Qualify that source against a genuine
+  HSM provider;
+  then demonstrate old-share retention/zeroization, restart recovery, peer
+  authentication/rate limits, freshness expiry, canonical collection, and
+  operator submission on at least four peers. Do not describe a point-in-time
+  custody attestation as future availability, aggregate opening as operationally
+  automatic, or the software adapter as secure erasure.
 - Qualify the implemented Core-authorized pre-seal timed-OVN casting-context
   archive read and its maximum-4,194,304-byte canonical header-framed Norito
   `ParliamentTimedOvnCastingContextArchiveV1`. The archive is public diagnostic
@@ -341,24 +365,35 @@ Completed history lives in [`status.md`](./status.md).
   the source and pinned Cargo input are sealed, then publish the exact
   proposal-kind/body/route inventory. Keep the retired equal Parliament ballot
   route and proposal-backed referendum/finalize/enact surfaces absent from the
-  served OpenAPI as they already are from source and SDKs. Standalone referenda
-  must remain explicitly separate from Parliament attempts, and automatic
-  execution must remain only its non-submit-able audit outcome.
+  served OpenAPI as they already are from source and SDKs. The three current
+  mirrors are byte-identical at 3,078,501 bytes and SHA-256
+  `6f1d88fe8503d56e8fb1bb1b0115d5a1cef8228b41c953bab4fc565be706e8bd`,
+  with the retired `GovernanceFinalizeRequestV1` and
+  `GovernanceEnactRequestV1` schemas removed, and the focused Python Parliament
+  API gate is green at 36/36. Their deliberately unchanged provenance manifests
+  remain unsigned dirty-tree output and cannot be promoted. Standalone
+  referenda must remain explicitly separate from Parliament attempts, and
+  automatic execution must remain only its non-submit-able audit outcome.
 - Review and candidate-qualify the implemented aggregate-only Parliament alert
   rules for stuck attempts and deadline misses. Their five-rule `promtool` suite
   is green locally; restart and four-peer behavior still require evidence
   without identifiers, free-form labels, or private ballot material.
 - Freeze and rerun the implemented 23-case threshold-BLS/timed-OVN Criterion
   and logical-allocation matrix from the same immutable candidate. The local
-  evidence checker and byte-identical pre-merge allocation runs establish the
-  harness contract, but do not replace fresh candidate measurements and an
-  archived sealed report.
+  evidence checker passes all 18 collected cases across 15 test functions, and
+  byte-identical pre-merge allocation runs establish the harness contract, but
+  do not replace fresh candidate measurements and an archived sealed report.
 - Re-run the bounded Parliament model and deterministic source/model contract
   from the immutable candidate, then pass focused data-model/Core/Torii tests,
   the legacy-codec guard, workspace tests, strict all-target Clippy, formatting,
-  and a clean signed release corridor. The local TLC run and source/model gate
-  are green; bounded model checking remains regression evidence and does not
-  replace cryptographic review or multi-peer tests.
+  strict TLAPS, pinned Verus, chaos/soak qualification, and a clean externally
+  signed release corridor. The local TLC run now covers the typed zero/singleton
+  pre-request capacity path, bounded exhaustion, and atomic Confirmation-capacity
+  decision in addition to the original lifecycle, while the deterministic
+  source/model gate and all 14 lifecycle corridor source checks with 113
+  adversarial subtests are green.
+  Bounded model checking remains regression evidence and does not replace
+  cryptographic review, real-HSM custody, or multi-peer tests.
 
 ## ZK algorithm release qualification
 
@@ -402,6 +437,11 @@ Completed history lives in [`status.md`](./status.md).
   release-scale archive. Add a durable, version-bound rebuild checkpoint only if
   that evidence warrants it; preserve fail-closed reads for incomplete,
   poisoned, or pruning-recovery state and never restore the ledger-history scan.
+- Replace the first-release 4,096-entry retained Kaigi private-usage log with a
+  versioned rolling accumulator before supporting longer fine-grained sessions.
+  Preserve deterministic replay protection, bind the accumulator into the
+  privacy proof statement, and migrate only through an explicit protocol
+  version rather than weakening the V1 record bound.
 - Finish non-Rust Kaigi parity against one Rust-generated nine-instruction
   Norito fixture set. Wire the Kotlin/Java typed templates into canonical
   `WirePayload` encoding and consume the same complete fixture set from
@@ -468,6 +508,14 @@ Completed history lives in [`status.md`](./status.md).
 
 ## SoraNet first-release security qualification
 
+- Qualify the shared P2P pre-authentication gate through live TCP and QUIC
+  listeners under global-capacity saturation, authentication success, timeout,
+  shutdown, IPv4-mapped/native-IPv6 sources, and legitimate shared-NAT load.
+  Archive rejection-counter and bounded-resource evidence from the release
+  build.
+- Exercise stateless VPN quotes across Torii restart and load-balanced nodes,
+  then saturate the optional process session cache and prove an exact paid,
+  active WSV lease still creates the same canonical session and helper ticket.
 - Exercise the hardened relay, puzzle, DNS, VPN backend, and privileged helper
   boundaries on Linux with real TUN devices, pidfds, owner-private runtime
   secrets, DNS rollback, process replacement, partial writes, and hostile local
@@ -546,6 +594,22 @@ to:
   a substitute for operator approval.
 
 ## Kagemusha production evidence closeout
+
+Public Taira remains the deployment gate rather than a source-code toggle:
+
+- Restore `taira.sora.org:443`, render the four validator configurations with
+  the reviewed `[settlement.offline]` release, deploy the exact eight-role
+  ABI-21/V4 artifact set plus catalog/reservation/revalidation/validator seals,
+  and restart all four peers from the same signed genesis and flattened-config
+  digest.
+- Use the existing Taira Kagami bootstrap generator to register and fund the
+  command authority with `CanManageOfflineEscrow`, install the verifier records
+  and Convertible XOR definition, complete governed Stage/Enable activation,
+  activate the device policy, and enroll qualified hardware-backed users.
+- Publish the protected `privacy-production-enabled` SDK artifacts, then run a
+  same-revision `iroha taira doctor` and every SDK's credential-free live probe.
+  Perform top-up/redemption canaries only under a separate explicit live-write
+  authorization and retain their four-validator finality/liveness evidence.
 
 The exact V4 lifecycle source corridor is implemented end to end: Core's
 direct-carrier and atomic state rules, the six-phase archive CLI, the
@@ -628,10 +692,15 @@ close the internal blockers below:
   probe. Host JDK 21 and the exact NDK are present, but no ADB device,
   governance-aligned Android trust roots, signed reference slot, or complete
   offline AndroidX test cache is available.
-- Keep tagged and manually dispatched mobile production capability forced
-  false independently for Apple and Android until the workflow authenticates
-  a protected, source-bound receipt for that exact platform. Never let one
-  platform's receipt enable the other platform's artifacts.
+- Execute the implemented platform-separated mobile authorization workflow
+  only after the Apple and Android protected environments contain current,
+  source-bound physical-device evidence. Each build now derives production
+  mode from the exact protected promotion run and requires its own OIDC-attested
+  authorization digest; the combined publisher independently reverifies both
+  receipts, both complete build-job package digests, every internal checksum,
+  and the exact fourteen-file final release inventory before any release
+  mutation. Run that implemented path on the real protected hosts; repository
+  fixtures do not replace the deployment-owned promotion receipt.
 - Freeze a clean immutable source commit with exactly one accepted SSH
   signature and no tracked or untracked changes. The current unsigned
   development HEAD and dirty checkout are not candidate source. Qualify the
@@ -1965,18 +2034,23 @@ green at that checkpoint. That historical checkpoint did not include a Cargo
 result against its split source; newer receipts above supersede it, without
 replacing the complete release gates.
 
-The static release inventory contract now enumerates `864/864` production tests
-across 43 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
+The static release inventory contract now enumerates `863/863` production tests
+across 44 modules and `518/518` focused `G-UNIT` entries. Its canonical 519-line
 TSV has
 SHA-256
-`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
+`b3bcc3655b1362819c0a01ea7a9acab3eaa303b58ec28866cc4d42315c4240b7`.
 The separate canonical production module/test TSV has SHA-256
-`9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`;
-the newest rows bind the proposal-height namespace for exact retired attempts,
-canonical successor acceptance while local sidecars lag, two-link raw
+`2c27cdd44bc6b62d5e7798c0ed2694f5caaf86546dbb9daf30abf920381da444`;
+the newest inventoried rows bind stale exact `TimeoutVote` retransmission
+coalescing without reply-route regression, Ready local Proposal Sign plus
+its exact output taking precedence over a pending Timeout Certificate, the
+eligible-only authority for that ordinary-head preemption, and replica
+disposition observing the exact FIFO beneath the global-selection overlay. The
+broader current inventory binds the proposal-height namespace for exact retired
+attempts, canonical successor acceptance while local sidecars lag, two-link raw
 lane-chain hydration on receipt-free cold restart, and exact noncanonical
 autonomous-output retirement at applied-height handoff, plus ordinary and
-record-backed autonomous historical predecessor durability. They also bind
+record-backed autonomous historical predecessor durability. It also binds
 crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, and the exact pre-mutation
 terminal-sweep partition. The duplicate inline V2 core network simulations
@@ -1999,10 +2073,10 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 66 parents and 398
+source check. The reviewed Rust include topology contains 70 parents and 425
 direct entries; its canonical payload SHA-256 is
-`6830478f0523f8e320378200b67894bf9a6a3c09574a99741a3a04b76a457990`.
-The release-inventory contract is statically reconciled at 84/864/522, and the
+`0e92b92181eb915d6b70f2ec963fb721ebdd6c0519446a1c5bc7ef1d5013635f`.
+The release-inventory contract is statically reconciled at 85/863/518, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker discharges its current Rust/model/mutation/source obligations except
 for the separately recorded task-start `Cargo.lock` mismatch; the static
@@ -2036,7 +2110,7 @@ source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required unsupported-version-before-signing regression preserves the exact
-864-production-test and 522-G-UNIT-test counts. Rust's separated client test
+863-production-test and 518-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -2094,13 +2168,13 @@ The remaining work is evidence-driven and must stay in order:
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
   mutations before release evidence is accepted, then finish the remaining
-  864-test,
-  43-module production inventory legs and archived G-UNIT execution.
+  863-test,
+  44-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product assigns all 54 structural TLAPS
   projection rows; that is source inventory only. Its V2 inductive-safety,
   successor-isolation, and temporal-product obligations remain in the formal
   dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 522 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 518 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
@@ -28119,8 +28193,8 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 84 pre-network legs and their exact
-864-test inventory plus the separate exact 522-test G-UNIT inventory, the
+original HEAD/tree/`Cargo.lock`, all 85 pre-network legs and their exact
+863-test inventory plus the separate exact 518-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
@@ -28481,23 +28555,18 @@ hardening for SORA Parliament policy juries.
 
 ## Kagemusha protected mobile production publication
 
-**Status:** outstanding deployment/release qualification work; the ABI-21/V4
-runtime and legitimate full/partial redemption paths are implemented.
+**Status:** source implementation complete; protected-host execution and release
+qualification remain outstanding. The ABI-21/V4 runtime and legitimate
+full/partial redemption paths are implemented.
 
-- Produce separate, attested Apple and Android build-authorization receipts
-  from their own protected physical-device qualification lanes. Each receipt
-  must bind the platform, source commit and closure, release/tag identity,
-  manifest/policy/promotion digests, ABI-21/native ABI-23, and the exact
-  `privacy-production-enabled` feature set.
-- Let each mobile build job enable only its own platform after independently
-  verifying its receipt and GitHub attestation. Receipt coordinates may select
-  evidence but must never act as a trusted boolean, and Apple evidence must not
-  authorize Android or vice versa.
-- Require both platform receipt digests before publishing the combined mobile
-  release, and embed the appropriate authorization digest in each artifact's
-  provenance. Tag builds without both receipts must not publish default-off
-  artifacts under the final production release identity.
-- The current protected promotion workflow validates physical iOS evidence but
-  emits no durable authorization receipt; there is no equivalent protected
-  Android evidence lane yet. Resolve both deployment-owned prerequisites before
-  advertising official production mobile packages.
+- Provision and approve the `kagemusha-v4-production` and
+  `kagemusha-v4-android-production` environments with the exact protected
+  runners, current physical-device evidence, trust roots, and root-custodied
+  release inputs required by the checked-in workflow.
+- Run the platform-separated authorization workflow from one clean immutable
+  `main` commit. Retain both canonical authorization documents, both pinned
+  Kagami verification reports, and both GitHub OIDC bundles, then publish the
+  matching canonical mobile tag through the guarded combined publisher.
+- Do not advertise the official production mobile packages until that real
+  protected run and its release readback complete. Source and fixture checks do
+  not substitute for device evidence or protected-environment approval.

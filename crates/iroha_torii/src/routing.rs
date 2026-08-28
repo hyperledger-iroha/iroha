@@ -1584,7 +1584,8 @@ pub struct KaigiCallViewDto {
     /// Optional description assigned by the host.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Maximum allowed participants excluding the host.
+    /// Explicit participant limit excluding the host (1..=4096).
+    /// An omitted value uses the Kaigi V1 protocol maximum of 4096.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub max_participants: Option<u32>,
     /// Host-selected gas rate for the call.
@@ -10071,8 +10072,7 @@ fn insert_account_alias_binding_for_test(
     world
         .account_aliases_by_account_mut_for_testing()
         .insert(account_id.clone(), labels);
-    world.account_rekey_records_mut_for_testing().insert(
-        label.clone(),
+    world.replace_account_rekey_record_for_testing(
         iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
     );
 }
@@ -40867,14 +40867,14 @@ mod tx_query_filter_tests {
     }
     routing_test! { sync kaigi_signal_batch_lineage_scan_rejects_unrelated_global_work_over_budget
         let (account, _) = account_with_key();
+        let (other_account, _) = account_with_key();
         let mut world = iroha_core::state::World::with([], [], []);
         for label in ["unrelated-a", "unrelated-b"] {
             let alias = iroha_data_model::account::rekey::AccountAlias::domainless(
                 label.parse().expect("account alias label"),
                 iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
             );
-            world.account_rekey_records_mut_for_testing().insert(
-                alias.clone(),
+            world.replace_account_rekey_record_for_testing(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     alias,
                     account.clone(),
@@ -40890,6 +40890,18 @@ mod tx_query_filter_tests {
             1,
         )
         .expect_err("the second unrelated record must exceed the hard work budget");
+        assert_eq!(
+            error,
+            iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+        );
+        let error = resolve_kaigi_signal_active_lineages_batch(
+            &world.view(),
+            &catalog,
+            &BTreeSet::from([account, other_account]),
+            0,
+            1,
+        )
+        .expect_err("requested lineage accounts must consume the same hard work budget");
         assert_eq!(
             error,
             iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
@@ -41053,17 +41065,30 @@ mod tx_query_filter_tests {
                 expires_at_ms,
                 dm::Metadata::default(),
             );
-            world
+            let mut block = world.block();
+            let mut transaction = block.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(),
+                0,
+            );
+            transaction
                 .smart_contract_state_mut_for_testing()
                 .insert(
                     iroha_core::sns::record_storage_key(&selector),
                     norito::codec::Encode::encode(&lease),
                 );
-            world
+            transaction
                 .account_aliases_mut_for_testing()
                 .insert(alias.clone(), active.clone());
-            world.account_rekey_records_mut_for_testing().insert(
-                alias.clone(),
+            let mut aliases = transaction
+                .account_aliases_by_account_mut_for_testing()
+                .get(active)
+                .cloned()
+                .unwrap_or_default();
+            aliases.insert(alias.clone());
+            transaction
+                .account_aliases_by_account_mut_for_testing()
+                .insert(active.clone(), aliases);
+            transaction.replace_account_rekey_record_for_testing(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     alias,
                     retired.clone(),
@@ -41071,6 +41096,8 @@ mod tx_query_filter_tests {
                 .repoint_for_account_id_rekey(active.clone())
                 .expect("active account-id rekey lineage"),
             );
+            transaction.apply();
+            block.commit();
         }
 
         let (retired_host, retired_host_keypair) = account_with_key();
@@ -46737,6 +46764,7 @@ mod validation_fee_torii_ingress_tests {
                             nay: 1,
                             abstain: 0,
                         },
+                        2,
                         166,
                     )
                     .expect("finalize deterministic aggregate ballot");

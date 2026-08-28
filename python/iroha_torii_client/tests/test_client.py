@@ -8269,7 +8269,7 @@ def test_get_offline_capability_is_asset_neutral_and_exact() -> None:
     session.queue(StubResponse(payload=_offline_capability_payload()))
     client = ToriiClient("http://node.test", session=session)
 
-    capability = client.get_offline_capability()
+    capability = client.get_offline_capability(timeout=12.5)
 
     assert isinstance(capability, OfflineStatus)
     assert capability.cash_handoff_capability == "cash_handoff_v1"
@@ -8281,7 +8281,13 @@ def test_get_offline_capability_is_asset_neutral_and_exact() -> None:
     assert call["url"].endswith("/v1/offline/readiness")
     assert call["params"] == {}
     assert call["headers"]["Accept"] == "application/json"
+    assert call["allow_redirects"] is False
+    assert call["timeout"] == 12.5
     assert not hasattr(ToriiClient, "get_kagemusha_readiness")
+
+    for invalid_timeout in (True, 0, -1, float("inf"), float("nan"), "1"):
+        with pytest.raises(ValueError, match="positive finite number"):
+            client.get_offline_capability(timeout=invalid_timeout)  # type: ignore[arg-type]
 
 
 def test_get_offline_capability_rejects_non_universal_claims() -> None:
@@ -8346,7 +8352,7 @@ def test_submit_kagemusha_top_up_sends_exact_norito_and_idempotency_key() -> Non
     client = ToriiClient("http://node.test", session=session)
 
     request = _offline_top_up_request()
-    reference = client.submit_kagemusha_top_up(request)
+    reference = client.submit_kagemusha_top_up(request, timeout=7.5)
 
     assert reference.operation_id == OFFLINE_OPERATION_ID
     assert reference.kind.kind == "top_up"
@@ -8360,6 +8366,8 @@ def test_submit_kagemusha_top_up_sends_exact_norito_and_idempotency_key() -> Non
         "Idempotency-Key": OFFLINE_OPERATION_ID,
     }
     assert call["data"] is request.norito
+    assert call["allow_redirects"] is False
+    assert call["timeout"] == 7.5
 
 
 def test_submit_kagemusha_redeem_uses_only_the_final_route() -> None:
@@ -8374,12 +8382,37 @@ def test_submit_kagemusha_redeem_uses_only_the_final_route() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     request = _offline_redeem_request()
-    reference = client.submit_kagemusha_redeem(request)
+    reference = client.submit_kagemusha_redeem(request, timeout=8.5)
 
     assert reference.kind.kind == "redeem"
     assert session.calls[0]["url"].endswith("/v1/offline/redeem")
     assert session.calls[0]["headers"]["Content-Type"] == "application/x-norito"
     assert session.calls[0]["data"] is request.norito
+    assert session.calls[0]["allow_redirects"] is False
+    assert session.calls[0]["timeout"] == 8.5
+
+
+def test_kagemusha_request_methods_reject_invalid_timeouts_before_network() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+    calls = (
+        lambda timeout: client.submit_kagemusha_top_up(
+            _offline_top_up_request(),
+            timeout=timeout,
+        ),
+        lambda timeout: client.submit_kagemusha_redeem(
+            _offline_redeem_request(),
+            timeout=timeout,
+        ),
+        lambda timeout: client.get_kagemusha_operation_status(
+            OFFLINE_OPERATION_ID,
+            timeout=timeout,
+        ),
+    )
+
+    for call in calls:
+        for invalid_timeout in (True, 0, -1, float("inf"), float("nan"), "1"):
+            with pytest.raises(ValueError, match="positive finite number"):
+                call(invalid_timeout)  # type: ignore[arg-type]
 
 
 def test_kagemusha_command_validation_rejects_noncanonical_inputs_before_network() -> None:
@@ -8610,10 +8643,15 @@ def test_get_kagemusha_operation_status_parses_all_tagged_states() -> None:
         session = RecordingSession()
         session.queue(StubResponse(payload=payload))
         client = ToriiClient("http://node.test", session=session)
-        status = client.get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+        status = client.get_kagemusha_operation_status(
+            OFFLINE_OPERATION_ID,
+            timeout=9.5,
+        )
         assert isinstance(status, expected_type)
         assert status.operation_id == OFFLINE_OPERATION_ID
         assert session.calls[0]["url"].endswith(OFFLINE_STATUS_URI)
+        assert session.calls[0]["allow_redirects"] is False
+        assert session.calls[0]["timeout"] == 9.5
 
 
 def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:

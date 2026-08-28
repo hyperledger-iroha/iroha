@@ -56,6 +56,7 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
+import { KAIGI_MAX_PARTICIPANTS_V1 } from "./instructionBuilders.js";
 import {
   assertNonBlankString,
   normalizeTransactionStatusScope,
@@ -242,6 +243,7 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
   import.meta.url,
 ).href;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
 const FEE_QUOTE_JSON_MAX_BYTES = 64 * 1024;
 const FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES = 64 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
@@ -1623,16 +1625,19 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/offline/readiness", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      redirect: "error",
     });
     await this._expectStatus(response, [200]);
     requireKagemushaJsonContentType(
       this._getHeader(response, "content-type"),
       "Offline capability response",
     );
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new TypeError("Offline capability response must contain JSON");
-    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      "Offline capability response",
+      { signal },
+    );
     return normalizeOfflineStatus(payload);
   }
 
@@ -1669,17 +1674,19 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/offline/operations/${canonicalId}`,
-      { headers: JSON_ACCEPT_HEADERS, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal, redirect: "error" },
     );
     await this._expectStatus(response, [200]);
     requireKagemushaJsonContentType(
       this._getHeader(response, "content-type"),
       "Kagemusha operation status response",
     );
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new TypeError("Kagemusha operation status response must contain JSON");
-    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      "Kagemusha operation status response",
+      { signal },
+    );
     return normalizeKagemushaOperationStatus(payload, canonicalId);
   }
 
@@ -1698,6 +1705,7 @@ export class ToriiClient {
       },
       body: Buffer.from(normalized.norito),
       signal,
+      redirect: "error",
     });
     await this._expectStatus(response, [202]);
     requireKagemushaJsonContentType(
@@ -1706,10 +1714,12 @@ export class ToriiClient {
     );
     const location = this._getHeader(response, "location");
     const retryAfter = this._getHeader(response, "retry-after");
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new TypeError("Kagemusha operation reference response must contain JSON");
-    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      "Kagemusha operation reference response",
+      { signal },
+    );
     return normalizeKagemushaOperationReference(payload, {
       expectedOperationId: normalized.operationId,
       expectedKind: kind,
@@ -30641,8 +30651,10 @@ function normalizeKaigiCallView(payload, expectedCallId) {
           0xffff_ffff,
         )
     : undefined;
-  if (maxParticipants === 0) {
-    throw new RangeError(`${context}.max_participants must be between 1 and 4294967295`);
+  if (maxParticipants === 0 || maxParticipants > KAIGI_MAX_PARTICIPANTS_V1) {
+    throw new RangeError(
+      `${context}.max_participants must be between 1 and ${KAIGI_MAX_PARTICIPANTS_V1}`,
+    );
   }
   const createdAtMs = normalizeKaigiU64(
     record.created_at_ms,

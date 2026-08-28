@@ -744,7 +744,7 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "5009fc5c34fbcd3f75897ef7f37e7c331e948ac00e555b749ca1a4bff85cadf7"
     ),
     "try_push_at": (
-        "eb2a36ec0884655d739e38e34b4031467c0f5ed983c77583b3d331df6cceffac"
+        "41efad869d70a96aadd0e31053c4691158a61b0bd894e98981859523a79a1419"
     ),
     "try_recv_if_at_checked": (
         "73722eaedc36f6ef5265f77198fb95ea520b686ea71406cca9326a8376c2c13b"
@@ -759,6 +759,12 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
     "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (
         "9fdace5f2d7203c48221a9ea47be4bf0522a126403cb3dfd6d9397fefd63e989"
+    ),
+    "fair_v2_ingress_coalesces_stale_timeout_vote_retry_without_regressing_route": (
+        "6f7d5a69eed80d1f0969993aa2dabcae9903031851feb3e7b37fe27649f079ae"
+    ),
+    "fair_v2_ingress_rejects_stale_non_timeout_vote_route": (
+        "a655336f36e4cdd6b606192202820dc8156109bce4a1db098a3005d2fbdf41bd"
     ),
 }
 

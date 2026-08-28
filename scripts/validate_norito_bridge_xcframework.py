@@ -40,8 +40,10 @@ EXPECTED_MANIFEST_FIELDS = {
     "native_bridge_abi_version",
     "privacy_production_enabled",
     "cargo_features",
+    "kagemusha_production_authorization_sha256",
     "build_environment",
     "source_commit",
+    "embedded_source_commit",
     "source_tree_dirty",
     "source_fingerprint_sha256",
     "cargo_lock_sha256",
@@ -89,7 +91,9 @@ COMMON_BUILD_ENVIRONMENT = {
     "CARGO_INCREMENTAL",
     "CARGO_NET_OFFLINE",
     "CARGO_TARGET_DIR",
+    "CONNECT_NORITO_SOURCE_REVISION",
     "HOME",
+    "IROHA_GIT_COMMIT_HASH",
     "LANG",
     "LC_ALL",
     "NORITO_SKIP_BINDINGS_SYNC",
@@ -99,6 +103,7 @@ COMMON_BUILD_ENVIRONMENT = {
     "RUSTDOC",
     "RUSTUP_HOME",
     "TMPDIR",
+    "VERGEN_GIT_SHA",
 }
 EXPECTED_ENVIRONMENT_PROFILES = {
     "apple-ios-device": sorted(
@@ -578,11 +583,23 @@ def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
     expected_features = ["privacy-production-enabled"] if production else []
     if payload["cargo_features"] != expected_features:
         raise ValidationError("artifact Cargo feature inventory is not exact")
+    authorization = payload["kagemusha_production_authorization_sha256"]
+    if authorization is not None and (
+        not production
+        or not isinstance(authorization, str)
+        or SHA256.fullmatch(authorization) is None
+        or authorization == "0" * 64
+    ):
+        raise ValidationError("artifact Kagemusha production authorization is invalid")
     _validate_build_environment(root, payload["build_environment"])
     if not isinstance(payload["source_commit"], str) or COMMIT.fullmatch(
         payload["source_commit"]
     ) is None:
         raise ValidationError("artifact source_commit is not canonical")
+    if not isinstance(payload["embedded_source_commit"], str) or COMMIT.fullmatch(
+        payload["embedded_source_commit"]
+    ) is None:
+        raise ValidationError("artifact embedded_source_commit is not canonical")
     if type(payload["source_tree_dirty"]) is not bool:
         raise ValidationError("artifact source_tree_dirty must be boolean")
     for field in (
@@ -818,12 +835,18 @@ def _validate_repository_provenance(
             root,
             payload["source_commit"],
         )
+        expected_embedded_commit = pin_commit.embedded_source_commit(
+            root,
+            payload["source_commit"],
+        )
     except (OSError, RuntimeError, ValueError) as error:
         raise ValidationError(
             f"unable to authenticate artifact source provenance: {error}"
         ) from error
     if relationship not in {"direct", "pin-parent"}:
         raise ValidationError("artifact source commit relationship is not canonical")
+    if payload["embedded_source_commit"] != expected_embedded_commit:
+        raise ValidationError("artifact embedded source commit does not match source")
     if payload["source_tree_dirty"] is not actual_dirty:
         raise ValidationError("artifact source dirty state does not match source")
     if relationship == "pin-parent" and actual_dirty:

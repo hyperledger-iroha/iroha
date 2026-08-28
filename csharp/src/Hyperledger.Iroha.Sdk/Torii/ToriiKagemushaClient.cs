@@ -22,6 +22,7 @@ public sealed partial class ToriiClient
             content: null,
             accept: "application/json",
             cancellationToken: cancellationToken);
+        RequireKagemushaStatus(response, HttpStatusCode.OK, "Offline capability");
         using var document = await ReadKagemushaJsonAsync(
             response,
             "Offline capability response",
@@ -66,6 +67,7 @@ public sealed partial class ToriiClient
             content: null,
             accept: "application/json",
             cancellationToken: cancellationToken);
+        RequireKagemushaStatus(response, HttpStatusCode.OK, "Kagemusha operation status");
         using var document = await ReadKagemushaJsonAsync(
             response,
             "Kagemusha operation status response",
@@ -133,6 +135,18 @@ public sealed partial class ToriiClient
             stream,
             context,
             cancellationToken);
+    }
+
+    private static void RequireKagemushaStatus(
+        HttpResponseMessage response,
+        HttpStatusCode expected,
+        string context)
+    {
+        if (response.StatusCode != expected)
+        {
+            throw new InvalidDataException(
+                $"{context} expected HTTP {(int)expected}, got {(int)response.StatusCode}.");
+        }
     }
 
     private static async Task<byte[]> ReadBoundedKagemushaJsonBodyAsync(

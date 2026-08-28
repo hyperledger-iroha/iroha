@@ -28,7 +28,7 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
     call_starts = [
         index
         for index, line in enumerate(lines)
-        if line == "run_hermetic_apple_cargo \\"
+        if line.strip() == "run_hermetic_apple_cargo \\"
     ]
     assert len(call_starts) == 5
 
@@ -54,8 +54,11 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
         ("apple-macos", "$MACOSX_SDKROOT", "$MACOS_ARM_TRIPLE"),
         ("apple-macos", "$MACOSX_SDKROOT", "$MACOS_X64_TRIPLE"),
     )
-    for call, (profile, sdkroot, triple) in zip(calls, expected_slices, strict=True):
+    for start, call, (profile, sdkroot, triple) in zip(
+        call_starts, calls, expected_slices, strict=True
+    ):
         assert len(call) == 5
+        assert lines[start - 1].strip() == f'if should_build_apple_slice "{triple}"; then'
         assert call[1].strip() == f'{profile} "{sdkroot}" \\'
         assert (
             call[2].strip()
@@ -67,6 +70,12 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
     assert "CARGO_BUILD_DIR_" not in source
     assert "local cargo_target_dir" not in source
     assert source.count('--set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"') == 1
+    assert source.count(
+        '--set "CONNECT_NORITO_SOURCE_REVISION=$EMBEDDED_SOURCE_COMMIT"'
+    ) == 1
+    assert source.count('--set "IROHA_GIT_COMMIT_HASH=$EMBEDDED_SOURCE_COMMIT"') == 1
+    assert source.count('--set "VERGEN_GIT_SHA=$EMBEDDED_SOURCE_COMMIT"') == 1
+    assert source.count('"embedded_source_commit": "$EMBEDDED_SOURCE_COMMIT"') == 2
     assert (
         'source_library="$CARGO_TARGET_DIR/$target_triple/release/'
         'lib${LIB_CRATE_NAME}.a"'
@@ -75,6 +84,10 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
         "rm -rf" in line and "CARGO_TARGET_DIR" in line
         for line in lines
     )
+    assert 'if [[ -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then' in source
+    assert '[[ -z "$CI_APPLE_SLICE" || "$CI_APPLE_SLICE" == "$target_triple" ]]' in source
+    assert '"$APPLE_SLICE_HANDOFF" pack' in source
+    assert '"$APPLE_SLICE_HANDOFF" restore' in source
 
 
 def test_retired_build_modes_are_rejected_before_cargo(tmp_path: Path) -> None:
@@ -230,6 +243,46 @@ def test_ci_handoff_never_enters_the_release_publication_corridor() -> None:
     ]
     assert workflow_users == [
         ROOT / ".github" / "workflows" / "pr_kagemusha_payload_bench.yml"
+    ]
+
+
+def test_ci_slice_producers_and_assembler_are_closed_authenticated_modes() -> None:
+    source = _source()
+    mappings = {
+        "aarch64-apple-ios": "swift_slice_ios_device",
+        "aarch64-apple-ios-sim": "swift_slice_ios_sim_arm",
+        "x86_64-apple-ios": "swift_slice_ios_sim_x64",
+        "aarch64-apple-darwin": "swift_slice_macos_arm",
+        "x86_64-apple-darwin": "swift_slice_macos_x64",
+    }
+
+    assert 'CI_APPLE_SLICE_SHA256=()' in source
+    assert 'CI_APPLE_SLICE_ARCHIVE="$OUT_DIR/NoritoBridge.apple-slice.tar"' in source
+    assert "--ci-apple-slice is a standalone clean-source producer mode" in source
+    assert "--ci-assemble-apple-slices requires --ci-handoff-only and five slice digests" in source
+    assert "--ci-apple-slice-sha256 requires --ci-assemble-apple-slices" in source
+    for target, job in mappings.items():
+        target_branch = source.index(f"    {target})")
+        assert source.index(f"expected_slice_job={job}", target_branch) > target_branch
+    assert '${GITHUB_JOB:-}' in source
+    assert '"${GITHUB_JOB:-}" != "$expected_slice_job"' in source
+    assert 'pull_request | workflow_dispatch) ;;' in source
+    assert 'APPLE_SLICE_HANDOFF="$ROOT_DIR/scripts/' in source
+    assert 'norito_bridge_apple_slice_handoff.py"' in source
+
+    pack = source.index('run_isolated_python "$APPLE_SLICE_HANDOFF" pack')
+    slice_exit = source.index("  exit 0", pack)
+    restore = source.index('run_isolated_python "$APPLE_SLICE_HANDOFF" restore')
+    inventory_check = source.index('if [[ ! -f "$LIB_DEV"', restore)
+    lipo = source.index('"$LIPO_BINARY" -create -output "$SIM_UNI"', inventory_check)
+    assert pack < slice_exit < restore < inventory_check < lipo
+    assert '--common "$APPLE_SLICE_COMMON_ATTESTATION"' in source[pack:slice_exit]
+    assert '--archive "$CI_APPLE_SLICE_ARCHIVE"' in source[pack:slice_exit]
+    assert '--archive-root "$CI_ASSEMBLE_APPLE_SLICES"' in source[
+        restore:inventory_check
+    ]
+    assert '--destination "$STAGE_DIR/cargo-libraries"' in source[
+        restore:inventory_check
     ]
 
 

@@ -8,7 +8,9 @@ fallback transition enters the closed Parliament instruction enum, when global
 timed-OVN reservation admission or restore loses fail-atomic capacity checks, when a
 persisted attempt can exceed the authoritative framed-state bound, when a signed
 draft can claim a consensus-owned certificate outcome, or when the
-current specifications regress to the retired proposal-time JIT description.
+current specifications regress to the retired proposal-time JIT description. It
+also pins the modeled no-pulse hidden-electorate capacity failure and atomic
+Policy-to-Confirmation capacity handoff.
 It also keeps the PR model run bound to archived copies of its exact inputs and
 to stable, source-identified result metadata.
 """
@@ -37,6 +39,35 @@ def read(relative: str) -> str:
     return text
 
 
+RUST_INCLUDE_LINE = re.compile(
+    r'^(?P<indent>[ \t]*)include!\(\s*"(?P<path>[^"]+)"\s*\);[ \t]*$', re.M
+)
+
+
+def read_rust_with_includes(relative: str, stack: tuple[str, ...] = ()) -> str:
+    """Read one Rust source and recursively expand its textual item includes."""
+    if relative in stack:
+        chain = " -> ".join((*stack, relative))
+        raise RuntimeError(f"cyclic Rust include chain: {chain}")
+    text = read(relative)
+    parent = Path(relative).parent
+
+    def expand(match: re.Match[str]) -> str:
+        include_path = Path(match.group("path"))
+        if include_path.is_absolute() or ".." in include_path.parts:
+            raise RuntimeError(
+                f"{relative}: non-local Rust include path {include_path.as_posix()!r}"
+            )
+        child = (parent / include_path).as_posix()
+        expanded = read_rust_with_includes(child, (*stack, relative))
+        indent = match.group("indent")
+        if not indent:
+            return expanded
+        return indent + expanded.replace("\n", f"\n{indent}")
+
+    return RUST_INCLUDE_LINE.sub(expand, text)
+
+
 def require_all(relative: str, text: str, needles: tuple[str, ...]) -> None:
     missing = [needle for needle in needles if needle not in text]
     if missing:
@@ -50,6 +81,11 @@ def section(text: str, start: str, end: str, relative: str) -> str:
     if match is None:
         raise RuntimeError(f"{relative}: cannot locate section beginning {start!r}")
     return match.group("body")
+
+
+def public_field_names(text: str) -> tuple[str, ...]:
+    """Return public named fields from one Rust DTO source section."""
+    return tuple(re.findall(r"\bpub\s+([A-Za-z_][A-Za-z0-9_]*)\s*:", text))
 
 
 def main() -> int:
@@ -73,6 +109,7 @@ def main() -> int:
             "PublicFindingDeadlineExpired",
             "BallotOpeningDeadlineExpired",
             "SortitionRetriesExhausted",
+            "ConfirmationJuryCapacityUnavailable",
             "impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1",
             "pub opening_deadline_height: u64",
             "ExecutionFailed",
@@ -100,7 +137,7 @@ def main() -> int:
         )
 
     reducer_path = "crates/iroha_core/src/governance/parliament.rs"
-    reducer = read(reducer_path)
+    reducer = read_rust_with_includes(reducer_path)
     require_all(
         reducer_path,
         reducer,
@@ -119,6 +156,13 @@ def main() -> int:
             "MAX_PARLIAMENT_SORTITION_RETRIES_V1",
             "ParliamentElectionFailureKindV1::PulseUnavailable",
             "ParliamentElectionFailureKindV1::EmptyAcceptedRoster",
+            "ParliamentElectionFailureKindV1::InsufficientHiddenBallotRoster",
+            "pub struct ParliamentSortitionCapacityFailureV1 {",
+            "pub fn record_hidden_sortition_capacity_failure_batch(",
+            "candidate_snapshot.len() >= 2",
+            "failure.failure_height != failure.request_height",
+            "active_sortition_capacity_failures",
+            "BodyElectionAttemptStatusV1::AwaitingPulse\n                    | BodyElectionAttemptStatusV1::Drawing\n                    | BodyElectionAttemptStatusV1::AcceptingInvitations",
             "request.request_height < failure_height",
             "election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1",
             "election_awaiting_pulse_shape_is_empty(election)",
@@ -151,6 +195,22 @@ def main() -> int:
             "current_height > ballot.opening_deadline_height",
             "ParliamentBallotFailureKindV1::ReleasePulseUnavailable",
             "ParliamentBallotFailureKindV1::OpeningDeadlineExpired",
+            "ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable",
+            "eligible_confirmation_candidates: Option<u32>",
+            "if requires_confirmation && eligible_confirmation_candidates < 2",
+            "request.target_seats < 2",
+            "candidate_snapshot.len() < 2",
+            "request.request_height < policy_result_height",
+            "request.request_height != policy_result_height",
+            "sequences.get(&0)",
+            "fn policy_margin_is_strict_and_atomic_confirmation_roster_is_fresh()",
+            "fn hidden_sortition_capacity_failure_is_typed_bounded_and_consumes_no_pulse()",
+            "fn hidden_sortition_capacity_restore_rejects_mutated_evidence()",
+            "fn live_sortition_candidates_retain_bonds_until_terminal_or_superseded()",
+            "fn retryable_singleton_capacity_failure_retains_only_its_live_candidate_bond()",
+            "restore must reject a narrow Policy approval without its atomic Confirmation request",
+            "restore must reject a Confirmation snapshot backdated before the Policy result",
+            "restore must reject a sequence-zero Confirmation snapshot delayed past the Policy result",
             "parliament_ballot_failure_root_v1(",
             "if at_height != certificate.enact_at_height",
             "if observed_head == certificate.expected_head",
@@ -320,6 +380,36 @@ def main() -> int:
         raise RuntimeError(
             f"{instruction_path}: caller can select reducer-derived ballot failure evidence"
         )
+    objective_election_progress_payloads = (
+        (
+            "pub struct ParliamentConsumeSortitionPulseBatchV1 {",
+            "/// Payload beginning invitation acceptance after a deterministic draw.",
+            ("request_ids", "beacon_session_id", "pulse_height", "pulse_id"),
+        ),
+        (
+            "pub struct ParliamentBeginInvitationAcceptanceV1 {",
+            "/// Payload terminally recording a missing sortition pulse or empty roster.",
+            ("election_attempt_id",),
+        ),
+        (
+            "pub struct ParliamentFailBodyElectionNoRosterV1 {",
+            "/// A candidate's response to one canonical Parliament invitation.",
+            ("election_attempt_id",),
+        ),
+        (
+            "pub struct ParliamentSealBodyRosterV1 {",
+            "/// Payload advancing one sealed body by exactly one deliberation phase.",
+            ("election_attempt_id",),
+        ),
+    )
+    for start, end, expected_fields in objective_election_progress_payloads:
+        payload = section(instructions, start, end, instruction_path)
+        actual_fields = public_field_names(payload)
+        if actual_fields != expected_fields:
+            raise RuntimeError(
+                f"{instruction_path}: objective election-progress payload {start!r} "
+                f"must expose exactly {expected_fields!r}, found {actual_fields!r}"
+            )
     absence_payload = section(
         instructions,
         "pub struct ParliamentRecordAttemptAbsenceV1 {",
@@ -454,6 +544,123 @@ def main() -> int:
             ".fail_public_finding_no_result(",
             "state_transaction.gov.parliament_public_finding_phase_blocks",
             "no_result_kind",
+            "fn validated_active_parliament_tle_key_session_for_new_ballot_v1(",
+            ".tle_key_session_eligible_for_new_ballots(key_session_id)",
+            ".tle_key_session_rosters()",
+            "frozen_ordered_roster != Some(ordered_roster)",
+            '"active Parliament TLE key session is not bound to the current commit topology"',
+        ),
+    )
+    manager_partition = section(
+        world,
+        "const fn parliament_transition_requires_manager_v1(",
+        "fn parliament_certificate_enactment_height_v1(",
+        world_path,
+    )
+    require_all(
+        world_path,
+        manager_partition,
+        (
+            "ParliamentLifecycleTransitionKindV1::ConsumeSortitionPulseBatch",
+            "ParliamentLifecycleTransitionKindV1::BeginInvitationAcceptance",
+            "ParliamentLifecycleTransitionKindV1::FailBodyElectionNoRoster",
+            "ParliamentLifecycleTransitionKindV1::SealBodyRoster",
+        ),
+    )
+    for manager_only in (
+        "ParliamentLifecycleTransitionKindV1::EscalateRisk",
+        "ParliamentLifecycleTransitionKindV1::CompleteQualification",
+        "ParliamentLifecycleTransitionKindV1::RegisterSortitionRequest",
+        "ParliamentLifecycleTransitionKindV1::AdvanceBodyPhase",
+        "ParliamentLifecycleTransitionKindV1::RegisterBallotAttempt",
+        "ParliamentLifecycleTransitionKindV1::FreezeTimedOvnCorpus",
+    ):
+        if manager_only in manager_partition:
+            raise RuntimeError(
+                f"{world_path}: manager-only intent transition became permissionless: "
+                f"{manager_only!r}"
+            )
+    create_attempt_execution = section(
+        world,
+        "impl Execute for gov::CreateParliamentGovernanceAttemptV1 {",
+        "fn confirmation_candidate_snapshot_v1(",
+        world_path,
+    )
+    require_all(
+        world_path,
+        create_attempt_execution,
+        ("require_parliament_manager(authority, state_transaction)?;",),
+    )
+    require_all(
+        world_path,
+        world,
+        (
+            "fn parliament_progress_authority_partition_is_exact()",
+            "fn parliament_hidden_sortition_capacity_is_objective_for_zero_and_one_candidate()",
+            "fn parliament_sortition_pulse_consumption_is_permissionless_and_exactly_bound()",
+            "fn parliament_invitation_start_is_permissionless_and_election_bound()",
+            "fn parliament_no_roster_failure_is_permissionless_and_reducer_derived()",
+            "fn parliament_roster_sealing_is_permissionless_and_transcript_derived()",
+        ),
+    )
+    for branch_start, branch_end, bindings in (
+        (
+            "gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(payload) => {",
+            "gov::ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(payload) => {",
+            (
+                "parliament_finalized_pulse_seed_v1(",
+                "payload.request_ids",
+                "payload.beacon_session_id",
+                "payload.pulse_height",
+                "payload.pulse_id",
+                "pulse_output",
+                "&state_transaction.network_id",
+                "&state_transaction.gov",
+            ),
+        ),
+        (
+            "gov::ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(payload) => {",
+            "gov::ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(payload) => {",
+            (
+                "payload.election_attempt_id",
+                "current_height",
+                "state_transaction.gov.parliament_invitation_phase_blocks",
+            ),
+        ),
+        (
+            "gov::ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(payload) => {",
+            "gov::ParliamentLifecycleTransitionV1::SealBodyRoster(payload) => {",
+            (
+                "parliament_verified_pulse_available_v1(",
+                "request.beacon_session_id",
+                "request.pulse_height",
+                "pulse_available",
+                "current_height",
+            ),
+        ),
+        (
+            "gov::ParliamentLifecycleTransitionV1::SealBodyRoster(payload) => {",
+            "gov::ParliamentLifecycleTransitionV1::AdvanceBodyPhase(payload) =>",
+            ("payload.election_attempt_id", "current_height"),
+        ),
+    ):
+        branch = section(world, branch_start, branch_end, world_path)
+        require_all(world_path, branch, bindings)
+    register_sortition_branch = section(
+        world,
+        "gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {",
+        "gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(payload) => {",
+        world_path,
+    )
+    require_all(
+        world_path,
+        register_sortition_branch,
+        (
+            "canonical_parliament_candidate_snapshot_v1(",
+            "expected_candidates.len() < 2 && hidden_body_requested",
+            ".record_hidden_sortition_capacity_failure_batch(",
+            "ParliamentNoResultKindV1::SortitionRetriesExhausted",
+            ".register_sortition_request_batch(",
         ),
     )
     for forbidden in (
@@ -476,7 +683,24 @@ def main() -> int:
     require_all(
         world_path,
         finalize_branch,
-        (".finalize_opened_ballot(", ".construct_certificate("),
+        (
+            "canonical_parliament_eligible_candidates_v1(",
+            "confirmation_candidate_snapshot_v1(",
+            "eligible_confirmation_candidates",
+            ".finalize_opened_ballot(",
+            "canonical_confirmation_sortition_request_v1(",
+            ".register_sortition_request(",
+            ".construct_certificate(",
+        ),
+    )
+    require_all(
+        world_path,
+        world,
+        (
+            "fn narrow_confirmation_request_freezes_exact_current_snapshot_and_schedule()",
+            "request_height + attempt.sortition_pulse_delay_blocks()",
+            "request.id, request.canonical_id()",
+        ),
     )
     for branch_start, branch_end, precheck, phase_guard, expensive_call in (
         (
@@ -618,6 +842,9 @@ def main() -> int:
             "Transition::FailBodyElectionNoRoster",
             'Kind::SortitionRetriesExhausted => "sortition_retries_exhausted"',
             "NoResult::SortitionRetriesExhausted => transition == Transition::FailBodyElectionNoRoster",
+            '"confirmation_jury_capacity_unavailable"',
+            "NoResult::ConfirmationJuryCapacityUnavailable",
+            "transition == Transition::FinalizeOpenedBallot",
             "pub(crate) fn seed_parliament_attempts(",
             "governance_parliament_attempts_by_status",
             "governance_parliament_attempts_by_stage",
@@ -639,6 +866,8 @@ def main() -> int:
             '"public_finding_deadline_expired"',
             '"ballot_opening_deadline_expired"',
             '"sortition_retries_exhausted"',
+            '"confirmation_jury_capacity_unavailable"',
+            "fn confirmation_capacity_no_result_metric_is_pre_registered()",
         ),
     )
     commitment_precheck = section(
@@ -819,6 +1048,13 @@ def main() -> int:
             "TimedOvnLifecycleStateV1::CorpusOpen(_)",
             ".validated_parliament_reducer_binding(key_session)",
             "timed_ovn_reducer_binding_matches(ballot_attempt_id, &lifecycle_binding)",
+            "Some(FailureKind::ConfirmationJuryCapacityUnavailable)",
+            "phase == PersistedTimedOvnPhaseV1::Released",
+            "Confirmation-capacity NoResult must retain its released timed-OVN evidence",
+            "let tle_key_session_rosters = world.tle_key_session_rosters.view();",
+            "validate_tle_key_session_roster_binding_v1(public_state, ordered_roster)",
+            '"TLE key session {key_session_id} is missing its frozen ordered roster"',
+            '"frozen ordered roster references missing TLE key session {key_session_id}"',
         ),
     )
     restore_size_validation = section(
@@ -878,6 +1114,23 @@ def main() -> int:
 
     state_path = "crates/iroha_core/src/state.rs"
     state = read(state_path)
+    tle_roster_binding = section(
+        state,
+        "pub(crate) fn validate_tle_key_session_roster_binding_v1(",
+        "/// Closed failures for the committed Parliament TLE key-session lifecycle.",
+        state_path,
+    )
+    require_all(
+        state_path,
+        tle_roster_binding,
+        (
+            "let unique_peers = ordered_roster.iter().collect::<BTreeSet<_>>()",
+            "ordered_roster.is_empty()",
+            "unique_peers.len() != ordered_roster.len()",
+            "usize::from(public_state.committee_size) != ordered_roster.len()",
+            "global_threshold_beacon_roster_hash_v1(ordered_roster)",
+        ),
+    )
     checked_reservation_insert = section(
         state,
         "fn insert_parliament_timed_ovn_resource_reservation_v1(",
@@ -927,6 +1180,45 @@ def main() -> int:
         raise RuntimeError(
             f"{state_path}: attempt admission mutates the live reservation index before validation"
         )
+    tle_session_admission = section(
+        state,
+        "    pub(crate) fn put_tle_key_session(",
+        "    /// Make one committed public TLE key session eligible for new ballots.",
+        state_path,
+    )
+    require_all(
+        state_path,
+        tle_session_admission,
+        (
+            "ordered_roster: Vec<PeerId>",
+            "validate_tle_key_session_roster_binding_v1(&state, &ordered_roster)?",
+            "self.tle_key_sessions.get(&key_session_id)",
+            "self.tle_key_session_rosters.get(&key_session_id)",
+            "(None, None)",
+            "self.tle_key_sessions.insert(key_session_id, state)",
+            ".insert(key_session_id, ordered_roster)",
+            "_ => Err(TleReleaseAdapterError::TranscriptMismatch)",
+        ),
+    )
+    required_tle_custody = section(
+        state,
+        "    fn tle_key_sessions_required_for_runtime_custody_v1(",
+        "    /// Return the single ABI version accepted by the first release runtime.",
+        state_path,
+    )
+    require_all(
+        state_path,
+        required_tle_custody,
+        (
+            "if let Some(active_key_session_id) = self.active_tle_key_session()",
+            "attempt.validate()?",
+            "for (_, ballot) in attempt.ballot_attempts()",
+            "let opening_deadline = ballot.opening_deadline_height()",
+            "(*deadline).max(opening_deadline)",
+            ".or_insert(opening_deadline)",
+            "committed_height <= deadline",
+        ),
+    )
     rebuilt_reservations = section(
         state,
         "    fn rebuild_governance_read_indexes(",
@@ -962,6 +1254,13 @@ def main() -> int:
             "BallotAttemptStatusV1::Opening",
             "finalized_height > opening_deadline_height",
             "pub trait TlePartialReleaseSignerV1: Send + Sync",
+            "fn attest_partial_release_capability(",
+            "Err(TlePartialReleaseCapabilityErrorV1::Unsupported)",
+            "pub struct TlePartialReleaseCapabilityAttestationV1",
+            "pub enum TlePartialReleaseCapabilityErrorV1",
+            "impl TlePartialReleaseSignerV1 for InMemoryTlePartialReleaseSignerV1",
+            "expected_participant_index != self.share.index()",
+            "TlePartialReleaseCapabilityAttestationV1::for_validated_session(",
             "context: &AuthorizedTleReleaseContextV1",
             "pub struct AuthorizedTleReleaseProjectionV1",
             "pub struct ValidatedTleReleaseProjectionV1",
@@ -1042,6 +1341,9 @@ def main() -> int:
             ".remove(&key_session_id)",
             "drop(retired);",
             ".get(&context.session().public_state().key_session_id)",
+            "fn attest_partial_release_capability(",
+            ".get(&session.public_state().key_session_id)",
+            "signer.attest_partial_release_capability(session, expected_participant_index)",
             "impl TleProjectedPartialReleaseSignerV1 for RuntimeTleReleaseShareCustodyV1",
             ".get(&projection.session().public_state().key_session_id)",
             "signer.sign_projected_partial_release(projection)",
@@ -1248,6 +1550,412 @@ def main() -> int:
             "pub(crate) fn parliament_tle_release_coordinator(",
             "TleReleaseCoordinatorV1::without_signer",
             "TleReleaseCoordinatorV1::from_signer",
+            "tle_key_sessions_required_for_runtime_custody_v1(committed_height)",
+            ".tle_key_session_rosters()",
+            "parliament_tle_local_participant_index_v1(frozen_roster, local_peer)",
+            "require_parliament_tle_capability_for_local_seat_v1(",
+            ".attest_partial_release_capability(session, participant_index)",
+            "attestation.matches(session, participant_index)",
+        ),
+    )
+    readiness = section(
+        runtime_deps,
+        "fn validate_threshold_signer_startup_readiness_v1(",
+        "macro_rules! define_runtime_dep_setters_v1",
+        runtime_deps_path,
+    )
+    if ".sign_partial_release(" in readiness:
+        raise RuntimeError(
+            f"{runtime_deps_path}: startup readiness must attest custody without signing"
+        )
+    readiness_fixture = section(
+        runtime_deps,
+        "fn threshold_signer_readiness_fixture_v1(",
+        "fn parliament_tle_coordinator_is_fail_closed_or_runtime_injected() {",
+        runtime_deps_path,
+    )
+    require_all(
+        runtime_deps_path,
+        readiness_fixture,
+        (
+            "const RETAINED_SESSION_BYTE: u8 = 0xD1",
+            "const ACTIVE_SESSION_BYTE: u8 = 0xE1",
+            "const RETENTION_DEADLINE_HEIGHT: u64 = 13",
+            "active_validator_keys.reverse()",
+            "let retained_participant_index = 2",
+            "let active_participant_index = 3",
+            "TleKeySessionId::new([RETAINED_SESSION_BYTE; 32])",
+            "put_parliament_attempt_for_testing(attempt_id, attempt)",
+            "while u64::try_from(block_hashes.len()).unwrap_or(u64::MAX) < committed_height",
+        ),
+    )
+    retained_readiness_test = section(
+        runtime_deps,
+        "fn threshold_signer_startup_readiness_scans_active_and_deadline_retained_frozen_rosters() {",
+        "fn threshold_signer_startup_readiness_skips_expired_history_and_rejects_mismatch() {",
+        runtime_deps_path,
+    )
+    require_all(
+        runtime_deps_path,
+        retained_readiness_test,
+        (
+            "threshold_signer_readiness_fixture_v1(13)",
+            "validate_threshold_signer_startup_readiness_v1(",
+            "fixture.retained_key_session_id",
+            "fixture.retained_participant_index",
+            "fixture.active_key_session_id",
+            "fixture.active_participant_index",
+            "assert_eq!(calls, expected)",
+            "signer.sign_calls.load(Ordering::Acquire), 0",
+        ),
+    )
+    expired_readiness_test = section(
+        runtime_deps,
+        "fn threshold_signer_startup_readiness_skips_expired_history_and_rejects_mismatch() {",
+        "fn threshold_signer_preflight_rejects_before_consensus_startup() {",
+        runtime_deps_path,
+    )
+    require_all(
+        runtime_deps_path,
+        expired_readiness_test,
+        (
+            "threshold_signer_readiness_fixture_v1(14)",
+            "validate_threshold_signer_startup_readiness_v1(",
+            "exact_signer.attestation_calls()",
+            "fixture.active_key_session_id",
+            "fixture.active_participant_index",
+            "CapabilityMode::MismatchedSeat",
+            "mismatched_signer.attestation_calls()",
+            "returned a mismatched runtime custody attestation",
+        ),
+    )
+    if "fixture.retained_key_session_id" in expired_readiness_test:
+        raise RuntimeError(
+            f"{runtime_deps_path}: expired startup-readiness call set still includes the historical session"
+        )
+
+    broker_primitives_path = (
+        "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
+    )
+    broker_primitives = read(broker_primitives_path)
+    require_all(
+        broker_primitives_path,
+        broker_primitives,
+        (
+            "OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1: u16 = 125",
+            "ParliamentTleCapabilityAttestRequestWireV1",
+            "ParliamentTleCapabilityAttestResultWireV1",
+            "assert!(!super::super::operation_is_known(126))",
+        ),
+    )
+    broker_attestation_request_wire = section(
+        broker_primitives,
+        "define_broker_wire_struct!(owned pub(super) ParliamentTleCapabilityAttestRequestWireV1 {",
+        "define_broker_wire_struct!(owned pub(super) ParliamentTleCapabilityAttestResultWireV1 {",
+        broker_primitives_path,
+    )
+    require_all(
+        broker_primitives_path,
+        broker_attestation_request_wire,
+        (
+            "pub(super) key_session: iroha_core::tle_release::TleKeySessionPublicStateV1",
+            "pub(super) participant_index: u16",
+        ),
+    )
+    broker_attestation_result_wire = section(
+        broker_primitives,
+        "define_broker_wire_struct!(owned pub(super) ParliamentTleCapabilityAttestResultWireV1 {",
+        "pub(super) fn governance_signing_purpose_from_wire(",
+        broker_primitives_path,
+    )
+    require_all(
+        broker_primitives_path,
+        broker_attestation_result_wire,
+        (
+            "pub(super) key_session_id: iroha_data_model::governance::types::TleKeySessionId",
+            "pub(super) transcript_hash: [u8; 32]",
+            "pub(super) participant_index: u16",
+        ),
+    )
+    broker_validation_path = (
+        "crates/irohad/src/runtime_provider_broker/protocol_operation_validation.rs"
+    )
+    broker_validation = read(broker_validation_path)
+    broker_semantic_limits = section(
+        broker_validation,
+        "const fn operation_semantic_frame_limit(operation: u16) -> usize {",
+        "const fn operation_frame_limit(operation: u16) -> usize {",
+        broker_validation_path,
+    )
+    require_all(
+        broker_validation_path,
+        broker_semantic_limits,
+        (
+            "OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1",
+            "MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1",
+        ),
+    )
+    broker_frame_limits = section(
+        broker_validation,
+        "const fn operation_frame_limit(operation: u16) -> usize {",
+        "const fn operation_is_known(operation: u16) -> bool {",
+        broker_validation_path,
+    )
+    require_all(
+        broker_validation_path,
+        broker_frame_limits,
+        (
+            "OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1",
+            "MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1",
+        ),
+    )
+    broker_known_operations = section(
+        broker_validation,
+        "const fn operation_is_known(operation: u16) -> bool {",
+        "fn provider_ingest_signer_context_from_wire(",
+        broker_validation_path,
+    )
+    require_all(
+        broker_validation_path,
+        broker_known_operations,
+        ("OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1",),
+    )
+    broker_attestation_request = section(
+        broker_validation,
+        "fn decode_parliament_tle_capability_attest_request(",
+        "fn verify_parliament_tle_capability_attest_result(",
+        broker_validation_path,
+    )
+    require_all(
+        broker_validation_path,
+        broker_attestation_request,
+        (
+            "request.key_session.network_id != *session_network_id.as_bytes()",
+            ".key_session\n        .clone()\n        .validate()",
+            "TlePartialReleaseCapabilityAttestationV1::for_validated_session(",
+            "request.participant_index",
+        ),
+    )
+    broker_attestation_result = section(
+        broker_validation,
+        "fn verify_parliament_tle_capability_attest_result(",
+        "fn verify_parliament_tle_partial_release_result(",
+        broker_validation_path,
+    )
+    require_all(
+        broker_validation_path,
+        broker_attestation_result,
+        (
+            "result.key_session_id != expected.key_session_id()",
+            "result.transcript_hash != expected.transcript_hash()",
+            "result.participant_index != expected.participant_index()",
+            "return Err(BrokerError::Rejected)",
+        ),
+    )
+    broker_typed_response = section(
+        broker_validation,
+        "fn validate_operation_response_for_client(",
+        "fn validate_operation_response_envelope(",
+        broker_validation_path,
+    )
+    require_all(
+        broker_validation_path,
+        broker_typed_response,
+        (
+            "OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1",
+            "IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id()",
+            "response.status == STATUS_OK_V1",
+            "return Ok(())",
+        ),
+    )
+    broker_result_matrix = section(
+        broker_validation,
+        "fn validate_operation_result(",
+        "fn sealed_slot_to_wire(",
+        broker_validation_path,
+    )
+    broker_attestation_result_branch = section(
+        broker_result_matrix,
+        "            OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1 => {",
+        "            OPERATION_MODERATION_HANDOFF_DELIVER_ONCE_V1 => {",
+        broker_validation_path,
+    )
+    require_all(
+        broker_validation_path,
+        broker_attestation_result_branch,
+        (
+            "IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id()",
+            "decode_parliament_tle_capability_attest_request(",
+            "decode_canonical::<ParliamentTleCapabilityAttestResultWireV1>(",
+            "verify_parliament_tle_capability_attest_result(",
+            ".map_err(|_| BrokerError::Protocol)?;",
+        ),
+    )
+    broker_payload_path = (
+        "crates/irohad/src/runtime_provider_broker/validate_operation_payload.rs"
+    )
+    broker_payload = read(broker_payload_path)
+    broker_attestation_payload_branch = section(
+        broker_payload,
+        "        (slot, OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1)",
+        "        (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1)",
+        broker_payload_path,
+    )
+    require_all(
+        broker_payload_path,
+        broker_attestation_payload_branch,
+        (
+            "if slot == parliament_tle_partial_release_signer_slot",
+            "decode_parliament_tle_capability_attest_request(",
+            "&request.payload",
+            "session_network_id",
+        ),
+    )
+    broker_dispatch_path = (
+        "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs"
+    )
+    broker_dispatch = read(broker_dispatch_path)
+    require_all(
+        broker_dispatch_path,
+        broker_dispatch,
+        (
+            "OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1",
+            "decode_parliament_tle_capability_attest_request(",
+            ".attest_partial_release_capability(&session, request.participant_index)",
+            "if !attestation.matches(&session, request.participant_index)",
+            "requalify()?;",
+            "ParliamentTleCapabilityAttestResultWireV1",
+        ),
+    )
+    broker_api_path = "crates/irohad/src/runtime_provider_broker/api.rs"
+    broker_api = read(broker_api_path)
+    tle_broker_backend = section(
+        broker_api,
+        "pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {",
+        "/// One-shot lifecycle control shared by a broker launcher and serving thread.",
+        broker_api_path,
+    )
+    require_all(
+        broker_api_path,
+        tle_broker_backend,
+        (
+            "fn attest_partial_release_capability(",
+            "_session: &iroha_core::tle_release::ValidatedTleKeySessionV1",
+            "_expected_participant_index: u16",
+            "Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)",
+        ),
+    )
+    broker_client_path = (
+        "crates/irohad/src/runtime_provider_broker/platform_provider_clients_03.rs"
+    )
+    broker_client = read(broker_client_path)
+    broker_attestation_client = section(
+        broker_client,
+        "    fn attest_projected_capability(",
+        "    fn sign_projected_partial_release(",
+        broker_client_path,
+    )
+    require_all(
+        broker_client_path,
+        broker_attestation_client,
+        (
+            "retry_consensus_signer_once_after_unavailable(",
+            "live_exact_qualification(",
+            "OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1",
+            "ParliamentTleCapabilityAttestResultWireV1",
+            "if attested.key_session_id != expected.key_session_id()",
+            "attested.transcript_hash != expected.transcript_hash()",
+            "attested.participant_index != expected.participant_index()",
+            "self.session.poison();",
+        ),
+    )
+    require_all(
+        broker_client_path,
+        broker_client,
+        ("fn attest_partial_release_capability(",),
+    )
+    software_tle_path = (
+        "crates/irohad/src/external_software_signer/consensus_threshold.rs"
+    )
+    software_tle = read(software_tle_path)
+    require_all(
+        software_tle_path,
+        software_tle,
+        (
+            "fn attest_partial_release_capability(",
+            "self.custody",
+            ".attest_partial_release_capability(session, expected_participant_index)",
+            "TlePartialReleaseCapabilityErrorV1::Unavailable",
+            "ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Unavailable",
+        ),
+    )
+    broker_tests_path = "crates/irohad/src/runtime_provider_broker/server_tests_04.rs"
+    broker_tests = read(broker_tests_path)
+    require_all(
+        broker_tests_path,
+        broker_tests,
+        (
+            "fn parliament_tle_capability_attestation_round_trips_over_authenticated_broker()",
+            "wrong_seat_payload",
+            "Err(BrokerError::Rejected)",
+        ),
+    )
+    broker_typed_capability_success = section(
+        broker_tests,
+        "fn parliament_tle_capability_typed_proxy_requalifies_before_and_after_lookup()",
+        "fn parliament_tle_partial_release_round_trips_over_authenticated_broker()",
+        broker_tests_path,
+    )
+    require_all(
+        broker_tests_path,
+        broker_typed_capability_success,
+        (
+            "expect_and_answer_consensus_signer_qualification(",
+            "&mut stream, 1, revision, policy_digest",
+            "assert_eq!(attest.request_id, 2)",
+            "OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1",
+            "ParliamentTleCapabilityAttestResultWireV1",
+            "&mut stream, 3, revision, policy_digest",
+            ".attest_projected_capability(&session, 1)",
+            "attestation.matches(&session, 1)",
+        ),
+    )
+    first_qualification = broker_typed_capability_success.find(
+        "expect_and_answer_consensus_signer_qualification("
+    )
+    capability_lookup = broker_typed_capability_success.find(
+        "let attest = read_consensus_signer_operation("
+    )
+    second_qualification = broker_typed_capability_success.rfind(
+        "expect_and_answer_consensus_signer_qualification("
+    )
+    if not first_qualification < capability_lookup < second_qualification:
+        raise RuntimeError(
+            f"{broker_tests_path}: typed TLE capability lookup is not surrounded by live qualification"
+        )
+    broker_typed_capability_failures = section(
+        broker_tests,
+        "enum ParliamentTleCapabilityResultFault {",
+        "fn parliament_tle_partial_release_reconnects_after_broker_restart()",
+        broker_tests_path,
+    )
+    require_all(
+        broker_tests_path,
+        broker_typed_capability_failures,
+        (
+            "WrongKeySessionId",
+            "WrongTranscriptHash",
+            "WrongParticipantIndex",
+            "Truncated",
+            "result.key_session_id = if candidate == result.key_session_id",
+            "result.transcript_hash[0] ^= 1",
+            "result.participant_index = 2",
+            ".pop()",
+            "fn correlated_wrong_tle_key_session_id_is_rejected_by_typed_proxy()",
+            "fn correlated_wrong_tle_transcript_hash_is_rejected_by_typed_proxy()",
+            "fn correlated_wrong_tle_participant_index_is_rejected_by_typed_proxy()",
+            "fn correlated_truncated_tle_capability_is_rejected_by_typed_proxy()",
+            "an invalid capability must permanently poison the TLE session without replay",
         ),
     )
     daemon_path = "crates/irohad/src/main.rs"
@@ -1273,6 +1981,12 @@ def main() -> int:
             "sortitionPulseHeight' = height + SortitionPulseDelayBlocks",
             "FailSortitionPulseUnavailable ==",
             "RetryInitialSortitionBatch ==",
+            "RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==",
+            "RecordRetryHiddenSortitionCapacityFailure(candidateCount) ==",
+            '"HiddenElectorateCapacityUnavailable"',
+            "sortitionCandidateCount",
+            "sortitionPulseConsumed",
+            "HiddenElectorateCapacityConsumesNoPulse ==",
             'sortitionFailureKind\' = "PulseUnavailable"',
             "sortitionSequence < MaxSortitionRetries",
             "supersededSortitionAttempts' = supersededSortitionAttempts + 1",
@@ -1325,8 +2039,78 @@ def main() -> int:
             "CertifiedCannotPassDueHeight ==",
             '"ExecutionFailed"',
             "FinalizeAggregateApprovedAndCertify ==",
+            "FinalizeNarrowPolicyCapacityNoResult(eligibleCount) ==",
+            "FinalizeNarrowPolicyAndRegisterConfirmationRequest ==",
+            "AtomicPolicyConfirmationCapacity ==",
             "RecordInternalExecutionFailureAtExactHeight ==",
             "~releasePulseKnown",
+        ),
+    )
+    for start, end in (
+        (
+            "RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==",
+            "RevealSortitionPulse ==",
+        ),
+        (
+            "RecordRetryHiddenSortitionCapacityFailure(candidateCount) ==",
+            "SealInvitationRosters ==",
+        ),
+    ):
+        capacity_action = section(model, start, end, model_path)
+        require_all(
+            model_path,
+            capacity_action,
+            (
+                "candidateCount \\in 0..1",
+                'sortitionFailureKind\' = "HiddenElectorateCapacityUnavailable"',
+                "sortitionFailureHeight' = height",
+                "requestHeight' = height",
+                "sortitionPulseKnown' = FALSE",
+                "sortitionPulseConsumed' = FALSE",
+                "sortitionCandidateCount' = candidateCount",
+            ),
+        )
+        if "sortitionPulseConsumed' = TRUE" in capacity_action:
+            raise RuntimeError(
+                f"{model_path}: hidden-electorate capacity failure consumes a pulse"
+            )
+    confirmation_capacity_action = section(
+        model,
+        "FinalizeNarrowPolicyCapacityNoResult(eligibleCount) ==",
+        "FinalizeNarrowPolicyAndRegisterConfirmationRequest ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        confirmation_capacity_action,
+        (
+            "eligibleCount \\in 0..1",
+            'ballotState\' = "NoResult"',
+            'attemptStatus\' = "Rejected"',
+            "policyBindingCommitted' = FALSE",
+            "confirmationRequirementCommitted' = FALSE",
+            "confirmationRequestCommitted' = FALSE",
+            "confirmationRequestHeight' = None",
+            "confirmationPulseHeight' = None",
+        ),
+    )
+    confirmation_handoff_action = section(
+        model,
+        "FinalizeNarrowPolicyAndRegisterConfirmationRequest ==",
+        "FinalizeAggregateRejected ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        confirmation_handoff_action,
+        (
+            "eligibleConfirmationCandidates' = 2",
+            "policyResultHeight' = height",
+            "policyBindingCommitted' = TRUE",
+            "confirmationRequirementCommitted' = TRUE",
+            "confirmationRequestCommitted' = TRUE",
+            "confirmationRequestHeight' = height",
+            "confirmationPulseHeight' = height + SortitionPulseDelayBlocks",
         ),
     )
     if "ConstructCertificate ==" in model:
@@ -1356,6 +2140,7 @@ def main() -> int:
             "SecondAssignment = Seat1",
             "FindingRoots = {Finding0, Finding1}",
             "ObjectiveBoundedSortitionRetries",
+            "HiddenElectorateCapacityConsumesNoPulse",
             "TimedOvnReservationSafety",
             "RejectedReservationDoesNotLeak",
             "TimedOvnReservationAuditShape",
@@ -1364,6 +2149,7 @@ def main() -> int:
             "ExactPublicFindingDeadline",
             "PhaseCapacity",
             "BoundedOpeningWindow",
+            "AtomicPolicyConfirmationCapacity",
             "CertificateBindsApprovedResult",
             "ExactHeightCasEnactment",
             "NoResultTerminalization",
@@ -1373,6 +2159,7 @@ def main() -> int:
         "TypeOK",
         "FuturePulseSortition",
         "ObjectiveBoundedSortitionRetries",
+        "HiddenElectorateCapacityConsumesNoPulse",
         "TimedOvnReservationSafety",
         "RejectedReservationDoesNotLeak",
         "TimedOvnReservationAuditShape",
@@ -1386,6 +2173,7 @@ def main() -> int:
         "ObjectiveReleaseAvailability",
         "BoundedOpeningWindow",
         "FreshRetrySessions",
+        "AtomicPolicyConfirmationCapacity",
         "NoPlaintextOrFallback",
         "CertificateBindsApprovedResult",
         "ExactHeightCasEnactment",
@@ -1492,6 +2280,10 @@ def main() -> int:
             "ParliamentAutomaticExecutionOutcomeV1",
             "opening_phase_blocks",
             "parliament_sortition_pulse_delay_blocks",
+            "ConsumeSortitionPulseBatch",
+            "BeginInvitationAcceptance",
+            "FailBodyElectionNoRoster",
+            "SealBodyRoster",
             "RecordAttemptAbsence",
             "EndorsePublicFinding",
             "ceil(2 * original_seats / 3)",
@@ -1520,12 +2312,13 @@ def main() -> int:
             "public_finding_quorum_unreachable",
             "public_finding_deadline_expired",
             "sortition_retries_exhausted",
+            "confirmation_jury_capacity_unavailable",
             "never use proposal, governance-attempt, body, ballot, assignment, pulse,",
         ),
     )
 
     model_readme_path = "formal/sora_parliament/README.md"
-    model_readme = read(model_readme_path)
+    model_readme = " ".join(read(model_readme_path).split())
     require_all(
         model_readme_path,
         model_readme,
@@ -1533,6 +2326,10 @@ def main() -> int:
             "mathematically irreversible splits",
             "permissionless caller eventually submitting the deadline trigger",
             "post-deadline non-response rejection",
+            "empty or singleton live electorate",
+            "without revealing or consuming a pulse",
+            "Policy binding, Confirmation requirement, and Confirmation request all",
+            "same transition commits the Policy binding and Confirmation requirement",
         ),
     )
     pipeline_spec = read("specs/governance_pipeline.md")

@@ -443,6 +443,34 @@ Artifact installation requires the canonical candidate-bound promotion record th
 internal-validation receipt, benchmark evidence, and cryptographic review. The receipt and review
 are each limited to 1 MiB. An authenticated-but-unpromoted release cannot become active.
 
+For the public SORA Taira testnet, `TairaTestnetProfile` supplies only stable, non-secret deployment
+metadata and the `https://taira.sora.org` Torii origin. Supply the exact current genesis-derived
+`NetworkId` from the deployed client config or trusted genesis material; do not substitute the
+stable semantic `CHAIN_ID`, and do not persist account private keys or bearer tokens in the profile.
+Public resets can change the signing `NetworkId`.
+
+```java
+ClientConfig deployed = ClientConfigManifestLoader.load(runtimeManifest).clientConfig();
+NetworkId deployedNetworkId =
+    deployed.localSigningContext()
+        .orElseThrow(() -> new IllegalStateException("runtime Taira config has no network_id"))
+        .networkId();
+ClientConfig config = TairaTestnetProfile.clientConfig(deployedNetworkId);
+KagemushaRecursiveSpendProver.ToriiClient kagemusha = config.toKagemushaToriiClient();
+
+KagemushaRecursiveSpendProver.OfflineStatus capability =
+    kagemusha.getOfflineCapability().join();
+```
+
+Applications that already load `ClientConfig` through `ClientConfigManifestLoader` can call
+`toKagemushaToriiClient()` on that config after setting its Torii base URI to
+`TairaTestnetProfile.TORII_BASE_URI`. The manifest's `network_id` remains the authoritative runtime
+input; the SDK never learns a signing identity from the public endpoint. The adapter applies
+`ClientConfig.requestTimeout()` to all five Kagemusha routes. It deliberately does not copy
+`defaultHeaders()` into Kagemusha requests: command authorization is payload-bound, receiver-lineage
+authorization is supplied per call, and ambient bearer or account credentials must not leak into
+this protocol surface.
+
 `newToriiClient(...)` requires an exact genesis-derived `LocalSigningContext` and exposes the
 query-free, asset-neutral `getOfflineCapability`, `getRecipientRegistrationLineage`, `submitTopUp`,
 `submitRedeem`, and `getOperation`. Receiver-lineage proof construction additionally requires a

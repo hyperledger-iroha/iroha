@@ -2232,8 +2232,8 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
          r"write_release_circuit_params_staged_file_v1\(.*?staging\s*\.sync_all\(\).*?"
          r"let complete_staging_snapshot = PromotionDirectorySnapshotV1::from_metadata\(.*?"
          r"if !staging_snapshot\.matches_except_links\(complete_staging_snapshot\)\s*\|\|\s*"
-         r"!complete_staging_snapshot\s*\.links\s*\.checked_sub\(staging_snapshot\.links\)\s*"
-         r"\.is_some_and\(\|delta\| delta <= 2\).*?"
+         r"complete_staging_snapshot\s*\.links\s*\.checked_sub\(staging_snapshot\.links\)\s*"
+         r"\.is_none_or\(\|delta\| delta > 2\).*?"
          r"statat\(&parent\.file, &temporary_name, AtFlags::SYMLINK_NOFOLLOW\).*?"
          r"if !release_circuit_params_directory_snapshot_matches_stat_v1\(\s*complete_staging_snapshot,\s*&linked,\s*\).*?"
          r"before_publish\(\)\?;.*?verify_path_identity_against\(publication_parent_snapshot\).*?"
@@ -3049,8 +3049,15 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         "cargo test -p connect_norito_bridge output_membership_local_carrier --lib",
     )
     rq(t[PW], PW, e,
-        "name: Verify Kagemusha V4 production readiness (publication blocked)",
-        "name: Verify reviewed production inputs (does not publish or activate)",
+        "name: Authorize Kagemusha V4 mobile production builds",
+        "name: Qualify and authorize the Apple production build",
+        "name: Qualify and authorize the Android production build",
+        "environment: kagemusha-v4-android-production",
+        "mobile_release_manifest_sha256",
+        "scripts/kagemusha_mobile_production_authorization.py issue",
+        "--artifact-manifest-sha256",
+        "--release-verification-report",
+        "uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
         "ref: ${{ github.workflow_sha }}",
         "PROMOTION_GITHUB_EVENT_NAME: ${{ github.event_name }}",
         "PROMOTION_GITHUB_REF: ${{ github.ref }}",

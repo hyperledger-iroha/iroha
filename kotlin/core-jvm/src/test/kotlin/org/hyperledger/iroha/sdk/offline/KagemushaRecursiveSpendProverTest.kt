@@ -7,6 +7,7 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import java.security.KeyPairGenerator
 import java.security.Signature
+import java.time.Duration
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
@@ -1677,49 +1678,82 @@ class KagemushaRecursiveSpendProverTest {
                 )
             }
         }
+        val transport = object : TransportExecutor {
+            override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+                captured.set(request)
+                val capability = request.uri.path.endsWith("/readiness")
+                val lineage = request.uri.path.endsWith("/receiver-lineage")
+                val command = request.method == "POST" && !lineage
+                return CompletableFuture.completedFuture(
+                    TransportResponse.builder()
+                        .setStatusCode(if (command) 202 else 200)
+                        .addHeader(
+                            "content-type",
+                            if (capability) "application/json" else "application/x-norito",
+                        )
+                        .addHeader(
+                            "Location",
+                            "/v1/offline/operations/${"11".repeat(32)}",
+                        )
+                        .addHeader("Retry-After", "1")
+                        .setBody(
+                            if (capability) {
+                                """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true}"""
+                                    .toByteArray(StandardCharsets.UTF_8)
+                            } else {
+                                archive(
+                                    if (command) {
+                                        "OfflineOperationReference"
+                                    } else if (lineage) {
+                                        "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
+                                    } else if (request.uri.path.contains("/operations/")) {
+                                        "OfflineOperationStatus"
+                                    } else {
+                                        error("unexpected Torii route")
+                                    },
+                                )
+                            },
+                        )
+                        .build(),
+                )
+            }
+        }
+        val toriiBaseUri = URI.create("https://torii.example/api/")
+        val localSigningContext = LocalSigningContext(networkId)
+        KagemushaRecursiveSpendProver.newToriiClient(
+            toriiBaseUri,
+            transport,
+            localSigningContext,
+        ).getOfflineCapability().join()
+        assertEquals(null, captured.get().timeout)
+        KagemushaRecursiveSpendProver.newToriiClient(
+            toriiBaseUri,
+            transport,
+            localSigningContext,
+            null,
+        ).getOfflineCapability().join()
+        assertEquals(null, captured.get().timeout)
+        KagemushaRecursiveSpendProver.newToriiClient(
+            toriiBaseUri,
+            transport,
+            localSigningContext,
+            Duration.ZERO,
+        ).getOfflineCapability().join()
+        assertEquals(Duration.ZERO, captured.get().timeout)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.newToriiClient(
+                toriiBaseUri,
+                transport,
+                localSigningContext,
+                Duration.ofMillis(-1),
+            )
+        }
+        val requestTimeout = Duration.ofSeconds(37)
         val client = KagemushaRecursiveSpendProver.newToriiClient(
-            URI.create("https://torii.example/api/"),
-            object : TransportExecutor {
-                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
-                    captured.set(request)
-                    val capability = request.uri.path.endsWith("/readiness")
-                    val lineage = request.uri.path.endsWith("/receiver-lineage")
-                    val command = request.method == "POST" && !lineage
-                    return CompletableFuture.completedFuture(
-                        TransportResponse.builder()
-                            .setStatusCode(if (command) 202 else 200)
-                            .addHeader(
-                                "content-type",
-                                if (capability) "application/json" else "application/x-norito",
-                            )
-                            .addHeader(
-                                "Location",
-                                "/v1/offline/operations/${"11".repeat(32)}",
-                            )
-                            .addHeader("Retry-After", "1")
-                            .setBody(
-                                if (capability) {
-                                    """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true}"""
-                                        .toByteArray(StandardCharsets.UTF_8)
-                                } else {
-                                    archive(
-                                        if (command) {
-                                            "OfflineOperationReference"
-                                        } else if (lineage) {
-                                            "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
-                                        } else if (request.uri.path.contains("/operations/")) {
-                                            "OfflineOperationStatus"
-                                        } else {
-                                            error("unexpected Torii route")
-                                        },
-                                    )
-                                },
-                            )
-                            .build(),
-                    )
-                }
-            },
-            LocalSigningContext(networkId),
+            toriiBaseUri,
+            transport,
+            localSigningContext,
+            requestTimeout,
         )
 
         val status = client.getOfflineCapability().join()
@@ -1738,6 +1772,7 @@ class KagemushaRecursiveSpendProverTest {
             captured.get().uri.toString(),
         )
         assertEquals(listOf("application/json"), captured.get().headers["Accept"])
+        assertEquals(requestTimeout, captured.get().timeout)
 
         val lineageQuery = KagemushaRecursiveSpendProver.RecipientLineageQueryV2(
             archive("iroha_torii_shared::offline_api::OfflineRecipientLineageRequest"),
@@ -1756,6 +1791,7 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertEquals(listOf(nonce), lineageRequest.headers[CanonicalRequestSigner.HEADER_NONCE])
         assertEquals(RequestReplayPolicy.ONE_SHOT, lineageRequest.replayPolicy)
+        assertEquals(requestTimeout, lineageRequest.timeout)
         val signature = Base64.getDecoder().decode(
             lineageRequest.headers.getValue(CanonicalRequestSigner.HEADER_SIGNATURE).single(),
         )
@@ -1799,6 +1835,7 @@ class KagemushaRecursiveSpendProverTest {
             captured.get().headers["Content-Type"],
         )
         assertEquals(listOf(operationId), captured.get().headers["Idempotency-Key"])
+        assertEquals(requestTimeout, captured.get().timeout)
 
         client.submitRedeem(
             KagemushaRecursiveSpendProver.RedeemSubmissionRequest(
@@ -1807,9 +1844,11 @@ class KagemushaRecursiveSpendProverTest {
             operationId,
         ).join()
         assertEquals("/api/v1/offline/redeem", captured.get().uri.path)
+        assertEquals(requestTimeout, captured.get().timeout)
 
         client.getOperation(operationId).join()
         assertEquals("/api/v1/offline/operations/$operationId", captured.get().uri.path)
+        assertEquals(requestTimeout, captured.get().timeout)
     }
 
     @Test

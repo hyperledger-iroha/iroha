@@ -1,4 +1,6 @@
 //! Built-in handling for multisig instructions without requiring an executor upgrade.
+mod parliament_rekey;
+
 use crate::{
     smartcontracts::Execute,
     smartcontracts::isi::domain::isi::ensure_controller_capabilities,
@@ -436,6 +438,7 @@ fn multisig_policy_from_spec(
     MultisigPolicy::new(spec.quorum.get(), members)
         .map_err(|err| InstructionExecutionError::InvariantViolation(format!("{err}").into()))
 }
+
 fn rekey_account_id(
     state_transaction: &mut StateTransaction<'_, '_>,
     old_account: &AccountId,
@@ -500,6 +503,12 @@ fn rekey_account_id(
         .get(old_account)
         .cloned()
         .ok_or_else(|| InstructionExecutionError::Find(FindError::Account(old_account.clone())))?;
+    // Parliament candidate roots, seat assignments, proposal fingerprints, and live,
+    // operational, or retryable validation-fee bindings are immutable. Rewriting those records
+    // would invalidate their hashes, while moving only the account/citizenship record would
+    // strand member actions or release the retained bond under the replacement identity. Reject
+    // before any rekey write.
+    parliament_rekey::ensure_account_rekey_preserves_bindings(state_transaction, old_account)?;
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
         .world
         .account_aliases_by_account
@@ -511,20 +520,18 @@ fn rekey_account_id(
     labels_to_repoint.extend(
         state_transaction
             .world
-            .account_aliases
-            .view()
-            .iter()
-            .filter(|(_, account_id)| *account_id == old_account)
-            .map(|(label, _)| label.clone()),
-    );
-    labels_to_repoint.extend(
-        state_transaction
-            .world
-            .account_rekey_records
-            .view()
-            .iter()
-            .filter(|(_, record)| &record.active_account_id == old_account)
-            .map(|(label, _)| label.clone()),
+            .account_rekey_records_by_account
+            .get(old_account)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter(|label| {
+                state_transaction
+                    .world
+                    .account_rekey_records
+                    .get(label)
+                    .is_some_and(|record| &record.active_account_id == old_account)
+            })
+            .cloned(),
     );
     if let Some(label) = account_value.label().cloned() {
         labels_to_repoint.insert(label);
@@ -653,10 +660,8 @@ fn rekey_account_id(
         state_transaction
             .world
             .insert_account_alias_binding(label.clone(), new_account.clone());
-        state_transaction
-            .world
-            .account_rekey_records
-            .insert(label, record);
+        debug_assert_eq!(label, record.label);
+        state_transaction.world.replace_account_rekey_record(record);
     }
     for (_, (storage_key, record)) in alias_lease_updates {
         state_transaction
@@ -1285,7 +1290,13 @@ fn replace_account_id_in_governance(
             .governance_proposals
             .get_mut(&proposal_id)
         {
-            replace_account_id(&mut record.proposer, old, new);
+            // A validation-fee proposal's retained proposer is also its embedded operator and is
+            // covered by the proposal fingerprint. Live/operational/retryable records were
+            // rejected during rekey preflight; exhausted terminal records remain immutable
+            // historical evidence and must survive restore-time operator checks byte-for-byte.
+            if !parliament_rekey::is_validation_fee_proposal(&record.kind) {
+                replace_account_id(&mut record.proposer, old, new);
+            }
         }
     }
     let lock_ids: Vec<_> = state_transaction
@@ -3135,7 +3146,7 @@ mod tests {
                 SettlementReceipt,
             },
         },
-        kaigi::{KaigiId, KaigiRecord, NewKaigi, kaigi_metadata_key},
+        kaigi::{KaigiId, KaigiRecord, NewKaigi},
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         permission::Permission,
@@ -3205,6 +3216,7 @@ mod tests {
             register_multisig_account(&mut $transaction, &$authority, &$domain, &$spec, $message)
         };
     }
+    include!("multisig/parliament_rekey_tests.rs");
     fn spec(signatories: BTreeMap<AccountId, u8>, quorum: u16) -> MultisigSpec {
         MultisigSpec {
             signatories,
@@ -3395,6 +3407,7 @@ mod tests {
             );
         }
     }
+
     #[test]
     fn register_existing_multisig_account_refreshes_ttl() {
         tx!(
@@ -4252,14 +4265,8 @@ mod tests {
             &NewKaigi::with_defaults(call_id.clone(), old_account.clone()),
             0,
         );
-        tx.world
-            .domain_mut(&domain_id)
-            .expect("domain")
-            .metadata_mut()
-            .insert(
-                kaigi_metadata_key(&call_id.call_name).expect("Kaigi key"),
-                Json::try_new(record).expect("serialize Kaigi record"),
-            );
+        crate::smartcontracts::isi::kaigi::store_kaigi_record_for_testing(&mut tx, &record)
+            .expect("store indexed Kaigi fixture");
 
         let error = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
             .expect_err("aliasless rekey must not strand the active Kaigi host ID");
@@ -4409,7 +4416,7 @@ mod tests {
             .get(&aliases[0])
             .cloned()
             .expect("canonical continuity record");
-        tx.world.account_rekey_records.remove(aliases[0].clone());
+        tx.world.remove_account_rekey_record(&aliases[0]);
         let err = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
             .expect_err("missing continuity record must reject account rekey");
         assert!(
@@ -4417,16 +4424,14 @@ mod tests {
             "{err}"
         );
         tx.world
-            .account_rekey_records
-            .insert(aliases[0].clone(), canonical_rekey_record.clone());
+            .replace_account_rekey_record(canonical_rekey_record.clone());
         assert_account_rekey_not_applied(&tx, &old_account, &new_account, &aliases);
         let mut malformed_rekey_record = canonical_rekey_record.clone();
         malformed_rekey_record
             .transition_provenance
             .push(AccountRekeyTransitionProvenance::AccountIdRekey);
         tx.world
-            .account_rekey_records
-            .insert(aliases[0].clone(), malformed_rekey_record);
+            .replace_account_rekey_record(malformed_rekey_record);
         let err = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
             .expect_err("malformed continuity record must reject account rekey");
         assert!(
@@ -4435,8 +4440,7 @@ mod tests {
         );
         assert_account_rekey_not_applied(&tx, &old_account, &new_account, &aliases);
         tx.world
-            .account_rekey_records
-            .insert(aliases[0].clone(), canonical_rekey_record);
+            .replace_account_rekey_record(canonical_rekey_record);
         rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
             .expect("canonical active leases should migrate atomically");
         for alias in &aliases {

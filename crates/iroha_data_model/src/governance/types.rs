@@ -1687,8 +1687,9 @@ pub enum BallotAttemptStatusV1 {
 /// Deterministic reason a private ballot attempt ended without a result.
 ///
 /// Invalid caller-supplied proofs are rejected and never become lifecycle
-/// state. These reasons are reserved for phase expiry derived from persisted
-/// state or an unavailable finalized release pulse after its immutable height.
+/// state. These reasons are reserved for objective terminal conditions derived
+/// from persisted state: phase expiry, an unavailable finalized release pulse,
+/// or insufficient fresh Confirmation Jury capacity after a narrow opening.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1711,6 +1712,9 @@ pub enum ParliamentBallotFailureKindV1 {
     /// The aggregate was not validly opened before its immutable deadline.
     #[codec(index = 4)]
     OpeningDeadlineExpired,
+    /// Fewer than two eligible citizens remained outside the sealed Policy Jury.
+    #[codec(index = 5)]
+    ConfirmationJuryCapacityUnavailable,
 }
 
 /// Closed audit classification for every Parliament body that ends without a result.
@@ -1749,6 +1753,9 @@ pub enum ParliamentNoResultKindV1 {
     /// The current body exhausted its bounded future-pulse sortition retries.
     #[codec(index = 7)]
     SortitionRetriesExhausted,
+    /// A narrow Policy Jury result had fewer than two eligible fresh confirmers.
+    #[codec(index = 8)]
+    ConfirmationJuryCapacityUnavailable,
 }
 
 impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {
@@ -1768,6 +1775,9 @@ impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {
             }
             ParliamentBallotFailureKindV1::OpeningDeadlineExpired => {
                 Self::BallotOpeningDeadlineExpired
+            }
+            ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable => {
+                Self::ConfirmationJuryCapacityUnavailable
             }
         }
     }
@@ -3050,6 +3060,10 @@ mod tests {
                 ParliamentBallotFailureKindV1::OpeningDeadlineExpired,
                 ParliamentNoResultKindV1::BallotOpeningDeadlineExpired,
             ),
+            (
+                ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable,
+                ParliamentNoResultKindV1::ConfirmationJuryCapacityUnavailable,
+            ),
         ];
         for (index, (ballot, audit)) in cases.into_iter().enumerate() {
             assert_eq!(ParliamentNoResultKindV1::from(ballot), audit);
@@ -3059,9 +3073,10 @@ mod tests {
                     .expect("ballot failure index fits u32")
                     .to_le_bytes()
             );
+            let expected_audit_index = if index == 5 { 8 } else { index + 2 };
             assert_eq!(
                 audit.encode(),
-                u32::try_from(index + 2)
+                u32::try_from(expected_audit_index)
                     .expect("audit failure index fits u32")
                     .to_le_bytes()
             );

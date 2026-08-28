@@ -919,6 +919,27 @@ pub enum TleReleaseAuthorizationErrorV1 {
 /// [`InMemoryTlePartialReleaseSignerV1`] is only a software adapter and test
 /// provider, not a global key-rotation policy.
 pub trait TlePartialReleaseSignerV1: Send + Sync {
+    /// Attest non-secret custody for one exact public session and participant seat.
+    ///
+    /// The default is deliberately unsupported so legacy signing-only providers
+    /// remain source compatible but cannot satisfy validator startup readiness.
+    /// Implementations must perform a live lookup in the same custody object
+    /// later used by [`Self::sign_partial_release`]; constructing an attestation
+    /// from public state alone is not proof of custody.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed capability error when the provider cannot perform the
+    /// lookup, does not own the exact session and seat, or does not implement
+    /// readiness attestation.
+    fn attest_partial_release_capability(
+        &self,
+        _session: &ValidatedTleKeySessionV1,
+        _expected_participant_index: u16,
+    ) -> Result<TlePartialReleaseCapabilityAttestationV1, TlePartialReleaseCapabilityErrorV1> {
+        Err(TlePartialReleaseCapabilityErrorV1::Unsupported)
+    }
+
     /// Sign the exact Core-authorized committed future identity.
     ///
     /// # Errors
@@ -930,6 +951,90 @@ pub trait TlePartialReleaseSignerV1: Send + Sync {
         &self,
         context: &AuthorizedTleReleaseContextV1,
     ) -> Result<TlePartialReleaseShareV1, String>;
+}
+
+/// Non-secret readiness attestation for one runtime provider's exact TLE share.
+///
+/// The fields identify only public transcript material and a public one-based
+/// committee seat. Callers must exact-match the returned value against their
+/// committed session and expected local seat. The value is intentionally not
+/// serializable as a ledger object; broker adapters use their own authenticated
+/// runtime wire envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TlePartialReleaseCapabilityAttestationV1 {
+    key_session_id: TleKeySessionId,
+    transcript_hash: [u8; 32],
+    participant_index: u16,
+}
+
+impl TlePartialReleaseCapabilityAttestationV1 {
+    /// Construct the exact public attestation expected for a validated session seat.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TlePartialReleaseCapabilityErrorV1::InvalidRequest`] when the
+    /// one-based seat does not exist in the validated public transcript.
+    pub fn for_validated_session(
+        session: &ValidatedTleKeySessionV1,
+        participant_index: u16,
+    ) -> Result<Self, TlePartialReleaseCapabilityErrorV1> {
+        if !session
+            .public_state()
+            .public_shares
+            .iter()
+            .any(|share| share.index == participant_index)
+        {
+            return Err(TlePartialReleaseCapabilityErrorV1::InvalidRequest);
+        }
+        Ok(Self {
+            key_session_id: session.public_state().key_session_id,
+            transcript_hash: session.public_state().transcript_hash,
+            participant_index,
+        })
+    }
+
+    /// Return the exact public key-session identifier.
+    #[must_use]
+    pub const fn key_session_id(self) -> TleKeySessionId {
+        self.key_session_id
+    }
+
+    /// Return the exact validated public-transcript hash.
+    #[must_use]
+    pub const fn transcript_hash(self) -> [u8; 32] {
+        self.transcript_hash
+    }
+
+    /// Return the exact one-based participant seat.
+    #[must_use]
+    pub const fn participant_index(self) -> u16 {
+        self.participant_index
+    }
+
+    /// Return whether this attestation exactly matches a committed session seat.
+    #[must_use]
+    pub fn matches(self, session: &ValidatedTleKeySessionV1, participant_index: u16) -> bool {
+        self.key_session_id == session.public_state().key_session_id
+            && self.transcript_hash == session.public_state().transcript_hash
+            && self.participant_index == participant_index
+    }
+}
+
+/// Closed failure classes for non-signing Parliament TLE custody attestation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum TlePartialReleaseCapabilityErrorV1 {
+    /// The provider predates or deliberately omits capability attestation.
+    #[error("Parliament TLE release capability attestation is unsupported")]
+    Unsupported,
+    /// The secure runtime or authenticated lookup is temporarily unavailable.
+    #[error("Parliament TLE release capability attestation is unavailable")]
+    Unavailable,
+    /// The provider does not own the exact requested session and participant seat.
+    #[error("Parliament TLE release capability is not owned")]
+    NotOwned,
+    /// The requested one-based participant seat is absent from the public transcript.
+    #[error("Parliament TLE release capability request is invalid")]
+    InvalidRequest,
 }
 
 /// Runtime broker backend capable of signing one revalidated public projection.
@@ -1050,6 +1155,22 @@ impl InMemoryTlePartialReleaseSignerV1 {
 }
 
 impl TlePartialReleaseSignerV1 for InMemoryTlePartialReleaseSignerV1 {
+    fn attest_partial_release_capability(
+        &self,
+        session: &ValidatedTleKeySessionV1,
+        expected_participant_index: u16,
+    ) -> Result<TlePartialReleaseCapabilityAttestationV1, TlePartialReleaseCapabilityErrorV1> {
+        if session.public_state() != self.session.public_state()
+            || expected_participant_index != self.share.index()
+        {
+            return Err(TlePartialReleaseCapabilityErrorV1::NotOwned);
+        }
+        TlePartialReleaseCapabilityAttestationV1::for_validated_session(
+            session,
+            expected_participant_index,
+        )
+    }
+
     fn sign_partial_release(
         &self,
         context: &AuthorizedTleReleaseContextV1,
@@ -1427,6 +1548,29 @@ pub(crate) mod tests {
         let signer = runtime_signer(&fixture, 1);
         assert_eq!(signer.participant_index(), 1);
 
+        let attestation = signer
+            .attest_partial_release_capability(&fixture.validated, 1)
+            .expect("exact imported share must attest its public session and seat");
+        assert!(attestation.matches(&fixture.validated, 1));
+        assert_eq!(
+            attestation.key_session_id(),
+            fixture.validated.public_state().key_session_id
+        );
+        assert_eq!(
+            attestation.transcript_hash(),
+            fixture.validated.public_state().transcript_hash
+        );
+        assert_eq!(attestation.participant_index(), 1);
+        assert_eq!(
+            signer.attest_partial_release_capability(&fixture.validated, 2),
+            Err(TlePartialReleaseCapabilityErrorV1::NotOwned)
+        );
+        let other = fixture_for_key(0x91);
+        assert_eq!(
+            signer.attest_partial_release_capability(&other.validated, 1),
+            Err(TlePartialReleaseCapabilityErrorV1::NotOwned)
+        );
+
         let early_context = authorized_context(fixture.validated.clone(), identity, 99);
         let early = signer
             .sign_partial_release(&early_context)
@@ -1569,6 +1713,22 @@ pub(crate) mod tests {
         assert_eq!(
             custody.insert_validated_share(runtime_signer(&second, 2)),
             Err(TleReleaseShareCustodyErrorV1::SessionAlreadyPresent)
+        );
+        assert!(
+            custody
+                .attest_partial_release_capability(&first.validated, 1)
+                .expect("custody attests the exact first session seat")
+                .matches(&first.validated, 1)
+        );
+        assert!(
+            custody
+                .attest_partial_release_capability(&second.validated, 2)
+                .expect("custody attests the exact rotating session seat")
+                .matches(&second.validated, 2)
+        );
+        assert_eq!(
+            custody.attest_partial_release_capability(&second.validated, 1),
+            Err(TlePartialReleaseCapabilityErrorV1::NotOwned)
         );
 
         let signer: Arc<dyn TlePartialReleaseSignerV1> = custody.clone();

@@ -21,6 +21,33 @@ fn lane_reservation_test_state() -> Arc<State> {
     install_single_validator_topology_for_queue_test(&mut state, 0xD5);
     Arc::new(state)
 }
+fn owned_lane_reservation_test_state() -> (Arc<State>, TempDir) {
+    let kura_dir = tempdir().expect("owned lane-reservation Kura directory");
+    let config = KuraConfig {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        store_dir: WithOrigin::inline(kura_dir.path().to_path_buf()),
+        max_disk_usage_bytes: kura_defaults::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: kura_defaults::BLOCKS_IN_MEMORY,
+        lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
+        replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity: kura_defaults::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: kura_defaults::FSYNC_MODE,
+        fsync_interval: kura_defaults::FSYNC_INTERVAL,
+    };
+    let (kura, _) = Kura::new_fresh_single_lane(
+        &config,
+        &iroha_config::parameters::actual::LaneConfig::default(),
+    )
+    .expect("open an exclusively owned lane-reservation Kura root");
+    let mut state = State::new(
+        world_with_test_domains(),
+        kura,
+        LiveQueryStore::start_test(),
+    );
+    install_single_validator_topology_for_queue_test(&mut state, 0xD5);
+    (Arc::new(state), kura_dir)
+}
 fn lane_reservation_scope(
     state: &State,
     owner_seed: &[u8],

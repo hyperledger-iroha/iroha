@@ -2058,6 +2058,11 @@ impl TieredStateBackend {
             world.tle_key_sessions
         );
         collect_map!(
+            TieredSegment::TleKeySessionRosters,
+            TleKeySessionRoster,
+            world.tle_key_session_rosters
+        );
+        collect_map!(
             TieredSegment::TleActiveKeySession,
             TleActiveKeySession,
             world.tle_active_key_session
@@ -4128,6 +4133,7 @@ enum TieredSegment {
     ParliamentBodies,
     ParliamentAttempts,
     TleKeySessions,
+    TleKeySessionRosters,
     TleActiveKeySession,
     TimedOvnEvidence,
     GlobalBeaconDkg,
@@ -4198,6 +4204,7 @@ impl TieredSegment {
             TieredSegment::ParliamentBodies => "parliament_bodies",
             TieredSegment::ParliamentAttempts => "parliament_attempts",
             TieredSegment::TleKeySessions => "tle_key_sessions",
+            TieredSegment::TleKeySessionRosters => "tle_key_session_rosters",
             TieredSegment::TleActiveKeySession => "tle_active_key_session",
             TieredSegment::TimedOvnEvidence => "timed_ovn_evidence",
             TieredSegment::GlobalBeaconDkg => "global_beacon_dkg",
@@ -4280,6 +4287,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "parliament_bodies" => TieredSegment::ParliamentBodies,
             "parliament_attempts" => TieredSegment::ParliamentAttempts,
             "tle_key_sessions" => TieredSegment::TleKeySessions,
+            "tle_key_session_rosters" => TieredSegment::TleKeySessionRosters,
             "tle_active_key_session" => TieredSegment::TleActiveKeySession,
             "timed_ovn_evidence" => TieredSegment::TimedOvnEvidence,
             "global_beacon_dkg" => TieredSegment::GlobalBeaconDkg,
@@ -4491,6 +4499,7 @@ pub(crate) enum TieredKeyHandle {
     ParliamentBodies(u64),
     ParliamentAttempt(iroha_data_model::governance::types::GovernanceAttemptId),
     TleKeySession(iroha_data_model::governance::types::TleKeySessionId),
+    TleKeySessionRoster(iroha_data_model::governance::types::TleKeySessionId),
     TleActiveKeySession(u64),
     TimedOvnEvidence(iroha_data_model::governance::types::BallotAttemptId),
     GlobalBeaconDkg([u8; 32]),
@@ -4567,6 +4576,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
             TieredKeyHandle::ParliamentAttempt(_) => TieredSegment::ParliamentAttempts,
             TieredKeyHandle::TleKeySession(_) => TieredSegment::TleKeySessions,
+            TieredKeyHandle::TleKeySessionRoster(_) => TieredSegment::TleKeySessionRosters,
             TieredKeyHandle::TleActiveKeySession(_) => TieredSegment::TleActiveKeySession,
             TieredKeyHandle::TimedOvnEvidence(_) => TieredSegment::TimedOvnEvidence,
             TieredKeyHandle::GlobalBeaconDkg(_) => TieredSegment::GlobalBeaconDkg,
@@ -4649,6 +4659,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentAttempt(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleKeySession(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::TleKeySessionRoster(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleActiveKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TimedOvnEvidence(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconDkg(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4771,6 +4782,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
+            TieredKeyHandle::TleKeySessionRoster(id) => {
+                fetch!(world.tle_key_session_rosters, id)
+            }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 fetch!(world.tle_active_key_session, id)
             }
@@ -4895,6 +4909,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
+            TieredKeyHandle::TleKeySessionRoster(id) => {
+                fetch!(world.tle_key_session_rosters, id)
+            }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 fetch!(world.tle_active_key_session, id)
             }
@@ -5065,6 +5082,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::ParliamentBodies(id) => write!(f, "parliament_bodies:{id}"),
             TieredKeyHandle::ParliamentAttempt(id) => write!(f, "parliament_attempt:{id}"),
             TieredKeyHandle::TleKeySession(id) => write!(f, "tle_key_session:{id}"),
+            TieredKeyHandle::TleKeySessionRoster(id) => {
+                write!(f, "tle_key_session_roster:{id}")
+            }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 write!(f, "tle_active_key_session:{id}")
             }

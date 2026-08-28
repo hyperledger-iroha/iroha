@@ -2591,6 +2591,129 @@ mod tests {
         server_connection.close(0u32.into(), b"test complete");
         client_connection.close(0u32.into(), b"test complete");
     }
+    #[tokio::test]
+    async fn finished_quic_stream_delivers_final_protected_vpn_record() {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["relay.test".to_owned()])
+                .expect("generate test certificate");
+        let key =
+            PrivateKeyDer::try_from(signing_key.serialize_der()).expect("encode test private key");
+        let server_config = RelayRuntime::server_config(vec![cert.der().clone()], key)
+            .expect("build relay QUIC configuration");
+        let server = Endpoint::server(
+            server_config,
+            "127.0.0.1:0".parse().expect("parse loopback address"),
+        )
+        .expect("bind relay QUIC endpoint");
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(cert.der().clone())
+            .expect("trust test relay certificate");
+        let mut client_tls =
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+        client_tls.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
+        let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)
+            .expect("build QUIC client crypto");
+        let mut client = Endpoint::client(
+            "127.0.0.1:0"
+                .parse()
+                .expect("parse client loopback address"),
+        )
+        .expect("bind QUIC client endpoint");
+        client.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
+        let connecting = client
+            .connect(server.local_addr().expect("relay address"), "relay.test")
+            .expect("start QUIC connection");
+        let client_task = tokio::spawn(connecting);
+        let initial = timeout(Duration::from_secs(2), server.accept())
+            .await
+            .expect("initial connection attempt timed out")
+            .expect("initial incoming connection");
+        assert!(RelayRuntime::require_validated_quic_address(initial).is_none());
+        let retried = timeout(Duration::from_secs(2), server.accept())
+            .await
+            .expect("retried connection attempt timed out")
+            .expect("retried incoming connection");
+        let server_connecting = RelayRuntime::require_validated_quic_address(retried)
+            .expect("retry token must validate the peer address")
+            .accept()
+            .expect("accept validated connection");
+        let (server_connection, client_connection) = timeout(Duration::from_secs(2), async {
+            let (server_result, client_result) = tokio::join!(server_connecting, client_task);
+            (
+                server_result.expect("server QUIC handshake"),
+                client_result
+                    .expect("client task")
+                    .expect("client QUIC handshake"),
+            )
+        })
+        .await
+        .expect("validated QUIC handshake timed out");
+
+        let sender = async {
+            let (mut send, _recv) = client_connection.open_bi().await.expect("open stream");
+            let context = record_stream_context(send.id());
+            let record = RecordLayer::new(SessionKey::new(vec![0xB6; 32]), RecordEndpoint::Client)
+                .expect("client record layer")
+                .stream(context)
+                .expect("client record stream");
+            let overlay = VpnOverlay::from_config(VpnConfig::default());
+            let cell = overlay
+                .data_cell(
+                    [0xB6; 16],
+                    vpn_flow_label_from_session_id([0xB6; 16]),
+                    0,
+                    0,
+                    VpnCellFlagsV1::new(false, false, false, false),
+                    b"final protected packet".to_vec(),
+                )
+                .expect("vpn cell");
+            let frame = overlay.pad_cell(cell).expect("vpn frame");
+            let mut protected = RecordWriter::new(&mut send, record.sealer);
+            crate::vpn::write_frame(&mut protected, &frame)
+                .await
+                .expect("write final frame");
+            protected.shutdown().await.expect("finish protected stream");
+            drop(protected);
+            timeout(
+                Duration::from_secs(2),
+                wait_for_finished_quic_send_stream(&send),
+            )
+            .await
+            .expect("peer acknowledgement timed out")
+            .expect("peer acknowledged final stream bytes");
+        };
+        let receiver = async {
+            let (_send, recv) = server_connection.accept_bi().await.expect("accept stream");
+            let context = record_stream_context(recv.id());
+            let record = RecordLayer::new(SessionKey::new(vec![0xB6; 32]), RecordEndpoint::Relay)
+                .expect("relay record layer")
+                .stream(context)
+                .expect("relay record stream");
+            let overlay = VpnOverlay::from_config(VpnConfig::default());
+            let mut protected = RecordReader::new(recv, record.opener);
+            let cell = crate::vpn::read_frame(&overlay, &mut protected)
+                .await
+                .expect("read final frame");
+            let mut trailing = Vec::new();
+            protected
+                .read_to_end(&mut trailing)
+                .await
+                .expect("read finished stream");
+            assert!(trailing.is_empty());
+            cell
+        };
+        let ((), cell) = tokio::join!(sender, receiver);
+        assert_eq!(cell.payload, b"final protected packet");
+        server_connection.close(0u32.into(), b"test complete");
+        client_connection.close(0u32.into(), b"test complete");
+        server.close(0u32.into(), b"test complete");
+        client.close(0u32.into(), b"test complete");
+        tokio::join!(server.wait_idle(), client.wait_idle());
+    }
     #[test]
     fn relay_quic_server_rejects_tls_early_data() {
         let rcgen::CertifiedKey { cert, signing_key } =

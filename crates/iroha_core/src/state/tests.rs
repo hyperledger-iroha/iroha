@@ -93,8 +93,9 @@ use iroha_data_model::{
         proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
     },
     sorafs::pin_registry::{
-        ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy,
-        ReplicationOrderId, StorageClass,
+        ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
+        ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy, ReplicationOrderId,
+        StorageClass,
     },
     transaction::ExecutionStep,
 };
@@ -479,12 +480,7 @@ fn test_da_pin_intent(
     storage_ticket: StorageTicketId,
     manifest_hash: ManifestDigest,
 ) -> DaPinIntent {
-    DaPinIntent::new(
-        lane_id,
-        epoch,
-        sequence,
-        storage_ticket,
-        manifest_hash,
+    crate::da::signed_test_pin_intent(
         crate::da::signed_test_ingest_authorization(
             network_id,
             &ALICE_KEYPAIR,
@@ -493,7 +489,25 @@ fn test_da_pin_intent(
             sequence,
             1,
         ),
+        &ALICE_KEYPAIR,
+        storage_ticket,
+        manifest_hash,
+        None,
     )
+}
+fn set_test_da_pin_intent_alias(
+    intent: &mut DaPinIntent,
+    key_pair: &KeyPair,
+    alias: Option<String>,
+) {
+    intent.pin_scope_authorization = crate::da::signed_test_pin_scope_authorization(
+        &intent.authorization,
+        key_pair,
+        intent.storage_ticket,
+        intent.manifest_hash,
+        alias.clone(),
+    );
+    intent.alias = alias;
 }
 state_test! { sync musubi_v1_world_defaults_and_domain_generation_are_deterministic
     use iroha_data_model::musubi::{
@@ -1128,7 +1142,7 @@ state_test! { sync merge_write_set_encoder_mentions_every_persisted_world_block_
     let source = include_str!("../state.rs");
     let_row! { struct_start = source .find("pub struct WorldBlock<'world> {") .expect("WorldBlock declaration must remain discoverable") };
     let struct_tail = &source[struct_start..];
-    let_row! { struct_end = struct_tail .find("\n}\n\nimpl WorldBlock<'_>") .expect("WorldBlock declaration terminator must remain discoverable") };
+    let_row! { struct_end = struct_tail .find("\n}\nimpl WorldBlock<'_>") .expect("WorldBlock declaration terminator must remain discoverable") };
     let struct_body = &struct_tail[..struct_end];
     let_row! { encoder_start = source .find("fn merge_execution_write_set_bytes(&self)") .expect("merge write-set encoder must exist") };
     let encoder_tail = &source[encoder_start..];
@@ -1169,7 +1183,7 @@ state_test! { sync world_and_world_block_keep_snapshot_skip_annotations_in_sync
     }
     let source = include_str!("../state.rs");
     let_row! { world = source .split_once("pub struct World {") .and_then(|(_, tail)| tail.split_once("\n}\n/// Struct for block's aggregated changes")) .map(|(body, _)| body) .expect("World declaration must remain discoverable") };
-    let_row! { world_block = source .split_once("pub struct WorldBlock<'world> {") .and_then(|(_, tail)| tail.split_once("\n}\n#[cfg(test)]\nimpl<'world> WorldBlock")) .map(|(body, _)| body) .expect("WorldBlock declaration must remain discoverable") };
+    let_row! { world_block = source .split_once("pub struct WorldBlock<'world> {") .and_then(|(_, tail)| tail.split_once("\n}\nimpl WorldBlock<'_>")) .map(|(body, _)| body) .expect("WorldBlock declaration must remain discoverable") };
     let world_annotations = snapshot_skip_annotations(world);
     let block_annotations = snapshot_skip_annotations(world_block);
     assert_eq!(
@@ -1202,6 +1216,20 @@ state_test! { sync world_and_world_block_keep_snapshot_skip_annotations_in_sync
         Some(&false),
         "the authoritative SoraFS pin registry must be part of canonical snapshots"
     );
+    assert_eq!(
+        world_annotations.get("manifest_aliases"),
+        Some(&false),
+        "non-reconstructible SoraFS alias authority and expiry state must be persisted"
+    );
+    let parser_source = include_str!("deserialize_world.rs");
+    for (field, skipped) in &world_annotations {
+        if *skipped {
+            assert!(
+                !parser_source.contains(&format!("take_required(&mut map, \"{field}\")")),
+                "snapshot parser must not require skipped World field `{field}`"
+            );
+        }
+    }
     for (field, world_skips) in &world_annotations {
         if *field == "external_event_buf" {
             // The staged canonical serializer deliberately substitutes the
@@ -1329,7 +1357,7 @@ state_test! { sync world_transaction_apply_commits_sorafs_da_and_direct_lane_ove
     let manifest = ManifestDigest::new([0x95; 32]);
     let alias = "world-transaction-apply-regression".to_owned();
     let_row! { mut intent = test_da_pin_intent( *DEFAULT_TEST_NETWORK_ID, lane_id, epoch, sequence, ticket, manifest, ) };
-    intent.alias = Some(alias.clone());
+    set_test_da_pin_intent_alias(&mut intent, &ALICE_KEYPAIR, Some(alias.clone()));
     let_row! { intent_with_location = DaPinIntentWithLocation { intent: intent.clone(), location: DaCommitmentLocation { block_height: 17, index_in_bundle: 19, }, } };
     let_row! { (marker_key, marker) = sample_direct_lane_application_marker(lane_id, lane_id, DataSpaceId::UNIVERSAL, 23, 0x96) };
     {
@@ -3676,6 +3704,21 @@ state_test! { sync account_alias_bindings_roundtrip_through_state_json
         .expect("rebuild should preserve rekey records");
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
+    let snapshot_world = json_value
+        .as_object()
+        .and_then(|snapshot| snapshot.get("world"))
+        .and_then(norito::json::Value::as_object)
+        .expect("state snapshot world object");
+    for derived_field in [
+        "account_aliases_by_account",
+        "account_scope_directory",
+        "account_rekey_records_by_account",
+    ] {
+        assert!(
+            !snapshot_world.contains_key(derived_field),
+            "derived account index `{derived_field}` must not be serialized"
+        );
+    }
     let_row! { seed = deserialize::KuraSeed { kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
@@ -3692,11 +3735,247 @@ state_test! { sync account_alias_bindings_roundtrip_through_state_json
         account_id
     );
     assert_eq!(
+        view.account_rekey_records_by_account().get(&account_id),
+        Some(&BTreeSet::from([
+            primary_label.clone(),
+            bound_label.clone()
+        ])),
+        "deserialization must rebuild the skipped rekey occurrence index"
+    );
+    assert_eq!(
         view.bound_account_aliases(&account_id)
             .into_iter()
             .collect::<BTreeSet<_>>(),
         BTreeSet::from([primary_label, bound_label])
     );
+}
+state_test! { sync manifest_alias_records_roundtrip_through_state_json
+    let mut world = World::default();
+    let binder = AccountId::new(crate::state::checked_keypair().public_key().clone());
+    let binding = ManifestAliasBinding {
+        name: "release".to_owned(),
+        namespace: "kaigi-snapshot".to_owned(),
+        proof: vec![0xA5, 0x5A],
+    };
+    let alias_id = ManifestAliasId::from(&binding);
+    let record = ManifestAliasRecord::new(
+        binding,
+        ManifestDigest::new([0x42; 32]),
+        binder,
+        17,
+        29,
+    );
+    world
+        .manifest_aliases
+        .insert(alias_id.clone(), record.clone());
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize state");
+    let snapshot_world = snapshot
+        .as_object()
+        .and_then(|value| value.get("world"))
+        .and_then(norito::json::Value::as_object)
+        .expect("state snapshot world object");
+    assert!(
+        snapshot_world.contains_key("manifest_aliases"),
+        "authoritative manifest alias records must be serialized"
+    );
+    let restored = deserialize_state_snapshot_value(snapshot).expect("restore state");
+    assert_eq!(
+        restored.world_view().manifest_aliases().get(&alias_id),
+        Some(&record),
+        "manifest alias authority and epoch bounds must survive restart"
+    );
+}
+state_test! { sync account_rekey_occurrence_index_tracks_lifecycle_and_transaction_rollback
+    use iroha_data_model::account::rekey::AccountRekeyRecord;
+    let state = State::new(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let alias = AccountAlias::domainless(
+        "indexed-history".parse().expect("alias label"),
+        DataSpaceId::UNIVERSAL,
+    );
+    let predecessor = AccountId::new(crate::state::checked_keypair().public_key().clone());
+    let active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+    let replacement = AccountId::new(crate::state::checked_keypair().public_key().clone());
+    let record = AccountRekeyRecord::new(alias.clone(), predecessor.clone())
+        .repoint_for_account_id_rekey(active.clone())
+        .expect("canonical rekey history");
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    {
+        let mut transaction = block.transaction();
+        transaction.world.replace_account_rekey_record(record.clone());
+        transaction.apply();
+    }
+    for account_id in [&predecessor, &active] {
+        assert_eq!(
+            block.world.account_rekey_records_by_account.get(account_id),
+            Some(&BTreeSet::from([alias.clone()]))
+        );
+    }
+    {
+        let mut transaction = block.transaction();
+        transaction.world.replace_account_rekey_record(
+            AccountRekeyRecord::new(alias.clone(), replacement.clone()),
+        );
+        assert!(
+            transaction
+                .world
+                .account_rekey_records_by_account
+                .get(&predecessor)
+                .is_none()
+        );
+    }
+    assert_eq!(
+        block.world.account_rekey_records.get(&alias),
+        Some(&record),
+        "dropping a transaction must roll the authoritative record back"
+    );
+    assert!(
+        block
+            .world
+            .account_rekey_records_by_account
+            .get(&replacement)
+            .is_none(),
+        "dropping a transaction must roll the derived index back"
+    );
+    {
+        let mut transaction = block.transaction();
+        assert_eq!(
+            transaction.world.remove_account_rekey_record(&alias),
+            Some(record)
+        );
+        transaction.apply();
+    }
+    assert!(block.world.account_rekey_records.get(&alias).is_none());
+    assert!(
+        block
+            .world
+            .account_rekey_records_by_account
+            .get(&predecessor)
+            .is_none()
+    );
+    assert!(
+        block
+            .world
+            .account_rekey_records_by_account
+            .get(&active)
+            .is_none()
+    );
+}
+state_test! { sync kaigi_account_dependency_index_rebuilds_from_state_snapshot
+    use iroha_data_model::kaigi::{
+        KaigiId, KaigiRecord, NewKaigi, kaigi_metadata_key,
+    };
+
+    let domain_id = DomainId::try_new("kaigi-snapshot", "universal").expect("domain id");
+    let (host, _) = gen_account_in("kaigi-snapshot");
+    let call = KaigiId::new(
+        domain_id.clone(),
+        "active-call".parse().expect("call name"),
+    );
+    let record = KaigiRecord::from_new(
+        &NewKaigi::with_defaults(call.clone(), host.clone()),
+        0,
+    );
+    let metadata_key = kaigi_metadata_key(&call.call_name).expect("Kaigi metadata key");
+    let mut domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+    domain.metadata_mut().insert(
+        metadata_key.clone(),
+        Json::try_new(record).expect("serialize Kaigi record"),
+    );
+    let state = State::new(
+        World::with(
+            [domain],
+            [Account::new(host.clone()).build(&ALICE_ID)],
+            std::iter::empty::<AssetDefinition>(),
+        ),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize state snapshot");
+    let snapshot_world = snapshot
+        .as_object()
+        .and_then(|value| value.get("world"))
+        .and_then(norito::json::Value::as_object)
+        .expect("state snapshot world object");
+    assert!(
+        !snapshot_world.contains_key("kaigi_account_dependencies"),
+        "the derived Kaigi dependency index must not be serialized"
+    );
+
+    let restored = deserialize_state_snapshot_value(snapshot).expect("restore state snapshot");
+    let view = restored.world_view();
+    assert!(
+        view.kaigi_account_dependencies()
+            .get(&host)
+            .is_some_and(|dependencies| dependencies.iter().any(
+                |(_, indexed_domain, indexed_key)|
+                    indexed_domain == &domain_id && indexed_key == &metadata_key
+            )),
+        "snapshot restore must rebuild active Kaigi account dependencies"
+    );
+}
+state_test! { sync account_rekey_occurrence_index_rebuild_preserves_latest_block_revert
+    use iroha_data_model::account::rekey::AccountRekeyRecord;
+    let previous_account = AccountId::new(crate::state::checked_keypair().public_key().clone());
+    let current_account = AccountId::new(crate::state::checked_keypair().public_key().clone());
+    let accounts = [previous_account.clone(), current_account.clone()]
+        .map(|account_id| Account::new(account_id).build(&ALICE_ID));
+    let mut world = World::with(
+        std::iter::empty::<Domain>(),
+        accounts,
+        std::iter::empty::<AssetDefinition>(),
+    );
+    let alias = AccountAlias::domainless(
+        "restart-revert".parse().expect("alias label"),
+        DataSpaceId::UNIVERSAL,
+    );
+    world.account_rekey_records.insert(
+        alias.clone(),
+        AccountRekeyRecord::new(alias.clone(), previous_account.clone()),
+    );
+    {
+        let mut records = world.account_rekey_records.block();
+        records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), current_account.clone()),
+        );
+        records.commit();
+    }
+    let authoritative_before = norito::json::to_json(&world.account_rekey_records)
+        .expect("serialize authoritative rekey storage");
+    world
+        .rebuild_account_rekey_records()
+        .expect("rebuild rekey occurrence index");
+    assert_eq!(
+        norito::json::to_json(&world.account_rekey_records)
+            .expect("serialize rebuilt authoritative rekey storage"),
+        authoritative_before,
+        "rebuilding a skipped index must preserve authoritative MV history"
+    );
+    assert_eq!(
+        world
+            .account_rekey_records_by_account
+            .view()
+            .get(&current_account),
+        Some(&BTreeSet::from([alias.clone()]))
+    );
+    let reverted = world.account_rekey_records_by_account.block_and_revert();
+    assert_eq!(
+        reverted.get(&previous_account),
+        Some(&BTreeSet::from([alias.clone()])),
+        "restored reverse index must retain the previous block projection"
+    );
+    assert!(reverted.get(&current_account).is_none());
+    reverted.commit();
 }
 state_test! { sync asset_definition_alias_bindings_roundtrip_through_state_json
     let (mut world, definition_id) = asset_alias_test_world();
@@ -8889,7 +9168,11 @@ state_test! { sync autoscale_scale_out_height_mismatch_does_not_publish_storage_
     store_committed_autoscale_history_block_for_test(&state, &kura, &first);
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xB8);
     let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), LaneId::new(0), 1, 0, StorageTicketId::new([0xB9; 32]), ManifestDigest::new([0xBA; 32]), ) };
-    intent.alias = Some("autoscale-height-mismatch-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut intent,
+        &ALICE_KEYPAIR,
+        Some("autoscale-height-mismatch-pin".to_owned()),
+    );
     let mut signed_second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
     signed_second.set_da_commitments(Some(DaCommitmentBundle::new(vec![record])));
     signed_second.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])));
@@ -9664,7 +9947,7 @@ fn assert_autoscale_scale_out_preflight_failure_is_atomic(
         .expect("seed autoscale storage conflict");
     let record = sample_da_commitment_record(LaneId::SINGLE, 1, 0, record_tag);
     let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), LaneId::SINGLE, 1, 0, StorageTicketId::new([ticket_tag; 32]), ManifestDigest::new([manifest_tag; 32]), ) };
-    intent.alias = Some(pin_alias.to_owned());
+    set_test_da_pin_intent_alias(&mut intent, &ALICE_KEYPAIR, Some(pin_alias.to_owned()));
     let mut signed_second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
     signed_second.set_da_commitments(Some(DaCommitmentBundle::new(vec![record])));
     signed_second.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])));
@@ -9769,7 +10052,7 @@ fn assert_autoscale_scale_in_preflight_failure_is_atomic(conflict: LaneRetiremen
     record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
     let record = sample_da_commitment_record(LaneId::SINGLE, 1, 0, record_tag);
     let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), LaneId::SINGLE, 1, 0, StorageTicketId::new([ticket_tag; 32]), ManifestDigest::new([manifest_tag; 32]), ) };
-    intent.alias = Some(pin_alias.to_owned());
+    set_test_da_pin_intent_alias(&mut intent, &ALICE_KEYPAIR, Some(pin_alias.to_owned()));
     let mut retirement = autoscale_signed_block_with_committed_fragments(Some(&carrier), 300, 0);
     retirement.set_da_commitments(Some(DaCommitmentBundle::new(vec![record])));
     retirement.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])));
@@ -13185,9 +13468,17 @@ state_test! { sync committed_autoscale_lifecycle_prunes_persistent_reset_lane_st
         block.commit();
     }
     let_row! { mut retired_pin_intent = test_da_pin_intent( *state.network_id_ref(), retired_lane_id, 9, 0, StorageTicketId::new([0xF3; 32]), ManifestDigest::new([0xF4; 32]), ) };
-    retired_pin_intent.alias = Some("committed-autoscale-retired-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retired_pin_intent,
+        &ALICE_KEYPAIR,
+        Some("committed-autoscale-retired-pin".to_owned()),
+    );
     let_row! { mut retained_pin_intent = test_da_pin_intent( *state.network_id_ref(), LaneId::SINGLE, 9, 1, StorageTicketId::new([0xF5; 32]), ManifestDigest::new([0xF6; 32]), ) };
-    retained_pin_intent.alias = Some("committed-autoscale-retained-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retained_pin_intent,
+        &ALICE_KEYPAIR,
+        Some("committed-autoscale-retained-pin".to_owned()),
+    );
     seed_da_pin_intent_world_indexes_for_test(&state, retired_pin_intent.clone(), 9, 0);
     seed_da_pin_intent_world_indexes_for_test(&state, retained_pin_intent.clone(), 9, 1);
     let (_, validator_keypairs) = bls_accounts_in("validators", 4);
@@ -13560,9 +13851,13 @@ state_test! { sync da_pin_intent_index_prune_keys_select_embedded_and_index_lane
     let survivor_lane = LaneId::new(2);
     let_row! { location = DaCommitmentLocation { block_height: 9, index_in_bundle: 0, } };
     let_row! { mut reset_intent = test_da_pin_intent( *DEFAULT_TEST_NETWORK_ID, reset_lane, 3, 0, StorageTicketId::new([0x41; 32]), ManifestDigest::new([0x51; 32]), ) };
-    reset_intent.alias = Some("reset-pin".to_owned());
+    set_test_da_pin_intent_alias(&mut reset_intent, &ALICE_KEYPAIR, Some("reset-pin".to_owned()));
     let_row! { mut survivor_intent = test_da_pin_intent( *DEFAULT_TEST_NETWORK_ID, survivor_lane, 3, 1, StorageTicketId::new([0x42; 32]), ManifestDigest::new([0x52; 32]), ) };
-    survivor_intent.alias = Some("survivor-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut survivor_intent,
+        &ALICE_KEYPAIR,
+        Some("survivor-pin".to_owned()),
+    );
     let orphan_reset_ticket = StorageTicketId::new([0x43; 32]);
     let stale_lane_epoch_for_reset_ticket = (survivor_lane, 4, 0);
     let reset_lane_epoch_for_orphan_ticket = (reset_lane, 4, 1);
@@ -13708,9 +14003,17 @@ state_test! { sync autoscale_transition_prunes_retired_managed_lane_runtime_cach
         "test setup should seed retired-lane pin intents"
     );
     let_row! { mut retired_pin_intent = test_da_pin_intent( *state.network_id_ref(), retired_lane_id, 7, 0, StorageTicketId::new([0xB4; 32]), ManifestDigest::new([0xB5; 32]), ) };
-    retired_pin_intent.alias = Some("retired-lane-world-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retired_pin_intent,
+        &ALICE_KEYPAIR,
+        Some("retired-lane-world-pin".to_owned()),
+    );
     let_row! { mut retained_pin_intent = test_da_pin_intent( *state.network_id_ref(), LaneId::SINGLE, 7, 1, StorageTicketId::new([0xB6; 32]), ManifestDigest::new([0xB7; 32]), ) };
-    retained_pin_intent.alias = Some("retained-lane-world-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retained_pin_intent,
+        &ALICE_KEYPAIR,
+        Some("retained-lane-world-pin".to_owned()),
+    );
     seed_da_pin_intent_world_indexes_for_test(&state, retired_pin_intent.clone(), 3, 0);
     seed_da_pin_intent_world_indexes_for_test(&state, retained_pin_intent.clone(), 3, 1);
     let_row! { retirement = prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id) };
@@ -13837,11 +14140,23 @@ state_test! { sync autoscale_scale_in_rejects_same_block_pin_intents_for_retired
     commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &close);
     commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &carrier);
     let_row! { mut retired_intent = test_da_pin_intent( *state.network_id_ref(), retired_lane_id, 9, 0, StorageTicketId::new([0xC4; 32]), ManifestDigest::new([0xC5; 32]), ) };
-    retired_intent.alias = Some("same-block-retired-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retired_intent,
+        &ALICE_KEYPAIR,
+        Some("same-block-retired-pin".to_owned()),
+    );
     let_row! { mut retained_intent = test_da_pin_intent( *state.network_id_ref(), LaneId::SINGLE, 9, 1, StorageTicketId::new([0xC6; 32]), ManifestDigest::new([0xC7; 32]), ) };
-    retained_intent.alias = Some("same-block-retained-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retained_intent,
+        &ALICE_KEYPAIR,
+        Some("same-block-retained-pin".to_owned()),
+    );
     let_row! { mut retained_side_intent = test_da_pin_intent( *state.network_id_ref(), retained_side_lane_id, 9, 2, StorageTicketId::new([0xC8; 32]), ManifestDigest::new([0xC9; 32]), ) };
-    retained_side_intent.alias = Some("same-block-retained-side-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retained_side_intent,
+        &ALICE_KEYPAIR,
+        Some("same-block-retained-side-pin".to_owned()),
+    );
     retirement.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![
         retired_intent.clone(),
         retained_intent.clone(),
@@ -16788,9 +17103,17 @@ state_test! { sync apply_lane_lifecycle_allows_repair_retire_of_future_created_a
     nexus.autoscale.enabled = true;
     let state = State::new_with_nexus_for_testing(World::default(), nexus, query_handle);
     let_row! { mut future_pin_intent = test_da_pin_intent( *state.network_id_ref(), LaneId::new(1), 7, 0, StorageTicketId::new([0x65; 32]), ManifestDigest::new([0x75; 32]), ) };
-    future_pin_intent.alias = Some("future-created-repair-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut future_pin_intent,
+        &ALICE_KEYPAIR,
+        Some("future-created-repair-pin".to_owned()),
+    );
     let_row! { mut retained_pin_intent = test_da_pin_intent( *state.network_id_ref(), LaneId::SINGLE, 7, 1, StorageTicketId::new([0x66; 32]), ManifestDigest::new([0x76; 32]), ) };
-    retained_pin_intent.alias = Some("future-created-retained-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retained_pin_intent,
+        &ALICE_KEYPAIR,
+        Some("future-created-retained-pin".to_owned()),
+    );
     seed_da_pin_intent_world_indexes_for_test(&state, future_pin_intent.clone(), 5, 0);
     seed_da_pin_intent_world_indexes_for_test(&state, retained_pin_intent.clone(), 5, 1);
     let_row! { override_set = LaneRelayEmergencyValidatorSet { peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())], expires_at_height: 10, metadata: Metadata::default(), } };
@@ -19415,7 +19738,7 @@ fn assert_lane_state_pruned_on_dataspace_change(route: LaneDataspaceChangeRoute)
             LaneDataspaceChangeRoute::SetNexus => "lane1-reassign",
             LaneDataspaceChangeRoute::Lifecycle => "lane1-lifecycle-reassign",
         };
-        intent.alias = Some(alias.to_string());
+        set_test_da_pin_intent_alias(&mut intent, &ALICE_KEYPAIR, Some(alias.to_owned()));
         intents.insert(
             intent,
             DaCommitmentLocation {
@@ -20120,7 +20443,7 @@ fn apply_lane_lifecycle_retire_prunes_lane_relays() {
     {
         let mut intents = state.da_pin_intents.write();
         let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), LaneId::new(1), 1, 1, StorageTicketId::new([0x44; 32]), ManifestDigest::new([0x55; 32]), ) };
-        intent.alias = Some("lane1-alias".to_string());
+        set_test_da_pin_intent_alias(&mut intent, &ALICE_KEYPAIR, Some("lane1-alias".to_owned()));
         intents.insert(
             intent,
             DaCommitmentLocation {
@@ -20232,9 +20555,17 @@ state_test! { sync apply_lane_lifecycle_retire_prunes_da_pin_intent_world_indexe
         .apply_lane_lifecycle(&plan)
         .expect("added pin test lane");
     let_row! { mut retired_intent = test_da_pin_intent( *state.network_id_ref(), retired_lane_id, 5, 0, StorageTicketId::new([0x61; 32]), ManifestDigest::new([0x71; 32]), ) };
-    retired_intent.alias = Some("retired-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retired_intent,
+        &ALICE_KEYPAIR,
+        Some("retired-pin".to_owned()),
+    );
     let_row! { mut retained_intent = test_da_pin_intent( *state.network_id_ref(), LaneId::SINGLE, 5, 1, StorageTicketId::new([0x62; 32]), ManifestDigest::new([0x72; 32]), ) };
-    retained_intent.alias = Some("retained-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retained_intent,
+        &ALICE_KEYPAIR,
+        Some("retained-pin".to_owned()),
+    );
     seed_da_pin_intent_world_indexes_for_test(&state, retired_intent.clone(), 3, 0);
     seed_da_pin_intent_world_indexes_for_test(&state, retained_intent.clone(), 3, 1);
     state
@@ -20311,9 +20642,17 @@ state_test! { sync set_nexus_retire_prunes_da_pin_intent_world_indexes
         })
         .expect("seed pin test lane through set_nexus");
     let_row! { mut retired_intent = test_da_pin_intent( *state.network_id_ref(), retired_lane_id, 5, 0, StorageTicketId::new([0x63; 32]), ManifestDigest::new([0x73; 32]), ) };
-    retired_intent.alias = Some("set-nexus-retired-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retired_intent,
+        &ALICE_KEYPAIR,
+        Some("set-nexus-retired-pin".to_owned()),
+    );
     let_row! { mut retained_intent = test_da_pin_intent( *state.network_id_ref(), LaneId::SINGLE, 5, 1, StorageTicketId::new([0x64; 32]), ManifestDigest::new([0x74; 32]), ) };
-    retained_intent.alias = Some("set-nexus-retained-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut retained_intent,
+        &ALICE_KEYPAIR,
+        Some("set-nexus-retained-pin".to_owned()),
+    );
     seed_da_pin_intent_world_indexes_for_test(&state, retired_intent.clone(), 4, 0);
     seed_da_pin_intent_world_indexes_for_test(&state, retained_intent.clone(), 4, 1);
     state
@@ -20531,7 +20870,11 @@ state_test! { sync apply_lane_lifecycle_recreated_lane_hides_previous_da_indexes
     );
     let stale_record = sample_da_commitment_record(recreated_lane_id, 2, 1, 0xC8);
     let_row! { mut stale_pin = test_da_pin_intent( *state.network_id_ref(), recreated_lane_id, 2, 1, StorageTicketId::new([0xCB; 32]), ManifestDigest::new([0xCC; 32]), ) };
-    stale_pin.alias = Some("old-incarnation-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut stale_pin,
+        &ALICE_KEYPAIR,
+        Some("old-incarnation-pin".to_owned()),
+    );
     let keypair = crate::state::checked_keypair();
     let_row! { old_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some( iroha_data_model::da::commitment::DaCommitmentBundle::new(vec![stale_record.clone()]), )) .with_da_pin_intents(Some( iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![stale_pin.clone()]), )) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
     kura.store_block(Arc::new(old_block.clone()))
@@ -22023,7 +22366,11 @@ fn assert_same_lane_da_reset_hides_previous_indexes(case: SameLaneDaResetCase) {
             StorageTicketId::new([0xD1; 32]),
             ManifestDigest::new([0xD2; 32]),
         );
-        pin.alias = Some("same-shard-old-dataspace-pin".to_owned());
+        set_test_da_pin_intent_alias(
+            &mut pin,
+            &ALICE_KEYPAIR,
+            Some("same-shard-old-dataspace-pin".to_owned()),
+        );
         Some(pin)
     } else {
         None
@@ -22433,7 +22780,7 @@ fn seed_da_runtime_record_for_lane(
         ),
     );
     let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), lane_id, 1, 1, StorageTicketId::new([tag.wrapping_add(4); 32]), ManifestDigest::new([tag.wrapping_add(5); 32]), ) };
-    intent.alias = Some(alias.to_owned());
+    set_test_da_pin_intent_alias(&mut intent, &ALICE_KEYPAIR, Some(alias.to_owned()));
     state.da_pin_intents.write().insert(intent, location);
     record
 }
@@ -27010,7 +27357,11 @@ state_test! { sync da_pin_intents_hydrate_from_kura_block_log
         })
         .expect("apply Nexus catalog for DA pin replay test");
     let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), lane, 7, 3, StorageTicketId::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), ) };
-    intent.alias = Some("alias-one".to_string());
+    set_test_da_pin_intent_alias(
+        &mut intent,
+        &ALICE_KEYPAIR,
+        Some("alias-one".to_owned()),
+    );
     let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_pin_intents(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -27052,7 +27403,11 @@ state_test! { sync da_pin_intents_kura_replay_rejects_future_created_autoscale_l
         nexus.lane_catalog = catalog;
     }
     let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), future_created_lane, 1, 0, StorageTicketId::new([0xA7; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB7; 32]), ) };
-    intent.alias = Some("future-replay-pin".to_string());
+    set_test_da_pin_intent_alias(
+        &mut intent,
+        &ALICE_KEYPAIR,
+        Some("future-replay-pin".to_owned()),
+    );
     let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_pin_intents(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -27139,7 +27494,8 @@ state_test! { sync da_pin_intents_kura_replay_preserves_committed_owner_after_ac
     let kura_cfg = strict_kura_config_for_testing(store_root);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
-    let owner_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
+    let owner_keypair = crate::state::checked_keypair();
+    let owner_id = AccountId::new(owner_keypair.public_key().clone());
     let mut world = World::default();
     world.accounts.insert(
         owner_id.clone(),
@@ -27158,13 +27514,17 @@ state_test! { sync da_pin_intents_kura_replay_preserves_committed_owner_after_ac
     let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), lane, 9, 0, StorageTicketId::new([0x44; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x55; 32]), ) };
     intent.authorization = crate::da::signed_test_ingest_authorization(
         *state.network_id_ref(),
-        &crate::state::checked_keypair(),
+        &owner_keypair,
         lane,
         intent.epoch,
         intent.sequence,
         1,
     );
-    intent.alias = Some("owned-alias".to_string());
+    set_test_da_pin_intent_alias(
+        &mut intent,
+        &owner_keypair,
+        Some("owned-alias".to_owned()),
+    );
     let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_pin_intents(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -27964,7 +28324,11 @@ state_test! { sync da_bundle_indexes_are_not_committed_when_block_height_mismatc
     let signed_first: SignedBlock = first_block.into();
     let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xA0);
     let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), LaneId::new(0), 1, 0, StorageTicketId::new([0xB0; 32]), ManifestDigest::new([0xB1; 32]), ) };
-    intent.alias = Some("height-mismatch-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut intent,
+        &ALICE_KEYPAIR,
+        Some("height-mismatch-pin".to_owned()),
+    );
     let_row! { second_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&signed_first)) .with_da_commitments(Some(DaCommitmentBundle::new(vec![record]))) .with_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent]))) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_second: SignedBlock = second_block.into();
     let mut state_block = state.block(signed_second.header());
@@ -28724,11 +29088,23 @@ state_test! { sync da_pin_intents_replay_sanitizes_invalid_entries
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
     let lane = lane_config.primary().lane_id;
     let_row! { mut superseded = test_da_pin_intent( *state.network_id_ref(), lane, 1, 1, StorageTicketId::new([0x01; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x01; 32]), ) };
-    superseded.alias = Some("alias-one".to_string());
+    set_test_da_pin_intent_alias(
+        &mut superseded,
+        &ALICE_KEYPAIR,
+        Some("alias-one".to_owned()),
+    );
     let_row! { mut winner = test_da_pin_intent( *state.network_id_ref(), lane, 2, 0, StorageTicketId::new([0x02; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]), ) };
-    winner.alias = Some("alias-one".to_string());
+    set_test_da_pin_intent_alias(
+        &mut winner,
+        &ALICE_KEYPAIR,
+        Some("alias-one".to_owned()),
+    );
     let_row! { mut zero_manifest = test_da_pin_intent( *state.network_id_ref(), lane, 3, 0, StorageTicketId::new([0x03; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0; 32]), ) };
-    zero_manifest.alias = Some("alias-drop".to_string());
+    set_test_da_pin_intent_alias(
+        &mut zero_manifest,
+        &ALICE_KEYPAIR,
+        Some("alias-drop".to_owned()),
+    );
     let_row! { plain = test_da_pin_intent( *state.network_id_ref(), lane, 4, 0, StorageTicketId::new([0x04; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x04; 32]), ) };
     let_row! { bundle = DaPinIntentBundle::new(vec![ superseded.clone(), winner.clone(), zero_manifest, plain.clone(), ]) };
     let keypair = crate::state::checked_keypair();
@@ -28791,8 +29167,19 @@ state_test! { sync da_pin_intents_drop_missing_owner_accounts
         missing_owner.sequence,
         1,
     );
+    missing_owner.pin_scope_authorization = crate::da::signed_test_pin_scope_authorization(
+        &missing_owner.authorization,
+        &missing_owner_keypair,
+        missing_owner.storage_ticket,
+        missing_owner.manifest_hash,
+        missing_owner.alias.clone(),
+    );
     let_row! { mut valid = test_da_pin_intent( *state.network_id_ref(), lane_id, 6, 1, StorageTicketId::new([0x30; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x40; 32]), ) };
-    valid.alias = Some("kept-alias".to_string());
+    set_test_da_pin_intent_alias(
+        &mut valid,
+        &ALICE_KEYPAIR,
+        Some("kept-alias".to_owned()),
+    );
     let bundle = DaPinIntentBundle::new(vec![missing_owner.clone(), valid.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_pin_intents(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -28832,7 +29219,11 @@ state_test! { sync da_pin_intents_persist_into_world_indexes
         })
         .expect("configure nexus");
     let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), lane_id, 5, 0, StorageTicketId::new([0xCC; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xDD; 32]), ) };
-    intent.alias = Some("persist-alias".to_string());
+    set_test_da_pin_intent_alias(
+        &mut intent,
+        &ALICE_KEYPAIR,
+        Some("persist-alias".to_owned()),
+    );
     let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_pin_intents(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -28905,7 +29296,11 @@ state_test! { sync da_pin_intent_ingest_rejects_future_created_autoscale_lane
         nexus.lane_catalog = catalog;
     }
     let_row! { mut early = test_da_pin_intent( *state.network_id_ref(), future_created_lane, 1, 0, StorageTicketId::new([0xE1; 32]), ManifestDigest::new([0xE2; 32]), ) };
-    early.alias = Some("future-created-autoscale-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut early,
+        &ALICE_KEYPAIR,
+        Some("future-created-autoscale-pin".to_owned()),
+    );
     let inserted = state.ingest_pin_intents(6, vec![early], "future-created-test");
     assert!(
         inserted.is_empty(),
@@ -28918,7 +29313,11 @@ state_test! { sync da_pin_intent_ingest_rejects_future_created_autoscale_lane
             .is_none()
     );
     let_row! { mut active = test_da_pin_intent( *state.network_id_ref(), future_created_lane, 1, 1, StorageTicketId::new([0xE3; 32]), ManifestDigest::new([0xE4; 32]), ) };
-    active.alias = Some("active-autoscale-pin".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut active,
+        &ALICE_KEYPAIR,
+        Some("active-autoscale-pin".to_owned()),
+    );
     let inserted = state.ingest_pin_intents(7, vec![active.clone()], "future-created-test");
     assert_eq!(inserted.len(), 1);
     assert_eq!(inserted[0].intent, active);
@@ -36930,6 +37329,64 @@ state_test! { sync emergency_fast_snapshot_index_finalization_defers_vpn_network
         .finalize_snapshot_derived_state_indexes(true)
         .expect("emergency Fast snapshot restore must defer the VPN semantic scan");
 }
+state_test! { sync strict_snapshot_index_finalization_rejects_mis_homed_kaigi_relay
+    use iroha_data_model::{
+        account::rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
+        kaigi::{KaigiRelayRegistration, kaigi_relay_metadata_key},
+    };
+    let home = DomainId::try_new("relay-home", "universal").expect("home domain");
+    let wrong = DomainId::try_new("relay-wrong", "universal").expect("wrong domain");
+    let relay_id = AccountId::new(
+        KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("deterministic relay key")
+            .public_key()
+            .clone(),
+    );
+    let alias = AccountAlias::new(
+        "snapshotrelay".parse().expect("relay alias label"),
+        Some(AccountAliasDomain::new(home.name().clone())),
+        DataSpaceId::UNIVERSAL,
+    );
+    let mut state = blank_test_state();
+    state
+        .world
+        .domains
+        .insert(home.clone(), Domain::new(home.clone()).build(&*ALICE_ID));
+    let mut wrong_domain = Domain::new(wrong.clone()).build(&*ALICE_ID);
+    let registration = KaigiRelayRegistration {
+        relay_id: relay_id.clone(),
+        hpke_public_key: vec![0xAA],
+        bandwidth_class: 1,
+    };
+    wrong_domain.metadata_mut().insert(
+        kaigi_relay_metadata_key(&relay_id).expect("relay metadata key"),
+        Json::try_new(registration).expect("serialize relay registration"),
+    );
+    state.world.domains.insert(wrong.clone(), wrong_domain);
+    let (account_id, account_value) = Account::new(relay_id.clone())
+        .with_label(Some(alias.clone()))
+        .build(&*ALICE_ID)
+        .into_key_value();
+    state.world.accounts.insert(account_id, account_value);
+    state
+        .world
+        .replace_account_rekey_record_for_testing(AccountRekeyRecord::new(
+            alias,
+            relay_id.clone(),
+        ));
+    state
+        .world
+        .kaigi_relay_registry
+        .insert(relay_id, wrong);
+
+    let error = state
+        .finalize_snapshot_derived_state_indexes(false)
+        .expect_err("Strict snapshot restore must validate rebuilt Kaigi relay homes");
+    assert!(error.contains("outside its persisted home domain"));
+    state
+        .finalize_snapshot_derived_state_indexes(true)
+        .expect("emergency Fast snapshot restore must defer the Kaigi semantic scan");
+}
 state_test! { sync governance_lock_test_mutator_replaces_removes_and_rolls_back_expiry_index
     let world = World::default();
     let referendum_id = "indexed-locks".to_owned();
@@ -37154,6 +37611,7 @@ fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
     let snapshot = norito::json::to_value(&state).expect("serialize indexed state snapshot");
     let_row! { snapshot_world = snapshot .as_object() .and_then(|state| state.get("world")) .and_then(norito::json::Value::as_object) .expect("state snapshot world object") };
     for derived_field in [
+        "account_rekey_records_by_account",
         "governance_lock_expiry_index",
         "validation_fee_proposal_index",
         "vpn_settled_leases_by_account",
@@ -39078,6 +39536,74 @@ fn parliament_timed_ovn_resource_index_rebuild_is_deterministic_and_fail_atomic(
             .collect::<BTreeMap<_, _>>(),
         before_failed_rebuild,
         "a failed restore rebuild must not publish a partial derived index"
+    );
+}
+
+#[test]
+fn tle_runtime_custody_projection_is_inclusive_and_retains_unbounded_history() {
+    let active_key_session_id = TleKeySessionId::new([0x53; 32]);
+    let retained_key_session_id = TleKeySessionId::new([0x54; 32]);
+    let retaining_attempt =
+        crate::governance::parliament::tests::tle_key_session_retention_attempt_fixture_v1(
+            retained_key_session_id,
+        );
+    let mut world = World::new();
+    world
+        .tle_active_key_session
+        .insert(TLE_KEY_SESSION_SINGLETON_KEY, active_key_session_id);
+    world
+        .parliament_attempts
+        .insert(retaining_attempt.attempt().id, retaining_attempt);
+    let world = world.block();
+    assert_eq!(
+        world
+            .tle_key_sessions_required_for_runtime_custody_v1(62)
+            .expect("validate the committed Parliament attempt once"),
+        BTreeSet::from([active_key_session_id, retained_key_session_id]),
+        "the greatest opening deadline is inclusive"
+    );
+    assert_eq!(
+        world
+            .tle_key_sessions_required_for_runtime_custody_v1(63)
+            .expect("validate the committed Parliament attempt once"),
+        BTreeSet::from([active_key_session_id]),
+        "the active session remains required after historical custody expires"
+    );
+
+    let no_active_world = {
+        let retaining_attempt =
+            crate::governance::parliament::tests::tle_key_session_retention_attempt_fixture_v1(
+                retained_key_session_id,
+            );
+        let mut world = World::new();
+        world
+            .parliament_attempts
+            .insert(retaining_attempt.attempt().id, retaining_attempt);
+        world
+    };
+    let no_active_world = no_active_world.block();
+    assert_eq!(
+        no_active_world
+            .tle_key_sessions_required_for_runtime_custody_v1(62)
+            .expect("validate retained history without an active pointer"),
+        BTreeSet::from([retained_key_session_id]),
+        "retained historical custody does not depend on an active session"
+    );
+
+    let unbounded_key_session_id = TleKeySessionId::new([0x55; 32]);
+    let unbounded_attempt = crate::governance::parliament::tests::
+        tle_key_session_unbounded_retention_attempt_fixture_v1(unbounded_key_session_id);
+    let mut unbounded_world = World::new();
+    unbounded_world
+        .parliament_attempts
+        .insert(unbounded_attempt.attempt().id, unbounded_attempt);
+    let unbounded_world = unbounded_world.block();
+    assert_eq!(
+        unbounded_world
+            .tle_key_sessions_required_for_runtime_custody_v1(u64::MAX)
+            .expect("validate an unbounded committed opening deadline"),
+        BTreeSet::from([unbounded_key_session_id]),
+        "u64::MAX custody remains required even at the maximum committed height"
     );
 }
 

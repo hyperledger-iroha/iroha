@@ -67,6 +67,34 @@ public sealed class KagemushaToriiTests
     }
 
     [Fact]
+    public async Task KagemushaReadRoutesRequireExactHttpOk()
+    {
+        using (var handler = new KagemushaHandler(_ =>
+               JsonResponse(OfflineCapabilityJson(), HttpStatusCode.Created)))
+        using (var client = new ToriiClient(
+               new Uri("https://torii.example"),
+               new HttpClient(handler)))
+        {
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                client.GetOfflineCapabilityAsync(TestContext.Current.CancellationToken));
+            Assert.Contains("expected HTTP 200, got 201", error.Message);
+        }
+
+        using (var handler = new KagemushaHandler(_ =>
+               JsonResponse(TopUpStatusJson(), HttpStatusCode.Accepted)))
+        using (var client = new ToriiClient(
+               new Uri("https://torii.example"),
+               new HttpClient(handler)))
+        {
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                client.GetKagemushaOperationStatusAsync(
+                    OperationId,
+                    TestContext.Current.CancellationToken));
+            Assert.Contains("expected HTTP 200, got 202", error.Message);
+        }
+    }
+
+    [Fact]
     public async Task TopUpTransportsAnExternalV4NoritoArchiveWithoutAProverClaim()
     {
         var archive = NoritoArchive(TopUpRequestSchemaName);
