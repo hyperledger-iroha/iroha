@@ -76,7 +76,7 @@
     },
     {
       "key": "validation_error",
-      "value": "orderbook signature verification failed: signature error: Verification equation was not satisfied"
+      "value": "orderbook signature verification failed: signature R is small-order (weak); rejected: Signature verification failed"
     },
     {
       "key": "payload_code",
@@ -84,7 +84,7 @@
     },
     {
       "key": "payload_message",
-      "value": "OrderRequestV1 validation failed: orderbook signature verification failed: signature error: Verification equation was not satisfied"
+      "value": "OrderRequestV1 validation failed: orderbook signature verification failed: signature R is small-order (weak); rejected: Signature verification failed"
     }
   ],
   "inputs": [

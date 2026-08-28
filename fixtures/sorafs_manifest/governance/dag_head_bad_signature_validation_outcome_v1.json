@@ -2,7 +2,7 @@
   "status": "Error",
   "code": "SFS-SIG-007",
   "category": "signature",
-  "message": "governance DAG head-chain validation failed: head manifest validation failed: governance DAG head signature validation failed: governance log publisher signature verification failed: signature error: Verification equation was not satisfied",
+  "message": "governance DAG head-chain validation failed: head manifest validation failed: governance DAG head signature validation failed: governance log publisher signature verification failed: signature R is small-order (weak); rejected: Signature verification failed",
   "action": "Regenerate the governance DAG blocks and signed head manifest from one canonical parent-linked chain.",
   "docs_url": "https://docs.iroha.tech/",
   "telemetry_tags": [
@@ -68,7 +68,7 @@
     },
     {
       "key": "validation_error",
-      "value": "head manifest validation failed: governance DAG head signature validation failed: governance log publisher signature verification failed: signature error: Verification equation was not satisfied"
+      "value": "head manifest validation failed: governance DAG head signature validation failed: governance log publisher signature verification failed: signature R is small-order (weak); rejected: Signature verification failed"
     }
   ],
   "inputs": [
