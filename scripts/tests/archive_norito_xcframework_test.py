@@ -25,7 +25,7 @@ VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
 KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "83ab8f96bd11308c9e096413b8ad9526de109a88b702ba49d18916c184a01ddc"
+    "861264508201d99494f427b7b0eaeacc5f61ba2870dcd94162f768576f5782b3"
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),
@@ -170,6 +170,7 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
             "cargo_features": [],
             "build_environment": build_environment,
             "source_commit": "1" * 40,
+            "embedded_source_commit": "1" * 40,
             "source_tree_dirty": False,
             "source_fingerprint_sha256": "2" * 64,
             "cargo_lock_sha256": digest((ROOT / "Cargo.lock").read_bytes()),

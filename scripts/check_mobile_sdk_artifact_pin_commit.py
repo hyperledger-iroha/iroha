@@ -96,6 +96,55 @@ def _changed_paths(root: Path, parent: str, head: str) -> dict[str, str]:
     return dict(zip(fields[1::2], fields[0::2]))
 
 
+def _mechanical_pin_parent(root: Path, commit: str) -> str | None:
+    """Return the parent when ``commit`` is an exact mechanical pin child."""
+
+    ancestry = _git(root, "rev-list", "--parents", "-n", "1", commit).decode(
+        "ascii"
+    ).split()
+    if len(ancestry) != 2 or ancestry[0] != commit:
+        return None
+    parent = ancestry[1]
+    changed = _changed_paths(root, parent, commit)
+    allowed = OPTIONAL_ARTIFACT_METADATA_PATHS | {LOADER_PATH}
+    if set(changed) - allowed or changed.get(LOADER_PATH) != "M":
+        return None
+    if any(
+        changed[path] not in {"A", "M", "T"}
+        for path in OPTIONAL_ARTIFACT_METADATA_PATHS & changed.keys()
+    ):
+        return None
+
+    parent_loader = _git(root, "show", f"{parent}:{LOADER_PATH}")
+    child_loader = _git(root, "show", f"{commit}:{LOADER_PATH}")
+    if parent_loader == child_loader:
+        return None
+    source_seal = _load_source_seal_module()
+    try:
+        normalized_parent = source_seal.normalize_swift_native_bridge_hash_pins(
+            parent_loader
+        )
+        normalized_child = source_seal.normalize_swift_native_bridge_hash_pins(
+            child_loader
+        )
+    except RuntimeError:
+        return None
+    return parent if normalized_parent == normalized_child else None
+
+
+def embedded_source_commit(root: Path, revision: str = "HEAD") -> str:
+    """Return the real Git commit embedded in one Apple bridge build.
+
+    A rigorously mechanical fallback-pin child embeds its exact parent so the
+    pin literals do not recursively change the static-library hashes they
+    authenticate. Every other commit embeds its own identity.
+    """
+
+    root = root.resolve(strict=True)
+    commit = _canonical_commit(root, revision)
+    return _mechanical_pin_parent(root, commit) or commit
+
+
 def validate_pin_relationship(root: Path, manifest_commit: str) -> str:
     """Return ``direct`` or ``pin-parent`` for an authenticated relationship."""
 
@@ -209,12 +258,20 @@ def validate_prospective_loader(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True, type=Path)
-    parser.add_argument("--manifest-commit", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--manifest-commit")
+    mode.add_argument("--print-embedded-source-commit", action="store_true")
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--prospective-loader", type=Path)
     arguments = parser.parse_args()
     try:
-        if arguments.artifact_root is None and arguments.prospective_loader is None:
+        if arguments.print_embedded_source_commit:
+            if arguments.artifact_root is not None or arguments.prospective_loader is not None:
+                parser.error(
+                    "--print-embedded-source-commit does not accept artifact paths"
+                )
+            result = embedded_source_commit(arguments.root)
+        elif arguments.artifact_root is None and arguments.prospective_loader is None:
             result = validate_pin_relationship(arguments.root, arguments.manifest_commit)
         elif (
             arguments.artifact_root is not None

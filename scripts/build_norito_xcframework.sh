@@ -632,6 +632,7 @@ fi
 
 PINNED_RUST_TOOLCHAIN="1.93.1"
 SOURCE_SEAL_SCRIPT="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
+PIN_COMMIT_CHECKER="$ROOT_DIR/scripts/check_mobile_sdk_artifact_pin_commit.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 APPLE_SLICE_HANDOFF="$ROOT_DIR/scripts/norito_bridge_apple_slice_handoff.py"
 USER_HOME_DIR="$(run_python312_clean -c \
@@ -664,6 +665,7 @@ for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY"; do
 done
 for required_input in \
   "$SOURCE_SEAL_SCRIPT" \
+  "$PIN_COMMIT_CHECKER" \
   "$HERMETIC_RUNNER" \
   "$APPLE_SLICE_HANDOFF" \
   "$ROOT_DIR/rust-toolchain.toml"; do
@@ -845,6 +847,15 @@ if [[ -n "$SOURCE_STATUS_START" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
   exit 1
 fi
 SOURCE_COMMIT="$SOURCE_COMMIT_START"
+EMBEDDED_SOURCE_COMMIT="$(
+  run_isolated_python "$PIN_COMMIT_CHECKER" \
+    --root "$ROOT_DIR" \
+    --print-embedded-source-commit
+)"
+if [[ ! "$EMBEDDED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "[-] NoritoBridge embedded source commit is not canonical" >&2
+  exit 1
+fi
 SOURCE_TREE_DIRTY=false
 if [[ -n "$SOURCE_STATUS_START" ]]; then
   SOURCE_TREE_DIRTY=true
@@ -1109,6 +1120,7 @@ if [[ -n "$CI_APPLE_SLICE" || -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
 {
   "schema": "iroha.norito-bridge-apple-slice-common.v1",
   "source_commit": "$SOURCE_COMMIT",
+  "embedded_source_commit": "$EMBEDDED_SOURCE_COMMIT",
   "source_tree_dirty": $SOURCE_TREE_DIRTY,
   "source_fingerprint_sha256": "$SOURCE_FINGERPRINT",
   "cargo_lock_sha256": "$CARGO_LOCK_SHA256_START",
@@ -1216,7 +1228,9 @@ run_hermetic_apple_cargo() {
       --set "CARGO_INCREMENTAL=0" \
       --set "CARGO_NET_OFFLINE=true" \
       --set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+      --set "CONNECT_NORITO_SOURCE_REVISION=$EMBEDDED_SOURCE_COMMIT" \
       --set "HOME=$USER_HOME_DIR" \
+      --set "IROHA_GIT_COMMIT_HASH=$EMBEDDED_SOURCE_COMMIT" \
       --set "LANG=C.UTF-8" \
       --set "LC_ALL=C.UTF-8" \
       --set "NORITO_SKIP_BINDINGS_SYNC=1" \
@@ -1226,6 +1240,7 @@ run_hermetic_apple_cargo() {
       --set "RUSTDOC=$RUSTDOC_BINARY" \
       --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
       --set "TMPDIR=$MOBILE_TMPDIR" \
+      --set "VERGEN_GIT_SHA=$EMBEDDED_SOURCE_COMMIT" \
       "${platform_environment[@]}" \
       -- "$CARGO_BINARY" "$cargo_subcommand" \
       -Z unstable-options --lockfile-path "$CARGO_LOCKFILE" "$@"; then
@@ -1527,9 +1542,11 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "CARGO_INCREMENTAL",
         "CARGO_NET_OFFLINE",
         "CARGO_TARGET_DIR",
+        "CONNECT_NORITO_SOURCE_REVISION",
         "DEVELOPER_DIR",
         "HOME",
         "IPHONEOS_DEPLOYMENT_TARGET",
+        "IROHA_GIT_COMMIT_HASH",
         "LANG",
         "LC_ALL",
         "NORITO_SKIP_BINDINGS_SYNC",
@@ -1539,7 +1556,8 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
-        "TMPDIR"
+        "TMPDIR",
+        "VERGEN_GIT_SHA"
       ],
       "apple-ios-simulator": [
         "CARGO",
@@ -1548,10 +1566,12 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "CARGO_INCREMENTAL",
         "CARGO_NET_OFFLINE",
         "CARGO_TARGET_DIR",
+        "CONNECT_NORITO_SOURCE_REVISION",
         "DEVELOPER_DIR",
         "HOME",
         "IPHONEOS_DEPLOYMENT_TARGET",
         "IPHONESIMULATOR_DEPLOYMENT_TARGET",
+        "IROHA_GIT_COMMIT_HASH",
         "LANG",
         "LC_ALL",
         "NORITO_SKIP_BINDINGS_SYNC",
@@ -1561,7 +1581,8 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
-        "TMPDIR"
+        "TMPDIR",
+        "VERGEN_GIT_SHA"
       ],
       "apple-macos": [
         "CARGO",
@@ -1570,8 +1591,10 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "CARGO_INCREMENTAL",
         "CARGO_NET_OFFLINE",
         "CARGO_TARGET_DIR",
+        "CONNECT_NORITO_SOURCE_REVISION",
         "DEVELOPER_DIR",
         "HOME",
+        "IROHA_GIT_COMMIT_HASH",
         "LANG",
         "LC_ALL",
         "MACOSX_DEPLOYMENT_TARGET",
@@ -1582,7 +1605,8 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
-        "TMPDIR"
+        "TMPDIR",
+        "VERGEN_GIT_SHA"
       ]
     },
     "cargo_build_jobs": 1,
@@ -1612,6 +1636,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "macosx_deployment_target": "$MACOSX_DEPLOYMENT_TARGET"
   },
   "source_commit": "$SOURCE_COMMIT",
+  "embedded_source_commit": "$EMBEDDED_SOURCE_COMMIT",
   "source_tree_dirty": $SOURCE_TREE_DIRTY,
   "source_fingerprint_sha256": "$SOURCE_FINGERPRINT",
   "cargo_lock_sha256": "$CARGO_LOCK_SHA256_START",

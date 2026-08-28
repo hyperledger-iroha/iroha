@@ -68,8 +68,14 @@ that workflow for local release verification.
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
    one atomic XCFramework exchange publishes the binaries and manifest together. The
    manifest binds exact native bridge ABI 23, the privacy-production feature state,
-   source commit and fingerprint, header digest, required-symbol inventory, and
-   per-slice SHA-256 hashes. Before publication the helper invokes
+   source commit and fingerprint, embedded source commit, header digest,
+   required-symbol inventory, and per-slice SHA-256 hashes. Ordinary builds embed
+   their own commit. An exact mechanical fallback-pin child embeds its parent commit,
+   preventing the three pin literals from recursively changing the static-library
+   hashes they authenticate; the checker rejects every broader child as ordinary
+   source. The hermetic Apple build binds that identity consistently through
+   `CONNECT_NORITO_SOURCE_REVISION`, `IROHA_GIT_COMMIT_HASH`, and
+   `VERGEN_GIT_SHA`. Before publication the helper invokes
    `scripts/check_mobile_sdk_artifacts.sh --apple-only` against the staged generation; a
    checker or `xcodebuild` failure leaves the live generation unchanged. The
    first-release builder has no skip-build, preserved-target, alternate-lock, or
